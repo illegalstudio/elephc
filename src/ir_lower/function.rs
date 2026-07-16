@@ -1033,6 +1033,19 @@ fn direct_closure_return_expr_type(
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
+    if let ExprKind::ScopedConstantAccess {
+        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
+        name,
+    } = &expr.kind
+    {
+        let normalized = class_name.as_str().trim_start_matches('\\');
+        if let Some(value) = classes
+            .get(normalized)
+            .and_then(|class_info| class_info.constants.get(name))
+        {
+            return crate::types::checker::infer_expr_type_syntactic(value);
+        }
+    }
     if let ExprKind::Variable(name) = &expr.kind {
         if let Some((_, php_type, _)) = captures
             .iter()

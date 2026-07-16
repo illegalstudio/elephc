@@ -118,6 +118,16 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
+            constant_deprecations: class
+                .constants
+                .iter()
+                .filter_map(|constant| {
+                    crate::types::checker::schema::validation::extract_deprecation(
+                        &constant.attributes,
+                    )
+                    .map(|reason| (constant.name.clone(), reason))
+                })
+                .collect(),
             attribute_names: collect_attribute_names(&class.attributes),
             attribute_args,
             method_attribute_names: self.method_attribute_names,

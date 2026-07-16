@@ -1,8 +1,8 @@
 //! Purpose:
 //! Decides whether a parsed program references the PDO standard-library classes
-//! (`PDO`, `PDOStatement`, `PDOException`) so the prelude is injected only for
-//! PDO-using programs. Replaces a `format!("{:?}")` substring scan with a precise
-//! AST walk that inspects only class-name positions.
+//! (`PDO`, `PDOStatement`, `PDOException`) or calls the global `pdo_drivers()`
+//! function, so the prelude is injected only for PDO-using programs. Replaces a
+//! `format!("{:?}")` substring scan with a precise AST walk.
 //!
 //! Called from:
 //! - `crate::pdo_prelude::inject_if_used`.
@@ -24,7 +24,7 @@
 //!   name only in the import, and the later `new Db()` carries the alias, which
 //!   the walk cannot otherwise connect back to PDO — so skipping imports would be
 //!   a false negative. Function/constant name positions are not class references
-//!   and are skipped.
+//!   and are skipped, except for PHP's case-insensitive global `pdo_drivers()`.
 
 use crate::names::Name;
 use crate::parser::ast::{
@@ -49,7 +49,16 @@ fn name_is_pdo(name: &Name) -> bool {
         segment.eq_ignore_ascii_case("PDO")
             || segment.eq_ignore_ascii_case("PDOStatement")
             || segment.eq_ignore_ascii_case("PDOException")
+            || segment.eq_ignore_ascii_case("PDORow")
     }) || name_is_pdo_driver_subclass(name)
+}
+
+/// Returns whether a function-call name denotes PHP's global `pdo_drivers()`
+/// helper. Only the single-segment global name matches; a namespaced function
+/// with the same short name is unrelated. PHP function names are
+/// case-insensitive, so the comparison is too.
+fn name_is_pdo_drivers(name: &Name) -> bool {
+    matches!(name.parts.as_slice(), [function] if function.eq_ignore_ascii_case("pdo_drivers"))
 }
 
 /// Returns whether `name` denotes one of PHP 8.4's `Pdo\` driver subclasses
@@ -227,8 +236,10 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
                 || result_target.as_deref().is_some_and(expr_refs_pdo)
                 || prelude.iter().any(stmt_refs_pdo)
         }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::ClosureCall { args, .. } => args.iter().any(expr_refs_pdo),
+        ExprKind::FunctionCall { name, args } => {
+            name_is_pdo_drivers(name) || args.iter().any(expr_refs_pdo)
+        }
+        ExprKind::ClosureCall { args, .. } => args.iter().any(expr_refs_pdo),
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_refs_pdo),
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
@@ -669,6 +680,28 @@ mod tests {
     fn detects_case_insensitive() {
         assert!(program_uses_pdo(&parse(
             r#"<?php $db = new pdo("sqlite::memory:");"#
+        )));
+    }
+
+    /// A bare global `pdo_drivers()` call is sufficient to request the PDO
+    /// prelude even when no PDO class name occurs in the program.
+    #[test]
+    fn detects_global_pdo_drivers_function() {
+        assert!(program_uses_pdo(&parse("<?php echo count(pdo_drivers());")));
+    }
+
+    /// Global PHP function matching is case-insensitive.
+    #[test]
+    fn detects_global_pdo_drivers_function_case_insensitive() {
+        assert!(program_uses_pdo(&parse("<?php $drivers = PDO_DRIVERS();")));
+    }
+
+    /// A namespaced function whose short name happens to be `pdo_drivers` is not
+    /// PHP's global PDO helper and does not force bridge injection.
+    #[test]
+    fn ignores_namespaced_pdo_drivers_function() {
+        assert!(!program_uses_pdo(&parse(
+            "<?php $drivers = Vendor\\pdo_drivers();"
         )));
     }
 

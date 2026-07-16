@@ -44,6 +44,8 @@ pub mod name_resolver;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+/// Selected PHP compatibility version for version-sensitive compiler surfaces.
+pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.

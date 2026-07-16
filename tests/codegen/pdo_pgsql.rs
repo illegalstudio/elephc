@@ -25,6 +25,44 @@
 
 use crate::support::*;
 
+/// Verifies PHP 8.4's nullable notice callback signature without requiring a live server.
+#[test]
+fn test_pdo_pgsql_notice_callback_accepts_null() {
+    let out = compile_and_run(
+        r#"<?php
+function disable_notices(\Pdo\Pgsql $connection): void {
+    $connection->setNoticeCallback(null);
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies every PHP 8.4 legacy pdo_pgsql method signature lowers without a live server.
+#[test]
+fn test_pdo_pgsql_legacy_method_signatures_compile() {
+    let out = compile_and_run(
+        r#"<?php
+function exercise_legacy_pgsql(PDO $connection, int $guard): void {
+    if ($guard < 0) {
+        $connection->pgsqlCopyFromArray("items", ["1\tAda"]);
+        $connection->pgsqlCopyFromFile("items", "input.tsv");
+        $connection->pgsqlCopyToArray("items");
+        $connection->pgsqlCopyToFile("items", "output.tsv");
+        $oid = $connection->pgsqlLOBCreate();
+        $connection->pgsqlLOBOpen((string) $oid);
+        $connection->pgsqlLOBUnlink((string) $oid);
+        $connection->pgsqlGetNotify(PDO::FETCH_ASSOC, 0);
+        $connection->pgsqlGetPid();
+    }
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Wraps a PHP body that opens `$db` from `ELEPHC_PG_DSN`, so each fixture only
 /// writes the database logic under test.
 fn pg_program(body: &str) -> String {
@@ -34,6 +72,100 @@ fn pg_program(body: &str) -> String {
         "<?php\n$db = new PDO((string) getenv(\"ELEPHC_PG_DSN\"));\n{}\n",
         body
     )
+}
+
+/// Generic connection-information attributes expose the linked client, live
+/// libpq-equivalent status, and PostgreSQL session parameters.
+#[test]
+#[ignore]
+fn test_pgsql_connection_information_attributes() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$client = (string) $db->getAttribute(PDO::ATTR_CLIENT_VERSION);
+$server = (string) $db->getAttribute(PDO::ATTR_SERVER_VERSION);
+$info = (string) $db->getAttribute(PDO::ATTR_SERVER_INFO);
+$status = (string) $db->getAttribute(PDO::ATTR_CONNECTION_STATUS);
+echo (strpos($client, "postgres ") === 0 ? "client" : "bad-client") . "|";
+echo (strlen($server) > 0 ? "server" : "bad-server") . "|";
+echo (strpos($info, "PID: ") === 0 && strpos($info, "; Client Encoding: ") !== false ? "info" : "bad-info") . "|";
+echo ($status === "Connection OK; waiting to send." ? "status" : "bad-status");
+"#,
+    ));
+    assert_eq!(out, "client|server|info|status");
+}
+
+/// PostgreSQL scroll cursors honor every PDO fetch orientation, including
+/// one-based/negative absolute positions and relative movement.
+#[test]
+#[ignore]
+fn test_pgsql_scroll_cursor_orientations() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$stmt = $db->prepare("SELECT n FROM generate_series(1, 4) AS n", [PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL]);
+$stmt->execute();
+$first = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_FIRST);
+$next = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_NEXT);
+$last = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_LAST);
+$prior = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_PRIOR);
+$absolute = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_ABS, 2);
+$relative = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_REL, 1);
+$back = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_REL, -2);
+$negative = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_ABS, -1);
+$before = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_ABS, 0);
+$restart = $stmt->fetch(PDO::FETCH_NUM, PDO::FETCH_ORI_NEXT);
+echo $first[0] . $next[0] . $last[0] . $prior[0] . $absolute[0]
+    . $relative[0] . $back[0] . $negative[0] . ($before === false ? "F" : "T") . $restart[0];
+"#,
+    ));
+    assert_eq!(out, "12432314F1");
+}
+
+/// PostgreSQL exposes statement-owned result memory after execution, grows with
+/// the result, and records HY000 while returning null before execution.
+#[test]
+#[ignore]
+fn test_pgsql_result_memory_size_attribute() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$small = $db->query("SELECT 1")->getAttribute(Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE);
+$large = $db->query("SELECT generate_series(1, 1000)")->getAttribute(Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE);
+$pending = $db->prepare("SELECT 1");
+$none = $pending->getAttribute(Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE);
+$error = $pending->errorInfo();
+echo (is_int($small) && $small > 0 ? "small" : "bad-small") . "|";
+echo (is_int($large) && $large > $small ? "large" : "bad-large") . "|";
+echo (is_null($none) ? "null" : "bad-null") . "|" . $error[0];
+"#,
+    ));
+    assert_eq!(out, "small|large|null|HY000");
+}
+
+/// PostgreSQL `ATTR_PREFETCH=false` selects single-row/unbuffered semantics:
+/// SELECT rowCount is not known up front and starting another query closes the
+/// older cursor. A prepare-local true override remains buffered.
+#[test]
+#[ignore]
+fn test_pgsql_prefetch_connection_and_statement_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->setAttribute(PDO::ATTR_PREFETCH, false);
+$streamed = $db->prepare("SELECT generate_series(1, 3) AS n");
+$streamed->execute();
+$first = $streamed->fetchColumn();
+$rowCount = $streamed->rowCount();
+$db->query("SELECT 99")->fetchColumn();
+$closed = $streamed->fetch() === false ? "closed" : "bad";
+
+$buffered = $db->prepare("SELECT generate_series(1, 2) AS n", [PDO::ATTR_PREFETCH => true]);
+$buffered->execute();
+$bufferedCount = $buffered->rowCount();
+$db->query("SELECT 100")->fetchColumn();
+$stillReadable = $buffered->fetchColumn();
+echo $first . ":" . $rowCount . ":" . $closed . ":" . $bufferedCount . ":" . $stillReadable;
+"#,
+    );
+    assert_eq!(out, "1:0:closed:2:1");
 }
 
 /// Round-trip: create, insert through named placeholders, and read a row back
@@ -93,6 +225,42 @@ $db->exec("DROP TABLE pg_pos");
     assert_eq!(out, "seven");
 }
 
+/// PostgreSQL's emulation flag selects the simple-query protocol, including SQL that
+/// contains multiple commands and therefore cannot be server-side prepared as one unit.
+#[test]
+#[ignore]
+fn test_pgsql_emulated_prepare_executes_multi_command_sql() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$enabled = $db->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
+$stmt = $db->prepare("SELECT ? AS value; SELECT ? AS value");
+$stmt->execute([3, 9]);
+echo ($enabled ? "enabled" : "failed") . "|"
+    . ($stmt->getAttribute(PDO::ATTR_EMULATE_PREPARES) ? "emulated" : "native") . "|"
+    . $stmt->fetchColumn();
+"#,
+    ));
+    assert_eq!(out, "enabled|emulated|9");
+}
+
+/// `Pdo\Pgsql::ATTR_DISABLE_PREPARES` independently selects execute-only simple-query
+/// mode while the generic emulation attribute remains false.
+#[test]
+#[ignore]
+fn test_pgsql_disable_prepares_executes_multi_command_sql() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$disabled = $db->setAttribute(Pdo\Pgsql::ATTR_DISABLE_PREPARES, true);
+$stmt = $db->prepare("SELECT 11 AS value; SELECT 13 AS value");
+$stmt->execute();
+echo ($disabled ? "disabled" : "failed") . "|"
+    . ($db->getAttribute(Pdo\Pgsql::ATTR_DISABLE_PREPARES) ? "simple" : "prepared") . "|"
+    . $stmt->fetchColumn();
+"#,
+    ));
+    assert_eq!(out, "disabled|simple|13");
+}
+
 /// `SERIAL` columns drive `lastInsertId()` (via `lastval()`).
 #[test]
 #[ignore]
@@ -141,22 +309,24 @@ echo ":" . $id;
     assert_eq!(out, "err-ok:1");
 }
 
-/// Column types decode to PHP scalars: integer, double, boolean (0/1), text, and
-/// SQL NULL.
+/// Column types decode to PHP scalars: integer, double, native boolean, text, and
+/// SQL NULL; bytea is exposed as the read stream returned by php-src.
 #[test]
 #[ignore]
 fn test_pgsql_type_decoding() {
     let out = compile_and_run(&pg_program(
         r#"
 $db->exec("DROP TABLE IF EXISTS pg_types");
-$db->exec("CREATE TABLE pg_types (i INTEGER, d DOUBLE PRECISION, flag BOOLEAN, t TEXT, n TEXT)");
-$db->exec("INSERT INTO pg_types VALUES (42, 3.5, true, 'hi', NULL)");
-$row = $db->query("SELECT i, d, flag, t, n FROM pg_types")->fetch(PDO::FETCH_ASSOC);
-echo $row["i"] . "|" . $row["d"] . "|" . $row["flag"] . "|" . $row["t"] . "|" . (is_null($row["n"]) ? "NULL" : "x");
+$db->exec("CREATE TABLE pg_types (i INTEGER, d DOUBLE PRECISION, flag BOOLEAN, t TEXT, n TEXT, b BYTEA)");
+$db->exec("INSERT INTO pg_types VALUES (42, 3.5, true, 'hi', NULL, decode('410042', 'hex'))");
+$row = $db->query("SELECT i, d, flag, t, n, b FROM pg_types")->fetch(PDO::FETCH_ASSOC);
+echo $row["i"] . "|" . $row["d"] . "|" . (is_bool($row["flag"]) ? "bool:" : "not-bool:") . ($row["flag"] ? "1" : "0")
+    . "|" . $row["t"] . "|" . (is_null($row["n"]) ? "NULL" : "x")
+    . "|" . (is_resource($row["b"]) ? bin2hex(stream_get_contents($row["b"])) : "not-resource");
 $db->exec("DROP TABLE pg_types");
 "#,
     ));
-    assert_eq!(out, "42|3.5|1|hi|NULL");
+    assert_eq!(out, "42|3.5|bool:1|hi|NULL|410042");
 }
 
 /// A `PDOStatement` is Traversable: `foreach` walks the result set in the current
@@ -199,6 +369,22 @@ $db->exec("DROP TABLE pg_tx");
 "#,
     ));
     assert_eq!(out, "1:2");
+}
+
+/// A raw PostgreSQL BEGIN is visible to PDO::inTransaction() and the ordinary
+/// PDO::commit() guard even though beginTransaction() bookkeeping was bypassed.
+#[test]
+#[ignore]
+fn test_pgsql_raw_transaction_is_visible() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("BEGIN");
+echo ($db->inTransaction() ? "in" : "out") . ":";
+$db->commit();
+echo ($db->inTransaction() ? "in" : "out");
+"#,
+    ));
+    assert_eq!(out, "in:out");
 }
 
 /// Rich PostgreSQL types decode to their text representation: `numeric` keeps its
@@ -263,6 +449,33 @@ fn test_pgsql_get_pid() {
     assert_eq!(out, "pid-ok");
 }
 
+/// Verifies PHP 8.4's legacy pdo_pgsql extension methods remain installed on a
+/// base `PDO` connection and share the modern bridge behavior.
+#[test]
+#[ignore]
+fn test_pgsql_legacy_driver_extension_methods() {
+    let out = compile_and_run(&pg_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS pg_legacy");
+$db->exec("CREATE TABLE pg_legacy (id INT, name TEXT)");
+$copied = $db->pgsqlCopyFromArray("pg_legacy", ["1\tAda", "2\tBob"]);
+$rows = $db->pgsqlCopyToArray("pg_legacy", "\t", "\\N", "id, name");
+$pid = $db->pgsqlGetPid();
+$none = $db->pgsqlGetNotify(PDO::FETCH_NUM, 0);
+$db->beginTransaction();
+$oid = $db->pgsqlLOBCreate();
+$opened = $oid === false ? false : $db->pgsqlLOBOpen((string) $oid);
+$unlinked = $oid === false ? false : $db->pgsqlLOBUnlink((string) $oid);
+$db->rollBack();
+$db->exec("DROP TABLE pg_legacy");
+echo ($copied ? "copy" : "bad") . ":" . count($rows) . ":";
+echo ($pid > 0 ? "pid" : "bad") . ":" . ($none === false ? "none" : "bad") . ":";
+echo (($opened !== false && $unlinked) ? "lob" : "bad");
+"#,
+    ));
+    assert_eq!(out, "copy:2:pid:none:lob");
+}
+
 /// `Pdo\Pgsql::lobCreate()` returns a new large object's OID (a numeric string) and
 /// `lobUnlink()` deletes it, both driven against the live server.
 #[test]
@@ -271,9 +484,11 @@ fn test_pgsql_lob_create_unlink() {
     let out = compile_and_run(
         r#"<?php
 $db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->beginTransaction();
 $oid = $db->lobCreate();
 $ok = ($oid !== false && is_numeric($oid)) ? "1" : "0";
 $unlinked = $db->lobUnlink((string) $oid) ? "1" : "0";
+$db->commit();
 echo $ok . $unlinked;
 "#,
     );
@@ -339,7 +554,7 @@ echo ($empty === [] ? "empty-ok" : "empty-bad") . ":" . ($error === false ? "err
 
 /// `Pdo\Pgsql::getNotify()` receives a LISTEN/NOTIFY notification: the session
 /// listens on a channel, notifies it, and getNotify returns [channel, pid, payload]
-/// (the numerically-indexed shape elephc produces). Driven against the live server.
+/// without truncating an embedded tab in the payload. Driven against the live server.
 #[test]
 #[ignore]
 fn test_pgsql_get_notify() {
@@ -347,12 +562,12 @@ fn test_pgsql_get_notify() {
         r#"<?php
 $db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
 $db->exec("LISTEN elephc_ch");
-$db->exec("NOTIFY elephc_ch, 'hi'");
+$db->exec("SELECT pg_notify('elephc_ch', E'hi\\tthere')");
 $n = $db->getNotify(\PDO::FETCH_NUM, 1000);
 echo (count($n) === 0) ? "none" : ($n[0] . ":" . $n[2]);
 "#,
     );
-    assert_eq!(out, "elephc_ch:hi");
+    assert_eq!(out, "elephc_ch:hi\tthere");
 }
 
 /// `Pdo\Pgsql::getNotify(PDO::FETCH_ASSOC)` shapes the notification as
@@ -398,24 +613,31 @@ try {
     assert_eq!(out, "fast");
 }
 
-/// `Pdo\Pgsql::lobOpen()` reads a large object whole into a rewound php://memory
-/// stream (the read-whole resource shape). The fixture creates a large object from a
-/// known byte string via `lo_from_bytea`, opens it, reads it fully back, and confirms
-/// that opening a nonexistent OID returns false. Driven against the live server.
+/// `Pdo\Pgsql::lobOpen()` returns a transaction-scoped seekable stream. The live
+/// fixture reads an existing object, overwrites and extends it (including a seek
+/// beyond EOF), verifies the write through SQL, and rejects a nonexistent OID.
 #[test]
 #[ignore]
 fn test_pgsql_lob_open() {
     let out = compile_and_run(
         r#"<?php
 $db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->beginTransaction();
 $oid = $db->query("SELECT lo_from_bytea(0, 'elephc-lo'::bytea)")->fetchColumn();
-$s = $db->lobOpen((string) $oid);
+$s = $db->lobOpen((string) $oid, "w+b");
 $content = stream_get_contents($s);
+$seek = fseek($s, 7);
+$written = fwrite($s, "LOB");
+fseek($s, 12);
+fwrite($s, "!");
+$stored = $db->query("SELECT encode(lo_get(" . (string) $oid . "), 'hex')")->fetchColumn();
+$missing = $db->lobOpen("999999999") === false ? "false" : "leak";
 $db->lobUnlink((string) $oid);
-echo $content . ":" . (($db->lobOpen("999999999") === false) ? "false" : "leak");
+$db->commit();
+echo $content . ":" . $seek . ":" . $written . ":" . $stored . ":" . $missing;
 "#,
     );
-    assert_eq!(out, "elephc-lo:false");
+    assert_eq!(out, "elephc-lo:0:3:656c657068632d4c4f42000021:false");
 }
 
 /// Live TLS round-trip. Opens `ELEPHC_PG_TLS_DSN` — a DSN carrying `sslmode=require`
@@ -556,13 +778,17 @@ $money = $stmt->getColumnMeta(2);
 $expr = $stmt->getColumnMeta(3);
 $db->exec("DROP TABLE pg_meta_full");
 echo ((((int) $id["pgsql:table_oid"]) > 0) ? "tbl-y" : "tbl-n")
+    . ":" . $id["table"] . ":" . (isset($expr["table"]) ? "expr-table-y" : "expr-table-n")
     . ":" . (isset($expr["pgsql:table_oid"]) ? "key-y" : "key-n")
     . ":" . $expr["pgsql:table_oid"]
     . "|" . $id["len"] . "," . $label["len"] . "," . $money["len"]
     . "|" . $id["precision"] . "," . $label["precision"] . "," . $money["precision"];
 "#,
     ));
-    assert_eq!(out, "tbl-y:key-y:0|4,-1,-1|-1,24,655366");
+    assert_eq!(
+        out,
+        "tbl-y:pg_meta_full:expr-table-n:key-y:0|4,-1,-1|-1,24,655366"
+    );
 }
 
 /// F-PG-04 (Wave 1): an `oid` column is `PDO::PARAM_LOB` (3), not `PDO::PARAM_INT`.

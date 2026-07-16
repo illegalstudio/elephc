@@ -15,12 +15,78 @@ mod properties_null_coalesce;
 mod static_properties;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
-use crate::types::TypeEnv;
+use crate::parser::ast::{ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX};
+use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
 impl Checker {
+    /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
+    /// an empty indexed base needs its element type auto-vivified to an array.
+    ///
+    /// Returns `true` only after consuming a recognized synthetic suffix. All
+    /// other synthetic groups, associative keys, and already-typed bases remain
+    /// on the ordinary statement-by-statement path.
+    pub(crate) fn check_empty_indexed_nested_append(
+        &mut self,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if body.len() < 3 {
+            return Ok(false);
+        }
+        let split = body.len() - 3;
+        let (prefix, triple) = body.split_at(split);
+        let (temp, base, index) = match &triple[0].kind {
+            StmtKind::Assign { name, value }
+                if name.starts_with(NESTED_APPEND_TEMP_PREFIX) =>
+            {
+                match &value.kind {
+                    ExprKind::ArrayAccess { array, index } => match &array.kind {
+                        ExprKind::Variable(base) => (name.as_str(), base.as_str(), index.as_ref()),
+                        _ => return Ok(false),
+                    },
+                    _ => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        };
+        if !matches!(
+            &triple[1].kind,
+            StmtKind::ArrayPush { array, .. } if array == temp
+        ) || !matches!(
+            &triple[2].kind,
+            StmtKind::ArrayAssign { array, value, .. }
+                if array == base
+                    && matches!(&value.kind, ExprKind::Variable(name) if name == temp)
+        ) {
+            return Ok(false);
+        }
+        if !matches!(env.get(base), Some(PhpType::Array(element)) if **element == PhpType::Never) {
+            return Ok(false);
+        }
+
+        for stmt in prefix {
+            self.check_stmt(stmt, env)?;
+        }
+        let index_type = self.infer_type_with_assignment_effects(index, env)?;
+        if normalized_array_key_type(index, index_type) != PhpType::Int {
+            return Ok(false);
+        }
+
+        // PHP auto-vivifies the missing bucket as an empty indexed array. Seeding
+        // the parser's hidden read temporary with that shape lets the ordinary
+        // push checker infer `Array(T)` and the ordinary write-back checker infer
+        // the outer `Array(Array(T))` without weakening user-visible assignments.
+        env.insert(
+            temp.to_string(),
+            PhpType::Array(Box::new(PhpType::Never)),
+        );
+        self.check_stmt(&triple[1], env)?;
+        self.check_stmt(&triple[2], env)?;
+        Ok(true)
+    }
+
     /// Returns true when `name` is bound as a `foreach` loop key in the current
     /// scope. A foreach key is a boxed `Mixed` cell at runtime even when the
     /// checker types it as `Int`/`Str` from the source array, so an array write

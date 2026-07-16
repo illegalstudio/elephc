@@ -393,6 +393,15 @@ pub(crate) fn insert_enum_metadata(
             is_readonly_class: true,
             allow_dynamic_properties: false,
             constants,
+            constant_deprecations: user_constants
+                .iter()
+                .filter_map(|constant| {
+                    crate::types::checker::schema::validation::extract_deprecation(
+                        &constant.attributes,
+                    )
+                    .map(|reason| (constant.name.clone(), reason))
+                })
+                .collect(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),

@@ -217,15 +217,21 @@ fn apply_instance_method(
             method,
         ));
     }
-    if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
-        if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
-            return Err(CompileError::new(
-                method.span,
-                &format!(
-                    "Cannot reduce visibility when overriding method: {}::{}",
-                    class.name, method.name
-                ),
-            ));
+    // PHP exempts constructors from ordinary override compatibility: a child may
+    // deliberately reduce constructor visibility (PDOStatement subclasses are the
+    // canonical internal-API example). Signature validation already carries the same
+    // `__construct` exemption; keep visibility validation aligned with it.
+    if method_key != "__construct" {
+        if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
+            if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot reduce visibility when overriding method: {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {

@@ -78,24 +78,47 @@ pub struct PgConn {
     /// (`Arc<Mutex>`) because the callback fires from the client's connection driver,
     /// which may run on a separate thread from the query call.
     pub notices: Arc<Mutex<VecDeque<String>>>,
+    /// Default `PDO::ATTR_PREFETCH` state snapshotted by prepared statements.
+    pub prefetch: bool,
+    /// Monotonic query generation used to invalidate an older unbuffered cursor
+    /// when PostgreSQL starts another query on the same connection.
+    query_generation: u64,
+    /// Transaction state updated from every successful bridge-owned command.
+    pub in_transaction: bool,
 }
 
 /// A live PostgreSQL prepared statement and its lazily-materialized result.
 pub struct PgStmt {
     pub conn_id: i64,
-    pub statement: Statement,
+    /// Original SQL retained for statement-level diagnostics.
+    pub query_string: String,
+    pub statement: Option<Statement>,
+    /// SQL with PDO placeholders translated to PostgreSQL `$N` markers.
+    emulated_sql: Option<String>,
+    /// Generated marker byte ranges and their 1-based bind indexes.
+    emulated_markers: Vec<(usize, usize, usize)>,
+    /// Most recent client-rendered SQL, exposed by `debugDumpParams()`.
+    pub sent_sql: String,
     /// Maps a bare named placeholder (`name` from `:name`) to its 1-based index.
     pub named_map: HashMap<String, i64>,
     /// Bound parameter values, indexed by 0-based position (`$1` → index 0).
     pub binds: Vec<Bind>,
+    /// Whether each slot was explicitly supplied for the current execution.
+    bound: Vec<bool>,
     /// Result column names, available from the prepare (before execution).
     pub col_names: Vec<String>,
+    /// Source table names resolved from each column's PostgreSQL table OID.
+    col_tables: Vec<String>,
     /// Materialized rows; each row is a vector of decoded column cells.
     pub rows: Vec<Vec<Cell>>,
     /// Current 0-based row index; `-1` before the first `step()`.
     pub cursor: isize,
     /// Whether the query has been executed (results materialized) yet.
     pub executed: bool,
+    /// Whether this statement buffers its full result (`ATTR_PREFETCH != 0`).
+    pub buffered: bool,
+    /// Query generation assigned when an unbuffered execution starts.
+    query_generation: u64,
 }
 
 /// Encodes a pending `Bind` according to the inferred PostgreSQL parameter type,
@@ -209,7 +232,7 @@ fn parse_datetime_utc(
 /// `Config`/rustls connector instead. Returns an error for a DSN without the
 /// `pgsql:` prefix.
 ///
-/// P1-d: every OTHER key is only forwarded when it is one tokio-postgres's own
+/// Every other key is forwarded only when it is one tokio-postgres's own
 /// `Config::from_str` parser recognizes — its accepted set is exactly: `user`,
 /// `password`, `dbname`, `options`, `application_name`, `sslmode`,
 /// `sslnegotiation`, `host`, `hostaddr`, `port`, `connect_timeout`,
@@ -219,13 +242,9 @@ fn parse_datetime_utc(
 /// above). Any libpq key outside that set (e.g. `sslcrl`, `sslpassword`,
 /// `sslsni`, `service`, `gssencmode`, `passfile`, `requiressl`,
 /// `sslcompression`, `client_encoding`, or a typo) would otherwise make
-/// `.parse::<Config>()` fail with a hard `UnknownOption` connect error even
-/// though real libpq/PHP connects fine with it. Dropping it instead is a
-/// deliberate graceful degradation: the DSN still connects, just without
-/// whatever behavior that key would have configured (e.g. `client_encoding`'s
-/// value would need a post-connect `SET client_encoding = ...` to have any
-/// effect at all — not attempted here) — a silent no-op is preferable to a
-/// connection that never happens.
+/// `.parse::<Config>()` reject. `client_encoding` is consumed separately and
+/// applied after connect. Every other unsupported libpq key is rejected with an
+/// explicit bridge error rather than being silently ignored.
 ///
 /// F-PG-03 / F-CORE-10: when neither the DSN body nor the caller's
 /// `PDO::ATTR_TIMEOUT` (which the prelude folds into the DSN as
@@ -275,7 +294,7 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
             continue;
         }
         let Some((key, value)) = pair.split_once('=') else {
-            continue;
+            return Err(format!("invalid PostgreSQL DSN option '{pair}': expected key=value"));
         };
         let key = key.trim();
         let value = value.trim();
@@ -286,10 +305,14 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         if matches!(key, "sslmode" | "sslrootcert" | "sslcert" | "sslkey") {
             continue;
         }
-        // P1-d: silently drop any key tokio-postgres's parser does not accept,
-        // rather than forwarding it and hard-failing the whole connection.
-        if !ACCEPTED_KEYS.contains(&key) {
+        if key == "client_encoding" {
+            validate_client_encoding(value)?;
             continue;
+        }
+        if !ACCEPTED_KEYS.contains(&key) {
+            return Err(format!(
+                "unsupported PostgreSQL DSN option '{key}': elephc's native client cannot honor its libpq semantics"
+            ));
         }
         if key == "connect_timeout" {
             saw_connect_timeout = true;
@@ -322,6 +345,44 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         parts.push(format!("connect_timeout='{}'", DEFAULT_CONNECT_TIMEOUT_SECS));
     }
     Ok(parts.join(" "))
+}
+
+/// Validates a PostgreSQL client-encoding identifier before it is embedded in a
+/// post-connect `SET client_encoding` command.
+fn validate_client_encoding(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(format!(
+            "invalid PostgreSQL client_encoding '{value}': expected an encoding identifier"
+        ));
+    }
+    Ok(())
+}
+
+/// Extracts the optional validated `client_encoding` DSN value.
+fn client_encoding_from_dsn(dsn: &str) -> Result<Option<String>, String> {
+    let Some(body) = dsn.strip_prefix("pgsql:") else {
+        return Ok(None);
+    };
+    let mut encoding = None;
+    for pair in body.split(';') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "client_encoding" {
+            let value = value.trim();
+            validate_client_encoding(value)?;
+            encoding = Some(value.to_string());
+        }
+    }
+    Ok(encoding)
 }
 
 /// Percent-decodes a `user=`/`password=` DSN value (F-CORE-02). The prelude
@@ -574,6 +635,34 @@ fn utf8_len(b: u8) -> usize {
     }
 }
 
+/// Scans a PostgreSQL single-quoted string or double-quoted identifier and returns
+/// the exclusive end after its closing delimiter. `backslash_escapes` is enabled
+/// only for a standalone `E'...'` prefix. `None` preserves php-src's scanner
+/// backtracking contract for an unterminated region.
+fn scan_pg_quoted_region(
+    bytes: &[u8],
+    start: usize,
+    quote: u8,
+    backslash_escapes: bool,
+) -> Option<usize> {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if backslash_escapes && bytes[i] == b'\\' && i + 1 < bytes.len() {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == quote {
+            if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                i += 2;
+                continue;
+            }
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Translates PDO `?` and `:name` placeholders to PostgreSQL `$N`, returning the
 /// rewritten SQL, the bare-name → 1-based-index map, and whether the SQL mixed a
 /// positional `?` with a named `:name` (PDO forbids this combination; `prepare()`
@@ -610,51 +699,25 @@ fn utf8_len(b: u8) -> usize {
 /// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
 /// way), most importantly so an array slice like `data[1:5]` is left
 /// untouched instead of misreading `:5` as a bind parameter.
-pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool) {
+fn translate_placeholders_with_markers(
+    sql: &str,
+) -> (
+    String,
+    HashMap<String, i64>,
+    bool,
+    Vec<(usize, usize, usize)>,
+) {
     let bytes = sql.as_bytes();
     let len = bytes.len();
     let mut out = String::with_capacity(sql.len() + 8);
     let mut named: HashMap<String, i64> = HashMap::new();
     let mut next_index: i64 = 1;
     let mut i = 0;
-    let mut in_string = false;
-    // Whether the currently-open string honors backslash escapes (an
-    // `E'...'`/`e'...'` string); irrelevant while `in_string` is false.
-    let mut string_escapes = false;
     let mut saw_positional = false;
     let mut saw_named = false;
+    let mut markers = Vec::new();
     while i < len {
         let c = bytes[i];
-        if in_string {
-            if string_escapes && c == b'\\' && i + 1 < len {
-                // A backslash escapes the next character in an E-string
-                // (which may itself be a multi-byte UTF-8 sequence): neither
-                // participates in terminating the string. Copy the whole
-                // escaped character via a slice rather than a per-byte `as
-                // char` push (BUG 1) — pushing only the escaped byte's lead
-                // byte would also leave its continuation bytes to be
-                // re-visited at a non-char-boundary index on the next
-                // iteration.
-                let esc_len = utf8_len(bytes[i + 1]).min(len - i - 1);
-                out.push('\\');
-                out.push_str(&sql[i + 1..i + 1 + esc_len]);
-                i += 1 + esc_len;
-                continue;
-            }
-            let n = utf8_len(c).min(len - i);
-            out.push_str(&sql[i..i + n]);
-            if c == b'\'' {
-                // Doubled '' is an escaped quote inside the literal.
-                if i + 1 < len && bytes[i + 1] == b'\'' {
-                    out.push('\'');
-                    i += 2;
-                    continue;
-                }
-                in_string = false;
-            }
-            i += n;
-            continue;
-        }
         match c {
             b'-' if i + 1 < len && bytes[i + 1] == b'-' => {
                 // Line comment: verbatim to the end of the line (exclusive of
@@ -668,38 +731,31 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                 i = j;
             }
             b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
-                // Block comment: verbatim to the matching (non-nested) `*/`, or
-                // to EOF if unterminated.
+                // Block comment: verbatim to the matching non-nested `*/`.
+                // An unterminated opener backtracks to the one-byte fallback,
+                // matching php-src's re2c scanner rather than swallowing EOF.
                 let start = i;
                 let mut j = i + 2;
                 while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
                     j += 1;
                 }
-                let end = if j + 1 < len { j + 2 } else { len };
-                out.push_str(&sql[start..end]);
-                i = end;
+                if j + 1 < len {
+                    let end = j + 2;
+                    out.push_str(&sql[start..end]);
+                    i = end;
+                } else {
+                    out.push('/');
+                    i += 1;
+                }
             }
             b'"' => {
-                // Double-quoted identifier: verbatim, with `""` as the doubled-
-                // quote escape (no backslash escaping here).
-                let start = i;
-                let mut j = i + 1;
-                loop {
-                    if j >= len {
-                        break;
-                    }
-                    if bytes[j] == b'"' {
-                        if j + 1 < len && bytes[j + 1] == b'"' {
-                            j += 2;
-                            continue;
-                        }
-                        j += 1;
-                        break;
-                    }
-                    j += 1;
+                if let Some(end) = scan_pg_quoted_region(bytes, i, b'"', false) {
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                } else {
+                    out.push('"');
+                    i += 1;
                 }
-                out.push_str(&sql[start..j]);
-                i = j;
             }
             b'\'' => {
                 // A standalone `E`/`e` immediately before this quote (not part
@@ -707,10 +763,13 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                 let is_e_prefixed = i > 0
                     && (bytes[i - 1] == b'E' || bytes[i - 1] == b'e')
                     && (i < 2 || !is_ident_byte(bytes[i - 2]));
-                in_string = true;
-                string_escapes = is_e_prefixed;
-                out.push('\'');
-                i += 1;
+                if let Some(end) = scan_pg_quoted_region(bytes, i, b'\'', is_e_prefixed) {
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                } else {
+                    out.push('\'');
+                    i += 1;
+                }
             }
             b'$' => {
                 // A `$` immediately followed by a digit can never open a
@@ -740,9 +799,10 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                             i = close_end;
                         }
                         None => {
-                            // Unterminated dollar-quote: consume verbatim to EOF.
-                            out.push_str(&sql[i..len]);
-                            i = len;
+                            // Unterminated dollar-quote: backtrack the opener and
+                            // keep scanning its body for placeholders like php-src.
+                            out.push('$');
+                            i += 1;
                         }
                     }
                 } else {
@@ -759,8 +819,10 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                     i += 2;
                     continue;
                 }
+                let marker_start = out.len();
                 out.push('$');
                 out.push_str(&next_index.to_string());
+                markers.push((marker_start, out.len(), next_index as usize));
                 next_index += 1;
                 saw_positional = true;
                 i += 1;
@@ -811,8 +873,10 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
                     next_index += 1;
                     idx
                 });
+                let marker_start = out.len();
                 out.push('$');
                 out.push_str(&index.to_string());
+                markers.push((marker_start, out.len(), index as usize));
                 saw_named = true;
                 i = j;
             }
@@ -828,7 +892,55 @@ pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool)
         }
     }
     let mixed = saw_positional && saw_named;
-    (out, named, mixed)
+    (out, named, mixed, markers)
+}
+
+/// Translates PDO placeholders to PostgreSQL `$N` markers for native prepares.
+#[cfg(test)]
+pub fn translate_placeholders(sql: &str) -> (String, HashMap<String, i64>, bool) {
+    let (translated, named, mixed, _) = translate_placeholders_with_markers(sql);
+    (translated, named, mixed)
+}
+
+/// Renders a PostgreSQL literal for one emulated-prepare bind without allowing
+/// value bytes to alter the surrounding SQL syntax.
+fn emulated_bind_literal(bind: &Bind) -> String {
+    match bind {
+        Bind::Null => "NULL".to_string(),
+        Bind::Int(value) => value.to_string(),
+        Bind::Float(value) if value.is_finite() => value.to_string(),
+        Bind::Float(value) => format!("'{}'", value),
+        Bind::Text(value) => format!("'{}'", value.replace('\'', "''")),
+        Bind::Bytes(value) => {
+            let hex = value
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("decode('{hex}', 'hex')")
+        }
+    }
+}
+
+/// Substitutes only markers generated by the PDO scanner, leaving any source
+/// `$1` token untouched even when the same statement also contains PDO binds.
+fn interpolate_emulated_sql(
+    sql: &str,
+    markers: &[(usize, usize, usize)],
+    binds: &[Bind],
+) -> Result<String, String> {
+    let mut out = String::with_capacity(sql.len() + binds.len() * 8);
+    let mut cursor = 0usize;
+    for &(start, end, bind_index) in markers {
+        let bind = binds.get(bind_index.saturating_sub(1)).ok_or_else(|| {
+            "Invalid parameter number: number of bound variables does not match number of tokens"
+                .to_string()
+        })?;
+        out.push_str(&sql[cursor..start]);
+        out.push_str(&emulated_bind_literal(bind));
+        cursor = end;
+    }
+    out.push_str(&sql[cursor..]);
+    Ok(out)
 }
 
 /// Extracts the 5-char SQLSTATE from a postgres driver error. `tokio_postgres`
@@ -879,6 +991,7 @@ impl PgConn {
     /// `Pdo\Pgsql::setNoticeCallback()`.
     pub fn open(dsn: &str) -> Result<PgConn, String> {
         let conn_str = parse_dsn(dsn)?;
+        let client_encoding = client_encoding_from_dsn(dsn)?;
         let tls = parse_tls(dsn);
         let mut config: Config = conn_str.parse().map_err(|e: postgres::Error| e.to_string())?;
         let notices: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -893,7 +1006,12 @@ impl PgConn {
         });
         // Applies `sslmode` and opens the connection over rustls (ring) when TLS is
         // requested, or plaintext otherwise (see `connect_tls`).
-        let client = connect_tls(&mut config, &tls)?;
+        let mut client = connect_tls(&mut config, &tls)?;
+        if let Some(encoding) = client_encoding {
+            client
+                .batch_execute(&format!("SET client_encoding TO '{encoding}'"))
+                .map_err(|error| error.to_string())?;
+        }
         Ok(PgConn {
             client,
             changes: 0,
@@ -901,7 +1019,23 @@ impl PgConn {
             errcode: 0,
             sqlstate: "00000".to_string(),
             notices,
+            prefetch: true,
+            query_generation: 0,
+            in_transaction: false,
         })
+    }
+
+    /// Sets the default PostgreSQL prefetch/buffering mode for future statements.
+    pub fn set_prefetch(&mut self, prefetch: bool) -> i64 {
+        self.prefetch = prefetch;
+        1
+    }
+
+    /// Starts a new query generation and returns the generation an unbuffered
+    /// statement must retain to remain readable.
+    fn begin_query(&mut self) -> u64 {
+        self.query_generation = self.query_generation.wrapping_add(1).max(1);
+        self.query_generation
     }
 
     /// Removes and returns the oldest buffered server NOTICE message text, or an empty
@@ -914,6 +1048,31 @@ impl PgConn {
             .ok()
             .and_then(|mut queue| queue.pop_front())
             .unwrap_or_default()
+    }
+
+    /// Applies PHP 8.6's persistent-disconnect cleanup. PostgreSQL requires
+    /// `DISCARD ALL` outside a transaction, so a standalone rollback is sent first.
+    pub fn discard_all(&mut self) {
+        let _ = self.client.batch_execute("ROLLBACK");
+        if let Err(error) = self.client.batch_execute("DISCARD ALL") {
+            self.fail(error);
+            return;
+        }
+        if let Ok(mut notices) = self.notices.lock() {
+            notices.clear();
+        }
+        self.changes = 0;
+        self.errmsg.clear();
+        self.errcode = 0;
+        self.sqlstate = "00000".to_string();
+        self.prefetch = true;
+        self.in_transaction = false;
+        self.begin_query();
+    }
+
+    /// Updates transaction bookkeeping after one successful SQL command.
+    fn note_transaction_sql(&mut self, sql: &str) {
+        self.in_transaction = transaction_state_after_sql(sql, self.in_transaction);
     }
 
     /// Records a server/transport error: its SQLSTATE (`errorInfo()[0]`), its message
@@ -943,6 +1102,7 @@ impl PgConn {
     /// Runs a statement with no result rows (`PDO::exec`), returning the affected
     /// row count or `-1`.
     pub fn exec(&mut self, sql: &str) -> i64 {
+        self.begin_query();
         // execute() runs a single command; fall back to a multi-statement path for
         // scripts execute() rejects (it only accepts exactly one command).
         match self.client.execute(sql, &[]) {
@@ -950,6 +1110,7 @@ impl PgConn {
                 self.changes = n as i64;
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
+                self.note_transaction_sql(sql);
                 n as i64
             }
             // P2-j: `simple_query` (not `batch_execute`) runs the whole script over
@@ -971,6 +1132,7 @@ impl PgConn {
                     self.changes = rows as i64;
                     self.errcode = 0;
                     self.sqlstate = "00000".to_string();
+                    self.note_transaction_sql(sql);
                     rows as i64
                 }
                 Err(e) => self.fail(e),
@@ -980,8 +1142,12 @@ impl PgConn {
 
     /// Runs a bare transaction-control statement, returning `1`/`0`.
     pub fn exec_simple(&mut self, sql: &str) -> i64 {
+        self.begin_query();
         match self.client.batch_execute(sql) {
-            Ok(()) => 1,
+            Ok(()) => {
+                self.note_transaction_sql(sql);
+                1
+            }
             Err(e) => {
                 self.fail(e);
                 0
@@ -1042,6 +1208,43 @@ impl PgConn {
         }
     }
 
+    /// Returns the linked pure-Rust PostgreSQL client implementation and version,
+    /// the standalone equivalent of php-src's compile-time libpq version.
+    pub fn client_version(&self) -> String {
+        "postgres 0.19.13".to_string()
+    }
+
+    /// Maps the synchronous client's live closed state to php-src's observable
+    /// `PQstatus()` strings. A connected synchronous client is never exposed in
+    /// one of libpq's asynchronous handshake states.
+    pub fn connection_status(&self) -> String {
+        if self.client.is_closed() {
+            "Bad connection.".to_string()
+        } else {
+            "Connection OK; waiting to send.".to_string()
+        }
+    }
+
+    /// Builds php-src's PostgreSQL server-information string from live backend
+    /// and session parameters.
+    pub fn server_info(&mut self) -> String {
+        let row = match self.client.query_one(
+            "SELECT pg_backend_pid(), current_setting('client_encoding'), current_setting('is_superuser'), current_setting('session_authorization'), current_setting('DateStyle')",
+            &[],
+        ) {
+            Ok(row) => row,
+            Err(_) => return String::new(),
+        };
+        let pid = row.try_get::<_, i32>(0).unwrap_or(0);
+        let client_encoding = row.try_get::<_, String>(1).unwrap_or_default();
+        let is_superuser = row.try_get::<_, String>(2).unwrap_or_default();
+        let session_authorization = row.try_get::<_, String>(3).unwrap_or_default();
+        let date_style = row.try_get::<_, String>(4).unwrap_or_default();
+        format!(
+            "PID: {pid}; Client Encoding: {client_encoding}; Is Superuser: {is_superuser}; Session Authorization: {session_authorization}; Date Style: {date_style}"
+        )
+    }
+
     /// Returns the PostgreSQL backend process id serving this connection
     /// (`SELECT pg_backend_pid()`), or 0 if the query fails. Backs
     /// `Pdo\Pgsql::getPid()`.
@@ -1085,7 +1288,8 @@ impl PgConn {
     /// Reads a large object whole (`SELECT lo_get(<oid>)`), returning its raw bytes,
     /// or `None` on a non-numeric OID or a server error (e.g. no such object). Unlike
     /// the descriptor-based `lo_open`/`lo_read`/`lo_close` API, `lo_get` runs
-    /// standalone (no explicit transaction). Backs `Pdo\Pgsql::lobOpen()` (read-whole).
+    /// standalone (no explicit transaction). Backs the initial snapshot used by
+    /// `Pdo\Pgsql::lobOpen()`'s seekable stream wrapper.
     pub fn lob_get(&mut self, oid: &str) -> Option<Vec<u8>> {
         let oid_num = oid.parse::<u32>().ok()?;
         // oid_num is a validated integer, so inlining it is injection-safe.
@@ -1104,6 +1308,30 @@ impl PgConn {
             Err(e) => {
                 self.fail(e);
                 None
+            }
+        }
+    }
+
+    /// Writes the complete locally materialized large-object value back at offset
+    /// zero with PostgreSQL's `lo_put`. The PDO prelude only exposes this operation
+    /// from a writable `lobOpen()` stream while its owning PDO transaction is live.
+    /// `lo_put` preserves PostgreSQL's native ability to extend a large object.
+    pub fn lob_put(&mut self, oid: &str, data: &[u8]) -> i64 {
+        let Ok(oid_num) = oid.parse::<u32>() else {
+            return 0;
+        };
+        match self
+            .client
+            .query_one("SELECT lo_put($1, 0, $2)", &[&oid_num, &data])
+        {
+            Ok(_) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(e) => {
+                self.fail(e);
+                0
             }
         }
     }
@@ -1194,13 +1422,40 @@ impl PgConn {
     /// with `HY093` before ever asking the server to prepare it — PDO forbids
     /// combining the two styles in one statement, and the server has no notion
     /// of "named" placeholders to catch this itself.
-    pub fn prepare(&mut self, sql: &str) -> Result<PgStmt, String> {
-        let (translated, named_map, mixed) = translate_placeholders(sql);
+    pub fn prepare(&mut self, sql: &str, emulated: bool) -> Result<PgStmt, String> {
+        let (translated, named_map, mixed, markers) = translate_placeholders_with_markers(sql);
         if mixed {
             return Err(self.fail_local(
                 "HY093",
                 "Invalid parameter number: mixed named and positional parameters",
             ));
+        }
+        if emulated {
+            let n_params = markers
+                .iter()
+                .map(|(_, _, index)| *index)
+                .max()
+                .unwrap_or(0);
+            self.errcode = 0;
+            self.sqlstate = "00000".to_string();
+            return Ok(PgStmt {
+                conn_id: 0,
+                query_string: sql.to_string(),
+                statement: None,
+                emulated_sql: Some(translated),
+                emulated_markers: markers,
+                sent_sql: String::new(),
+                named_map,
+                binds: vec![Bind::Null; n_params],
+                bound: vec![false; n_params],
+                col_names: Vec::new(),
+                col_tables: Vec::new(),
+                rows: Vec::new(),
+                cursor: -1,
+                executed: false,
+                buffered: self.prefetch,
+                query_generation: 0,
+            });
         }
         match self.client.prepare(&translated) {
             Ok(statement) => {
@@ -1210,17 +1465,43 @@ impl PgConn {
                     .map(|c| c.name().to_string())
                     .collect();
                 let n_params = statement.params().len();
+                let col_tables = statement
+                    .columns()
+                    .iter()
+                    .map(|column| {
+                        let Some(oid) = column.table_oid() else {
+                            return String::new();
+                        };
+                        self.client
+                            .query_opt(
+                                "SELECT relname FROM pg_catalog.pg_class WHERE oid = $1",
+                                &[&oid],
+                            )
+                            .ok()
+                            .flatten()
+                            .and_then(|row| row.try_get::<_, String>(0).ok())
+                            .unwrap_or_default()
+                    })
+                    .collect();
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
                 Ok(PgStmt {
                     conn_id: 0,
-                    statement,
+                    query_string: sql.to_string(),
+                    statement: Some(statement),
+                    emulated_sql: None,
+                    emulated_markers: Vec::new(),
+                    sent_sql: String::new(),
                     named_map,
                     binds: vec![Bind::Null; n_params],
+                    bound: vec![false; n_params],
                     col_names,
+                    col_tables,
                     rows: Vec::new(),
                     cursor: -1,
                     executed: false,
+                    buffered: self.prefetch,
+                    query_generation: 0,
                 })
             }
             Err(e) => {
@@ -1232,7 +1513,36 @@ impl PgConn {
     }
 }
 
+/// Derives PostgreSQL transaction state after a successful transaction-control
+/// command, preserving the current state for ordinary statements and savepoint rollback.
+pub(crate) fn transaction_state_after_sql(sql: &str, current: bool) -> bool {
+    let normalized = sql.trim_start().to_ascii_uppercase();
+    if normalized.starts_with("BEGIN") || normalized.starts_with("START TRANSACTION") {
+        return true;
+    }
+    if normalized.starts_with("COMMIT") || normalized.starts_with("END") {
+        return normalized.contains("AND CHAIN");
+    }
+    if normalized.starts_with("ROLLBACK") {
+        if normalized.starts_with("ROLLBACK TO") {
+            return current;
+        }
+        return normalized.contains("AND CHAIN");
+    }
+    current
+}
+
 impl PgStmt {
+    /// Overrides this statement's buffering mode from prepare-time
+    /// `PDO::ATTR_PREFETCH`, before its first execution.
+    pub fn set_prefetch(&mut self, prefetch: bool) -> i64 {
+        if self.executed {
+            return 0;
+        }
+        self.buffered = prefetch;
+        1
+    }
+
     /// Resolves a named placeholder to its 1-based index (0 if unknown). The
     /// leading colon is optional.
     pub fn bind_parameter_index(&self, name: &str) -> i64 {
@@ -1246,6 +1556,7 @@ impl PgStmt {
             return 0;
         }
         self.binds[(idx - 1) as usize] = value;
+        self.bound[(idx - 1) as usize] = true;
         1
     }
 
@@ -1259,8 +1570,9 @@ impl PgStmt {
 
     /// Clears all bound values back to NULL.
     pub fn clear_bindings(&mut self) -> i64 {
-        for b in &mut self.binds {
+        for (b, bound) in self.binds.iter_mut().zip(self.bound.iter_mut()) {
             *b = Bind::Null;
+            *bound = false;
         }
         1
     }
@@ -1268,7 +1580,15 @@ impl PgStmt {
     /// Executes the query (once) and materializes the result set into decoded
     /// cells. Sets `conn.changes` for non-result statements.
     fn execute(&mut self, conn: &mut PgConn) -> Result<(), i64> {
-        let param_types: Vec<Type> = self.statement.params().to_vec();
+        self.query_generation = conn.begin_query();
+        if self.emulated_sql.is_some() {
+            return self.execute_emulated(conn);
+        }
+        let statement = self
+            .statement
+            .as_ref()
+            .expect("native PostgreSQL statement missing its prepared handle");
+        let param_types: Vec<Type> = statement.params().to_vec();
         let params: Vec<Param> = self
             .binds
             .iter()
@@ -1281,14 +1601,15 @@ impl PgStmt {
         let refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
 
-        if self.statement.columns().is_empty() {
+        if statement.columns().is_empty() {
             // No result columns: a DML/DDL statement. Run it for the row count.
-            match conn.client.execute(&self.statement, &refs) {
+            match conn.client.execute(statement, &refs) {
                 Ok(n) => {
                     conn.changes = n as i64;
                     conn.errcode = 0;
                     conn.sqlstate = "00000".to_string();
                     self.executed = true;
+                    conn.note_transaction_sql(&self.query_string);
                     Ok(())
                 }
                 // `fail` records the SQLSTATE/message/native code and yields the `-1`
@@ -1296,13 +1617,18 @@ impl PgStmt {
                 Err(e) => Err(conn.fail(e)),
             }
         } else {
-            match conn.client.query(&self.statement, &refs) {
+            match conn.client.query(statement, &refs) {
                 Ok(rows) => {
                     self.rows = rows.iter().map(|r| decode_row(r)).collect();
-                    conn.changes = self.rows.len() as i64;
+                    conn.changes = if self.buffered {
+                        self.rows.len() as i64
+                    } else {
+                        0
+                    };
                     conn.errcode = 0;
                     conn.sqlstate = "00000".to_string();
                     self.executed = true;
+                    conn.note_transaction_sql(&self.query_string);
                     Ok(())
                 }
                 Err(e) => Err(conn.fail(e)),
@@ -1310,9 +1636,88 @@ impl PgStmt {
         }
     }
 
+    /// Executes an emulated PostgreSQL statement through the simple-query
+    /// protocol and materializes the final row-producing result set as text.
+    fn execute_emulated(&mut self, conn: &mut PgConn) -> Result<(), i64> {
+        if self.bound.iter().any(|bound| !bound) {
+            conn.errcode = PG_NATIVE_ERRCODE;
+            conn.sqlstate = "HY093".to_string();
+            conn.errmsg = "Invalid parameter number: number of bound variables does not match number of tokens".to_string();
+            return Err(-1);
+        }
+        let sql = match interpolate_emulated_sql(
+            self.emulated_sql
+                .as_deref()
+                .expect("emulated PostgreSQL statement missing SQL"),
+            &self.emulated_markers,
+            &self.binds,
+        ) {
+            Ok(sql) => sql,
+            Err(message) => {
+                conn.errcode = PG_NATIVE_ERRCODE;
+                conn.sqlstate = "HY093".to_string();
+                conn.errmsg = message;
+                return Err(-1);
+            }
+        };
+        self.sent_sql = sql.clone();
+        match conn.client.simple_query(&sql) {
+            Ok(messages) => {
+                self.rows.clear();
+                self.col_names.clear();
+                let mut changes = 0i64;
+                for message in messages {
+                    match message {
+                        SimpleQueryMessage::RowDescription(columns) => {
+                            self.rows.clear();
+                            self.col_names = columns
+                                .iter()
+                                .map(|column| column.name().to_string())
+                                .collect();
+                            self.col_tables = vec![String::new(); columns.len()];
+                        }
+                        SimpleQueryMessage::Row(row) => {
+                            let cells = (0..row.len())
+                                .map(|index| match row.get(index) {
+                                    Some(value) => Cell::Text(value.to_string()),
+                                    None => Cell::Null,
+                                })
+                                .collect();
+                            self.rows.push(cells);
+                        }
+                        SimpleQueryMessage::CommandComplete(count) => {
+                            changes = count as i64;
+                        }
+                        _ => {}
+                    }
+                }
+                conn.changes = if self.rows.is_empty() {
+                    changes
+                } else if !self.buffered {
+                    0
+                } else {
+                    self.rows.len() as i64
+                };
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                self.executed = true;
+                conn.note_transaction_sql(&self.query_string);
+                Ok(())
+            }
+            Err(error) => Err(conn.fail(error)),
+        }
+    }
+
     /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on
     /// error. Executes lazily on the first call.
     pub fn step(&mut self, conn: &mut PgConn) -> i64 {
+        if self.executed
+            && !self.buffered
+            && self.query_generation != conn.query_generation
+        {
+            self.cursor = self.rows.len() as isize;
+            return 0;
+        }
         if !self.executed {
             if let Err(code) = self.execute(conn) {
                 return code;
@@ -1324,6 +1729,47 @@ impl PgStmt {
         } else {
             0
         }
+    }
+
+    /// Executes lazily and moves a materialized PostgreSQL result cursor according
+    /// to PDO's scroll orientations. Absolute positions use PostgreSQL's one-based
+    /// cursor convention; negative absolute positions count backward from the end.
+    pub fn step_oriented(&mut self, conn: &mut PgConn, orientation: i64, offset: i64) -> i64 {
+        if self.executed
+            && !self.buffered
+            && self.query_generation != conn.query_generation
+        {
+            self.cursor = self.rows.len() as isize;
+            return 0;
+        }
+        if !self.executed {
+            if let Err(code) = self.execute(conn) {
+                return code;
+            }
+        }
+        let len = self.rows.len() as i128;
+        let current = self.cursor as i128;
+        let target = match orientation {
+            0 => current + 1,
+            1 => current - 1,
+            2 => 0,
+            3 => len - 1,
+            4 if offset > 0 => i128::from(offset) - 1,
+            4 if offset < 0 => len + i128::from(offset),
+            4 => -1,
+            5 => current + i128::from(offset),
+            _ => return 0,
+        };
+        if target < 0 {
+            self.cursor = -1;
+            return 0;
+        }
+        if target >= len {
+            self.cursor = self.rows.len() as isize;
+            return 0;
+        }
+        self.cursor = target as isize;
+        1
     }
 
     /// Returns the current cell at column `i`, if a row is active.
@@ -1338,12 +1784,24 @@ impl PgStmt {
 
     /// Number of result columns (available before execution).
     pub fn column_count(&self) -> i64 {
-        self.col_names.len() as i64
+        if self.emulated_sql.is_some() && !self.executed && self.col_names.is_empty() {
+            1
+        } else {
+            self.col_names.len() as i64
+        }
     }
 
     /// Name of result column `i` (0-based).
     pub fn column_name(&self, i: i64) -> String {
         self.col_names.get(i as usize).cloned().unwrap_or_default()
+    }
+
+    /// Returns the `pg_class.relname` resolved from the result column's table OID.
+    pub fn column_table_name(&self, i: i64) -> String {
+        if i < 0 {
+            return String::new();
+        }
+        self.col_tables.get(i as usize).cloned().unwrap_or_default()
     }
 
     /// SQLite-compatible type code for the current row's column `i`:
@@ -1356,6 +1814,41 @@ impl PgStmt {
             Some(Cell::Bytes(_)) => 4,
             _ => 5,
         }
+    }
+
+    /// Returns the bytes currently owned by this statement's materialized result,
+    /// including row/cell storage and heap-backed text/byte payload capacities.
+    /// `None` means the statement has not executed yet.
+    pub fn result_memory_size(&self) -> Option<i64> {
+        if !self.executed {
+            return None;
+        }
+        let visible_rows: &[Vec<Cell>] = if self.buffered {
+            &self.rows
+        } else {
+            self.rows
+                .get(self.cursor.max(0) as usize)
+                .map(std::slice::from_ref)
+                .unwrap_or(&[])
+        };
+        let mut bytes = visible_rows.len() * std::mem::size_of::<Vec<Cell>>();
+        for row in visible_rows {
+            bytes = bytes.saturating_add(row.capacity() * std::mem::size_of::<Cell>());
+            for cell in row {
+                bytes = bytes.saturating_add(match cell {
+                    Cell::Text(value) => value.capacity(),
+                    Cell::Bytes(value) => value.capacity(),
+                    Cell::Null | Cell::Int(_) | Cell::Float(_) => 0,
+                });
+            }
+        }
+        bytes = bytes.saturating_add(
+            self.col_names
+                .iter()
+                .map(|name| name.capacity())
+                .sum::<usize>(),
+        );
+        Some(i64::try_from(bytes).unwrap_or(i64::MAX))
     }
 
     /// PostgreSQL native type name of result column `i` (0-based) — the server's
@@ -1371,8 +1864,8 @@ impl PgStmt {
             return String::new();
         }
         self.statement
-            .columns()
-            .get(i as usize)
+            .as_ref()
+            .and_then(|statement| statement.columns().get(i as usize))
             .map(|c| c.type_().name().to_string())
             .unwrap_or_default()
     }
@@ -1387,8 +1880,8 @@ impl PgStmt {
             return 0;
         }
         self.statement
-            .columns()
-            .get(i as usize)
+            .as_ref()
+            .and_then(|statement| statement.columns().get(i as usize))
             .map(|c| i64::from(c.type_().oid()))
             .unwrap_or(0)
     }
@@ -1414,8 +1907,8 @@ impl PgStmt {
             return 0;
         }
         self.statement
-            .columns()
-            .get(i as usize)
+            .as_ref()
+            .and_then(|statement| statement.columns().get(i as usize))
             .and_then(|c| c.table_oid())
             .map(i64::from)
             .unwrap_or(0)
@@ -1452,8 +1945,8 @@ impl PgStmt {
             return -1;
         }
         self.statement
-            .columns()
-            .get(i as usize)
+            .as_ref()
+            .and_then(|statement| statement.columns().get(i as usize))
             .map(|c| type_len(c.type_()))
             .unwrap_or(-1)
     }
@@ -1482,8 +1975,8 @@ impl PgStmt {
             return -1;
         }
         self.statement
-            .columns()
-            .get(i as usize)
+            .as_ref()
+            .and_then(|statement| statement.columns().get(i as usize))
             .map(|c| i64::from(c.type_modifier()))
             .unwrap_or(-1)
     }
@@ -1717,6 +2210,25 @@ fn decode_row(row: &Row) -> Vec<Cell> {
 mod tests {
     use super::*;
 
+    /// Emulated interpolation replaces only scanner-generated markers, quotes
+    /// text and bytes, and preserves a source `$1` token byte-for-byte.
+    #[test]
+    fn emulated_interpolation_uses_scanner_marker_ranges() {
+        let (sql, _, mixed, markers) =
+            translate_placeholders_with_markers("SELECT '$1', $1, :first, :name");
+        assert!(!mixed);
+        let rendered = interpolate_emulated_sql(
+            &sql,
+            &markers,
+            &[Bind::Text("O'Reilly".to_string()), Bind::Bytes(vec![0, 255])],
+        )
+        .expect("emulated SQL renders");
+        assert_eq!(
+            rendered,
+            "SELECT '$1', $1, 'O''Reilly', decode('00ff', 'hex')"
+        );
+    }
+
     /// The TLS keys are consumed by `parse_tls`, not forwarded into the libpq
     /// connection string — tokio-postgres's parser rejects `sslrootcert` and the
     /// `verify-*` sslmode values, so leaking any of them would break `.parse()`.
@@ -1736,28 +2248,36 @@ mod tests {
         );
     }
 
-    /// P1-d: an unrecognized-but-real libpq key (`sslcrl`) and a key
-    /// tokio-postgres simply doesn't model (`client_encoding`) are dropped
-    /// rather than forwarded, so the DSN still parses into a connection string
-    /// instead of hard-failing with `UnknownOption`.
+    /// A supported translated key is stripped from the native Config string,
+    /// while an unsupported libpq key fails explicitly instead of disappearing.
     #[test]
-    fn parse_dsn_drops_unrecognized_libpq_keys() {
-        let dsn = "pgsql:host=db.example.com;dbname=app;sslcrl=/x;client_encoding=UTF8";
-        let conn_str = parse_dsn(dsn).expect("dsn parses despite the unrecognized keys");
+    fn parse_dsn_translates_client_encoding_and_rejects_unsupported_keys() {
+        let dsn = "pgsql:host=db.example.com;dbname=app;client_encoding=UTF8";
+        let conn_str = parse_dsn(dsn).expect("translated DSN parses");
         assert!(conn_str.contains("host='db.example.com'"));
         assert!(conn_str.contains("dbname='app'"));
         assert!(
-            !conn_str.contains("sslcrl"),
-            "sslcrl must not reach the libpq conn string: {conn_str}"
-        );
-        assert!(
             !conn_str.contains("client_encoding"),
-            "client_encoding must not reach the libpq conn string: {conn_str}"
+            "translated client_encoding must not reach Config: {conn_str}"
         );
-        // The whole point: tokio-postgres's own parser must accept the result.
         conn_str
             .parse::<Config>()
-            .expect("conn string with dropped keys must still parse");
+            .expect("conn string with translated key must parse");
+        assert_eq!(
+            client_encoding_from_dsn(dsn).expect("encoding parses"),
+            Some("UTF8".to_string())
+        );
+        let error = parse_dsn("pgsql:host=db.example.com;sslcrl=/x")
+            .expect_err("unsupported CRL semantics must fail");
+        assert!(error.contains("unsupported PostgreSQL DSN option 'sslcrl'"));
+    }
+
+    /// Malformed options and unsafe client-encoding values fail during DSN parsing.
+    #[test]
+    fn parse_dsn_rejects_malformed_and_invalid_client_encoding() {
+        assert!(parse_dsn("pgsql:host=localhost;broken").is_err());
+        assert!(parse_dsn("pgsql:host=localhost;client_encoding=UTF8' RESET ALL")
+            .is_err());
     }
 
     /// F-CORE-02: the prelude percent-encodes a constructor-supplied password

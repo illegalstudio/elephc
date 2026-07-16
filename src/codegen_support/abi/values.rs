@@ -193,13 +193,16 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 
 /// Branches to `label` when the integer result register is zero (coerced truthiness).
 ///
-/// AArch64: `cbz` (compare and branch if zero). x86_64: `test` + `je` (set cc + conditional jump).
+/// AArch64: inverse `cbnz` over an unconditional `b`; x86_64: `test` + `je`.
+/// The two-instruction AArch64 sequence gives the destination `b` its ±128 MiB range instead
+/// of `cbz`'s ±1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
+            emitter.instruction(&format!("b {}", label)); // branch with the wider unconditional range when the result is zero
+            emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(
@@ -214,13 +217,16 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 
 /// Branches to `label` when the integer result register is non-zero (coerced truthiness).
 ///
-/// AArch64: `cbnz` (compare and branch if non-zero). x86_64: `test` + `jne` (set cc + conditional jump).
+/// AArch64: inverse `cbz` over an unconditional `b`; x86_64: `test` + `jne`.
+/// The two-instruction AArch64 sequence gives the destination `b` its ±128 MiB range instead
+/// of `cbnz`'s ±1 MiB range, which large generated PDO/class functions can exceed.
 /// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("cbz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is zero
+            emitter.instruction(&format!("b {}", label)); // branch with the wider unconditional range when the result is nonzero
+            emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(

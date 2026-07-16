@@ -1337,6 +1337,7 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_deprecations: HashMap::new(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),

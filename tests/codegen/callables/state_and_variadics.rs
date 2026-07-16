@@ -673,6 +673,51 @@ echo (new Calc())->count_args(10, 20, 30);
     assert_eq!(out, "3");
 }
 
+/// Verifies an explicitly `mixed` method variadic remains heterogeneous across call sites
+/// instead of being permanently specialized to the first call's element type.
+#[test]
+fn test_mixed_variadic_method_does_not_specialize_between_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class MixedVariadicCollector {
+    public function count_args(mixed ...$args): int { return count($args); }
+}
+$collector = new MixedVariadicCollector();
+echo $collector->count_args("first") . ":" . $collector->count_args([1, 2], 3.5);
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies associative-array COW cloning retains receiver-bound callable
+/// descriptors. Later insertions must not free descriptors already stored under
+/// earlier keys when their source locals leave scope.
+#[test]
+fn test_assoc_array_cow_clone_retains_callable_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableHashTarget {
+    public function twice($value) { return $value * 2; }
+    public function triple($value) { return $value * 3; }
+    public function quadruple($value) { return $value * 4; }
+}
+
+$target = new CallableHashTarget();
+$twice = $target->twice(...);
+$callbacks = ["twice" => $twice];
+$triple = $target->triple(...);
+$callbacks["triple"] = $triple;
+$quadruple = $target->quadruple(...);
+$callbacks["quadruple"] = $quadruple;
+unset($twice, $triple, $quadruple);
+echo call_user_func_array($callbacks["twice"], [5]);
+echo ":" . call_user_func_array($callbacks["triple"], [5]);
+echo ":" . call_user_func_array($callbacks["quadruple"], [5]);
+"#,
+    );
+    assert_eq!(out, "10:15:20");
+}
+
 /// Verifies a typed variadic on a closure collects its arguments.
 #[test]
 fn test_typed_variadic_closure() {

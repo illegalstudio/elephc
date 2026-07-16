@@ -49,48 +49,49 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     // -- dispatch on array storage kind --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte (kind tag)
-    emitter.instruction("cmp x9, #3");                                           // kind 3 = hash storage?
-    emitter.instruction("b.eq __rt_array_get_mixed_key_hash");                   // route hash-storage arrays through hash_get
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = hash storage?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_hash");                  // route hash-storage arrays through hash_get
     emitter.instruction("cmp x9, #2");                                          // kind 2 = indexed storage?
-    emitter.instruction("b.ne __rt_array_get_mixed_key_null");                   // unknown kind → null
+    emitter.instruction("b.ne __rt_array_get_mixed_key_null");                  // unknown kind → null
 
     // -- indexed storage: dispatch on key tag --
     emitter.label("__rt_array_get_mixed_key_indexed");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
-    emitter.instruction("cmn x11, #1");                                          // compare with -1 (int-key sentinel)
-    emitter.instruction("b.ne __rt_array_get_mixed_key_string_on_indexed");      // string key on indexed storage → warn + null
+    emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
+    emitter.instruction("b.ne __rt_array_get_mixed_key_string_on_indexed");     // string key on indexed storage → warn + null
 
     // -- integer key on indexed storage: inline bounds-checked read --
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
-    emitter.instruction("ldr x9, [x0]");                                         // x9 = array length (header offset 0)
-    emitter.instruction("cmp x12, #0");                                          // negative index → null
-    emitter.instruction("b.lt __rt_array_get_mixed_key_int_missing");            // warn and return null for a negative indexed-array key
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = array length (header offset 0)
+    emitter.instruction("cmp x12, #0");                                         // negative index → null
+    emitter.instruction("b.lt __rt_array_get_mixed_key_int_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
     emitter.instruction("b.ge __rt_array_get_mixed_key_int_missing");           // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("ldr x13, [x0, #-8]");                                   // reload kind metadata for element type tag
+    emitter.instruction("ldr x13, [x0, #-8]");                                  // reload kind metadata for element type tag
     emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
     emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
-    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_boxed");          // boxed slots must be retained before returning
+    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_boxed");         // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp x13, #1");                                         // do indexed slots contain string pointer/length pairs?
-    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_string");         // string slots need a 16-byte load before boxing
+    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_string");        // string slots need a 16-byte load before boxing
     emitter.instruction("cmp x13, #8");                                         // do indexed slots represent null payloads?
-    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_null");            // null slots have no payload to read
-    emitter.instruction("ldr x1, [x10, x12, lsl #3]");                           // load scalar or pointer payload from the typed indexed slot
+    emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_null");          // null slots have no payload to read
+    emitter.instruction("ldr x1, [x10, x12, lsl #3]");                          // load scalar or pointer payload from the typed indexed slot
     emitter.instruction("mov x2, #0");                                          // typed indexed slots use one payload word except strings
     emitter.instruction("mov x0, x13");                                         // x0 = runtime value_type tag for the boxed result
-    emitter.instruction("bl __rt_mixed_from_value");                             // box the typed indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed indexed-array element into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
-    emitter.instruction("ldr x0, [x10, x12, lsl #3]");                            // load the boxed Mixed pointer from the indexed slot
-    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");                // empty slot → null Mixed
-    emitter.instruction("bl __rt_incref");                                       // retain the stored Mixed cell so the caller owns the returned result
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
+    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // empty slot → null Mixed
+    emitter.instruction("bl __rt_mixed_unbox");                                 // copy the stored zval payload instead of aliasing its mutable Mixed cell
+    emitter.instruction("bl __rt_mixed_from_value");                            // return a fresh cell that retains the nested heap payload
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_string");
     emitter.instruction("lsl x12, x12, #4");                                    // convert the element index to a 16-byte string slot offset
@@ -98,26 +99,26 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x10]");                                       // load string pointer from the selected slot
     emitter.instruction("ldr x2, [x10, #8]");                                   // load string length from the selected slot
     emitter.instruction("mov x0, #1");                                          // x0 = string runtime value_type tag
-    emitter.instruction("bl __rt_mixed_from_value");                             // box the string indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the string indexed-array element into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_indexed_null");
     emitter.instruction("mov x0, #8");                                          // x0 = null runtime value_type tag
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 for null
     emitter.instruction("mov x2, #0");                                          // value_hi = 0 for null
-    emitter.instruction("bl __rt_mixed_from_value");                             // box the null indexed-array element into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the null indexed-array element into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
     emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
-    emitter.instruction("ldr x0, [sp, #8]");                                     // reload the missing integer key for the PHP warning
-    emitter.instruction("bl __rt_warn_undefined_array_key_int");                 // emit or suppress the undefined-array-key warning
-    emitter.instruction("b __rt_array_get_mixed_key_null");                      // return boxed Mixed(null) after the warning
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
+    emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
+    emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) after the warning
 
     // -- string key on indexed storage: PHP returns null and may warn --
     emitter.label("__rt_array_get_mixed_key_string_on_indexed");
@@ -132,30 +133,31 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.label("__rt_array_get_mixed_key_hash");
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
-    emitter.instruction("bl __rt_hash_get");                                     // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
-    emitter.instruction("cbz x0, __rt_array_get_mixed_key_hash_missing");        // miss → optional warning + null
-    emitter.instruction("cmp x3, #7");                                           // is the hash entry already a boxed Mixed?
-    emitter.instruction("b.ne __rt_array_get_mixed_key_hash_box");               // no → box (lo, hi, tag) into a fresh Mixed cell
-    emitter.instruction("mov x0, x1");                                           // yes → move the stored Mixed cell into the return register
-    emitter.instruction("bl __rt_incref");                                       // retain the stored Mixed cell so the caller owns the returned result
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
+    emitter.instruction("cbz x0, __rt_array_get_mixed_key_hash_missing");       // miss → optional warning + null
+    emitter.instruction("cmp x3, #7");                                          // is the hash entry already a boxed Mixed?
+    emitter.instruction("b.ne __rt_array_get_mixed_key_hash_box");              // no → box (lo, hi, tag) into a fresh Mixed cell
+    emitter.instruction("mov x0, x1");                                          // yes → load the stored Mixed cell into the unbox input register
+    emitter.instruction("bl __rt_mixed_unbox");                                 // copy the stored zval payload instead of aliasing its mutable cell
+    emitter.instruction("bl __rt_mixed_from_value");                            // return a fresh cell that retains the nested heap payload
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_array_get_mixed_key_hash_box");
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag (mixed_from_value first arg)
     emitter.instruction("mov x1, x1");                                          // x1 = value_lo (already in place)
     emitter.instruction("mov x2, x2");                                          // x2 = value_hi (already in place)
-    emitter.instruction("bl __rt_mixed_from_value");                             // box the hash entry into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the hash entry into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_array_get_mixed_key_hash_missing");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
     emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi to distinguish integer and string keys
     emitter.instruction("cmn x11, #1");                                         // check whether the missing hash key is integer-keyed
-    emitter.instruction("b.eq __rt_array_get_mixed_key_hash_missing_int");       // integer keys use the decimal warning helper
+    emitter.instruction("b.eq __rt_array_get_mixed_key_hash_missing_int");      // integer keys use the decimal warning helper
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
     emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit or suppress the undefined string-key warning
@@ -170,10 +172,10 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #8");                                          // x0 = null runtime value_type tag
     emitter.instruction("mov x1, #0");                                          // value_lo = 0 for null
     emitter.instruction("mov x2, #0");                                          // value_hi = 0 for null
-    emitter.instruction("bl __rt_mixed_from_value");                             // box null into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #32]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                      // release the local frame
-    emitter.instruction("ret");                                                  // return Mixed* in x0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 }
 
 /// Emits the x86_64 variant of `__rt_array_get_mixed_key`.
@@ -224,11 +226,11 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r11, 0x7f");                                       // mask the element type tag
     emitter.instruction("lea r10, [rdi + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp r11, 7");                                          // are indexed slots already boxed Mixed pointers?
-    emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");            // boxed slots must be retained before returning
+    emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");           // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp r11, 1");                                          // do indexed slots contain string pointer/length pairs?
-    emitter.instruction("je __rt_array_get_mixed_key_indexed_string");           // string slots need a 16-byte load before boxing
+    emitter.instruction("je __rt_array_get_mixed_key_indexed_string");          // string slots need a 16-byte load before boxing
     emitter.instruction("cmp r11, 8");                                          // do indexed slots represent null payloads?
-    emitter.instruction("je __rt_array_get_mixed_key_indexed_null");             // null slots have no payload to read
+    emitter.instruction("je __rt_array_get_mixed_key_indexed_null");            // null slots have no payload to read
     emitter.instruction("mov rdi, QWORD PTR [r10 + r8 * 8]");                   // load scalar or pointer payload from the typed indexed slot
     emitter.instruction("xor rsi, rsi");                                        // typed indexed slots use one payload word except strings
     emitter.instruction("mov rax, r11");                                        // rax = runtime value_type tag for the boxed result
@@ -241,7 +243,9 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null Mixed
     emitter.instruction("je __rt_array_get_mixed_key_null");                    // return null for an empty boxed slot
-    emitter.instruction("call __rt_incref");                                     // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("call __rt_mixed_unbox");                               // copy the stored zval payload instead of aliasing its mutable Mixed cell
+    emitter.instruction("mov rsi, rdx");                                        // adapt mixed_unbox value_hi to mixed_from_value's third argument
+    emitter.instruction("call __rt_mixed_from_value");                          // return a fresh cell that retains the nested heap payload
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
@@ -293,8 +297,10 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_get_mixed_key_hash_missing");            // miss → optional warning + null
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_array_get_mixed_key_hash_box");               // no → box (lo, hi, tag) into a fresh Mixed cell
-    emitter.instruction("mov rax, rdi");                                        // yes → move the stored Mixed cell into the return register
-    emitter.instruction("call __rt_incref");                                     // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("mov rax, rdi");                                        // yes → load the stored Mixed cell into the unbox input register
+    emitter.instruction("call __rt_mixed_unbox");                               // copy the stored zval payload instead of aliasing its mutable cell
+    emitter.instruction("mov rsi, rdx");                                        // adapt mixed_unbox value_hi to mixed_from_value's third argument
+    emitter.instruction("call __rt_mixed_from_value");                          // return a fresh cell that retains the nested heap payload
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax

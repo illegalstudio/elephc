@@ -23,11 +23,12 @@
 //!   under a mutexed SQLite build; `assert_sqlite_threadsafe` pins that invariant
 //!   at the first open.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
-use std::sync::Once;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Once};
 
 use libsqlite3_sys as ffi;
 
@@ -50,6 +51,20 @@ pub struct SqliteConn {
     pub db: *mut ffi::sqlite3,
     /// Whether `db` has already been handed back to SQLite (see the type docs).
     released: Cell<bool>,
+    /// Transaction opening mode used by the next `PDO::beginTransaction()` call.
+    transaction_mode: Cell<i64>,
+    /// Authorizer callback registration owned by this connection. SQLite's
+    /// authorizer API has no destructor hook, so replacement/reset/close free it
+    /// explicitly rather than using the UDF registration path's `x_destroy`.
+    authorizer: Cell<*mut AuthorizerReg>,
+    /// Deferred PHP error classification produced inside SQLite's C callback.
+    authorizer_error: Arc<AtomicI64>,
+    /// Successfully registered collation names whose native callbacks must be
+    /// removed before PHP releases their callable descriptor roots.
+    collations: RefCell<Vec<String>>,
+    /// Successfully registered scalar/aggregate `(name, arity)` pairs. SQLite
+    /// shares one namespace for both forms, so one key tracks either registration.
+    functions: RefCell<Vec<(String, i64)>>,
 }
 unsafe impl Send for SqliteConn {}
 
@@ -70,6 +85,7 @@ impl Drop for SqliteConn {
         if self.released.replace(true) || self.db.is_null() {
             return;
         }
+        self.clear_callbacks();
         // `sqlite3_close` (not `_v2`) declines with SQLITE_BUSY when statements are
         // still live rather than freeing the handle underneath them, so this net can
         // never yank a db out from under a statement that is still registered: at
@@ -227,23 +243,28 @@ impl SqliteConn {
         Ok(SqliteConn {
             db,
             released: Cell::new(false),
+            transaction_mode: Cell::new(0),
+            authorizer: Cell::new(ptr::null_mut()),
+            authorizer_error: Arc::new(AtomicI64::new(0)),
+            collations: RefCell::new(Vec::new()),
+            functions: RefCell::new(Vec::new()),
         })
     }
 
-    /// Runs one or more statements with no result rows (`PDO::exec`). Returns the
-    /// number of rows changed, or `-1` on error.
+    /// Runs SQL on a borrowed native connection pointer without requiring the
+    /// bridge's connection-table lock to remain held across SQLite callbacks.
     ///
     /// # Safety
-    /// `sql` must point to a NUL-terminated string valid for the call.
-    pub unsafe fn exec(&self, sql: *const c_char) -> i64 {
+    /// `db` must be a live SQLite connection and `sql` a valid NUL-terminated string.
+    pub unsafe fn exec_on(db: *mut ffi::sqlite3, sql: *const c_char) -> i64 {
         if sql.is_null() {
             return -1;
         }
-        let rc = ffi::sqlite3_exec(self.db, sql, None, ptr::null_mut(), ptr::null_mut());
+        let rc = ffi::sqlite3_exec(db, sql, None, ptr::null_mut(), ptr::null_mut());
         if rc != ffi::SQLITE_OK {
             return -1;
         }
-        ffi::sqlite3_changes(self.db) as i64
+        ffi::sqlite3_changes(db) as i64
     }
 
     /// Returns the rowid of the most recent successful INSERT.
@@ -285,6 +306,30 @@ impl SqliteConn {
         (rc == ffi::SQLITE_OK) as i64
     }
 
+    /// Begins a transaction with the configured PHP 8.5 SQLite transaction mode.
+    pub fn begin_transaction(&self) -> i64 {
+        let sql = match self.transaction_mode.get() {
+            1 => b"BEGIN IMMEDIATE".as_slice(),
+            2 => b"BEGIN EXCLUSIVE".as_slice(),
+            _ => b"BEGIN DEFERRED".as_slice(),
+        };
+        self.exec_simple(sql)
+    }
+
+    /// Stores a validated PHP 8.5 SQLite transaction mode, returning `1` on success.
+    pub fn set_transaction_mode(&self, mode: i64) -> i64 {
+        if !(0..=2).contains(&mode) {
+            return 0;
+        }
+        self.transaction_mode.set(mode);
+        1
+    }
+
+    /// Returns the configured PHP 8.5 SQLite transaction mode.
+    pub fn transaction_mode(&self) -> i64 {
+        self.transaction_mode.get()
+    }
+
     /// Returns SQLite's primary result code for the connection's last operation.
     pub fn errcode(&self) -> i64 {
         unsafe { ffi::sqlite3_errcode(self.db) as i64 }
@@ -295,23 +340,27 @@ impl SqliteConn {
         unsafe { read_errmsg(self.db) }
     }
 
-    /// Prepares a statement, returning the statement handle or `()` on error.
+    /// Prepares SQL on a borrowed native connection pointer without retaining the
+    /// bridge's connection-table lock while an authorizer callback runs.
     ///
     /// # Safety
-    /// `sql` must point to a NUL-terminated string valid for the call.
-    pub unsafe fn prepare(&self, sql: *const c_char) -> Result<SqliteStmt, ()> {
+    /// `db` must be a live SQLite connection and `sql` a valid NUL-terminated string.
+    pub unsafe fn prepare_on(
+        db: *mut ffi::sqlite3,
+        sql: *const c_char,
+    ) -> Result<SqliteStmt, ()> {
         if sql.is_null() {
             return Err(());
         }
         let mut stmt: *mut ffi::sqlite3_stmt = ptr::null_mut();
         // -1 length lets SQLite read up to the NUL terminator.
-        let rc = ffi::sqlite3_prepare_v2(self.db, sql, -1, &mut stmt, ptr::null_mut());
+        let rc = ffi::sqlite3_prepare_v2(db, sql, -1, &mut stmt, ptr::null_mut());
         if rc != ffi::SQLITE_OK || stmt.is_null() {
             return Err(());
         }
         Ok(SqliteStmt {
             ptr: stmt,
-            db: self.db,
+            db,
             released: Cell::new(false),
         })
     }
@@ -323,6 +372,7 @@ impl SqliteConn {
         if self.released.get() || self.db.is_null() {
             return;
         }
+        self.clear_callbacks();
         // Only SQLITE_OK means SQLite actually freed the handle. Anything else
         // (SQLITE_BUSY: a statement of this connection outlived the caller's
         // finalize loop) leaves it live and un-released, so `Drop` still gets a shot
@@ -376,6 +426,12 @@ impl SqliteConn {
         }
     }
 
+    /// Returns SQLite's linked library version, which php-src exposes identically
+    /// for both its client- and server-version attributes.
+    pub fn client_version(&self) -> String {
+        self.server_version()
+    }
+
     /// Loads the SQLite extension at `path` (its entry point auto-derived, as PHP's
     /// `Pdo\Sqlite::loadExtension()` does), returning 1 on success or 0 on error.
     /// Extension loading is enabled only for the duration of the call and disabled
@@ -408,7 +464,8 @@ impl SqliteConn {
     /// returning its raw bytes. `dbname` selects the attached database ("main" by
     /// default), `rowid` is the row's integer key, and `column` names the BLOB
     /// column. A missing row/column, or a column that cannot be opened as a blob,
-    /// surfaces as `Err(message)`. Backs `Pdo\Sqlite::openBlob()` (read-whole).
+    /// surfaces as `Err(message)`. Backs the initial snapshot used by
+    /// `Pdo\Sqlite::openBlob()`'s seekable stream wrapper.
     pub fn blob_read(
         &self,
         dbname: &str,
@@ -421,7 +478,8 @@ impl SqliteConn {
         let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
         unsafe {
             let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
-            // flags = 0 opens the blob read-only, which is all read-whole needs.
+            // flags = 0 is sufficient for the wrapper's initial snapshot; writable
+            // range updates reopen the same cell through `blob_write`.
             let rc = ffi::sqlite3_blob_open(
                 self.db,
                 c_db.as_ptr(),
@@ -447,6 +505,60 @@ impl SqliteConn {
             match err {
                 Some(msg) => Err(msg),
                 None => Ok(buf),
+            }
+        }
+    }
+
+    /// Replaces the bytes of an existing SQLite BLOB through the incremental-blob
+    /// API. SQLite cannot resize an incremental BLOB, so `data` must have exactly
+    /// the cell's existing byte length; callers implement partial writes by first
+    /// reading the cell, patching that snapshot, and sending the full fixed-size
+    /// value back. Returns `Ok(())` on success and the live SQLite error otherwise.
+    pub fn blob_write(
+        &self,
+        dbname: &str,
+        table: &str,
+        column: &str,
+        rowid: i64,
+        data: &[u8],
+    ) -> Result<(), String> {
+        let c_db = CString::new(dbname).map_err(|_| "invalid database name".to_string())?;
+        let c_table = CString::new(table).map_err(|_| "invalid table name".to_string())?;
+        let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
+        unsafe {
+            let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
+            let rc = ffi::sqlite3_blob_open(
+                self.db,
+                c_db.as_ptr(),
+                c_table.as_ptr(),
+                c_col.as_ptr(),
+                rowid,
+                1,
+                &mut blob,
+            );
+            if rc != ffi::SQLITE_OK || blob.is_null() {
+                return Err(read_errmsg(self.db));
+            }
+            let size = ffi::sqlite3_blob_bytes(blob).max(0) as usize;
+            if size != data.len() {
+                ffi::sqlite3_blob_close(blob);
+                return Err("It is not possible to increase the size of a BLOB".to_string());
+            }
+            let write_rc = if data.is_empty() {
+                ffi::SQLITE_OK
+            } else {
+                ffi::sqlite3_blob_write(
+                    blob,
+                    data.as_ptr() as *const c_void,
+                    data.len() as c_int,
+                    0,
+                )
+            };
+            let err = (write_rc != ffi::SQLITE_OK).then(|| read_errmsg(self.db));
+            ffi::sqlite3_blob_close(blob);
+            match err {
+                Some(msg) => Err(msg),
+                None => Ok(()),
             }
         }
     }
@@ -484,6 +596,9 @@ impl SqliteConn {
             Some(x_destroy),
         );
         if rc == ffi::SQLITE_OK {
+            let mut collations = self.collations.borrow_mut();
+            collations.retain(|registered| !registered.eq_ignore_ascii_case(name));
+            collations.push(name.to_string());
             1
         } else {
             0
@@ -529,6 +644,7 @@ impl SqliteConn {
             Some(x_destroy),
         );
         if rc == ffi::SQLITE_OK {
+            self.remember_function(name, num_args);
             1
         } else {
             0
@@ -582,10 +698,112 @@ impl SqliteConn {
             Some(x_destroy_agg),
         );
         if rc == ffi::SQLITE_OK {
+            self.remember_function(name, num_args);
             1
         } else {
             0
         }
+    }
+
+    /// Installs a PHP 8.5 SQLite authorizer backed by a compiled-PHP callable.
+    /// The scalar callback adapter is reused because the authorizer's five values
+    /// use the same int/string/null argument shape and boxed scalar return ABI.
+    /// Replacing a callback releases the previous registration. Returns `1` on
+    /// success and `0` when SQLite rejects the registration.
+    ///
+    /// # Safety
+    /// `descriptor` and `adapter` must remain valid while the authorizer is
+    /// installed. The PDO prelude roots the descriptor for that lifetime.
+    pub unsafe fn set_authorizer(
+        &self,
+        descriptor: *mut c_void,
+        adapter: *const c_void,
+    ) -> i64 {
+        self.clear_authorizer();
+        let reg = Box::into_raw(Box::new(AuthorizerReg {
+            descriptor,
+            adapter,
+            error: Arc::clone(&self.authorizer_error),
+        }));
+        let rc = ffi::sqlite3_set_authorizer(self.db, Some(x_authorizer), reg as *mut c_void);
+        if rc == ffi::SQLITE_OK {
+            self.authorizer.set(reg);
+            1
+        } else {
+            drop(Box::from_raw(reg));
+            0
+        }
+    }
+
+    /// Removes and frees the installed SQLite authorizer, if any. This is
+    /// idempotent and is used by nullable reset, replacement, close, and `Drop`.
+    pub fn clear_authorizer(&self) {
+        let reg = self.authorizer.replace(ptr::null_mut());
+        unsafe {
+            ffi::sqlite3_set_authorizer(self.db, None, ptr::null_mut());
+            if !reg.is_null() {
+                drop(Box::from_raw(reg));
+            }
+        }
+        self.authorizer_error.store(0, Ordering::Release);
+    }
+
+    /// Removes every callback registration before its compiled-PHP descriptor roots
+    /// are released. This is required even for persistent handles, which stay in the
+    /// pool after the owning PDO object is destroyed.
+    pub fn clear_callbacks(&self) {
+        self.clear_authorizer();
+        let collations = self.collations.take();
+        for name in collations {
+            let Ok(c_name) = CString::new(name) else {
+                continue;
+            };
+            unsafe {
+                ffi::sqlite3_create_collation_v2(
+                    self.db,
+                    c_name.as_ptr(),
+                    ffi::SQLITE_UTF8,
+                    ptr::null_mut(),
+                    None,
+                    None,
+                );
+            }
+        }
+        let functions = self.functions.take();
+        for (name, num_args) in functions {
+            let Ok(c_name) = CString::new(name) else {
+                continue;
+            };
+            unsafe {
+                ffi::sqlite3_create_function_v2(
+                    self.db,
+                    c_name.as_ptr(),
+                    num_args as c_int,
+                    ffi::SQLITE_UTF8,
+                    ptr::null_mut(),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
+    }
+
+    /// Records one successful scalar or aggregate registration, replacing the
+    /// case-insensitive SQLite key already occupying the same name and arity.
+    fn remember_function(&self, name: &str, num_args: i64) {
+        let mut functions = self.functions.borrow_mut();
+        functions.retain(|(registered, arity)| {
+            *arity != num_args || !registered.eq_ignore_ascii_case(name)
+        });
+        functions.push((name.to_string(), num_args));
+    }
+
+    /// Takes and clears a deferred authorizer callback error classification.
+    /// Zero means the callback returned a valid SQLite decision or did not run.
+    pub fn take_authorizer_error(&self) -> i64 {
+        self.authorizer_error.swap(0, Ordering::AcqRel)
     }
 }
 
@@ -613,6 +831,17 @@ struct UdfReg {
     descriptor: *mut c_void,
     /// The shared codegen adapter entry that re-enters the descriptor.
     adapter: *const c_void,
+}
+
+/// SQLite authorizer registration with deferred PHP error state. The authorizer
+/// API has no destructor hook, so `SqliteConn` owns and frees this box directly.
+struct AuthorizerReg {
+    /// The 64-byte compiled-PHP callable descriptor pointer.
+    descriptor: *mut c_void,
+    /// The shared scalar callback adapter entry.
+    adapter: *const c_void,
+    /// Error classification consumed by the outer PDO method after SQLite returns.
+    error: Arc<AtomicI64>,
 }
 
 /// SQLite collation dispatcher (`xCompare`). Recovers the `UdfReg` from `pApp`
@@ -706,6 +935,98 @@ type ScalarAdapter = unsafe extern "C" fn(
     argc: i64,
     out: *mut ElephcResult,
 );
+
+/// Converts one nullable, NUL-terminated SQLite authorizer argument to the
+/// byte-counted value record consumed by the shared scalar callback adapter.
+///
+/// # Safety
+/// A non-null `value` must point to a live NUL-terminated SQLite string for the
+/// duration of the current authorizer callback.
+unsafe fn decode_nullable_cstr(value: *const c_char) -> ElephcVal {
+    if value.is_null() {
+        return ElephcVal {
+            tag: 0,
+            i: 0,
+            f: 0.0,
+            ptr: ptr::null(),
+            len: 0,
+        };
+    }
+    let bytes = CStr::from_ptr(value).to_bytes();
+    ElephcVal {
+        tag: 3,
+        i: 0,
+        f: 0.0,
+        ptr: bytes.as_ptr(),
+        len: bytes.len() as i64,
+    }
+}
+
+/// SQLite authorizer dispatcher. It forwards the action code and four nullable
+/// context strings to the compiled-PHP callable and accepts only the three integer
+/// decisions SQLite defines (`OK`, `DENY`, and `IGNORE`). Exceptions and invalid
+/// return types/values fail closed with `SQLITE_DENY`.
+///
+/// # Safety
+/// `p_arg` must be a live `Box<AuthorizerReg>` installed by `set_authorizer`; every
+/// non-null string pointer is owned by SQLite and valid for this callback.
+unsafe extern "C" fn x_authorizer(
+    p_arg: *mut c_void,
+    action: c_int,
+    arg1: *const c_char,
+    arg2: *const c_char,
+    arg3: *const c_char,
+    arg4: *const c_char,
+) -> c_int {
+    if p_arg.is_null() {
+        return ffi::SQLITE_OK;
+    }
+    let reg = &*(p_arg as *const AuthorizerReg);
+    let values = [
+        ElephcVal {
+            tag: 1,
+            i: action as i64,
+            f: 0.0,
+            ptr: ptr::null(),
+            len: 0,
+        },
+        decode_nullable_cstr(arg1),
+        decode_nullable_cstr(arg2),
+        decode_nullable_cstr(arg3),
+        decode_nullable_cstr(arg4),
+    ];
+    let adapter: ScalarAdapter = std::mem::transmute(reg.adapter);
+    let mut out = ElephcResult {
+        tag: 0,
+        i: 0,
+        f: 0.0,
+    };
+    udf_result_stash_clear();
+    adapter(
+        reg.descriptor,
+        values.as_ptr(),
+        values.len() as i64,
+        &mut out,
+    );
+    let error = match out.tag {
+        1 if matches!(out.i, 0..=2) => 0,
+        1 => 1,
+        -1 => 2,
+        0 => 10,
+        2 => 11,
+        3 | 4 => 12,
+        5 => 13,
+        6 => 14,
+        7 => 15,
+        _ => 15,
+    };
+    reg.error.store(error, Ordering::Release);
+    if error == 0 {
+        out.i as c_int
+    } else {
+        ffi::SQLITE_DENY
+    }
+}
 
 thread_local! {
     /// Per-thread staging buffer for a scalar/aggregate UDF's string or blob return.
@@ -830,6 +1151,10 @@ unsafe fn dispatch_scalar_result(ctx: *mut ffi::sqlite3_context, out: &ElephcRes
                     ffi::SQLITE_TRANSIENT(),
                 );
             }
+        }
+        6 | 7 => {
+            let msg = c"PDO user function callback returned an unsupported type";
+            ffi::sqlite3_result_error(ctx, msg.as_ptr(), -1);
         }
         _ => ffi::sqlite3_result_null(ctx),
     }
@@ -1049,6 +1374,22 @@ unsafe extern "C" fn x_destroy_agg(p_arg: *mut c_void) {
 }
 
 impl SqliteStmt {
+    /// Returns SQLite's source table name for result column `i`, or an empty
+    /// string for expressions and out-of-range columns.
+    pub fn column_table_name(&self, i: i64) -> String {
+        if i < 0 {
+            return String::new();
+        }
+        unsafe {
+            let value = ffi::sqlite3_column_table_name(self.ptr, i as c_int);
+            if value.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(value).to_string_lossy().into_owned()
+            }
+        }
+    }
+
     /// Resolves a named placeholder to its 1-based bind index, trying the
     /// `:name`, `@name`, `$name` prefixes and the bare name. Returns `0` when no
     /// placeholder matches.
@@ -1260,5 +1601,23 @@ impl SqliteStmt {
     /// as a live read rather than a stored value.
     pub fn readonly(&self) -> i64 {
         (unsafe { ffi::sqlite3_stmt_readonly(self.ptr) } != 0) as i64
+    }
+
+    /// Returns whether SQLite has stepped this statement and not yet reset or finalized it.
+    pub fn busy(&self) -> i64 {
+        unsafe { (ffi::sqlite3_stmt_busy(self.ptr) != 0) as i64 }
+    }
+
+    /// Returns SQLite's current explain mode for this statement.
+    pub fn explain_mode(&self) -> i64 {
+        unsafe { ffi::sqlite3_stmt_isexplain(self.ptr) as i64 }
+    }
+
+    /// Selects SQLite's prepared, EXPLAIN, or EXPLAIN QUERY PLAN mode.
+    pub fn set_explain_mode(&self, mode: i64) -> i64 {
+        if !(0..=2).contains(&mode) {
+            return 0;
+        }
+        unsafe { (ffi::sqlite3_stmt_explain(self.ptr, mode as c_int) == ffi::SQLITE_OK) as i64 }
     }
 }

@@ -4419,6 +4419,16 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        if let ExprKind::Variable(name) = &arg.kind {
+            ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+        }
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
@@ -6405,6 +6415,7 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 /// Returns precise builtin return types needed by EIR value materialization.
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "__elephc_normalize_callable" => Some(PhpType::Callable),
         "chdir" | "checkdate" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
         | "class_alias" | "class_exists" | "copy" | "define" | "defined"
         | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
@@ -6443,7 +6454,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_bucket_append" | "stream_bucket_prepend" | "unset" => Some(PhpType::Void),
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
-        | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
+        | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell"
         | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "gmmktime" | "sleep"
         | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
@@ -6457,6 +6468,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         // `=== false` and `echo` observe the distinct false; `__elephc_strtotime_raw` (the DateTime
         // internal alias above) stays a plain Int that maps the failure sentinel to -1.
         "strtotime" => Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])),
+        // fwrite() reports the non-negative byte count or boolean false when the
+        // underlying write fails; the backend converts its -1 runtime sentinel.
+        "fwrite" => Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])),
         // microtime() with a non-literal `as_float` flag yields `string|float` (boxed `Mixed`):
         // the runtime branches on the flag and boxes either the "0.NNNNNNNN sec" string or the
         // float. Literal-true / literal-false / omitted cases are resolved earlier by
@@ -8444,11 +8458,19 @@ fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let mut operands = vec![lower_expr(ctx, name_expr).value];
-    operands.extend(lower_args(ctx, args));
+    let uses_runtime_arg_container = args.iter().any(is_spread_arg)
+        || crate::types::call_args::has_named_args(args);
+    if uses_runtime_arg_container {
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+            .expect("dynamic constructor arguments always have a runtime container form");
+        operands.push(arg_container.value);
+    } else {
+        operands.extend(lower_args(ctx, args));
+    }
     ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        None,
+        uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),

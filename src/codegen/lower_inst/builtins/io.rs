@@ -2834,7 +2834,7 @@ pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fwrite(stream, data)` and returns the number of bytes written.
+/// Lowers `fwrite(stream, data)` and boxes a byte count or PHP `false` on error.
 pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "fwrite", 2)?;
     let stream = expect_operand(inst, 0)?;
@@ -2855,6 +2855,7 @@ pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_call_label(ctx.emitter, "__rt_fwrite");
         }
     }
+    box_negative_int_or_false_result(ctx, "fwrite");
     store_if_result(ctx, inst)
 }
 

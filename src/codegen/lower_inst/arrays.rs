@@ -913,7 +913,8 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Mixed => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
-            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // copy the stored zval payload instead of aliasing its mutable Mixed cell
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");         // return a fresh cell that retains the nested heap payload
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
@@ -975,7 +976,9 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Mixed => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
-            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // copy the stored zval payload instead of aliasing its mutable Mixed cell
+            ctx.emitter.instruction("mov rsi, rdx");                            // adapt mixed_unbox value_hi to mixed_from_value's third argument
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");         // return a fresh cell that retains the nested heap payload
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads

@@ -570,7 +570,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
     ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("je {}", null_key));                      // route null keys to the empty-string key path
+    ctx.emitter.instruction(&format!("je {}", null_key));                       // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
@@ -587,7 +587,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);
     emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
-    ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
@@ -635,9 +635,15 @@ fn materialize_hash_value_aarch64(
         return materialize_hash_mixed_value_for_concrete_storage_aarch64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the owned callable descriptor as the hash value low word
+            ctx.emitter.instruction("mov x4, xzr");                             // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
@@ -675,9 +681,15 @@ fn materialize_hash_value_x86_64(
         return materialize_hash_mixed_value_for_concrete_storage_x86_64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the owned callable descriptor as the hash value low word
+            ctx.emitter.instruction("xor r8, r8");                              // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
@@ -1076,8 +1088,9 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.instruction("mov x0, x1");                                      // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // copy the stored zval payload instead of aliasing its mutable cell
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // return a fresh cell that retains the nested heap payload
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
@@ -1091,8 +1104,10 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.instruction("mov rax, rdi");                                    // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // copy the stored zval payload instead of aliasing its mutable cell
+    ctx.emitter.instruction("mov rsi, rdx");                                    // adapt mixed_unbox value_hi to mixed_from_value's third argument
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // return a fresh cell that retains the nested heap payload
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper

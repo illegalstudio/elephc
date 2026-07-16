@@ -74,9 +74,9 @@ enum BaseKind<'a> {
 /// Returns the nested-append group a synthetic body encodes, or `None` to fall back to
 /// today's lowering.
 ///
-/// The scope gate is deliberately narrow: a plain variable base whose checker type is an
-/// associative array. Indexed bases, property bases and static-property bases keep the existing
-/// read/copy/write-back path — correct, just slow (and, for a missing key, still lossy).
+/// The scope gate is deliberately narrow: a plain variable base whose checker type is an indexed
+/// or associative array. Property bases and static-property bases are gated after loading their
+/// IR value. Other shapes keep the existing read/copy/write-back path.
 pub(super) fn recognize<'a>(
     ctx: &LoweringContext<'_, '_>,
     body: &'a [Stmt],
@@ -163,11 +163,13 @@ pub(super) fn recognize<'a>(
         _ => return None,
     }
 
-    // A local container must be an associative-array local the checker knows about; anything else
-    // (an indexed array, a Mixed local, an undeclared name) falls open to today's lowering. A
-    // property container is gated at lowering time instead, on the IR type of the loaded property.
+    // A local container must be an indexed- or associative-array local the checker knows about;
+    // anything else falls open to ordinary lowering. A property container is gated at lowering
+    // time instead, on the IR type of the loaded property.
     if let BaseKind::Local(name) = base {
-        if !ctx.has_local_slot(name) || !matches!(ctx.local_type(name), PhpType::AssocArray { .. }) {
+        if !ctx.has_local_slot(name)
+            || !matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
             return None;
         }
     }
@@ -267,19 +269,21 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // base the new pointer would never reach the property and it would be left stale. A property
     // base therefore keeps the auto-vivification and stays quadratic.
     if let BaseKind::Local(name) = &group.base {
-        // Re-load the container and key: they were emitted in a predecessor block, and the
-        // vivification may have republished a grown or copy-on-write-split container pointer into
-        // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
-        // a prefix temporary, so neither is evaluated twice observably.
-        let container = ctx.load_local(name, Some(span));
-        let key = lower_expr(ctx, group.index);
-        ctx.emit_void(
-            Op::SlotDetach,
-            vec![container.value, key.value],
-            None,
-            Op::SlotDetach.default_effects(),
-            Some(span),
-        );
+        if matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            // Re-load the container and key: they were emitted in a predecessor block, and the
+            // vivification may have republished a grown or copy-on-write-split container pointer into
+            // the local. A `LoadLocal` is pure, and the key is either replayable or already hoisted into
+            // a prefix temporary, so neither is evaluated twice observably.
+            let container = ctx.load_local(name, Some(span));
+            let key = lower_expr(ctx, group.index);
+            ctx.emit_void(
+                Op::SlotDetach,
+                vec![container.value, key.value],
+                None,
+                Op::SlotDetach.default_effects(),
+                Some(span),
+            );
+        }
     }
 
     super::lower_stmt(ctx, group.push);

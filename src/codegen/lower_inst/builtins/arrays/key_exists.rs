@@ -13,6 +13,8 @@
 //!   runtime-backed by promoted hash storage even though the checker only
 //!   promotes the *static* type to `AssocArray` at a provably string-keyed write.
 //! - Associative arrays probe `__rt_hash_get`; its found flag is already a PHP bool result.
+//! - Boxed Mixed/Union arrays unbox at runtime and dispatch tags 4/5 to the same packed/hash
+//!   probes, which preserves key presence after flow checks such as `is_array()`.
 //! - `array_key_exists()` must answer `true` for a key present with a `null`
 //!   value (unlike `isset()`, which answers `false`), so the mixed-key path
 //!   cannot reuse `__rt_array_get_mixed_key` plus an is-null check — it needs
@@ -35,11 +37,76 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Array(_) => lower_indexed_array_key_exists(ctx, inst, key, array),
         PhpType::AssocArray { .. } => lower_assoc_array_key_exists(ctx, inst, key, array),
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_mixed_array_key_exists(ctx, inst, key, array)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_key_exists for PHP array type {:?}",
             other
         ))),
     }
+}
+
+/// Lowers key existence for a boxed runtime array by dispatching Mixed tags 4/5.
+fn lower_mixed_array_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    let indexed = ctx.next_label("array_key_exists_mixed_indexed");
+    let assoc = ctx.next_label("array_key_exists_mixed_assoc");
+    let done = ctx.next_label("array_key_exists_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::super::super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov x9, x1");                              // preserve the unboxed array/hash payload pointer
+            ctx.emitter.instruction("cmp x0, #4");                             // runtime tag 4 selects indexed-array storage
+            ctx.emitter.instruction(&format!("b.eq {}", indexed));             // dispatch indexed arrays to their presence helper
+            ctx.emitter.instruction("cmp x0, #5");                             // runtime tag 5 selects associative-array storage
+            ctx.emitter.instruction(&format!("b.eq {}", assoc));               // dispatch associative arrays to hash lookup
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&indexed);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array payload to the presence helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists_mixed_key");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&assoc);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction("mov x0, x9");                              // pass the associative-array payload to hash lookup
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+        Arch::X86_64 => {
+            super::super::super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov r9, rdi");                             // preserve the unboxed array/hash payload pointer
+            ctx.emitter.instruction("cmp rax, 4");                             // runtime tag 4 selects indexed-array storage
+            ctx.emitter.instruction(&format!("je {}", indexed));               // dispatch indexed arrays to their presence helper
+            ctx.emitter.instruction("cmp rax, 5");                             // runtime tag 5 selects associative-array storage
+            ctx.emitter.instruction(&format!("je {}", assoc));                 // dispatch associative arrays to hash lookup
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&indexed);
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.emitter.instruction("mov rdi, r9");                            // pass the indexed-array payload to the presence helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists_mixed_key");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&assoc);
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.emitter.instruction("mov rdi, r9");                            // pass the associative-array payload to hash lookup
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers indexed-array key existence, dispatching on the key's PHP type: an

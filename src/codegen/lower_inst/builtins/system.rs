@@ -549,6 +549,60 @@ pub(crate) fn lower_elephc_strtotime_raw(
     store_if_result(ctx, inst)
 }
 
+/// Allocates a dynamically named object while deliberately skipping its constructor.
+pub(crate) fn lower_elephc_new_without_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_new_without_constructor", 1)?;
+    super::super::objects::lower_dynamic_object_new_mixed_without_constructor(ctx, inst)
+}
+
+/// Tests whether a dynamically named AOT class exposes an inherited or declared constructor.
+pub(crate) fn lower_elephc_class_has_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_class_has_constructor", 1)?;
+    super::super::objects::lower_dynamic_class_has_constructor(ctx, inst)
+}
+
+/// Classifies a dynamically named class for PDO's custom statement construction rules.
+pub(crate) fn lower_elephc_pdo_statement_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_statement_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_statement_class_status(ctx, inst)
+}
+
+/// Classifies the late-static called class for `PDO::connect()` driver validation.
+pub(crate) fn lower_elephc_pdo_called_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_called_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_called_class_status(ctx, inst)
+}
+
+/// Invokes a selected PDOStatement subclass constructor after its native state is initialized.
+pub(crate) fn lower_elephc_invoke_pdo_statement_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_invoke_pdo_statement_constructor", 3)?;
+    super::super::objects::lower_dynamic_pdo_statement_constructor_call(ctx, inst)
+}
+
+/// Initializes the private PDOStatement base fields on a dynamically allocated subclass.
+pub(crate) fn lower_elephc_initialize_pdo_statement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_initialize_pdo_statement", 5)?;
+    super::super::objects::lower_dynamic_pdo_statement_initialize(ctx, inst)
+}
+
 /// Marshals the shared `__rt_strtotime` ABI for `strtotime` / `__elephc_strtotime_raw`.
 ///
 /// Loads the datetime string (`x1`/`x2` on ARM64, `rdi`/`rsi` on x86_64), the optional base

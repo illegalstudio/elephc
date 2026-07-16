@@ -5,7 +5,7 @@ sidebar:
   order: 17
 ---
 
-elephc implements a large, practical subset of PHP 8.4's PDO database layer, with the
+elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, and **MySQL / MariaDB** drivers. `PDO`, `PDOStatement`,
 and `PDOException` behave like their PHP counterparts for everyday use: connect,
 execute, prepare/bind, fetch, and run transactions. The DSN prefix selects the driver,
@@ -21,6 +21,25 @@ loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
 returning wrong data. The [Divergences from php-src](#divergences-from-php-src) and
 [Limitations](#limitations) sections below enumerate what is different and why —
 read them before porting security-sensitive or data-loading code.
+
+## PHP compatibility version
+
+PDO's generated surface is selected with `--php-version=8.0` through
+`--php-version=8.6`; `ELEPHC_PHP_VERSION` provides the same selection for automation.
+The command-line option wins over the environment and the default remains PHP 8.4.
+Patch versions and values outside this range are rejected.
+
+| Target | PDO differences selected by elephc |
+| --- | --- |
+| 8.0 | Core classes and legacy SQLite/PostgreSQL driver methods; no public `queryString`, namespaced driver classes, or `PDO::connect()`. |
+| 8.1 | Public `PDOStatement::$queryString` and `PDORow::$queryString`. |
+| 8.2–8.3 | Password parameters carry `#[SensitiveParameter]`; otherwise the 8.1 PDO surface. |
+| 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`; historical high-bit fetch flags. |
+| 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, plus PostgreSQL transaction-constant deprecations. |
+| 8.6 | The 8.5 public surface plus PostgreSQL persistent-session cleanup with `DISCARD ALL` when the final owner releases a pooled handle. |
+
+The version switch currently governs PDO first; it does not claim that every unrelated
+PHP language or standard-library difference is version-gated.
 
 ## Connecting
 
@@ -86,10 +105,12 @@ $a = new PDO($dsn, null, null, [PDO::ATTR_PERSISTENT => true]);      // unkeyed 
 $b = new PDO($dsn, null, null, [PDO::ATTR_PERSISTENT => "reports"]); // separate pool
 ```
 
-Setting `ATTR_PERSISTENT` later with `setAttribute()` updates the reported attribute
-but does not reopen an already-created connection. Persistent connections are local to
-the running native process; there is no cross-process pool, and **no liveness check is
-performed on reuse** (see [Limitations](#limitations)).
+Setting `ATTR_PERSISTENT` later with `setAttribute()` returns `false`; persistence is a
+constructor-only choice and the live handle remains unchanged. Persistent connections are local to
+the running native process; there is no cross-process pool. Checkout is serialized and
+validates liveness (MySQL `COM_PING`, PostgreSQL client state), evicting a dead session
+before reconnecting. Under the PHP 8.6 target, the final owner of a persistent PostgreSQL
+handle also performs upstream's new disconnect-equivalent `DISCARD ALL` cleanup.
 
 ## Executing statements
 
@@ -137,8 +158,9 @@ $stmt->bindValue(":score", 5, PDO::PARAM_INT);
 $stmt->execute();
 ```
 
-`bindParam()` binds the variable's *current* value (it does not defer a by-reference
-read to `execute()` time), so bind immediately before `execute()`.
+`bindParam()` retains a durable reference to the caller variable and reads its current
+value on every `execute()`, including when a concrete scalar local must be promoted to
+the compiler's boxed `Mixed` reference-cell representation.
 
 **`execute($params)` REPLACES the recorded bindings**, it does not layer on top of
 them — php-src rebuilds its bound-parameter table from the array, so a slot bound
@@ -222,8 +244,9 @@ $cursorOrientation = PDO::FETCH_ORI_NEXT, int $cursorOffset = 0)`. Its second pa
 is an int **cursor orientation**, *not* a class/object target. (An earlier elephc
 release accepted `fetch(PDO::FETCH_CLASS, Row::class)`; that idiom is a `TypeError` in
 real PHP and no longer works here. Use `setFetchMode()` or `fetchObject()`.) The
-orientation is accepted and every value behaves as `FETCH_ORI_NEXT`: all cursors here
-are forward-only.
+orientation is honored by PostgreSQL statements prepared with
+`[PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL]`. SQLite rejects a scroll cursor and MySQL
+remains forward-only, matching the capabilities exposed by those drivers.
 
 `fetch()` returns `false` when the result set is exhausted. `FETCH_OBJ` creates a real
 `stdClass` and assigns dynamic properties directly, including numeric column names such
@@ -233,8 +256,9 @@ configured) and assigns column values to matching declared or dynamic properties
 fetch-into object specified.") when there is none.
 
 Column values are returned with their native scalar shape: integer → int, real /
-floating point → float, text → string, binary/BLOB/`bytea` → string with embedded NUL
-bytes preserved, and `NULL` → null. `FETCH_BOTH` is the default mode.
+floating point → float, text → string, SQLite/MySQL binary values → binary-safe string,
+PostgreSQL `boolean` → bool, PostgreSQL `bytea` → rewound stream resource, and `NULL` →
+null. `FETCH_BOTH` is the default mode.
 
 ### Fetch modes
 
@@ -242,16 +266,16 @@ bytes preserved, and `NULL` → null. `FETCH_BOTH` is the default mode.
 | --- | --- |
 | `FETCH_ASSOC` / `FETCH_NUM` / `FETCH_BOTH` / `FETCH_OBJ` | Fully supported. |
 | `FETCH_COLUMN` | Column index is the 2nd argument to `setFetchMode()` / `fetchAll()`. |
-| `FETCH_CLASS` | Target class configured on the statement. Always **constructor-first** hydration. |
+| `FETCH_CLASS` | Target class configured on the statement. Properties are assigned before the constructor by default; `FETCH_PROPS_LATE` selects constructor-first hydration. |
 | `FETCH_INTO` | Target object configured on the statement; HY000 without one. |
 | `FETCH_KEY_PAIR` | Two-column result as `[col0 => col1]`; HY000 if the result has ≠ 2 columns. |
 | `FETCH_NAMED` | Assoc-only; duplicate column names group into a list under one key. |
-| `FETCH_BOUND` | Advances the cursor and returns `true`/`false`, but `bindColumn()` is unsupported, so nothing is written back. |
+| `FETCH_BOUND` | Advances the cursor, writes every `bindColumn()` destination, and returns `true`/`false`. |
 | `FETCH_CLASSTYPE` | **Real**: the class name comes from column 0's *value*, per row; column 0 is consumed; an unknown class falls back to `stdClass`. |
 | `FETCH_GROUP` / `FETCH_UNIQUE` | **Implemented** (see below). |
-| `FETCH_PROPS_LATE` | Accepted, but inert — hydration is always constructor-first here. |
-| `FETCH_LAZY` | Rejected in `fetchAll()` (as in php-src) and, unlike php-src, also in `fetch()` — elephc has no `PDORow` class. |
-| `FETCH_FUNC` | Rejected with a `PDOException` (see [Limitations](#limitations)). |
+| `FETCH_PROPS_LATE` | Implements PHP's constructor-first class hydration. |
+| `FETCH_LAZY` | `fetch()` returns the statement-owned reusable `PDORow`; `fetchAll()` rejects it as php-src does. |
+| `FETCH_FUNC` | `fetchAll()` invokes any PHP callable shape (closure, function string, callable array, first-class descriptor, invokable object) once per row. |
 
 `setFetchMode()` validates before storing anything, so a rejected call leaves the
 statement's previous mode intact: an out-of-range base mode is a `ValueError`,
@@ -278,10 +302,14 @@ validates the argument before any driver dispatch).
   does: `native_type` is `"integer"` / `"double"` / `"string"` / `"null"`, a BLOB column
   reports `native_type` `"string"` with `"blob"` pushed into `flags` and `pdo_type`
   `PARAM_STR`. The column's *declared* type (`sqlite3_column_decltype`) is a separate
-  **`sqlite:decl_type`** key, present only when the column has one. `len`, `precision` and
-  `table` have no source in `pdo_sqlite` and are present with neutral values (`0`, `0`,
-  `""`) rather than omitted, so a caller reading them never errors.
-- **PostgreSQL** and **MySQL** report their own real metadata — see their sections below.
+  **`sqlite:decl_type`** key, present only when the column has one. Common descriptor
+  fields report `len = -1` and `precision = 0`; `table` is present only for a column
+  backed by a native SQLite table.
+- **PostgreSQL** reports `pgsql:oid`, `pgsql:table_oid`, native type, PDO type, raw
+  `PQfsize`/`PQfmod` equivalents, and the `pg_class` table name when applicable.
+- **MySQL** reports its wire type (`LONG`, `VAR_STRING`, `NEWDECIMAL`, …), PDO type,
+  source table, declared length/precision, and native flags such as `not_null`,
+  `primary_key`, `multiple_key`, `unique_key`, and `blob`.
 
 ### `FETCH_GROUP` and `FETCH_UNIQUE`
 
@@ -307,10 +335,7 @@ Supported base modes under GROUP/UNIQUE: `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH
 `FETCH_CLASSTYPE` combination (which would want column 0 too), raise a `PDOException`
 rather than returning a plausible array of the wrong shape.
 
-**One divergence:** php-src casts the grouping key to a string and PHP's array then
-folds an integer-*looking* string key back to an int key. elephc's arrays do not, so a
-grouping column holding `1` reads back as `$out["1"]`, not `$out[1]`. Non-numeric keys
-(type names, statuses, categories — the overwhelmingly common case) are identical.
+Grouping keys use PHP array-key normalization, including integer-looking strings.
 
 ## Iterating a statement
 
@@ -328,14 +353,10 @@ foreach ($stmt as $i => $row) {
 ```
 
 The cursor is forward-only: each row is consumed as it is yielded, so a statement can
-be iterated once. `getIterator()` returns the statement itself.
-
-Note that elephc's `PDOStatement` implements `Iterator` directly, where php-src's
-implements `IteratorAggregate` with an internal, userland-invisible iterator. `foreach`
-behaves identically and `$stmt instanceof \Traversable` is true in both, but
-`instanceof \Iterator` / `instanceof \IteratorAggregate` and
-`method_exists($stmt, 'rewind')` answer differently. This is deliberate — see the
-F-STMT-11 note in `src/pdo_prelude.rs`.
+be iterated once. `PDOStatement` implements `IteratorAggregate` and `getIterator()` returns
+a forwarding iterator. The compiler-owned adapter is excluded from public class discovery,
+has a private constructor and exposes no public helper hook; the observable interface
+relationship matches PHP.
 
 ## Attributes
 
@@ -349,25 +370,40 @@ F-STMT-11 note in `src/pdo_prelude.rs`.
 | `ATTR_TIMEOUT` | Seconds. SQLite: busy-timeout. pgsql/mysql: folded into the DSN as `connect_timeout`, bounding the initial connect. |
 | `ATTR_DEFAULT_FETCH_MODE` | Mode used by a no-argument `fetch()`; inherited by statements at `prepare()` time. |
 | `ATTR_SERVER_VERSION` | The server's version string. |
-| `ATTR_CLIENT_VERSION` | Same value (the bridge links each client statically and has no separate client-library version; for SQLite this is exact PHP parity). |
-| `ATTR_CONNECTION_STATUS` | The fixed string `"Connection OK; waiting to send."`. |
+| `ATTR_CLIENT_VERSION` | SQLite's embedded library version; PostgreSQL/MySQL report the statically linked pure-Rust client implementation and version. |
+| `ATTR_SERVER_INFO` | PostgreSQL: live PID/session parameters. MySQL: live server statistics. SQLite follows IM001. |
+| `ATTR_CONNECTION_STATUS` | PostgreSQL: live connected/closed status in libpq's wording. MySQL: actual TCP/socket transport description. SQLite follows IM001. |
 | `ATTR_CASE` | Folds fetched column-name keys upper/lowercase. |
 | `ATTR_ORACLE_NULLS` | Folds `NULL` ↔ `""` in fetched scalar values. |
 | `ATTR_STRINGIFY_FETCHES` | Stringifies fetched INTEGER/FLOAT values. |
+| `ATTR_EMULATE_PREPARES` | MySQL text protocol (default `true`) or PostgreSQL simple-query protocol (default `false`). SQLite rejects it. |
+| `ATTR_AUTOCOMMIT` | Live MySQL session autocommit state. |
+| `ATTR_DEFAULT_STR_PARAM` | MySQL default `PARAM_STR_CHAR`/`PARAM_STR_NATL` string binding. |
 | `Pdo\Sqlite::ATTR_OPEN_FLAGS` | Raw `sqlite3_open_v2` flags at open time. A `file:` DSN body always gets `SQLITE_OPEN_URI` OR-ed in. |
 | `Pdo\Sqlite::ATTR_READONLY_STATEMENT` | Live `sqlite3_stmt_readonly()` read (statement-level). |
-| `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` | Wired: with it on, `errorInfo()[1]` is the *extended* code (`2067` SQLITE_CONSTRAINT_UNIQUE, not the coarse `19`). Write-only, exactly as in php-src — `getAttribute()` returns `null`. |
+| `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` | Wired: with it on, `errorInfo()[1]` is the *extended* code (`2067` SQLITE_CONSTRAINT_UNIQUE, not the coarse `19`). Write-only, exactly as in php-src — `getAttribute()` follows IM001. |
 | `Pdo\Mysql::ATTR_INIT_COMMAND` | One SQL statement run right after authentication. |
 | `Pdo\Mysql::ATTR_FOUND_ROWS` | Wired: negotiates `CLIENT_FOUND_ROWS`, so an UPDATE's `rowCount()` reports rows *matched*, not rows *changed*. |
+| `Pdo\Mysql::ATTR_DIRECT_QUERY` | Alias of `ATTR_EMULATE_PREPARES`, as in php-src. |
+| `Pdo\Mysql::ATTR_USE_BUFFERED_QUERY` | Selects buffered or observable unbuffered semantics for new statements. |
+| `Pdo\Mysql::ATTR_LOCAL_INFILE` / `ATTR_LOCAL_INFILE_DIRECTORY` | Constructor-only upload permission and canonical directory sandbox. |
+| `Pdo\Mysql::ATTR_COMPRESS` / `ATTR_IGNORE_SPACE` / `ATTR_MULTI_STATEMENTS` | Connection protocol/capability controls. |
 | `Pdo\Mysql::ATTR_SSL_KEY` / `ATTR_SSL_CERT` / `ATTR_SSL_CA` / `ATTR_SSL_VERIFY_SERVER_CERT` | Drive MySQL TLS (see the TLS section). |
+| `Pdo\Pgsql::ATTR_DISABLE_PREPARES` | Uses PostgreSQL's execute-only simple-query path, including multi-command SQL. |
+| `ATTR_PREFETCH` | PostgreSQL connection/prepare option controlling buffered cursor semantics. |
+| `ATTR_CURSOR` (prepare option) | PostgreSQL supports `CURSOR_SCROLL` and all `FETCH_ORI_*` movements. SQLite rejects non-forward cursors; MySQL remains forward-only. |
+| `ATTR_FETCH_TABLE_NAMES` | MySQL prefixes fetched column keys with the protocol table label; other drivers reject it. |
 
 `ATTR_CASE`, `ATTR_ORACLE_NULLS`, `ATTR_STRINGIFY_FETCHES`, and
 `ATTR_DEFAULT_FETCH_MODE` are **snapshotted onto each statement at `prepare()` time**,
 not re-read on every fetch: a `setAttribute()` call after a statement is prepared does
 not retroactively affect it (real PHP re-checks the connection attribute per fetch).
 
-Every other `ATTR_*` in the generic range (0..21) and the driver-specific range
-(1000..1015) is **stored and read back** but has no effect.
+Attributes are selected by the active driver's hook, not by numeric-range membership.
+An attribute unsupported by that driver is never retained in a generic echo bag:
+`setAttribute()` returns `false`, and `getAttribute()` follows the IM001 path. This is
+especially important because driver-specific values overlap (`1002` is SQLite extended
+result codes and MySQL init command).
 
 ### Attribute value validation
 
@@ -379,17 +415,14 @@ Every other `ATTR_*` in the generic range (0..21) and the driver-specific range
 - `ATTR_ERRMODE` outside 0/1/2, and `ATTR_CASE` outside `CASE_NATURAL`/`UPPER`/`LOWER`,
   raise a `ValueError` and leave the current value untouched. `ATTR_DEFAULT_FETCH_MODE`
   rejects `0`.
-- An **unknown attribute number** (a negative, 22..999, or above 1015):
-  `setAttribute()` returns **`false` silently** — no exception, no error state, not even
-  under `ERRMODE_EXCEPTION` — while `getAttribute()` raises **IM001** ("driver does not
-  support that attribute") and returns `false`. That asymmetry looks like a php-src bug;
-  it is nonetheless php-src's behavior, verified against a real 8.5.6 CLI, and mirroring
-  it is the point of this surface.
+- An unsupported attribute, whether it is a known constant or an unknown number,
+  makes `setAttribute()` return **`false` silently**. `getAttribute()` raises **IM001**
+  (or returns `false` in silent mode), matching the active php-src driver hook.
 
-`PDOStatement::getAttribute()` answers `Pdo\Sqlite::ATTR_READONLY_STATEMENT` (live) and
-`ATTR_EMULATE_PREPARES` (from the prepare-time snapshot); every other statement
-attribute raises **IM001**, and `PDOStatement::setAttribute()` raises IM001 for
-everything (no driver here registers a statement-attribute hook).
+`PDOStatement::getAttribute()` answers SQLite readonly/busy/explain state,
+PostgreSQL result-memory size, and `ATTR_EMULATE_PREPARES` from the prepare-time
+snapshot. SQLite explain mode is writable on PHP 8.5+. Other statement attributes follow
+the driver's IM001 path.
 
 ## PostgreSQL notes
 
@@ -405,11 +438,11 @@ The PostgreSQL driver behaves like the SQLite one, with a few database-specific 
   last sequence value (`lastval()`), or `lastInsertId($sequence)` returns
   `currval($sequence)`. Use a `SERIAL`/`IDENTITY` column or `RETURNING`.
 - **Types.** `integer`/`bigint` → int, `real`/`double precision` → float, `boolean` →
-  `0`/`1`, text types → string, `NULL` → null. The rich types are returned as their text
+  bool, text types → string, `NULL` → null. The rich types are returned as their text
   representation: `numeric`/`decimal` (scale preserved), `date` / `time` / `timestamp` /
   `timestamptz`, `uuid`, and `json`/`jsonb`. The same values bind as parameters (text is
-  coerced to the column type). `bytea` is returned as a PHP string with embedded NUL
-  bytes preserved. `json` / `jsonb` are re-serialized compactly, so whitespace may differ
+  coerced to the column type). `bytea` is returned as a rewound binary stream resource.
+  `json` / `jsonb` are re-serialized compactly, so whitespace may differ
   from the server's text output, but the value is equivalent. Other types (arrays, network
   types) are best read with an explicit `::text` cast.
 - **`getColumnMeta()`** reports PostgreSQL's real per-column metadata, read off the
@@ -424,13 +457,13 @@ The PostgreSQL driver behaves like the SQLite one, with a few database-specific 
   (`int4` → 4, `uuid` → 16) and **`-1` for any VARLENA** (text, varchar, numeric, bytea,
   json, arrays) — a `VARCHAR(20)` reports `len` `-1`, not `20`; its declared 20 surfaces
   in `precision` as the **undecoded atttypmod** `24` (20 + VARHDRSZ), and `NUMERIC(10,2)`
-  is `655366`. The `table` **name** is the one key left empty: it would need a `pg_class`
-  catalog lookup this bridge does not perform.
+  is `655366`. A plain table column also carries its `pg_class` relation name under
+  `table`; expression columns omit that key.
 - **`getNotify()`.** `getNotify(PDO::FETCH_ASSOC, $timeoutMs)` shapes a pending
   `LISTEN`/`NOTIFY` message as `["message" => $channel, "pid" => $pid, "payload" =>
   $payload]`; any other `$fetchMode` (the default) keeps the numerically-indexed
-  `[$channel, $pid, $payload]` shape. Both return `[]` rather than `false` when no
-  notification arrives within the timeout.
+  `[$channel, $pid, $payload]` shape. Both return `false` when no notification
+  arrives within the timeout.
 - **`COPY`.** `copyFromArray()` / `copyFromFile()` emit `COPY … FROM STDIN`;
   `copyToArray()` / `copyToFile()` emit `COPY … TO STDOUT`. The `$separator` is
   **truncated to its first byte** (PostgreSQL's COPY grammar admits only a one-byte
@@ -621,23 +654,18 @@ that mutex and brick PDO for every later call in the process.
 
 ### `PDOException` shape
 
-elephc's `PDOException` diverges from PHP's inherited `Exception` signature, and the
-divergences are forced by elephc's type system rather than chosen:
+`PDOException` keeps PHP's inherited public constructor signature:
+`new PDOException(string $message = "", int $code = 0, ?Throwable $previous = null)`.
+Driver failures use a private prelude-only factory to attach structured metadata without
+exposing a non-PHP constructor shape:
 
-- **The 2nd constructor parameter is `?array $errorInfo`, not `int $code`**:
-  `new PDOException($message, $errorInfo, $previous)`. The inherited PHP form
-  `new PDOException($msg, $code, $prev)` is a type error here.
 - **`$e->errorInfo`** is a real `[SQLSTATE, driver-code, message]` array for a server
   error (so `$e->errorInfo[0]` works — which is what frameworks read) and `null` when
   there is no structured info, matching PHP.
-- **`getCode()`** returns the **driver-specific integer code** (i.e. `errorInfo[1]`), not
-  the `SQLSTATE` string PHP puts there — elephc's built-in `Exception::$code` is
-  `int`-typed and cannot hold a 5-character SQLSTATE. Read the SQLSTATE from
-  `$e->errorInfo[0]`.
-- **`getPrevious()` always returns `null`**: every Throwable "standard method" call is
-  intercepted in codegen before user-method dispatch, so an override would be dead code.
-  The chain is exposed through a public property instead — `$e->previous` (elephc) ==
-  `$e->getPrevious()` (PHP).
+- **`getCode()`** returns PDO's SQLSTATE string when structured driver information exists;
+  the driver-specific integer remains available in `errorInfo[1]`.
+- **`getPrevious()`** returns the stored previous Throwable. The same value is also exposed
+  as `$e->previous` because elephc's base Throwable layout has no private previous slot.
 
 ## Under `--web`
 
@@ -662,9 +690,8 @@ between requests.
 ## Supported surface
 
 - **`pdo_drivers(): array`** — the global, procedural spelling of
-  `PDO::getAvailableDrivers()`. Known gap: the prelude is only injected for a program
-  that *names* a PDO class, so a program whose only PDO reference is a bare
-  `pdo_drivers()` call needs `--with-pdo` to force injection.
+  `PDO::getAvailableDrivers()`. A bare, case-insensitive call is sufficient to
+  auto-inject the PDO prelude and bridge; `--with-pdo` is not required.
 - **PDO**: `__construct`, `exec`, `query`, `prepare`, `quote`, `lastInsertId`,
   `beginTransaction`, `commit`, `rollBack`, `inTransaction`, `errorCode`, `errorInfo`,
   `getAttribute`, `setAttribute`, `getAvailableDrivers` (static), `connect` (static
@@ -673,8 +700,8 @@ between requests.
   php-src marks the class `@not-serializable`, and without the guard elephc's
   property-walking `serialize()` would emit the raw bridge handle into the blob and
   hand back a zombie object on `unserialize()`.
-- **PDOStatement**: `execute`, `bindValue`, `bindParam`, `bindColumn` (throws — see
-  Limitations), `setFetchMode`, `fetch`, `fetchAll`, `fetchColumn`, `fetchObject`,
+- **PDOStatement**: `execute`, `bindValue`, `bindParam`, `bindColumn`, `setFetchMode`,
+  `fetch`, `fetchAll`, `fetchColumn`, `fetchObject`,
   `closeCursor`, `errorCode`, `errorInfo`, `rowCount`, `columnCount`, `getColumnMeta`,
   `getAttribute`, `setAttribute`, `nextRowset`, `debugDumpParams`, `getIterator`,
   `__destruct`, plus the public **`readonly`** `$queryString` property (the prepared
@@ -687,12 +714,12 @@ between requests.
 - **`debugDumpParams()`** reproduces php-src's full line shapes (`SQL: [n] …`,
   `Params:  n`, then a `Key:`/`paramno=`/`name=`/`is_param=`/`param_type=` block per
   bind), including php-src's reported `param_type` (an `execute($params)` array stamps
-  every element `PARAM_STR`, whatever the PHP value's type). `Sent SQL:` is correctly
-  absent — php-src prints it only for an emulated prepare, and elephc never emulates.
-  Two divergences: re-binding the same parameter prints two blocks (php-src's
-  bound-params table is keyed, so it prints one), and a named parameter's `paramno` is
-  the resolved slot from the start (php-src shows `-1` until the first `execute()`).
-- **Constants**: the full PHP 8.4 set — fetch-mode (base modes plus the OR-able
+  every element `PARAM_STR`, whatever the PHP value's type). Emulated MySQL/PostgreSQL
+  statements also print php-src's `Sent SQL: [n] ...` line using the exact SQL rendered
+  by the bridge; native and SQLite statements omit it.
+  Rebinding replaces the visible entry, and a named parameter reports `paramno=-1`
+  until its first execute-time normalization, as in php-src.
+- **Constants**: the selected PHP version's complete PDO set — fetch-mode (base modes plus the OR-able
   `FETCH_GROUP` / `FETCH_UNIQUE` / `FETCH_CLASSTYPE` / `FETCH_PROPS_LATE` / … flags),
   parameter (including `PARAM_STR_NATL` / `PARAM_STR_CHAR` / `PARAM_INPUT_OUTPUT`),
   cursor, case, null-handling, and `ATTR_*` constants, plus `ERR_NONE` (`"00000"`), the
@@ -702,24 +729,29 @@ between requests.
   (`PDO::SQLITE_ATTR_OPEN_FLAGS`, `PDO::SQLITE_OPEN_*`, `PDO::SQLITE_DETERMINISTIC`,
   `PDO::SQLITE_ATTR_READONLY_STATEMENT`, `PDO::SQLITE_ATTR_EXTENDED_RESULT_CODES`),
   which php-src registers on the base class alongside the 8.1+ class-scoped spellings.
-- **Driver subclasses**: `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql` (PHP 8.4) extend
+- **Driver subclasses**: `Pdo\Sqlite`, `Pdo\Mysql`, and `Pdo\Pgsql` (PHP 8.4+) extend
   `PDO` and inherit its full base surface, so `new \Pdo\Sqlite("sqlite::…")` works like
   `new \PDO(...)` and the instance is `instanceof \PDO`. A program that names only a
   subclass — never the base `PDO` — still injects the prelude, and `PDO::connect($dsn, …)`
   returns the matching subclass for the DSN's driver prefix (an unknown prefix throws).
   Each subclass declares its PHP 8.4 driver-specific constants.
 
-  **Opening a foreign DSN through a subclass is rejected**: `new Pdo\Sqlite("mysql:…")`
-  throws before any connection is attempted, matching php-src. (The *static* form,
-  `Pdo\Sqlite::connect("mysql:…")`, is not — elephc has no late static binding, so an
-  inherited static cannot see which subclass it was called through, and `connect()` still
-  dispatches on the DSN prefix alone.)
+  **Opening a foreign DSN through a subclass is rejected**, for constructors and the
+  inherited static factory: `new Pdo\Sqlite("mysql:…")` and
+  `Pdo\Sqlite::connect("mysql:…")` both fail before connecting.
 
   Driver methods: `Pdo\Pgsql::escapeIdentifier()`, `getPid()`, `lobCreate()` /
   `lobUnlink()` / `lobOpen()`, `copyFromArray()` / `copyFromFile()` / `copyToArray()` /
   `copyToFile()`, `getNotify()`, `setNoticeCallback()`; `Pdo\Mysql::getWarningCount()`;
   `Pdo\Sqlite::loadExtension()`, `openBlob()`, `createCollation()`, `createFunction()`,
-  `createAggregate()`.
+  `createAggregate()`, and `setAuthorizer()` on PHP 8.5+.
+
+  PHP 8.4's legacy driver-extension methods are also installed directly on `PDO`:
+  `sqliteCreateFunction()`, `sqliteCreateAggregate()`, `sqliteCreateCollation()`,
+  `pgsqlCopyFromArray()`, `pgsqlCopyFromFile()`, `pgsqlCopyToArray()`,
+  `pgsqlCopyToFile()`, `pgsqlLOBCreate()`, `pgsqlLOBOpen()`, `pgsqlLOBUnlink()`,
+  `pgsqlGetNotify()`, and `pgsqlGetPid()`. They use the same bridge behavior as the
+  modern subclass spellings.
 
 Connections and prepared statements release their underlying bridge resources
 automatically through `__destruct`: a `PDO` closes its connection (finalizing any
@@ -731,7 +763,7 @@ out of scope keeps the connection alive.
 
 ## SQLite user-defined functions and collations
 
-`Pdo\Sqlite` runs compiled-PHP closures as SQLite callbacks:
+`Pdo\Sqlite` runs compiled-PHP callables as SQLite callbacks:
 
 - `createCollation(string $name, callable $comparator): bool` — registers a custom
   `COLLATE` ordering; `$comparator($a, $b)` returns `<0` / `0` / `>0`.
@@ -752,18 +784,17 @@ $db->createAggregate("joined",
 echo $db->query("SELECT shout('hi')")->fetchColumn();          // HI!
 ```
 
-Only closures and first-class callables are accepted — a string or `[$obj, 'method']`
-callable is rejected at compile time. A callback that throws never crashes or unwinds
+Closures, function-name strings, static/instance callable arrays, invokable objects, and
+first-class callables are accepted. A callback that throws never crashes or unwinds
 across SQLite's engine: the exception is caught at the C boundary and the statement fails
 with a `PDOException` (a throwing *collation* comparator is instead treated as "equal",
 since SQLite's comparison has no error channel). A UDF/aggregate returning a **non-scalar**
-value (an array or object) yields SQL `NULL` silently. Each callback runs through elephc's
-dynamic-dispatch path, which currently retains a small amount of heap per invocation, so a
-callback applied across a very large result set accumulates memory until the program exits.
-Registering a callback inside another SQLite callback on the same connection is not
-supported — a nested query returns no rows rather than re-entering.
+value is reported as a callback error instead of being silently converted to SQL `NULL`.
+Callbacks may register/replace another callback and execute nested statements on the same
+SQLite connection. The bridge releases its global connection/statement table locks before
+SQLite invokes PHP, while SQLite's own serialized connection mutex remains authoritative.
 
-`Pdo\Pgsql::setNoticeCallback(callable $callback): void` registers a callback invoked with
+`Pdo\Pgsql::setNoticeCallback(?callable $callback): void` registers a callback invoked with
 the text of each PostgreSQL server `NOTICE` (e.g. from `RAISE NOTICE`):
 
 ```php
@@ -772,95 +803,47 @@ $pg->setNoticeCallback(fn($msg) => error_log("PG NOTICE: $msg"));
 $pg->exec("DO $$ BEGIN RAISE NOTICE 'migrated'; END $$");   // callback fires with "migrated"
 ```
 
-Two divergences from PHP: the parameter is a non-nullable `callable` (to stop delivery,
-register a no-op closure rather than passing `null`), and delivery is **poll-based** — the
-driver buffers notices as they arrive and dispatches them right after each `exec()` /
-`query()` on the connection, so a `NOTICE` raised by a prepared-statement `execute()` is
-delivered on the next `exec()`/`query()`.
+Passing `null` unregisters delivery. Delivery is **boundary-dispatched**: the driver buffers notices as they arrive and
+dispatches them right after each `exec()` / `query()` on the connection, so a `NOTICE`
+raised by a prepared-statement `execute()` is delivered on the next `exec()`/`query()`.
 
 ## Divergences from php-src
 
 These are behavioral differences you can *observe* — not missing features. Read them
 before assuming php-src semantics.
 
-### MySQL is always NATIVE-prepared; php-src emulates by default
+### Native and emulated prepare protocols
 
-This is the single largest divergence, and it is easy to trip over because it inverts a
-default:
+MySQL follows php-src's default and starts with `ATTR_EMULATE_PREPARES = true`. Its
+scanner renders placeholders client-side, quotes values according to the connection's
+`NO_BACKSLASH_ESCAPES` mode, skips strings/comments/backticks, treats `??` as a literal
+question mark and sends the result through the text protocol. Setting
+`ATTR_EMULATE_PREPARES` (or `Pdo\Mysql::ATTR_DIRECT_QUERY`) to `false` switches new
+statements to server-side prepare.
 
-- **php-src's `pdo_mysql` defaults to client-side prepare EMULATION** (`ATTR_EMULATE_PREPARES
-  = true`). elephc **always** uses real server-side prepares. elephc's default therefore
-  equals php-src's *opt-out*, not its default.
-- `PDO::ATTR_EMULATE_PREPARES` is **inert**: it is stored and read back (including from
-  `PDOStatement::getAttribute()`), but there is no emulated code path to switch to.
-- There is **no automatic native→emulated fallback** on MySQL **errno 1295** ("this
-  command is not supported in the prepared statement protocol yet"). A multi-statement
-  `prepare()`/`query()`, and admin statements such as `USE`, `LOCK TABLES` and some
-  `SHOW` forms, therefore **fail** here where real PHP quietly emulates them.
-- php-src's **emulated-mode bind-COUNT `HY093` pre-check** (raised client-side when the
-  number of bound parameters does not match the number of placeholders) **does not exist
-  here**. elephc raises HY093 for an *unresolvable* placeholder and for an out-of-range
-  slot, from the driver's own answer — not from a client-side count comparison.
-- `CALL` behaves like a genuine prepared `CALL` rather than an emulated one.
-- **A literal `?` cannot be sent through a MySQL prepared statement.** Doubling it as
-  `??` (the usual way to escape a placeholder-like literal) is kept **verbatim** by the
-  scanner and allocates no bind slot, so the server still counts both `?` characters as
-  placeholders — the prepared statement then fails at `execute()` with a bind-count
-  mismatch. This is a direct consequence of always-native prepares: php-src sidesteps it
-  because its default emulation resolves placeholders **client-side** before the SQL ever
-  reaches the server, so an escaped `??` (or any local rewriting) never has to survive a
-  real `PREPARE`. There is no scanner-side fix that makes `??` mean a literal `?` under a
-  genuine MySQL native prepare — not a bug, a documented consequence of the model above.
+PostgreSQL defaults to native extended-query prepares. `ATTR_EMULATE_PREPARES = true`
+selects client-side rendering plus the simple-query protocol;
+`Pdo\Pgsql::ATTR_DISABLE_PREPARES = true` selects the execute-only simple-query path.
+The latter supports multi-command and utility SQL that cannot be represented by one
+server-side prepared statement. Generated `$N` marker ranges are tracked separately so
+a literal PostgreSQL `$1` already present in source SQL is never mistaken for a PDO bind.
+
+Both emulated paths reject mixed placeholder styles and missing bindings with HY093,
+preserve source SQL evaluation order, and retain the rendered text for
+`debugDumpParams()`'s `Sent SQL:` line. The protocol choice is snapshotted on each
+`PDOStatement`; changing the connection attribute only affects statements prepared later.
 
 ### Other divergences
 
-- **PostgreSQL `boolean` and `bytea` do not map to PHP's native representations.** A
-  `boolean` column returns the integer `0`/`1` rather than a real `bool`, so
-  `$row['flag'] === true` is always `false` — compare with `== true` or cast with
-  `(bool) $row['flag']`. A `bytea` column returns a plain PHP string (embedded NUL bytes
-  preserved) rather than a stream resource, so `fread()` / `fseek()` do not apply. Both are
-  deliberate, ubiquitous divergences from php-src's `pdo_pgsql`, not bugs.
-- **`errorCode()` before the first operation** returns `"00000"` rather than PHP's `null`
-  (the bridge reports a fresh handle as success).
-- **readonly `$queryString`: the write is always rejected, but it is not always *loud*.**
-  php-src throws an `Error` on `$stmt->queryString = 'x'`. elephc declares the property
-  `readonly`, so the prepared SQL can never be overwritten — but *how* the rejection
-  surfaces depends on the receiver's static type:
-
-  ```php
-  $stmt = $db->prepare("SELECT 1");   // static type: PDOStatement|bool
-  $stmt->queryString = "DROP TABLE t";        // silently ignored — NO Error, value kept
-  echo $stmt->queryString;                    // "SELECT 1"
-
-  if ($stmt instanceof PDOStatement) {        // narrowed to a concrete PDOStatement
-      $stmt->queryString = "DROP TABLE t";    // catchable Error, as in php
-  }
-  ```
-
-  The silent case is a **compiler limitation, not a PDO one**: a `readonly` write through a
-  union-typed receiver is not checked (it reproduces on any user class whose factory
-  returns `Box|bool`), and `prepare()`/`query()` return `PDOStatement|bool`. The message in
-  the narrowed case is PHP's generic readonly text, not php-src's custom "Property
-  queryString is read only" — same class (`Error`), same catchability.
-- **`FETCH_GROUP` integer-looking keys stay strings** (see the FETCH_GROUP section).
-- **`FETCH_CLASS` / `FETCH_INTO` hydration is always constructor-first.** php-src's
-  *default* is properties-BEFORE-constructor (`FETCH_PROPS_LATE` is the flag that asks for
-  constructor-first). So elephc's default equals php-src's `FETCH_PROPS_LATE`, and passing
-  `FETCH_PROPS_LATE` explicitly is accepted and changes nothing. A constructor that
-  overwrites a property will therefore clobber the fetched column here.
-- **`nextRowset()`** raises `IM001` ("driver does not support multiple rowsets") for SQLite
-  and PostgreSQL statements — errmode-aware, like every other statement failure — instead
-  of silently returning `false`. A `mysql:` statement returns `false` *without* raising:
-  MySQL genuinely supports more rowsets over the wire, but this bridge only materializes
-  the first one per prepared statement, so there is no second rowset to advance to and no
-  "driver can't do this" to report.
-- **`PDO::connect()` on a subclass** does not reject a mismatched DSN (no late static
-  binding) — the `new Pdo\Sqlite("mysql:…")` spelling does.
-- **The placeholder scanners diverge from php-src only on already-malformed SQL.** An
-  unterminated string literal or unterminated `/* … */` comment consumes to end-of-input
-  (php-src's scanner instead backtracks and treats the opening quote / `/*` as a lone
-  character), so a `?` appearing after an unbalanced quote or comment is not recognized as
-  a placeholder. Well-formed SQL matches php-src exactly.
+- **`queryString` uses the language's `readonly` enforcement.** Writes are rejected with
+  a catchable `Error`, including through a `PDOStatement|false` receiver, but the message
+  is PHP's generic readonly-property text rather than pdo_stmt.c's custom wording.
+- **PostgreSQL native error code.** The Rust PostgreSQL client exposes SQLSTATE but has no
+  libpq `ExecStatusType`; `errorInfo()[1]` therefore uses stable non-zero marker `1` on
+  failure instead of fabricating a `PGRES_*` enum value.
+- **Notice timing.** PostgreSQL notices are dispatched at safe PHP call boundaries; a
+  notice raised by prepared `execute()` is delivered at the next connection `exec()` or
+  `query()` rather than re-entering PHP from the client's protocol thread.
 - **UPSTREAM php-src bug, deliberately NOT reproduced.** php-src 8.4's `copyToArray()` /
   `copyToFile()` build `COPY … TO STDIN` (`pgsql_driver.c:882,884,973,975`) — an invalid
   direction in PostgreSQL's COPY grammar. elephc correctly emits `TO STDOUT`. Do not "fix"
@@ -868,103 +851,62 @@ default:
 
 ## Limitations
 
-### Not implemented (fails loudly)
+### Driver matrix boundary
 
 - **Other PDO drivers.** Only SQLite, PostgreSQL, and MySQL / MariaDB; the bridge is
   structured to add more behind the same prelude.
-- **`bindColumn()`** throws a `PDOException` ("not supported") after validating its
-  arguments. PHP stores a *reference* to the variable and writes each fetched column into
-  it on every `fetch(PDO::FETCH_BOUND)`; capturing that escaping reference needs
-  `$this->boundColumns[$c] = &$var;`, which does not parse in elephc. `FETCH_BOUND` itself
-  still advances the cursor and reports whether a row was available.
-- **`FETCH_LAZY`** — elephc has no `PDORow` class (a lazily-materializing row object needs
-  a `__get` that reaches back into a live cursor), so `fetch(PDO::FETCH_LAZY)` throws
-  rather than substituting an eagerly-built row of some other shape. (php-src allows LAZY
-  in `fetch()` and forbids it in `fetchAll()`; elephc forbids it in both.)
-- **`FETCH_FUNC`** throws a `PDOException`: the callback would have to arrive through
-  `fetchAll()`'s `mixed` second parameter, and elephc's checker refuses to invoke a Mixed
-  value or pass one to a `callable`-typed parameter.
-- **`Pdo\Sqlite::setAuthorizer()`**, the legacy `sqliteCreateFunction()` /
-  `sqliteCreateAggregate()` / `sqliteCreateCollation()` aliases, `php.ini`-based DSN
-  aliasing (`pdo.dsn.*`), and the `#[\SensitiveParameter]` attribute.
-- **`PDO::PARAM_STR_NATL`** (the national-character-set string bind) and
-  **`PDO::ATTR_DEFAULT_STR_PARAM`**: the constants exist but neither is implemented. There
-  is no `_utf8`/`N''` introducer path, so `PARAM_STR|PARAM_STR_NATL` masks its flag off and
-  binds as a plain `PARAM_STR` string, and `ATTR_DEFAULT_STR_PARAM` is stored and ignored.
+- `php.ini`-based DSN aliases (`pdo.dsn.*`) are not available in standalone binaries.
 
-### Silently inert (accepted, no effect)
+### Driver options not provided by the Rust clients
 
-- **`Pdo\Mysql::ATTR_LOCAL_INFILE` is inert — and this is a correctness trap, not a
-  cosmetic no-op.** The bridge installs no local-infile handler, so the `mysql` client
-  answers the server's file request with an **empty packet**: `LOAD DATA LOCAL INFILE`
-  **loads ZERO ROWS and reports NO ERROR**. A data-loading script ported to elephc will
-  appear to succeed and import nothing. Use `COPY` (PostgreSQL), a server-side
-  `LOAD DATA INFILE`, or batched `INSERT`s instead. `ATTR_LOCAL_INFILE_DIRECTORY` is
-  likewise inert.
-- **Inert `Pdo\Mysql::ATTR_*` constants** (declared, stored, read back, no effect):
-  `ATTR_USE_BUFFERED_QUERY` (1000), `ATTR_LOCAL_INFILE` (1001, see above), `ATTR_COMPRESS`
-  (1003), `ATTR_DIRECT_QUERY` (1004), `ATTR_IGNORE_SPACE` (1006), `ATTR_SSL_CAPATH` (1010),
-  `ATTR_SSL_CIPHER` (1011), `ATTR_SERVER_PUBLIC_KEY` (1012), `ATTR_MULTI_STATEMENTS`
-  (1013), `ATTR_LOCAL_INFILE_DIRECTORY` (1015). The **wired** ones are `ATTR_INIT_COMMAND`
-  (1002), `ATTR_FOUND_ROWS` (1005), and `ATTR_SSL_KEY`/`ATTR_SSL_CERT`/`ATTR_SSL_CA`/
-  `ATTR_SSL_VERIFY_SERVER_CERT` (1007/1008/1009/1014).
-- **`Pdo\Pgsql::ATTR_DISABLE_PREPARES` is inert**, and "inert" undersells it. Callers reach
-  for it precisely because **some statements cannot be server-side PREPAREd at all** —
-  multi-command strings (`BEGIN; …; COMMIT;` in one call), certain admin/utility statements,
-  and anything the extended-query protocol refuses. In real PHP this attribute switches
-  those to a simple-query execute-only path; elephc has no such path, so those statements
-  simply **fail** here. Split them into separate `exec()` calls.
-- **`Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE`** is inert.
-- **`PDO::ATTR_SERVER_INFO`** is always `null` (unless a caller has explicitly
-  `setAttribute()`'d a value for it). php-src only answers this for MySQL, from mysqlnd's
-  live `mysql_stat()` admin string; neither the `mysql` crate nor `mysql_common` this bridge
-  links exposes a `mysql_stat()`/`COM_STATISTICS` accessor.
-- **`PDO::ATTR_CURSOR` / `CURSOR_SCROLL`** — every cursor is forward-only, so `fetch()`'s
-  `$cursorOrientation` / `$cursorOffset` are accepted and ignored. On a real
-  `CURSOR_SCROLL` statement php-src would honor `FETCH_ORI_FIRST`/`LAST`/`PRIOR`/`ABS`/`REL`.
-- **`ATTR_STATEMENT_CLASS`**, `ATTR_AUTOCOMMIT`, `ATTR_PREFETCH`, `ATTR_MAX_COLUMN_LEN`,
-  `ATTR_FETCH_TABLE_NAMES`, `ATTR_FETCH_CATALOG_NAMES`, `ATTR_CURSOR_NAME` — stored and read
-  back, no effect.
+- MySQL constructor options implement buffered/unbuffered observation,
+  `ATTR_LOCAL_INFILE` with an optional canonical `ATTR_LOCAL_INFILE_DIRECTORY` sandbox,
+  compression, ignore-space, multi-statement control, init command, found-rows, and the
+  supported TLS key/cert/CA/verification settings. A disabled local-infile handler rejects
+  the server request instead of returning a successful empty upload.
+- `Pdo\Mysql::ATTR_SSL_CAPATH`, `ATTR_SSL_CIPHER`, and `ATTR_SERVER_PUBLIC_KEY` cannot be
+  represented by the Rust rustls client and fail the constructor explicitly. Use a PEM
+  bundle through `ATTR_SSL_CA`; no security option is accepted inertly.
+- `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
+  result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
+  supported at connection and prepare-option scope.
+- `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected
+  when the active driver has no corresponding php-src hook/capability.
 
-### The PostgreSQL DSN allow-list silently DROPS real libpq keys
+### PostgreSQL DSN option handling
 
 `tokio-postgres`'s connection-string parser hard-fails with `UnknownOption` on any key it
-does not know, which would turn a perfectly good libpq DSN into a connection that never
-happens. The bridge therefore forwards **only** the keys that parser accepts and
-**silently drops the rest**. Forwarded: `user`, `password`, `dbname`, `options`,
+does not know. The bridge forwards the keys it can honor and rejects the others explicitly.
+Forwarded: `user`, `password`, `dbname`, `options`,
 `application_name`, `sslnegotiation`, `host`, `hostaddr`, `port`, `connect_timeout`,
 `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
 `keepalives_retries`, `target_session_attrs`, `channel_binding`, `load_balance_hosts`
 — plus `sslmode` / `sslrootcert` / `sslcert` / `sslkey`, which are consumed separately and
 applied to the rustls connector.
 
-**Dropped without a word** (present in a libpq DSN, ignored here): `service`, `passfile`,
-`client_encoding`, `gssencmode`, `krbsrvname`, `gsslib`, `requiressl`, `sslcrl`,
-`sslcrldir`, `sslpassword`, `sslsni`, `sslcompression`, `ssl_min_protocol_version`,
-`ssl_max_protocol_version`, `replication`, `fallback_application_name`. The connection
-still opens — just without whatever that key would have configured. If your DSN relies on
-one of these (a `service` file, a non-UTF-8 `client_encoding`, a CRL), it will not do what
-you expect.
+`client_encoding` is translated into a validated post-connect session setting. Libpq-only
+options the native client cannot honor — including `service`, `passfile`, GSS, TLS CRL,
+replication and fallback-application settings — now fail the connection with an explicit
+`unsupported PostgreSQL DSN option` error. No DSN security or transport option is silently
+dropped.
 
 ### Resource and lifetime caveats
 
-- **Persistent connections are reused with NO liveness check.** The pool hands back the
-  pooled handle if it is still registered; it does not ping the server. A connection the
-  server has since closed (idle timeout, restart, failover) is handed back dead, and the
-  failure surfaces on the next statement rather than at `new PDO(...)`.
-- **PostgreSQL and MySQL results are FULLY BUFFERED client-side** at the first `step()`:
-  the driver materializes every row of the result set into memory before the first
-  `fetch()` returns. A `SELECT` over a very large table is a memory cliff — there is no
-  streaming/unbuffered mode (`Pdo\Mysql::ATTR_USE_BUFFERED_QUERY` is inert). Paginate, or
-  push the aggregation into SQL. SQLite steps its cursor lazily and is unaffected.
-- **`openBlob()` / `lobOpen()` are read-whole**: the entire BLOB / large object is read
-  (NUL bytes preserved) into a rewound `php://memory` stream. Reads work fully; **writes
-  are not flushed back to storage**, and the `$flags` / `$mode` argument is accepted only
-  for signature compatibility. Both return `false` on a missing row/OID.
+- Persistent checkout is serialized and validates liveness before reuse: MySQL sends
+  `COM_PING`, PostgreSQL checks the live client state, and a dead handle plus its statements
+  is evicted before an atomic reconnect. SQLite needs no external-server probe.
+- **External-driver rows are internally materialized.** MySQL
+  `ATTR_USE_BUFFERED_QUERY=false` exposes php-src's row-count/connection-busy behavior,
+  and PostgreSQL `ATTR_PREFETCH=false` exposes cursor invalidation and visible-memory
+  semantics, but the Rust clients still materialize their rows internally. These modes do
+  not yet reduce peak memory for a very large result. SQLite steps lazily.
+- **BLOB/LOB streams are seekable and writable but snapshot their initial contents.**
+  SQLite `openBlob()` enforces the fixed native blob size and writes ranges back
+  immediately. PostgreSQL `lobOpen()` enforces transaction ownership, supports read/write
+  modes, zero-fills seek gaps, and writes through `lo_put`. Both are binary-safe and return
+  `false` for a missing row/OID.
 - **`Pdo\Sqlite::loadExtension()`** runs native code from the named library, weakening the
   standalone-binary guarantee. An empty name is a `ValueError`.
-- **`Pdo\Mysql::getWarningCount()`** reflects a preceding direct `exec()`/DML statement;
-  the pure-Rust client does not surface a SELECT's EOF-packet warnings.
 - **SQLite bridge threadsafety invariant.** The bridge keeps its connection table and its
   statement table under **two separate mutexes**, so two overlapping calls can touch the
   same `sqlite3*` — which is only defined under a **serialized** SQLite build
@@ -981,33 +923,3 @@ you expect.
   fails loudly rather than silently downgrading to plaintext. Rebuild with `cargo build -p
   elephc-pdo --features mysql-tls` to reach a MySQL server that *mandates* TLS (AWS
   RDS/Aurora, PlanetScale, …).
-
-### Compiler limitations that shape this surface
-
-These are elephc compiler gaps, not PDO design choices. They are worth knowing because
-they are what you will actually hit:
-
-- **No by-reference `bindParam(&$var)` deferred read.** `$this->prop = &$var;` does not
-  parse, so `bindParam()` records the variable's *current* value. Bind immediately before
-  `execute()`, or use `bindValue()`. (Same root cause as `bindColumn()`'s unsupported
-  write-back.)
-- **No constructor args through `query()` / `fetchAll()` / `fetchObject()`.** PHP's real
-  signatures take a heterogeneous variadic tail (`mixed ...$args`); elephc's checker
-  mis-derives both the minimum arity and the variadic element type for a variadic tail on a
-  *method* with a leading non-variadic parameter. So `query()` accepts up to two extra
-  arguments (the 2nd is forwarded to `setFetchMode()`, the 3rd is not), and
-  `fetchAll(PDO::FETCH_CLASS, 'Row', [$a, $b])` / `fetchObject('Row', [$a, $b])` accept the
-  constructor-argument array but **do not forward it** — the target class is always built
-  with no arguments.
-- **`FETCH_CLASS` / `FETCH_INTO` target classes should declare TYPED properties.**
-  Populating a class whose properties are *untyped* (`public $id;`) can corrupt a column
-  whose value type differs from another column's (a compiler limitation in dynamically-named
-  property writes); declare them `public mixed $id;` (or a concrete type) and every column
-  populates correctly. `FETCH_OBJ` (`stdClass`) is unaffected.
-- **Hydration is constructor-first** (see Divergences) because that is the order the
-  dynamic-property write path supports.
-- **`FETCH_GROUP` integer-looking keys stay strings** because elephc's arrays do not fold a
-  numeric string key back to an int key.
-- **`prepare()`'s `$options` array is accepted and ignored** — iterating it inside the
-  method body trips a known EIR miscompile, and no supported prepare option has a
-  behavioral effect anyway.

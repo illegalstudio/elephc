@@ -302,10 +302,19 @@ impl Checker {
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::MethodCall { object, args, .. }
-            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            }
+            | ExprKind::NullsafeMethodCall {
+                object,
+                method,
+                args,
+            } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -342,6 +351,52 @@ impl Checker {
         self.first_class_callable_targets
             .get(var_name)
             .is_some_and(callable_target_is_preg_replace_callback)
+    }
+
+    /// Widens PDOStatement binding destinations before validation so their escaping
+    /// references use the boxed storage that the EIR call lowering materializes.
+    fn promote_pdo_binding_ref_storage(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        if !type_may_be_pdo_statement(&object_ty) {
+            return Ok(());
+        }
+        let method_key = crate::names::php_symbol_key(method);
+        let parameter_name = match method_key.as_str() {
+            "bindparam" => "variable",
+            "bindcolumn" => "var",
+            _ => return Ok(()),
+        };
+        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+        let Some(Expr {
+            kind: ExprKind::Variable(name),
+            ..
+        }) = argument
+        else {
+            return Ok(());
+        };
+        env.insert(name.clone(), PhpType::Mixed);
+        Ok(())
+    }
+}
+
+/// Returns whether a receiver type contains PDOStatement, including the
+/// `PDOStatement|false` contract returned by `PDO::prepare()` and `query()`.
+fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
+        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
+        _ => false,
     }
 }
 

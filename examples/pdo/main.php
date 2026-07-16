@@ -33,6 +33,24 @@ $one->execute([2]);
 $row = $one->fetch(PDO::FETCH_ASSOC);
 echo "Contact #2: " . $row["name"] . " (" . $row["score"] . ")\n\n";
 
+// bindParam keeps a reference: changing $wanted before the next execute changes the bind.
+$wanted = 1;
+$reused = $db->prepare("SELECT name FROM contacts WHERE id = ?");
+$reused->bindParam(1, $wanted, PDO::PARAM_INT);
+$reused->execute();
+echo "Bound #1: " . $reused->fetchColumn();
+$wanted = 3;
+$reused->execute();
+echo ", bound #3: " . $reused->fetchColumn() . "\n";
+
+// bindColumn writes through its retained reference after each successful cursor step.
+$boundName = "";
+$bound = $db->prepare("SELECT name FROM contacts ORDER BY id LIMIT 1");
+$bound->bindColumn(1, $boundName);
+$bound->execute();
+$bound->fetch(PDO::FETCH_BOUND);
+echo "Bound column: " . $boundName . "\n\n";
+
 // FETCH_OBJ creates a real stdClass with dynamic properties.
 $object = $db->query("SELECT id, name FROM contacts WHERE id = 1")->fetch(PDO::FETCH_OBJ);
 echo "Object fetch: " . gettype($object) . " #" . $object->id . " " . $object->name . "\n\n";
@@ -56,6 +74,24 @@ $intoStmt = $db->query("SELECT id, name FROM contacts WHERE id = 2");
 $intoStmt->setFetchMode(PDO::FETCH_INTO, $into);
 $same = $intoStmt->fetch();
 echo "Into fetch: " . (($same === $into) ? "same" : "different") . " #" . $into->id . "\n\n";
+
+// FETCH_LAZY returns the statement-owned PDORow view. The same object is refreshed as
+// the cursor advances, and columns are available through properties or offsets.
+$lazy = $db->query("SELECT id, name FROM contacts ORDER BY id LIMIT 1")->fetch(PDO::FETCH_LAZY);
+if ($lazy instanceof PDORow) {
+    PDORow $typedLazy = $lazy;
+    echo "Lazy fetch: #" . $typedLazy->id . " " . $typedLazy[1] . "\n";
+}
+
+// FETCH_FUNC accepts every PHP callable shape, including a function-name string.
+function contactLabel($id, $name) {
+    return "#" . $id . " " . $name;
+}
+$labels = $db->query("SELECT id, name FROM contacts ORDER BY id")->fetchAll(
+    PDO::FETCH_FUNC,
+    "contactLabel"
+);
+echo "Function fetch: " . implode(", ", $labels) . "\n\n";
 
 // Binary values preserve embedded NUL bytes.
 $db->exec("CREATE TABLE blobs (payload BLOB)");

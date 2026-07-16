@@ -6,7 +6,7 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`/`is_array($var)` (and aliases),
+//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`/`is_array`/`is_callable($var)` (and aliases),
 //!   `$var instanceof Class`, and the strict comparisons `$var === null`/`$var === false` (and their
 //!   `!==` / operand-swapped forms), optionally negated with a leading `!`. Narrowing is applied to
 //!   each clause in an if/elseif*/else chain (each subsequent clause, and the else, see the
@@ -62,7 +62,7 @@ impl GuardTarget {
 impl Checker {
     /// Detects a type-predicate guard in an `if` condition and computes the then/else narrowing
     /// for the guarded variable against the current environment. Handles the scalar `is_*`
-    /// predicates, `is_null`/`is_array`, `$var instanceof Class`, and the strict comparisons
+    /// predicates, `is_null`/`is_array`/`is_callable`, `$var instanceof Class`, and the strict comparisons
     /// `$var === null`/`$var === false` (and `!==`), with an optional leading `!`. A `!==`
     /// comparison and a leading `!` each swap the branches, and they compose. Returns `None` when
     /// the condition is not a recognized single-variable guard or the variable has no known type in
@@ -186,6 +186,7 @@ fn guard_var_and_target(cond: &Expr) -> Option<(String, GuardTarget, bool)> {
                 "is_string" => GuardTarget::Exact(PhpType::Str),
                 "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 "is_null" => GuardTarget::Exact(PhpType::Void),
+                "is_callable" => GuardTarget::Exact(PhpType::Callable),
                 "is_array" => GuardTarget::AnyArray,
                 _ => return None,
             };

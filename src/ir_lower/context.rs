@@ -1271,6 +1271,29 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(owner_slot);
     }
 
+    /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
+    /// durable heap reference cell suitable for an escaping by-reference parameter.
+    pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
+            return;
+        }
+        if self.local_type(name).codegen_repr() != PhpType::Mixed {
+            let source = self.load_local(name, span);
+            let boxed = self.emit_value(
+                Op::MixedBox,
+                vec![source.value],
+                None,
+                PhpType::Mixed,
+                Op::MixedBox.default_effects(),
+                span,
+            );
+            self.store_local(name, boxed, PhpType::Mixed, span);
+        }
+        if !self.is_ref_bound_local(name) {
+            self.promote_local_ref_cell(name, span);
+        }
+    }
+
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
         if target == source {
@@ -1411,6 +1434,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
+                    | Op::MixedUnbox
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg

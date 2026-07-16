@@ -109,11 +109,10 @@ pub(crate) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// first-class callable already IS the raw pointer to its 64-byte descriptor, so
 /// this is a bare identity load into the pointer result register.
 ///
-/// String / array callables are rejected: their runtime value is a PHP string, not
-/// a descriptor, so reinterpreting it as a descriptor and later reading the
-/// invoker at offset 56 would read out of bounds. `PhpType::Callable` is emitted
-/// only by `Op::ClosureNew` / `Op::FirstClassCallableNew` (and carried by a
-/// `callable`-typed parameter), which is exactly the set of valid inputs.
+/// Dynamic PHP callable forms are normalized into the same descriptor ABI: strings
+/// select a static function/method descriptor, arrays select a static or receiver-
+/// bound method descriptor, invokable objects bind `__invoke`, and boxed callable
+/// descriptors preserve their existing payload.
 pub(crate) fn lower_elephc_callable_ptr(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -124,9 +123,103 @@ pub(crate) fn lower_elephc_callable_ptr(
         PhpType::Callable => {
             ctx.load_value_to_result(value)?;
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+                ctx,
+                value,
+                "__elephc_callable_ptr",
+                false,
+            )?;
+        }
+        PhpType::Str => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                value,
+                &result_reg,
+                "__elephc_callable_ptr",
+            )?;
+        }
+        PhpType::Array(element)
+            if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str) =>
+        {
+            super::super::callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                value,
+                "__elephc_callable_ptr",
+            )?;
+        }
+        PhpType::Object(class_name) => {
+            super::super::callables::emit_invokable_object_descriptor_value(
+                ctx,
+                value,
+                &class_name,
+                "__elephc_callable_ptr",
+            )?;
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
-                "__elephc_callable_ptr requires a closure or first-class callable whose value is a descriptor pointer, got {:?}",
+                "__elephc_callable_ptr requires a PHP callable value, got {:?}",
+                other
+            )));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_normalize_callable($cb)` into an owned callable descriptor.
+///
+/// Static descriptors tolerate retains as persistent values, while runtime descriptors
+/// selected from an existing `Callable` or boxed callable need one additional owner for
+/// the returned value. Fresh receiver-bound descriptors already start with one owner.
+pub(crate) fn lower_elephc_normalize_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+                ctx,
+                value,
+                "__elephc_normalize_callable",
+                true,
+            )?;
+        }
+        PhpType::Str => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                value,
+                &result_reg,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        PhpType::Array(element)
+            if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str) =>
+        {
+            super::super::callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                value,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        PhpType::Object(class_name) => {
+            super::super::callables::emit_invokable_object_descriptor_value(
+                ctx,
+                value,
+                &class_name,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "__elephc_normalize_callable requires a PHP callable value, got {:?}",
                 other
             )));
         }

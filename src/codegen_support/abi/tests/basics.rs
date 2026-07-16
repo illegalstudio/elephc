@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Verifies AArch64 truthiness helpers use a short inverse branch followed by a
+/// wide-range unconditional branch, avoiding `cbz`/`cbnz` fixup overflows in very
+/// large generated functions.
+#[test]
+fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
+    let mut emitter = test_emitter();
+    emit_branch_if_int_result_zero(&mut emitter, "zero_label");
+    emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    cbnz x0, 1f\n",
+            "    b zero_label\n",
+            "1:\n",
+            "    cbz x0, 1f\n",
+            "    b nonzero_label\n",
+            "1:\n",
+        )
+    );
+}
+
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
 /// sets up x29 as the frame pointer, and that restore/return undo this correctly

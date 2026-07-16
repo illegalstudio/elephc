@@ -82,6 +82,30 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
 ) -> (String, String, Vec<String>) {
+    compile_source_to_asm_with_defines_repr_and_php_version(
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        null_repr,
+        elephc::php_version::PhpVersion::default(),
+    )
+}
+
+/// Full compile-to-assembly pipeline with explicit null and PHP compatibility versions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_source_to_asm_with_defines_repr_and_php_version(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    php_version: elephc::php_version::PhpVersion,
+) -> (String, String, Vec<String>) {
     elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -92,7 +116,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version);
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
@@ -437,6 +461,44 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
 /// Provides the Compile and run helper used by the compiler module.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
+}
+
+/// Compiles and runs PHP source with an explicit PHP compatibility version.
+pub(crate) fn compile_and_run_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_version_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 /// Compiles and runs a PHP source with the legacy sentinel null representation forced on,

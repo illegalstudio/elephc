@@ -23,13 +23,15 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
     callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
-    emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_runtime_callable_invoker_inline, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     store_if_result, store_method_call_result,
@@ -95,6 +97,7 @@ struct ConstructorCallTarget {
     impl_class: String,
     param_types: Vec<PhpType>,
     ref_params: Vec<bool>,
+    sig: crate::types::FunctionSig,
 }
 
 /// Lowers fixed-class object allocation and optional constructor invocation.
@@ -178,6 +181,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 impl_class,
                 param_types,
                 ref_params: constructor.ref_params.clone(),
+                sig: constructor.clone(),
             })
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(
@@ -918,6 +922,7 @@ fn emit_throwable_message_fields_aarch64(
     } else {
         emit_empty_string_to_regs(ctx, "x1", "x2");
     }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for message initialization
     ctx.emitter.instruction("str x1, [x9, #8]");                                // store Throwable message pointer
     ctx.emitter.instruction("str x2, [x9, #16]");                               // store Throwable message length
@@ -934,6 +939,7 @@ fn emit_throwable_message_fields_x86_64(
     } else {
         emit_empty_string_to_regs(ctx, "rax", "rdx");
     }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for message initialization
     ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax");                    // store Throwable message pointer
     ctx.emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                   // store Throwable message length
@@ -1114,11 +1120,46 @@ pub(super) fn lower_dynamic_object_new_mixed(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    lower_dynamic_object_new_mixed_with_constructor(ctx, inst, true)
+}
+
+/// Allocates the class named by the builtin's string operand without invoking `__construct`.
+///
+/// PDO uses this path for PHP's default `FETCH_CLASS` hydration order: property values are
+/// assigned first and the constructor is invoked afterwards. Property defaults are still
+/// initialized exactly as for a normal object allocation.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed_without_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_dynamic_object_new_mixed_with_constructor(ctx, inst, false)
+}
+
+/// Shared dynamic allocation path, optionally suppressing constructor invocation for PDO hydration.
+fn lower_dynamic_object_new_mixed_with_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    invoke_constructor: bool,
+) -> Result<()> {
     let class_name_value = expect_operand(inst, 0)?;
-    let constructor_args = inst
-        .operands
-        .get(1..)
-        .ok_or_else(|| CodegenIrError::invalid_module("dynamic_object_new_mixed missing class operand"))?;
+    let uses_runtime_arg_container = invoke_constructor
+        && matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let constructor_arg_container = if uses_runtime_arg_container {
+        Some(*inst.operands.get(1).ok_or_else(|| {
+            CodegenIrError::invalid_module(
+                "dynamic_object_new_mixed missing runtime constructor argument container",
+            )
+        })?)
+    } else {
+        None
+    };
+    let constructor_args = if uses_runtime_arg_container {
+        &inst.operands[0..0]
+    } else {
+        inst.operands.get(1..).ok_or_else(|| {
+            CodegenIrError::invalid_module("dynamic_object_new_mixed missing class operand")
+        })?
+    };
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("dynamic_object_new_mixed missing result value"))?;
@@ -1131,7 +1172,15 @@ pub(super) fn lower_dynamic_object_new_mixed(
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_mixed_fallback");
-    let candidates = dynamic_new_mixed_candidates(ctx, constructor_args.len(), inst)?;
+    let candidates = dynamic_new_mixed_candidates(
+        ctx,
+        if invoke_constructor {
+            (!uses_runtime_arg_container).then_some(constructor_args.len())
+        } else {
+            None
+        },
+        inst,
+    )?;
     let case_labels = candidates
         .iter()
         .map(|candidate| {
@@ -1145,7 +1194,15 @@ pub(super) fn lower_dynamic_object_new_mixed(
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        emit_dynamic_new_mixed_candidate(ctx, candidate, constructor_args, class_name_value, result)?;
+        emit_dynamic_new_mixed_candidate(
+            ctx,
+            candidate,
+            constructor_args,
+            constructor_arg_container,
+            class_name_value,
+            result,
+            invoke_constructor,
+        )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -1198,7 +1255,7 @@ fn emit_generic_dynamic_new_class_string(
 /// Returns AOT dynamic-new candidates in stable class-id order.
 fn dynamic_new_mixed_candidates(
     ctx: &FunctionContext<'_>,
-    arg_count: usize,
+    arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Vec<DynamicNewCandidate>> {
     let mut candidates = Vec::new();
@@ -1370,15 +1427,337 @@ fn emit_branch_if_dynamic_new_mixed_class_name_matches(
     }
 }
 
+/// Lowers the internal class-name predicate used to gate PDO's post-hydration constructor call.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_class_has_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name_value = expect_operand(inst, 0)?;
+    let false_label = ctx.next_label("dynamic_has_ctor_false");
+    let done_label = ctx.next_label("dynamic_has_ctor_done");
+    if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &false_label)? {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_if_result(ctx, inst);
+    }
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    let constructor_key = php_symbol_key("__construct");
+    let mut classes = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(_, info)| info.methods.contains_key(&constructor_key))
+        .collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    let matched_labels = classes
+        .iter()
+        .map(|(class_name, _)| {
+            let label = ctx.next_label("dynamic_has_ctor_match");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+            label
+        })
+        .collect::<Vec<_>>();
+
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    for label in matched_labels {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Classifies a runtime class name for PDO's `ATTR_STATEMENT_CLASS` contract.
+///
+/// Status 0 is an unknown class, 1 is a known class outside the PDOStatement hierarchy,
+/// 2 is a PDOStatement subclass with a public user constructor, 3/4 are valid concrete/abstract
+/// classes without a user constructor, and 5/6 are valid concrete/abstract classes with a
+/// non-public user constructor. PHP accepts abstract statuses when setting the attribute and
+/// rejects them only when `prepare()` attempts instantiation.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name_value = expect_operand(inst, 0)?;
+    let unknown_label = ctx.next_label("pdo_statement_class_unknown");
+    let done_label = ctx.next_label("pdo_statement_class_done");
+    if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &unknown_label)? {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_if_result(ctx, inst);
+    }
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    let classified = classes
+        .into_iter()
+        .map(|(class_name, info)| {
+            let user_constructor = pdo_statement_user_constructor(ctx, class_name);
+            let has_user_constructor = user_constructor.is_some();
+            let status = if !class_extends_class(ctx, class_name, "PDOStatement") {
+                1
+            } else if has_user_constructor
+                && user_constructor
+                    .as_ref()
+                    .is_some_and(|(_, visibility, _)| visibility == &Visibility::Public)
+            {
+                2
+            } else if info.is_abstract {
+                if has_user_constructor { 6 } else { 4 }
+            } else {
+                if has_user_constructor { 5 } else { 3 }
+            };
+            let label = ctx.next_label("pdo_statement_class_match");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+            (label, status)
+        })
+        .collect::<Vec<_>>();
+
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    for (label, status) in classified {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), status);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&unknown_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Classifies a runtime class name for PHP 8.4+'s late-static `PDO::connect()`.
+///
+/// Status 0 is exactly PDO, 1/2/3 are the SQLite/MySQL/PostgreSQL driver-class
+/// hierarchies, 4 is a generic PDO subclass, and 5 is unknown or outside PDO.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name_value = expect_operand(inst, 0)?;
+    let unknown_label = ctx.next_label("pdo_called_class_unknown");
+    let done_label = ctx.next_label("pdo_called_class_done");
+    if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &unknown_label)? {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+        return store_if_result(ctx, inst);
+    }
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    let classified = classes
+        .into_iter()
+        .map(|(class_name, _)| {
+            let status = if same_php_type_name(class_name, "PDO") {
+                0
+            } else if class_extends_class(ctx, class_name, "Pdo\\Sqlite") {
+                1
+            } else if class_extends_class(ctx, class_name, "Pdo\\Mysql") {
+                2
+            } else if class_extends_class(ctx, class_name, "Pdo\\Pgsql") {
+                3
+            } else if class_extends_class(ctx, class_name, "PDO") {
+                4
+            } else {
+                5
+            };
+            let label = ctx.next_label("pdo_called_class_match");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+            (label, status)
+        })
+        .collect::<Vec<_>>();
+
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+    abi::emit_jump(ctx.emitter, &done_label);
+    for (label, status) in classified {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), status);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&unknown_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Invokes the protected/private constructor selected by PDO statement-class metadata.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_constructor_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name_value = expect_operand(inst, 0)?;
+    let statement_value = expect_operand(inst, 1)?;
+    let argument_container = expect_operand(inst, 2)?;
+    let unmatched_label = ctx.next_label("pdo_statement_constructor_unmatched");
+    let done_label = ctx.next_label("pdo_statement_constructor_done");
+    if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &unmatched_label)? {
+        emit_void_sentinel(ctx);
+        return store_if_result(ctx, inst);
+    }
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    let mut candidates = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, info)| info.class_id);
+    for (class_name, info) in classes {
+        let Some((owner, visibility, signature)) = pdo_statement_user_constructor(ctx, class_name) else {
+            continue;
+        };
+        if !class_extends_class(ctx, class_name, "PDOStatement")
+            || info.is_abstract
+            || visibility == Visibility::Public
+        {
+            continue;
+        }
+        let Some(mut candidate) = dynamic_new_candidate(ctx, class_name, info, None, inst)? else {
+            continue;
+        };
+        candidate.constructor_impl = Some(ConstructorCallTarget {
+            impl_class: owner,
+            param_types: signature
+                .params
+                .iter()
+                .map(|(_, ty)| ty.codegen_repr())
+                .collect(),
+            ref_params: signature.ref_params.clone(),
+            sig: signature,
+        });
+        let label = ctx.next_label("pdo_statement_constructor_match");
+        emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+        candidates.push((candidate, label));
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    for (candidate, label) in candidates {
+        ctx.emitter.label(&label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        ctx.load_value_to_reg(statement_value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_mixed_unboxed_object_payload(ctx, abi::int_result_reg(ctx.emitter));
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let constructor = candidate.constructor_impl.as_ref().ok_or_else(|| {
+            CodegenIrError::invalid_module("PDO statement constructor candidate has no constructor")
+        })?;
+        emit_dynamic_new_mixed_constructor_container_call(
+            ctx,
+            &candidate,
+            constructor,
+            argument_container,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&unmatched_label);
+    ctx.emitter.label(&done_label);
+    emit_void_sentinel(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the EIR void sentinel after an internal side-effect-only constructor call.
+fn emit_void_sentinel(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        RUNTIME_NULL_SENTINEL,
+    );
+}
+
+/// Resolves PDO's effective user constructor, including a private constructor declared
+/// by an ancestor that ordinary PHP method inheritance intentionally omits from the child
+/// class map. php-src retains that constructor pointer for ATTR_STATEMENT_CLASS and invokes it.
+fn pdo_statement_user_constructor(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Option<(String, Visibility, crate::types::FunctionSig)> {
+    let constructor_key = php_symbol_key("__construct");
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let info = class_info_by_name(ctx, &name)?;
+        if let Some(signature) = info.methods.get(&constructor_key) {
+            let owner = info
+                .method_impl_classes
+                .get(&constructor_key)
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+            if same_php_type_name(&owner, "PDOStatement") {
+                return None;
+            }
+            let visibility = info
+                .method_visibilities
+                .get(&constructor_key)
+                .cloned()
+                .unwrap_or(Visibility::Public);
+            return Some((owner, visibility, signature.clone()));
+        }
+        current = info.parent.clone();
+    }
+    None
+}
+
+/// Calls PDOStatement's private base initializer on an already allocated subclass object.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_initialize(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let statement = expect_operand(inst, 0)?;
+    ctx.load_value_to_reg(statement, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    move_mixed_unboxed_object_payload(ctx, abi::int_result_reg(ctx.emitter));
+    let receiver_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let params = [
+        PhpType::Object("PDOStatement".to_string()),
+        PhpType::Int,
+        PhpType::Int,
+        PhpType::Int,
+        PhpType::Str,
+    ];
+    let refs = [false, false, false, false, false];
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        &receiver_reg,
+        &params[0],
+        &inst.operands,
+        &params,
+        &refs,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(
+        ctx.emitter,
+        &method_symbol("PDOStatement", &php_symbol_key("__elephcInitialize")),
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    emit_void_sentinel(ctx);
+    store_if_result(ctx, inst)
+}
+
 /// Allocates one generic dynamic-new candidate, runs defaults/constructor, and boxes it as Mixed.
 fn emit_dynamic_new_mixed_candidate(
     ctx: &mut FunctionContext<'_>,
     candidate: &DynamicNewCandidate,
     constructor_args: &[ValueId],
+    constructor_arg_container: Option<ValueId>,
     dummy_receiver_operand: ValueId,
     result: ValueId,
+    invoke_constructor: bool,
 ) -> Result<()> {
-    if candidate.class_name == "SplFixedArray" {
+    if invoke_constructor
+        && candidate.class_name == "SplFixedArray"
+        && constructor_arg_container.is_none()
+    {
         return emit_dynamic_new_mixed_spl_fixed_array_candidate(
             ctx,
             candidate.class_id,
@@ -1386,7 +1765,10 @@ fn emit_dynamic_new_mixed_candidate(
             result,
         );
     }
-    if is_spl_doubly_linked_list_family(&candidate.class_name) {
+    if invoke_constructor
+        && is_spl_doubly_linked_list_family(&candidate.class_name)
+        && constructor_arg_container.is_none()
+    {
         return emit_dynamic_new_mixed_spl_dll_candidate(ctx, candidate.class_id, result);
     }
     emit_object_allocation(
@@ -1404,14 +1786,25 @@ fn emit_dynamic_new_mixed_candidate(
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
         emit_property_default(ctx, object_base_reg, default)?;
     }
-    if let Some(constructor) = &candidate.constructor_impl {
-        emit_dynamic_new_mixed_constructor_call(
-            ctx,
-            candidate,
-            constructor,
-            constructor_args,
-            dummy_receiver_operand,
-        )?;
+    if invoke_constructor {
+        if let Some(constructor) = &candidate.constructor_impl {
+            if let Some(arg_container) = constructor_arg_container {
+                emit_dynamic_new_mixed_constructor_container_call(
+                    ctx,
+                    candidate,
+                    constructor,
+                    arg_container,
+                )?;
+            } else {
+                emit_dynamic_new_mixed_constructor_call(
+                    ctx,
+                    candidate,
+                    constructor,
+                    constructor_args,
+                    dummy_receiver_operand,
+                )?;
+            }
+        }
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -1512,6 +1905,74 @@ fn emit_dynamic_new_mixed_constructor_call(
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
+/// Invokes a selected dynamic constructor through its uniform descriptor invoker
+/// when PHP supplied named arguments or one or more spread arrays.
+fn emit_dynamic_new_mixed_constructor_container_call(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &DynamicNewCandidate,
+    constructor: &ConstructorCallTarget,
+    arg_container: ValueId,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
+    let constructor_key = php_symbol_key("__construct");
+    let entry_label = emit_instance_method_descriptor_entry_wrapper(
+        ctx,
+        &constructor.impl_class,
+        &constructor_key,
+        &constructor.sig,
+    )?;
+    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &constructor.sig, &captures);
+    let php_name = format!("{}::__construct", candidate.class_name);
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+        ctx.data,
+        &entry_label,
+        Some(&php_name),
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        Some(&constructor.sig),
+        &captures,
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::method(
+            callable_descriptor::CallableDescriptorShape::InstanceMethod,
+            Some(candidate.class_name.clone()),
+            "__construct",
+        ),
+        Some(&invoker_label),
+    );
+
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
+    abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, &result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // preserve the runtime constructor descriptor while copying its static header
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        &descriptor_reg,
+        &descriptor_label,
+    );
+    abi::emit_pop_reg(ctx.emitter, &result_reg);
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        &descriptor_reg,
+        0,
+        &receiver_ty,
+    );
+    callables::emit_descriptor_reg_invoker_mixed_result_with_arg_container(
+        ctx,
+        &descriptor_reg,
+        arg_container,
+        "dynamic_constructor",
+        true,
+    )?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    Ok(())
+}
+
 /// Invokes the runtime class-name registry fallback and boxes object/null as Mixed.
 fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
     let null_label = ctx.next_label("dynamic_new_mixed_null");
@@ -1580,7 +2041,7 @@ fn dynamic_new_candidates(
             continue;
         }
         if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst)?
+            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst)?
         {
             candidates.push(candidate);
         }
@@ -1615,20 +2076,22 @@ fn dynamic_new_candidate(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     class_info: &ClassInfo,
-    arg_count: usize,
+    arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
-    if let Some(candidate) =
-        spl_runtime_storage_dynamic_new_candidate(class_name, class_info, arg_count)
-    {
-        return Ok(Some(candidate));
+    if let Some(arg_count) = arg_count {
+        if let Some(candidate) =
+            spl_runtime_storage_dynamic_new_candidate(class_name, class_info, arg_count)
+        {
+            return Ok(Some(candidate));
+        }
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
     let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-        if constructor.params.len() != arg_count {
+        if arg_count.is_some_and(|arg_count| constructor.params.len() != arg_count) {
             return Ok(None);
         }
         let impl_class = class_info
@@ -1648,8 +2111,9 @@ fn dynamic_new_candidate(
             impl_class,
             param_types,
             ref_params: constructor.ref_params.clone(),
+            sig: constructor.clone(),
         })
-    } else if arg_count == 0 {
+    } else if arg_count.is_none_or(|arg_count| arg_count == 0) {
         None
     } else {
         return Ok(None);

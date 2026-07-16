@@ -36,6 +36,110 @@ fn my_program(body: &str) -> String {
     )
 }
 
+/// Generic connection-information attributes expose the linked client, live
+/// server statistics, and the actual MySQL transport description.
+#[test]
+#[ignore]
+fn test_mysql_connection_information_attributes() {
+    let out = compile_and_run(&my_program(
+        r#"
+$client = (string) $db->getAttribute(PDO::ATTR_CLIENT_VERSION);
+$server = (string) $db->getAttribute(PDO::ATTR_SERVER_VERSION);
+$info = (string) $db->getAttribute(PDO::ATTR_SERVER_INFO);
+$status = (string) $db->getAttribute(PDO::ATTR_CONNECTION_STATUS);
+echo (strpos($client, "mysql ") === 0 ? "client" : "bad-client") . "|";
+echo (strlen($server) > 0 ? "server" : "bad-server") . "|";
+echo (strpos($info, "Uptime: ") === 0 && strpos($info, "Questions: ") !== false ? "info" : "bad-info") . "|";
+echo (strpos($status, " via TCP/IP") !== false || $status === "Localhost via UNIX socket" ? "status" : "bad-status");
+"#,
+    ));
+    assert_eq!(out, "client|server|info|status");
+}
+
+/// MySQL's live `ATTR_FETCH_TABLE_NAMES` setting prefixes fetched keys with the
+/// protocol table label and affects statements prepared after either constructor
+/// or runtime configuration.
+#[test]
+#[ignore]
+fn test_mysql_fetch_table_names_attribute() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("DROP TABLE IF EXISTS my_names");
+$db->exec("CREATE TABLE my_names (id INT)");
+$db->exec("INSERT INTO my_names VALUES (7)");
+echo ($db->getAttribute(PDO::ATTR_FETCH_TABLE_NAMES) ? "on" : "off") . "|";
+$db->setAttribute(PDO::ATTR_FETCH_TABLE_NAMES, true);
+$row = $db->query("SELECT id FROM my_names")->fetch(PDO::FETCH_ASSOC);
+echo $row["my_names.id"] . "|" . ($db->getAttribute(PDO::ATTR_FETCH_TABLE_NAMES) ? "on" : "off");
+$db->setAttribute(PDO::ATTR_FETCH_TABLE_NAMES, false);
+$plain = $db->query("SELECT id FROM my_names")->fetch(PDO::FETCH_ASSOC);
+echo "|" . $plain["id"];
+$db->exec("DROP TABLE my_names");
+"#,
+    ));
+    assert_eq!(out, "off|7|on|7");
+}
+
+/// MySQL unbuffered mode reports zero SELECT rowCount, blocks a second query
+/// until the active cursor is closed, and can be toggled live through the PDO
+/// attribute. MULTI_STATEMENTS=false rejects real second statements while
+/// allowing a semicolon embedded in a string literal.
+#[test]
+#[ignore]
+fn test_mysql_buffered_and_multi_statement_options() {
+    let out = compile_and_run(
+        r#"<?php
+$dsn = (string) getenv("ELEPHC_MYSQL_DSN");
+$db = new \Pdo\Mysql($dsn, null, null, [
+    \Pdo\Mysql::ATTR_USE_BUFFERED_QUERY => false,
+    \Pdo\Mysql::ATTR_MULTI_STATEMENTS => false,
+    \Pdo\Mysql::ATTR_IGNORE_SPACE => true,
+]);
+$stmt = $db->query("SELECT 1 AS n UNION ALL SELECT 2");
+$first = $stmt->fetchColumn();
+try {
+    $db->query("SELECT 3");
+    $busy = "bad";
+} catch (\PDOException $error) {
+    $busy = ($error->errorInfo[1] === 2014) ? "busy" : "wrong";
+}
+$stmt->closeCursor();
+$after = $db->query("SELECT ';' AS value;")->fetchColumn();
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT);
+$multi = $db->query("SELECT 1; SELECT 2") === false ? "blocked" : "bad";
+echo ($db->getAttribute(\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY) ? "buffered" : "unbuffered")
+    . ":" . $first . ":" . $busy . ":" . $after . ":" . $multi;
+"#,
+    );
+    assert_eq!(out, "unbuffered:1:busy:;:blocked");
+}
+
+/// With LOCAL_INFILE explicitly enabled, the native client uploads the exact
+/// requested file and enforces ATTR_LOCAL_INFILE_DIRECTORY's canonical path
+/// boundary. Requires a server configured with `local_infile=ON`.
+#[test]
+#[ignore]
+fn test_mysql_local_infile_directory_upload() {
+    let out = compile_and_run(
+        r#"<?php
+$path = sys_get_temp_dir() . "/elephc-pdo-local-infile.tsv";
+file_put_contents($path, "1\tAda\n2\tBob\n");
+$db = new \Pdo\Mysql((string) getenv("ELEPHC_MYSQL_DSN"), null, null, [
+    \Pdo\Mysql::ATTR_LOCAL_INFILE => true,
+    \Pdo\Mysql::ATTR_LOCAL_INFILE_DIRECTORY => sys_get_temp_dir(),
+]);
+$db->exec("DROP TABLE IF EXISTS elephc_local_infile");
+$db->exec("CREATE TABLE elephc_local_infile (id INT, name VARCHAR(20))");
+$count = $db->exec("LOAD DATA LOCAL INFILE " . $db->quote($path) . " INTO TABLE elephc_local_infile");
+$names = $db->query("SELECT GROUP_CONCAT(name ORDER BY id) FROM elephc_local_infile")->fetchColumn();
+$db->exec("DROP TABLE elephc_local_infile");
+unlink($path);
+echo $count . ":" . $names;
+"#,
+    );
+    assert_eq!(out, "2:Ada,Bob");
+}
+
 /// Round-trip: create, insert through named placeholders (rewritten to `?`), and
 /// read a row back keyed by column name.
 #[test]
@@ -72,6 +176,63 @@ $db->exec("DROP TABLE my_pos");
 "#,
     ));
     assert_eq!(out, "seven");
+}
+
+/// MySQL defaults to client-side emulated prepares, quotes bound text without losing
+/// apostrophes, and switches subsequent statements to native protocol when disabled.
+#[test]
+#[ignore]
+fn test_mysql_emulated_prepare_default_and_native_opt_out() {
+    let out = compile_and_run(&my_program(
+        r#"
+$default = $db->getAttribute(PDO::ATTR_EMULATE_PREPARES);
+$emulated = $db->prepare("SELECT ? AS value");
+$emulated->execute(["O'Reilly"]);
+$quoted = $emulated->fetchColumn();
+$disabled = $db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+$native = $db->prepare("SELECT ? AS value");
+$native->execute([17]);
+echo ($default ? "emulated" : "native") . "|" . $quoted . "|"
+    . ($disabled ? "disabled" : "failed") . "|"
+    . ($native->getAttribute(PDO::ATTR_EMULATE_PREPARES) ? "emulated" : "native") . "|"
+    . $native->fetchColumn();
+"#,
+    ));
+    assert_eq!(out, "emulated|O'Reilly|disabled|native|17");
+}
+
+/// Emulated execution rejects a missing bind client-side with HY093 instead of
+/// silently substituting SQL NULL for a parameter the caller never supplied.
+#[test]
+#[ignore]
+fn test_mysql_emulated_prepare_rejects_missing_bind() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT);
+$stmt = $db->prepare("SELECT ? + ?");
+$ok = $stmt->execute([1]);
+echo (($ok === false) ? "false" : "true") . "|" . $stmt->errorCode();
+"#,
+    ));
+    assert_eq!(out, "false|HY093");
+}
+
+/// `debugDumpParams()` exposes the exact SQL rendered by the emulated text-protocol
+/// path, including client-side string quoting.
+#[test]
+#[ignore]
+fn test_mysql_emulated_prepare_debug_dump_prints_sent_sql() {
+    let out = compile_and_run(&my_program(
+        r#"
+$stmt = $db->prepare("SELECT ? AS value");
+$stmt->execute(["O'Reilly"]);
+$stmt->debugDumpParams();
+"#,
+    ));
+    assert_eq!(
+        out,
+        "SQL: [17] SELECT ? AS value\nSent SQL: [27] SELECT 'O\\'Reilly' AS value\nParams:  1\nKey: Position #0:\nparamno=0\nname=[0] \"\"\nis_param=1\nparam_type=2\n"
+    );
 }
 
 /// `AUTO_INCREMENT` columns drive `lastInsertId()`.
@@ -150,6 +311,22 @@ $db->exec("DROP TABLE my_tx");
 "#,
     ));
     assert_eq!(out, "1:2");
+}
+
+/// A raw MySQL `START TRANSACTION` bypasses PDO::beginTransaction() but remains
+/// visible through PDO::inTransaction() and accepted by PDO::rollBack().
+#[test]
+#[ignore]
+fn test_mysql_raw_transaction_is_visible() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->exec("START TRANSACTION");
+echo ($db->inTransaction() ? "in" : "out") . ":";
+$db->rollBack();
+echo ($db->inTransaction() ? "in" : "out");
+"#,
+    ));
+    assert_eq!(out, "in:out");
 }
 
 /// Rich MySQL types decode to their text representation: `DECIMAL` keeps its
@@ -293,16 +470,15 @@ try {
 /// `Pdo\Mysql::getWarningCount()` reports the warning count of the last statement,
 /// cached from that statement's terminal OK packet. `CREATE TABLE IF NOT EXISTS`
 /// on an existing table raises one "table already exists" warning (an OK-terminated
-/// DDL statement, so the count is surfaced — unlike a SELECT warning, which sits in
-/// an EOF packet the pure-Rust client does not expose). Driven against the live
-/// server as the driver subclass directly.
+/// DDL statement). A lossy SELECT cast then pins EOF/OK warning capture on a prepared
+/// row-producing statement too. Driven against the live server as the driver subclass.
 #[test]
 #[ignore]
 fn test_mysql_get_warning_count() {
     let out = compile_and_run(
-        "<?php\n$db = new \\Pdo\\Mysql((string) getenv(\"ELEPHC_MY_DSN\"));\n$db->exec(\"DROP TABLE IF EXISTS elephc_warn_probe\");\n$db->exec(\"CREATE TABLE elephc_warn_probe (id INT)\");\n$db->exec(\"CREATE TABLE IF NOT EXISTS elephc_warn_probe (id INT)\");\n$n = $db->getWarningCount();\n$db->exec(\"DROP TABLE elephc_warn_probe\");\necho $n;\n",
+        "<?php\n$db = new \\Pdo\\Mysql((string) getenv(\"ELEPHC_MY_DSN\"));\n$db->exec(\"DROP TABLE IF EXISTS elephc_warn_probe\");\n$db->exec(\"CREATE TABLE elephc_warn_probe (id INT)\");\n$db->exec(\"CREATE TABLE IF NOT EXISTS elephc_warn_probe (id INT)\");\n$ddl = $db->getWarningCount();\n$stmt = $db->query(\"SELECT CAST('not-a-number' AS UNSIGNED)\");\n$stmt->fetchColumn();\n$select = $db->getWarningCount();\n$db->exec(\"DROP TABLE elephc_warn_probe\");\necho $ddl . ':' . (($select > 0) ? 'warn' : 'none');\n",
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "1:warn");
 }
 
 /// Live TLS round-trip. Opens a MySQL/MariaDB connection with `Pdo\Mysql::ATTR_SSL_CA`
@@ -767,8 +943,9 @@ echo (($idA !== $idB) ? "distinct" : "same") . ":" . (($idA === $idAgain) ? "reu
     assert_eq!(out, "distinct:reuse");
 }
 
-/// F-MY-08: `getColumnMeta()`'s `native_type` on a `mysql:` statement reports
-/// MySQL's OWN wire-type name, not the SQLite storage-class vocabulary
+/// F-MY-08 / v43: `getColumnMeta()` on a `mysql:` statement reports MySQL's
+/// wire type, PDO parameter type, source table, declared size/precision, and native
+/// column flags rather than the SQLite storage-class vocabulary
 /// ("integer"/"double"/"string") the prelude used to hand every driver. php-src
 /// builds the key from `type_to_name_native()`, whose `PDO_MYSQL_NATIVE_TYPE_NAME`
 /// macro simply stringifies the `MYSQL_TYPE_` suffix — so an `INT` is `LONG`, a
@@ -803,15 +980,19 @@ fn mysql_get_column_meta_native_types() {
     let out = compile_and_run(&my_program(
         r#"
 $db->exec("DROP TABLE IF EXISTS my_native_meta");
-$db->exec("CREATE TABLE my_native_meta (i INT, v VARCHAR(20), m DECIMAL(10,2), b BLOB, big BIGINT, ts DATETIME)");
+$db->exec("CREATE TABLE my_native_meta (i INT NOT NULL PRIMARY KEY, v VARCHAR(20) UNIQUE, m DECIMAL(10,2), b BLOB, big BIGINT, ts DATETIME)");
 $db->exec("INSERT INTO my_native_meta VALUES (42, 'ada', '1234.50', 'bin', 9000000000, '2024-01-15 10:30:00')");
 
 $rowed = $db->query("SELECT i, v, m, b, big, ts FROM my_native_meta");
 $withRow = [];
 for ($c = 0; $c < 6; $c++) {
     $meta = $rowed->getColumnMeta($c);
-    $withRow[] = (string) $meta["native_type"];
+    $withRow[] = (string) $meta["native_type"] . ":" . $meta["pdo_type"];
 }
+$mi = $rowed->getColumnMeta(0);
+$mv = $rowed->getColumnMeta(1);
+$mm = $rowed->getColumnMeta(2);
+$mb = $rowed->getColumnMeta(3);
 
 $empty = $db->query("SELECT i, v, m, b, big, ts FROM my_native_meta WHERE 1 = 0");
 $noRow = [];
@@ -820,14 +1001,19 @@ for ($c = 0; $c < 6; $c++) {
     $noRow[] = (string) $meta["native_type"];
 }
 
-echo implode(",", $withRow) . "|" . implode(",", $noRow);
+echo implode(",", $withRow) . "|" . implode(",", $noRow)
+    . "|" . $mi["table"] . ":" . implode(",", $mi["flags"])
+    . "|" . implode(",", $mv["flags"])
+    . "|" . implode(",", $mb["flags"])
+    . "|" . (($mv["len"] >= 20) ? "len-y" : "len-n") . ":" . $mm["precision"];
 $db->exec("DROP TABLE my_native_meta");
 "#,
     ));
     assert_eq!(
         out,
-        "LONG,VAR_STRING,NEWDECIMAL,BLOB,LONGLONG,DATETIME|\
-         LONG,VAR_STRING,NEWDECIMAL,BLOB,LONGLONG,DATETIME"
+        "LONG:1,VAR_STRING:2,NEWDECIMAL:2,BLOB:2,LONGLONG:1,DATETIME:2|\
+         LONG,VAR_STRING,NEWDECIMAL,BLOB,LONGLONG,DATETIME|\
+         my_native_meta:not_null,primary_key|unique_key|blob|len-y:2"
     );
 }
 
@@ -945,4 +1131,46 @@ $db->exec("DROP TABLE my_group");
 "#,
     ));
     assert_eq!(out, "2:apple,banana/carrot|2:banana=2|carrot=3|banana/carrot");
+}
+
+/// MySQL's two generic driver hooks are live rather than stored echo values:
+/// AUTOCOMMIT reaches the server session, and DEFAULT_STR_PARAM controls the
+/// national-string marker used by emulated prepared statements.
+#[test]
+#[ignore]
+fn mysql_autocommit_and_default_string_parameter_attributes() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->getAttribute(PDO::ATTR_AUTOCOMMIT) ? "1" : "0";
+echo $db->setAttribute(PDO::ATTR_AUTOCOMMIT, false) ? "1" : "0";
+echo $db->getAttribute(PDO::ATTR_AUTOCOMMIT) ? "1" : "0";
+echo $db->setAttribute(PDO::ATTR_AUTOCOMMIT, true) ? "1" : "0";
+echo "|";
+echo $db->setAttribute(PDO::ATTR_DEFAULT_STR_PARAM, PDO::PARAM_STR_NATL) ? "1" : "0";
+echo ($db->getAttribute(PDO::ATTR_DEFAULT_STR_PARAM) === PDO::PARAM_STR_NATL) ? "N" : "C";
+$stmt = $db->prepare("SELECT ?");
+$stmt->execute(["café"]);
+echo $stmt->fetchColumn();
+echo $db->setAttribute(PDO::ATTR_DEFAULT_STR_PARAM, PDO::PARAM_STR_CHAR) ? "1" : "0";
+echo ($db->getAttribute(PDO::ATTR_DEFAULT_STR_PARAM) === PDO::PARAM_STR_CHAR) ? "C" : "N";
+"#,
+    ));
+    assert_eq!(out, "1101|1Ncafé1C");
+}
+
+/// Verifies emulated MySQL multi-statements retain every wire result set and
+/// `nextRowset()` refreshes the active rows/metadata until it returns false.
+#[test]
+#[ignore]
+fn mysql_next_rowset_traverses_multi_statement_results() {
+    let out = compile_and_run(&my_program(
+        r#"
+$stmt = $db->query("SELECT 1 AS value; SELECT 2 AS value; SELECT 3 AS value");
+echo $stmt->fetchColumn() . ":" . $stmt->columnCount() . "|";
+echo ($stmt->nextRowset() ? "next" : "done") . ":" . $stmt->fetchColumn() . "|";
+echo ($stmt->nextRowset() ? "next" : "done") . ":" . $stmt->fetchColumn() . "|";
+echo $stmt->nextRowset() ? "next" : "done";
+"#,
+    ));
+    assert_eq!(out, "1:1|next:2|next:3|done");
 }

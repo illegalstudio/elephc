@@ -32,7 +32,9 @@
 //!   `__rt_mixed_cast_*`): the owned boxed return is `__rt_mixed_unbox`-ed once and the
 //!   tag dispatched — int→`out.tag = 1`, float→`out.tag = 2` (raw f64 bits into
 //!   `out.f`), string→bytes staged into the bridge via `elephc_pdo_udf_stash_bytes`
-//!   then `out.tag = 3`, bool→`out.tag = 5`, null/other→`out.tag = 0`. The boxed return
+//!   then `out.tag = 3`, bool→`out.tag = 5`, null→`out.tag = 0`, arrays→6, and
+//!   objects/callables→7. The latter two let the bridge reject unsupported callback
+//!   results instead of silently converting them to SQL NULL. The boxed return
 //!   is released after the bytes are staged (the stash deep-copies them out of the
 //!   about-to-be-freed cell).
 //! - Exception firewall: identical to the collation adapter. A compiled-PHP `throw` is
@@ -218,7 +220,15 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pdo_call_scalar_ret_string");
     emitter.instruction("cmp x0, #3"); // Mixed bool?
     emitter.instruction("b.eq __rt_pdo_call_scalar_ret_bool");
-    // -- tag 8 (null) or any non-scalar (array/object/...) → SQL NULL --
+    emitter.instruction("cmp x0, #4"); // Mixed indexed array?
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");
+    emitter.instruction("cmp x0, #5"); // Mixed associative array?
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_array");
+    emitter.instruction("cmp x0, #6"); // Mixed object?
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");
+    emitter.instruction("cmp x0, #10"); // Mixed callable descriptor?
+    emitter.instruction("b.eq __rt_pdo_call_scalar_ret_object");
+    // -- tag 8 (null) or an unknown tag → SQL NULL --
     emitter.instruction("ldr x11, [sp, #248]"); // out pointer
     emitter.instruction("str xzr, [x11, #0]"); // out.tag = 0 (NULL)
     emitter.instruction("b __rt_pdo_call_scalar_release_return");
@@ -239,6 +249,16 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #5"); // ElephcResult tag 5 = BOOL
     emitter.instruction("str x10, [x11, #0]"); // out.tag = 5
     emitter.instruction("str x1, [x11, #8]"); // out.i = lo (0/1)
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.label("__rt_pdo_call_scalar_ret_array");
+    emitter.instruction("ldr x11, [sp, #248]"); // out pointer
+    emitter.instruction("mov x10, #6"); // ElephcResult tag 6 = unsupported PHP array
+    emitter.instruction("str x10, [x11, #0]"); // report the array type to the bridge
+    emitter.instruction("b __rt_pdo_call_scalar_release_return");
+    emitter.label("__rt_pdo_call_scalar_ret_object");
+    emitter.instruction("ldr x11, [sp, #248]"); // out pointer
+    emitter.instruction("mov x10, #7"); // ElephcResult tag 7 = unsupported PHP object/callable
+    emitter.instruction("str x10, [x11, #0]"); // report the object type to the bridge
     emitter.instruction("b __rt_pdo_call_scalar_release_return");
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_scalar_ret_string");
@@ -430,7 +450,15 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pdo_call_scalar_ret_string_x86");
     emitter.instruction("cmp rax, 3"); // Mixed bool?
     emitter.instruction("je __rt_pdo_call_scalar_ret_bool_x86");
-    // -- tag 8 (null) or any non-scalar (array/object/...) → SQL NULL --
+    emitter.instruction("cmp rax, 4"); // Mixed indexed array?
+    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");
+    emitter.instruction("cmp rax, 5"); // Mixed associative array?
+    emitter.instruction("je __rt_pdo_call_scalar_ret_array_x86");
+    emitter.instruction("cmp rax, 6"); // Mixed object?
+    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");
+    emitter.instruction("cmp rax, 10"); // Mixed callable descriptor?
+    emitter.instruction("je __rt_pdo_call_scalar_ret_object_x86");
+    // -- tag 8 (null) or an unknown tag → SQL NULL --
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]"); // out pointer
     emitter.instruction("mov QWORD PTR [r11], 0"); // out.tag = 0 (NULL)
     emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
@@ -448,6 +476,14 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]"); // out pointer
     emitter.instruction("mov QWORD PTR [r11], 5"); // out.tag = 5 (BOOL)
     emitter.instruction("mov QWORD PTR [r11 + 8], rdi"); // out.i = lo (0/1)
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.label("__rt_pdo_call_scalar_ret_array_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]"); // out pointer
+    emitter.instruction("mov QWORD PTR [r11], 6"); // out.tag = unsupported PHP array
+    emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
+    emitter.label("__rt_pdo_call_scalar_ret_object_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]"); // out pointer
+    emitter.instruction("mov QWORD PTR [r11], 7"); // out.tag = unsupported PHP object/callable
     emitter.instruction("jmp __rt_pdo_call_scalar_release_return_x86");
     // -- string: stage the bytes into the bridge BEFORE releasing the owned box --
     emitter.label("__rt_pdo_call_scalar_ret_string_x86");

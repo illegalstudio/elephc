@@ -32,6 +32,7 @@ mod image_prelude;
 mod names;
 mod optimize;
 mod parser;
+mod php_version;
 mod pdo_prelude;
 mod pipeline;
 mod resolver;

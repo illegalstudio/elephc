@@ -1390,6 +1390,14 @@ fn coerce_typed_assign_value(
             Op::MixedBox.default_effects(),
             Some(span),
         ),
+        target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => ctx.emit_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            None,
+            target,
+            Op::MixedUnbox.default_effects(),
+            Some(span),
+        ),
         _ => value,
     }
 }

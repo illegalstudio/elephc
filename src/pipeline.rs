@@ -51,6 +51,7 @@ pub(crate) fn compile(config: CliConfig) {
         regalloc_linear,
         ir_opt,
         target,
+        php_version,
         mut extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -125,7 +126,11 @@ pub(crate) fn compile(config: CliConfig) {
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
     let phase_started = Instant::now();
-    let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
+    let ast = if php_version == crate::php_version::PhpVersion::default() {
+        pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"))
+    } else {
+        pdo_prelude::inject_if_used_for_version(ast, with_crates.contains("pdo"), php_version)
+    };
     timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,

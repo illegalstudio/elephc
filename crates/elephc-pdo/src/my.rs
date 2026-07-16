@@ -29,11 +29,13 @@
 //!   PostgreSQL driver — no per-parameter type inference is needed.
 
 use std::collections::HashMap;
+use std::io::{Error as IoError, ErrorKind, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use mysql::consts::{CapabilityFlags, ColumnType};
+use mysql::consts::{CapabilityFlags, ColumnFlags, ColumnType};
 use mysql::prelude::Queryable;
-use mysql::{Column, Conn, OptsBuilder, Statement, Value};
+use mysql::{Column, Conn, LocalInfileHandler, OptsBuilder, Statement, Value};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -51,6 +53,10 @@ pub enum Bind {
     Int(i64),
     Float(f64),
     Text(String),
+    /// Text rendered with MySQL's national-character `N'…'` introducer on the
+    /// emulated-prepare path (`PDO::PARAM_STR_NATL`). Native prepares send the
+    /// same byte payload as ordinary text and let the server type the parameter.
+    NationalText(String),
     /// Raw bytes, sent as-is (rather than through a lossy UTF-8 `String`) so a
     /// BLOB-style parameter round-trips embedded NUL bytes and arbitrary binary
     /// content unchanged.
@@ -89,6 +95,31 @@ const MYSQL_BINARY_CHARSET: u16 = 63;
 /// host fell back on the OS TCP timeout and could hang for minutes where real PHP
 /// gives up after 30 s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
+
+/// Connection-time pdo_mysql options packed by the generated PDO prelude.
+#[derive(Debug, Clone)]
+struct MyDriverOptions {
+    local_infile: bool,
+    local_infile_directory: Option<PathBuf>,
+    compress: bool,
+    ignore_space: bool,
+    multi_statements: bool,
+    buffered_query: bool,
+}
+
+impl Default for MyDriverOptions {
+    /// Returns php-src/mysqlnd's default connection-option state.
+    fn default() -> Self {
+        Self {
+            local_infile: false,
+            local_infile_directory: None,
+            compress: false,
+            ignore_space: false,
+            multi_statements: true,
+            buffered_query: true,
+        }
+    }
+}
 
 impl ColKind {
     /// Classifies a MySQL column into the text-rendering bucket the decoder
@@ -134,6 +165,16 @@ impl ColKind {
             ColumnType::MYSQL_TYPE_TIME | ColumnType::MYSQL_TYPE_TIME2 => ColKind::Time,
             _ => ColKind::Other,
         }
+    }
+}
+
+/// Returns a MySQL result column's PDO-visible name, optionally prefixed with
+/// the protocol table label for `PDO::ATTR_FETCH_TABLE_NAMES`.
+fn column_display_name(column: &Column, fetch_table_names: bool) -> String {
+    if fetch_table_names {
+        format!("{}.{}", column.table_str(), column.name_str())
+    } else {
+        column.name_str().into_owned()
     }
 }
 
@@ -198,6 +239,10 @@ fn native_type_name(t: ColumnType) -> &'static str {
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
     pub conn: Conn,
+    /// Transport description returned by `PDO::ATTR_CONNECTION_STATUS`, captured
+    /// from the resolved connection options in php-src's `mysql_get_host_info()`
+    /// shape (`"host via TCP/IP"` or `"Localhost via UNIX socket"`).
+    pub host_info: String,
     pub changes: i64,
     pub errmsg: String,
     pub errcode: i64,
@@ -213,12 +258,36 @@ pub struct MyConn {
     /// `BIGINT UNSIGNED` AUTO_INCREMENT id can exceed `i64::MAX`, and casting at
     /// storage time would wrap it negative before either accessor ever runs.
     pub last_id: u64,
+    /// Current session autocommit mode, kept in sync with `SET autocommit` for
+    /// `PDO::ATTR_AUTOCOMMIT` reads and idempotent writes.
+    pub autocommit: bool,
+    /// Whether result column names are prefixed with their MySQL table name.
+    pub fetch_table_names: bool,
+    /// Default result buffering mode snapshotted by newly prepared statements.
+    pub buffered_query: bool,
+    /// Whether client-side execution accepts more than one SQL statement.
+    pub multi_statements: bool,
+    /// Whether an unbuffered statement still has unread rows.
+    pub unbuffered_active: bool,
+    /// Warning count from the final OK/EOF packet of the last completed operation.
+    pub warning_count: u16,
+    /// Best available live transaction state, updated after every successful
+    /// bridge-owned command including raw `PDO::exec("BEGIN")` control SQL.
+    pub in_transaction: bool,
 }
 
 /// A live MySQL prepared statement and its lazily-materialized result.
 pub struct MyStmt {
     pub conn_id: i64,
-    statement: Statement,
+    /// Original SQL used for transaction-state bookkeeping and diagnostics.
+    query_string: String,
+    statement: Option<Statement>,
+    /// Placeholder-translated SQL retained for the text-protocol emulated path.
+    emulated_sql: Option<String>,
+    /// Session quoting mode captured when the emulated statement is created.
+    no_backslash_escape: bool,
+    /// Most recent client-rendered SQL, exposed by `debugDumpParams()`.
+    pub sent_sql: String,
     /// Maps a bare named placeholder (`name` from `:name`) to its 1-based slot.
     named_map: HashMap<String, i64>,
     /// For each `?` in source order, the 1-based bound slot that feeds it. Repeats
@@ -226,6 +295,8 @@ pub struct MyStmt {
     order: Vec<i64>,
     /// Bound values, indexed by 0-based slot (`slot 1` → index 0).
     binds: Vec<Bind>,
+    /// Whether each slot was explicitly supplied for the current execution.
+    bound: Vec<bool>,
     /// Result column names, available from the prepare (before execution).
     col_names: Vec<String>,
     /// Result column kinds, parallel to `col_names`, for temporal text rendering.
@@ -238,8 +309,19 @@ pub struct MyStmt {
     /// on execute, like `col_names`/`col_kinds`, so a `CALL`'s columns (unknown at
     /// prepare time — see `execute`) get real names rather than none.
     col_types: Vec<ColumnType>,
+    /// Native table label parallel to `col_names` for `getColumnMeta()`.
+    col_tables: Vec<String>,
+    /// Raw MySQL field flags parallel to `col_names`.
+    col_flags: Vec<ColumnFlags>,
+    /// Declared maximum byte lengths parallel to `col_names`.
+    col_lengths: Vec<u32>,
+    /// Native decimal precision markers parallel to `col_names`.
+    col_precisions: Vec<u8>,
     /// Materialized rows; each row is a vector of decoded column cells.
     rows: Vec<Vec<Cell>>,
+    /// Result sets after the active one, retained in wire order for
+    /// `PDOStatement::nextRowset()`.
+    remaining_rowsets: Vec<MyRowset>,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
     /// Whether the query has been executed (results materialized) yet.
@@ -253,6 +335,44 @@ pub struct MyStmt {
     /// before execution instead of that genuine (but misleading) zero — see
     /// `column_count`'s doc comment for why that matters.
     is_call: bool,
+    /// Snapshot of the connection's `ATTR_USE_BUFFERED_QUERY` mode.
+    pub buffered: bool,
+}
+
+/// One fully materialized MySQL protocol result set.
+struct MyRowset {
+    /// Server-reported affected rows for an OK-packet result.
+    affected: i64,
+    /// AUTO_INCREMENT id reported by this result set, when present.
+    last_id: Option<u64>,
+    /// Column names for row-returning result sets.
+    col_names: Vec<String>,
+    /// Decoding kinds parallel to `col_names`.
+    col_kinds: Vec<ColKind>,
+    /// Raw wire types parallel to `col_names`.
+    col_types: Vec<ColumnType>,
+    /// Native table labels parallel to `col_names`.
+    col_tables: Vec<String>,
+    /// Raw field flags parallel to `col_names`.
+    col_flags: Vec<ColumnFlags>,
+    /// Declared maximum byte lengths parallel to `col_names`.
+    col_lengths: Vec<u32>,
+    /// Native decimal precision markers parallel to `col_names`.
+    col_precisions: Vec<u8>,
+    /// Decoded rows for this result set.
+    rows: Vec<Vec<Cell>>,
+}
+
+impl MyRowset {
+    /// Returns PDO's row count for this result set: buffered row count for a
+    /// SELECT-like set, otherwise the server's affected-row count.
+    fn row_count(&self) -> i64 {
+        if self.col_names.is_empty() {
+            self.affected
+        } else {
+            self.rows.len() as i64
+        }
+    }
 }
 
 /// Extracts a MySQL server error code from a driver error, or `1` for transport /
@@ -309,7 +429,11 @@ fn err_sqlstate(e: &mysql::Error) -> String {
 /// option (F-MY-06), threaded in from the open entrypoint rather than read from
 /// the DSN: it is an attribute, not a DSN key, and it has to be known *before*
 /// the handshake because it only exists as a capability bit negotiated there.
-pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<String>), String> {
+pub fn build_opts(
+    dsn: &str,
+    found_rows: bool,
+    ignore_space: bool,
+) -> Result<(OptsBuilder, Option<String>), String> {
     let body = dsn
         .strip_prefix("mysql:")
         .ok_or_else(|| "could not find driver (expected a mysql: DSN)".to_string())?;
@@ -383,8 +507,15 @@ pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<St
     // covers only the capabilities the connection manages itself (`CLIENT_SSL`,
     // `CLIENT_COMPRESS`, `CLIENT_PROTOCOL_41`, the MULTI_* pair, …) — never
     // `CLIENT_FOUND_ROWS` — so the bit does reach the server.
+    let mut capabilities = CapabilityFlags::empty();
     if found_rows {
-        opts = opts.additional_capabilities(CapabilityFlags::CLIENT_FOUND_ROWS);
+        capabilities.insert(CapabilityFlags::CLIENT_FOUND_ROWS);
+    }
+    if ignore_space {
+        capabilities.insert(CapabilityFlags::CLIENT_IGNORE_SPACE);
+    }
+    if !capabilities.is_empty() {
+        opts = opts.additional_capabilities(capabilities);
     }
     // F-CORE-10: unconditional, so a DSN that names neither `connect_timeout` nor
     // (through the prelude) `ATTR_TIMEOUT` still inherits php-src's 30 s bound
@@ -393,6 +524,93 @@ pub fn build_opts(dsn: &str, found_rows: bool) -> Result<(OptsBuilder, Option<St
     let secs = connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
     opts = opts.tcp_connect_timeout(Some(Duration::from_secs(secs)));
     Ok((opts, charset))
+}
+
+/// Parses the percent-escaped MySQL driver-option string emitted by the PDO
+/// prelude. Unsupported security options fail the connection explicitly instead
+/// of being accepted into an inert attribute bag.
+fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
+    let mut options = MyDriverOptions::default();
+    for pair in config.split(';').filter(|pair| !pair.is_empty()) {
+        let Some((key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let value = percent_decode_credential(raw_value);
+        match key {
+            "local" => options.local_infile = value == "1",
+            "dir" if !value.is_empty() => {
+                options.local_infile_directory = Some(PathBuf::from(value))
+            }
+            "compress" => options.compress = value == "1",
+            "ignore" => options.ignore_space = value == "1",
+            "multi" => options.multi_statements = value != "0",
+            "buffered" => options.buffered_query = value != "0",
+            "capath" if !value.is_empty() => {
+                return Err("Pdo\\Mysql::ATTR_SSL_CAPATH is not supported by the rustls MySQL client; use ATTR_SSL_CA with a PEM bundle".to_string())
+            }
+            "cipher" if !value.is_empty() => {
+                return Err("Pdo\\Mysql::ATTR_SSL_CIPHER cannot be honored by the rustls MySQL client".to_string())
+            }
+            "serverkey" if !value.is_empty() => {
+                return Err("Pdo\\Mysql::ATTR_SERVER_PUBLIC_KEY cannot be honored by the native MySQL client".to_string())
+            }
+            _ => {}
+        }
+    }
+    if let Some(directory) = options.local_infile_directory.as_mut() {
+        *directory = directory.canonicalize().map_err(|error| {
+            format!(
+                "Pdo\\Mysql::ATTR_LOCAL_INFILE_DIRECTORY '{}': {error}",
+                directory.display()
+            )
+        })?;
+        if !directory.is_dir() {
+            return Err(format!(
+                "Pdo\\Mysql::ATTR_LOCAL_INFILE_DIRECTORY '{}' is not a directory",
+                directory.display()
+            ));
+        }
+    }
+    Ok(options)
+}
+
+/// Builds the local-infile callback installed on every MySQL connection. Disabled
+/// connections always reject the server request. Enabled connections read the
+/// requested file bytes, optionally requiring the canonical path to remain below
+/// `allowed_directory`, and never acknowledge an empty synthetic upload on error.
+fn local_infile_handler(
+    enabled: bool,
+    allowed_directory: Option<PathBuf>,
+) -> LocalInfileHandler {
+    LocalInfileHandler::new(move |file_name, writer| {
+        if !enabled {
+            return Err(IoError::new(
+                ErrorKind::PermissionDenied,
+                "LOAD DATA LOCAL INFILE is disabled",
+            ));
+        }
+        let requested = String::from_utf8_lossy(file_name);
+        let path = PathBuf::from(requested.as_ref());
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let canonical = absolute.canonicalize()?;
+        if let Some(root) = &allowed_directory {
+            if !canonical.starts_with(root) {
+                return Err(IoError::new(
+                    ErrorKind::PermissionDenied,
+                    format!(
+                        "LOCAL INFILE path '{}' is outside allowed directory '{}'",
+                        canonical.display(),
+                        root.display()
+                    ),
+                ));
+            }
+        }
+        writer.write_all(&std::fs::read(canonical)?)
+    })
 }
 
 /// Percent-decodes a `user=`/`password=` DSN value (F-CORE-02). The prelude
@@ -556,9 +774,64 @@ fn sql_is_call_statement(sql: &str) -> bool {
     rest.get(4).is_none_or(|&b| !is_ident_byte(b))
 }
 
+/// Returns whether `sql` contains a second non-empty statement after a real
+/// semicolon separator. Quoted regions and MySQL comments are skipped with the
+/// same escape rules as placeholder translation, so a semicolon inside data
+/// never trips `ATTR_MULTI_STATEMENTS = false`.
+fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool) -> bool {
+    let bytes = sql.as_bytes();
+    let mut i = 0usize;
+    let mut saw_statement = false;
+    let mut completed_statement = false;
+    while i < bytes.len() {
+        if is_my_space(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        if let Some(end) = scan_my_comment(bytes, i) {
+            i = end;
+            continue;
+        }
+        if bytes[i] == b';' {
+            if saw_statement {
+                completed_statement = true;
+                saw_statement = false;
+            }
+            i += 1;
+            continue;
+        }
+        if completed_statement {
+            return true;
+        }
+        saw_statement = true;
+        if matches!(bytes[i], b'\'' | b'"') {
+            i = scan_my_string(bytes, i, bytes[i], no_backslash_escapes)
+                .unwrap_or(bytes.len());
+            continue;
+        }
+        if bytes[i] == b'`' {
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'`' {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'`' {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Scans a MySQL quoted region opened by `quote` (`'` or `"`) starting at
 /// `start` (the index of the opening quote byte), returning the exclusive end
-/// index just past the closing quote (or `len` if unterminated). Both quote
+/// index just past the closing quote, or `None` when it is unterminated. Both quote
 /// styles are string literals in MySQL's default `sql_mode` and share the same
 /// escaping: a doubled quote (`''`/`""`) is a literal quote, and a backslash
 /// escapes the following byte unconditionally (so `\'`/`\"`/`\\` never
@@ -574,12 +847,17 @@ fn sql_is_call_statement(sql: &str) -> bool {
 /// as string content (e.g. `'a\' , ?` — the server closes the literal at the `'`
 /// after the backslash, this scanner would not), yielding a bound-parameter count
 /// that disagrees with the server's real placeholder count.
-fn scan_my_string(bytes: &[u8], start: usize, quote: u8, no_backslash_escapes: bool) -> usize {
+fn scan_my_string(
+    bytes: &[u8],
+    start: usize,
+    quote: u8,
+    no_backslash_escapes: bool,
+) -> Option<usize> {
     let len = bytes.len();
     let mut j = start + 1;
     loop {
         if j >= len {
-            return len;
+            return None;
         }
         let cj = bytes[j];
         if !no_backslash_escapes && cj == b'\\' && j + 1 < len {
@@ -591,7 +869,7 @@ fn scan_my_string(bytes: &[u8], start: usize, quote: u8, no_backslash_escapes: b
                 j += 2;
                 continue;
             }
-            return j + 1;
+            return Some(j + 1);
         }
         j += 1;
     }
@@ -650,15 +928,34 @@ pub fn translate_placeholders(
         // in `scan_my_comment`, shared with `sql_is_call_statement` — a comment must
         // mean the same thing to both scanners.
         if let Some(end) = scan_my_comment(bytes, i) {
+            if c == b'/'
+                && i + 1 < len
+                && bytes[i + 1] == b'*'
+                && end == len
+                && (len < 2 || &bytes[len - 2..] != b"*/")
+            {
+                // php-src's re2c scanner backtracks an unterminated block comment
+                // to its one-byte fallback instead of swallowing the rest of the
+                // statement. Copy only '/' so '*' and later placeholders are scanned.
+                out.push('/');
+                i += 1;
+                continue;
+            }
             out.push_str(&sql[i..end]);
             i = end;
             continue;
         }
         match c {
             b'\'' | b'"' => {
-                let end = scan_my_string(bytes, i, c, no_backslash_escapes);
-                out.push_str(&sql[i..end]);
-                i = end;
+                if let Some(end) = scan_my_string(bytes, i, c, no_backslash_escapes) {
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                } else {
+                    // Match php-src's scanner fallback for an unterminated quote:
+                    // the opener is ordinary text and following placeholders remain visible.
+                    out.push(c as char);
+                    i += 1;
+                }
             }
             b'`' => {
                 // Backtick-quoted identifier: verbatim, with doubled `` `` ``
@@ -765,6 +1062,97 @@ pub fn translate_placeholders(
     (out, named, order, mixed)
 }
 
+/// Replaces the translated statement's real `?` markers with safely quoted
+/// MySQL literals while preserving markers inside comments and quoted regions.
+fn interpolate_emulated_sql(
+    sql: &str,
+    values: &[Value],
+    national: &[bool],
+    no_backslash_escape: bool,
+) -> Result<String, String> {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len() + values.len() * 8);
+    let mut value_index = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if let Some(end) = scan_my_comment(bytes, i) {
+            if bytes[i] == b'/'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b'*'
+                && end == bytes.len()
+                && (bytes.len() < 2 || &bytes[bytes.len() - 2..] != b"*/")
+            {
+                out.push('/');
+                i += 1;
+                continue;
+            }
+            out.push_str(&sql[i..end]);
+            i = end;
+            continue;
+        }
+        match bytes[i] {
+            quote @ (b'\'' | b'"') => {
+                if let Some(end) = scan_my_string(bytes, i, quote, no_backslash_escape) {
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                } else {
+                    out.push(quote as char);
+                    i += 1;
+                }
+            }
+            b'`' => {
+                let start = i;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'`' {
+                        i += 1;
+                        if i < bytes.len() && bytes[i] == b'`' {
+                            i += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push_str(&sql[start..i]);
+            }
+            b'?' => {
+                let mut end = i + 1;
+                while end < bytes.len() && bytes[end] == b'?' {
+                    end += 1;
+                }
+                if end - i > 1 {
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                    continue;
+                }
+                let value = values.get(value_index).ok_or_else(|| {
+                    "Invalid parameter number: number of bound variables does not match number of tokens"
+                        .to_string()
+                })?;
+                if national.get(value_index).copied().unwrap_or(false) {
+                    out.push('N');
+                }
+                out.push_str(&value.as_sql(no_backslash_escape));
+                value_index += 1;
+                i += 1;
+            }
+            _ => {
+                let len = utf8_len(bytes[i]).min(bytes.len() - i);
+                out.push_str(&sql[i..i + len]);
+                i += len;
+            }
+        }
+    }
+    if value_index != values.len() {
+        return Err(
+            "Invalid parameter number: number of bound variables does not match number of tokens"
+                .to_string(),
+        );
+    }
+    Ok(out)
+}
+
 /// Applies the prelude's packed `Pdo\Mysql::ATTR_SSL_*` config to `opts`, enabling
 /// rustls TLS for the connection. Only compiled with the opt-in `mysql-tls`
 /// feature (the `mysql` crate's rustls backend pulls aws-lc-rs, which the default
@@ -815,8 +1203,8 @@ fn install_crypto_provider() {
 /// top of the bundled webpki roots); `cert`+`key` are `MYSQL_ATTR_SSL_CERT`/
 /// `SSL_KEY` (client-certificate mutual TLS, honored only when both are present);
 /// `verify=0` is `MYSQL_ATTR_SSL_VERIFY_SERVER_CERT` set false, which disables
-/// certificate and hostname validation via the crate's danger flags. Unknown keys
-/// (e.g. the unsupported `MYSQL_ATTR_SSL_CAPATH`/`SSL_CIPHER`) are ignored.
+/// certificate and hostname validation via the crate's danger flags. Unsupported
+/// security keys never reach this parser: `parse_driver_options` rejects them first.
 #[cfg(feature = "mysql-tls")]
 fn parse_ssl_config(ssl_config: &str) -> mysql::SslOpts {
     use mysql::{ClientIdentity, SslOpts};
@@ -886,9 +1274,19 @@ impl MyConn {
         init_command: &str,
         ssl_config: &str,
         found_rows: bool,
+        driver_config: &str,
     ) -> Result<MyConn, String> {
-        let (mut opts, charset) = build_opts(dsn, found_rows)?;
+        let driver_options = parse_driver_options(driver_config)?;
+        let (mut opts, charset) =
+            build_opts(dsn, found_rows, driver_options.ignore_space)?;
         opts = apply_ssl_opts(opts, ssl_config)?;
+        if driver_options.compress {
+            opts = opts.compress(Some(mysql::Compression::default()));
+        }
+        opts = opts.local_infile_handler(Some(local_infile_handler(
+            driver_options.local_infile,
+            driver_options.local_infile_directory.clone(),
+        )));
         let mut init_statements: Vec<String> = Vec::new();
         if let Some(cs) = charset {
             init_statements.push(format!("SET NAMES {cs}"));
@@ -899,15 +1297,52 @@ impl MyConn {
         if !init_statements.is_empty() {
             opts = opts.init(init_statements);
         }
+        let resolved_opts: mysql::Opts = opts.clone().into();
+        let host_info = match resolved_opts.get_socket() {
+            Some(_) => "Localhost via UNIX socket".to_string(),
+            None => format!("{} via TCP/IP", resolved_opts.get_ip_or_hostname()),
+        };
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
         Ok(MyConn {
             conn,
+            host_info,
             changes: 0,
             errmsg: String::new(),
             errcode: 0,
             sqlstate: "00000".to_string(),
             last_id: 0,
+            autocommit: true,
+            fetch_table_names: false,
+            buffered_query: driver_options.buffered_query,
+            multi_statements: driver_options.multi_statements,
+            unbuffered_active: false,
+            warning_count: 0,
+            in_transaction: false,
         })
+    }
+
+    /// Changes the default buffering mode used by statements prepared after this
+    /// call, matching `Pdo\Mysql::ATTR_USE_BUFFERED_QUERY`'s connection attribute.
+    pub fn set_buffered_query(&mut self, buffered: bool) -> i64 {
+        self.buffered_query = buffered;
+        1
+    }
+
+    /// Returns the current `ATTR_USE_BUFFERED_QUERY` default.
+    pub fn buffered_query(&self) -> i64 {
+        self.buffered_query as i64
+    }
+
+    /// Records mysqlnd's 2014/HY000 connection-busy diagnostic and returns false
+    /// while an unbuffered statement still owns unread rows.
+    fn ensure_not_busy(&mut self) -> bool {
+        if !self.unbuffered_active {
+            return true;
+        }
+        self.sqlstate = "HY000".to_string();
+        self.errcode = 2014;
+        self.errmsg = "Cannot execute queries while other unbuffered queries are active. Consider using PDOStatement::fetchAll(). Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.".to_string();
+        false
     }
 
     /// Records the AUTO_INCREMENT id from the just-run statement when it is
@@ -923,9 +1358,24 @@ impl MyConn {
         }
     }
 
+    /// Updates transaction bookkeeping from a successfully executed SQL command.
+    fn note_transaction_sql(&mut self, sql: &str) {
+        self.in_transaction = transaction_state_after_sql(sql, self.in_transaction, self.autocommit);
+    }
+
     /// Runs a statement with no result rows (`PDO::exec`), returning the affected
     /// row count or `-1` on error.
     pub fn exec(&mut self, sql: &str) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        let no_backslash_escape = self.no_backslash_escape();
+        if !self.multi_statements && sql_has_multiple_statements(sql, no_backslash_escape) {
+            self.sqlstate = "42000".to_string();
+            self.errcode = 1064;
+            self.errmsg = "Multiple statements are disabled for this connection".to_string();
+            return -1;
+        }
         // Collect the outcome into owned values first so the `&mut self.conn`
         // borrow held by the query result ends before the connection bookkeeping
         // fields are written below.
@@ -954,12 +1404,15 @@ impl MyConn {
             }
             Err(e) => Err(e),
         };
+        let warnings = self.conn.warnings();
         match outcome {
             Ok((affected, last)) => {
                 self.note_last_id(last);
                 self.changes = affected;
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
+                self.warning_count = warnings;
+                self.note_transaction_sql(sql);
                 affected
             }
             Err(e) => {
@@ -973,12 +1426,48 @@ impl MyConn {
 
     /// Runs a bare transaction-control statement, returning `1`/`0`.
     pub fn exec_simple(&mut self, sql: &str) -> i64 {
+        if !self.ensure_not_busy() {
+            return 0;
+        }
         match self.conn.query_drop(sql) {
-            Ok(()) => 1,
+            Ok(()) => {
+                self.note_transaction_sql(sql);
+                1
+            }
             Err(e) => {
                 self.sqlstate = err_sqlstate(&e);
                 self.errmsg = e.to_string();
                 self.errcode = err_code(&e);
+                0
+            }
+        }
+    }
+
+    /// Enables or disables MySQL session autocommit. An unchanged value is a
+    /// successful no-op; a server error leaves the stored state unchanged.
+    pub fn set_autocommit(&mut self, enabled: bool) -> i64 {
+        if self.autocommit == enabled {
+            return 1;
+        }
+        let sql = if enabled {
+            "SET autocommit=1"
+        } else {
+            "SET autocommit=0"
+        };
+        match self.conn.query_drop(sql) {
+            Ok(()) => {
+                self.autocommit = enabled;
+                if enabled {
+                    self.in_transaction = false;
+                }
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.sqlstate = err_sqlstate(&error);
+                self.errmsg = error.to_string();
+                self.errcode = err_code(&error);
                 0
             }
         }
@@ -1008,21 +1497,59 @@ impl MyConn {
         format!("{major}.{minor}.{patch}")
     }
 
-    /// Returns the number of warnings raised by the last statement executed on this
-    /// connection (`SELECT @@warning_count`), which PHP's
-    /// `Pdo\Mysql::getWarningCount()` returns. `SELECT @@warning_count` does not
-    /// itself clear the count and runs on a connection left clean by a preceding
-    /// direct `exec()`/DML statement (no open result set), so it observes that
-    /// statement's warnings. Divergence: an intervening prepared-statement
-    /// `COM_STMT_CLOSE` — e.g. a `query()` result discarded before this call — resets
-    /// the session count, so getWarningCount is reliable immediately after a direct
-    /// exec()/DML statement (the pure-Rust client also does not surface the EOF-packet
-    /// warnings of a SELECT). Backs `Pdo\Mysql::getWarningCount()`.
-    pub fn warning_count(&mut self) -> i64 {
-        match self.conn.query_first::<u64, _>("SELECT @@warning_count") {
-            Ok(Some(n)) => n as i64,
-            _ => 0,
-        }
+    /// Returns the pure-Rust MySQL client implementation and its pinned crate
+    /// version. Unlike php-src there is no mysqlnd/libmysql client library in the
+    /// standalone binary, so reporting the linked client crate is the truthful
+    /// equivalent of `mysql_get_client_info()`.
+    pub fn client_version(&self) -> String {
+        "mysql 25.0.1".to_string()
+    }
+
+    /// Returns the connection transport description in the same shape as
+    /// php-src's `mysql_get_host_info()` result.
+    pub fn connection_status(&self) -> String {
+        self.host_info.clone()
+    }
+
+    /// Updates the live `PDO::ATTR_FETCH_TABLE_NAMES` setting.
+    pub fn set_fetch_table_names(&mut self, enabled: bool) {
+        self.fetch_table_names = enabled;
+    }
+
+    /// Reconstructs MySQL's `COM_STATISTICS` text from live `SHOW STATUS` values.
+    /// The Rust client does not expose the protocol command, but the same server
+    /// counters are available without relying on fabricated constants.
+    pub fn server_info(&mut self) -> String {
+        let rows: Vec<(String, String)> = match self.conn.query("SHOW STATUS") {
+            Ok(rows) => rows,
+            Err(_) => return String::new(),
+        };
+        let values: HashMap<String, String> = rows.into_iter().collect();
+        let value = |name: &str| values.get(name).map(String::as_str).unwrap_or("0");
+        let uptime = value("Uptime").parse::<f64>().unwrap_or(0.0);
+        let questions = value("Questions").parse::<f64>().unwrap_or(0.0);
+        let queries_per_second = if uptime > 0.0 {
+            questions / uptime
+        } else {
+            0.0
+        };
+        format!(
+            "Uptime: {}  Threads: {}  Questions: {}  Slow queries: {}  Opens: {}  Flush tables: {}  Open tables: {}  Queries per second avg: {:.3}",
+            value("Uptime"),
+            value("Threads_connected"),
+            value("Questions"),
+            value("Slow_queries"),
+            value("Opened_tables"),
+            value("Flush_commands"),
+            value("Open_tables"),
+            queries_per_second,
+        )
+    }
+
+    /// Returns the warning count captured from the final OK/EOF packet of the last
+    /// completed operation, including SELECT and prepared-statement results.
+    pub fn warning_count(&self) -> i64 {
+        self.warning_count as i64
     }
 
     /// Returns whether the connection's current session has `NO_BACKSLASH_ESCAPES`
@@ -1049,9 +1576,19 @@ impl MyConn {
     /// scanner that disagrees with the server about that disagrees with it about
     /// how many placeholders the statement has. This is the only place the flag can
     /// be read: `translate_placeholders` is a free function with no connection.
-    pub fn prepare(&mut self, sql: &str) -> Result<MyStmt, String> {
+    pub fn prepare(&mut self, sql: &str, emulated: bool) -> Result<MyStmt, String> {
+        if !self.ensure_not_busy() {
+            return Err(self.errmsg.clone());
+        }
+        let no_backslash_escape = self.no_backslash_escape();
+        if !self.multi_statements && sql_has_multiple_statements(sql, no_backslash_escape) {
+            self.sqlstate = "42000".to_string();
+            self.errcode = 1064;
+            self.errmsg = "Multiple statements are disabled for this connection".to_string();
+            return Err(self.errmsg.clone());
+        }
         let (translated, named_map, order, mixed) =
-            translate_placeholders(sql, self.no_backslash_escape());
+            translate_placeholders(sql, no_backslash_escape);
         if mixed {
             // Nonzero native code like every other error path here, and `1`
             // specifically to match pg's identical HY093 branch (`pg.rs`,
@@ -1063,12 +1600,42 @@ impl MyConn {
                 "Invalid parameter number: mixed named and positional parameters".to_string();
             return Err(self.errmsg.clone());
         }
+        let n_binds = order.iter().copied().max().unwrap_or(0) as usize;
+        if emulated {
+            self.errcode = 0;
+            self.sqlstate = "00000".to_string();
+            return Ok(MyStmt {
+                conn_id: 0,
+                query_string: sql.to_string(),
+                statement: None,
+                emulated_sql: Some(translated),
+                no_backslash_escape: self.no_backslash_escape(),
+                sent_sql: String::new(),
+                named_map,
+                order,
+                binds: vec![Bind::Null; n_binds],
+                bound: vec![false; n_binds],
+                col_names: Vec::new(),
+                col_kinds: Vec::new(),
+                col_types: Vec::new(),
+                col_tables: Vec::new(),
+                col_flags: Vec::new(),
+                col_lengths: Vec::new(),
+                col_precisions: Vec::new(),
+                rows: Vec::new(),
+                remaining_rowsets: Vec::new(),
+                cursor: -1,
+                executed: false,
+                is_call: sql_is_call_statement(sql),
+                buffered: self.buffered_query,
+            });
+        }
         match self.conn.prep(&translated) {
             Ok(statement) => {
                 let col_names = statement
                     .columns()
                     .iter()
-                    .map(|c| c.name_str().into_owned())
+                    .map(|column| column_display_name(column, self.fetch_table_names))
                     .collect();
                 let col_kinds = statement
                     .columns()
@@ -1082,24 +1649,54 @@ impl MyConn {
                     .iter()
                     .map(|c| c.column_type())
                     .collect();
+                let col_tables = statement
+                    .columns()
+                    .iter()
+                    .map(|column| column.table_str().into_owned())
+                    .collect();
+                let col_flags = statement
+                    .columns()
+                    .iter()
+                    .map(Column::flags)
+                    .collect();
+                let col_lengths = statement
+                    .columns()
+                    .iter()
+                    .map(Column::column_length)
+                    .collect();
+                let col_precisions = statement
+                    .columns()
+                    .iter()
+                    .map(Column::decimals)
+                    .collect();
                 // Distinct slots run 1..=N contiguously, so the highest slot in
                 // `order` is the bound-value count.
-                let n_binds = order.iter().copied().max().unwrap_or(0) as usize;
                 self.errcode = 0;
                 self.sqlstate = "00000".to_string();
                 Ok(MyStmt {
                     conn_id: 0,
-                    statement,
+                    query_string: sql.to_string(),
+                    statement: Some(statement),
+                    emulated_sql: None,
+                    no_backslash_escape: self.no_backslash_escape(),
+                    sent_sql: String::new(),
                     named_map,
                     order,
                     binds: vec![Bind::Null; n_binds],
+                    bound: vec![false; n_binds],
                     col_names,
                     col_kinds,
                     col_types,
+                    col_tables,
+                    col_flags,
+                    col_lengths,
+                    col_precisions,
                     rows: Vec::new(),
+                    remaining_rowsets: Vec::new(),
                     cursor: -1,
                     executed: false,
                     is_call: sql_is_call_statement(sql),
+                    buffered: self.buffered_query,
                 })
             }
             Err(e) => {
@@ -1110,6 +1707,36 @@ impl MyConn {
             }
         }
     }
+}
+
+/// Derives MySQL's transaction state after one successful command. Explicit
+/// control statements win; DDL implicitly commits; with autocommit disabled a
+/// regular statement starts the session transaction.
+pub(crate) fn transaction_state_after_sql(
+    sql: &str,
+    current: bool,
+    autocommit: bool,
+) -> bool {
+    let normalized = sql.trim_start().to_ascii_uppercase();
+    if normalized.starts_with("BEGIN") || normalized.starts_with("START TRANSACTION") {
+        return true;
+    }
+    if normalized.starts_with("COMMIT") || normalized.starts_with("END") {
+        return normalized.contains("AND CHAIN");
+    }
+    if normalized.starts_with("ROLLBACK") {
+        if normalized.starts_with("ROLLBACK TO") {
+            return current;
+        }
+        return normalized.contains("AND CHAIN");
+    }
+    if ["ALTER", "CREATE", "DROP", "GRANT", "LOCK", "RENAME", "REVOKE", "TRUNCATE", "UNLOCK"]
+        .iter()
+        .any(|keyword| normalized.starts_with(keyword))
+    {
+        return false;
+    }
+    if autocommit { current } else { true }
 }
 
 /// Renders a MySQL `DATE`/`DATETIME`/`TIMESTAMP` value as its canonical text:
@@ -1198,6 +1825,7 @@ impl MyStmt {
             return 0;
         }
         self.binds[(idx - 1) as usize] = value;
+        self.bound[(idx - 1) as usize] = true;
         1
     }
 
@@ -1206,13 +1834,49 @@ impl MyStmt {
         self.cursor = -1;
         self.executed = false;
         self.rows.clear();
+        self.remaining_rowsets.clear();
+        1
+    }
+
+    /// Makes one materialized result set active and updates connection-level
+    /// row-count/insert-id state to match it.
+    fn install_rowset(&mut self, conn: &mut MyConn, rowset: MyRowset) {
+        conn.changes = if !self.buffered && !rowset.col_names.is_empty() {
+            0
+        } else {
+            rowset.row_count()
+        };
+        conn.note_last_id(rowset.last_id);
+        self.col_names = rowset.col_names;
+        self.col_kinds = rowset.col_kinds;
+        self.col_types = rowset.col_types;
+        self.col_tables = rowset.col_tables;
+        self.col_flags = rowset.col_flags;
+        self.col_lengths = rowset.col_lengths;
+        self.col_precisions = rowset.col_precisions;
+        self.rows = rowset.rows;
+        self.cursor = -1;
+        self.executed = true;
+        conn.unbuffered_active = !self.buffered && !self.rows.is_empty();
+    }
+
+    /// Advances to the next materialized MySQL result set. Returns `1` when a
+    /// rowset became active and `0` when the protocol exposed no further set.
+    pub fn next_rowset(&mut self, conn: &mut MyConn) -> i64 {
+        conn.unbuffered_active = false;
+        if self.remaining_rowsets.is_empty() {
+            return 0;
+        }
+        let rowset = self.remaining_rowsets.remove(0);
+        self.install_rowset(conn, rowset);
         1
     }
 
     /// Clears all bound values back to NULL.
     pub fn clear_bindings(&mut self) -> i64 {
-        for b in &mut self.binds {
+        for (b, bound) in self.binds.iter_mut().zip(self.bound.iter_mut()) {
             *b = Bind::Null;
+            *bound = false;
         }
         1
     }
@@ -1227,8 +1891,18 @@ impl MyStmt {
                 Bind::Int(v) => Value::Int(*v),
                 Bind::Float(v) => Value::Double(*v),
                 Bind::Text(s) => Value::Bytes(s.clone().into_bytes()),
+                Bind::NationalText(s) => Value::Bytes(s.clone().into_bytes()),
                 Bind::Bytes(b) => Value::Bytes(b.clone()),
             })
+            .collect()
+    }
+
+    /// Builds one flag per emitted positional marker, identifying national-text
+    /// values for MySQL's emulated `N'…'` literal syntax.
+    fn build_national_flags(&self) -> Vec<bool> {
+        self.order
+            .iter()
+            .map(|&slot| matches!(&self.binds[(slot - 1) as usize], Bind::NationalText(_)))
             .collect()
     }
 
@@ -1262,75 +1936,199 @@ impl MyStmt {
     /// `is_call` placeholder (see its doc comment), the prelude picks the
     /// throwaway branch and discards this method's very first materialized row.
     fn execute(&mut self, conn: &mut MyConn) -> Result<(), i64> {
+        if self.emulated_sql.is_some() {
+            return self.execute_emulated(conn);
+        }
         let values = self.build_values();
-        let statement = self.statement.clone();
-        type ExecOutcome = (
-            i64,
-            Option<u64>,
-            Vec<Vec<Cell>>,
-            bool,
-            Vec<String>,
-            Vec<ColKind>,
-            Vec<ColumnType>,
-        );
-        let outcome: Result<ExecOutcome, mysql::Error> = (|| {
+        let statement = self
+            .statement
+            .as_ref()
+            .expect("native MySQL statement missing its prepared handle")
+            .clone();
+        let outcome: Result<Vec<MyRowset>, mysql::Error> = (|| {
             let mut res = conn.conn.exec_iter(&statement, values)?;
-            let last = res.last_insert_id();
-            let (is_select, col_names, col_kinds, col_types) = {
-                let live = res.columns();
+            let mut rowsets = Vec::new();
+            while let Some(mut set) = res.iter() {
+                let last_id = set.last_insert_id();
+                let affected = set.affected_rows() as i64;
+                let live = set.columns();
                 let cols: &[Column] = live.as_ref();
-                if cols.is_empty() {
-                    (
-                        false,
-                        self.col_names.clone(),
-                        self.col_kinds.clone(),
-                        self.col_types.clone(),
-                    )
-                } else {
-                    (
-                        true,
-                        cols.iter().map(|c| c.name_str().into_owned()).collect(),
-                        cols.iter().map(ColKind::from_column).collect(),
-                        // F-MY-08: refreshed with the rest, so a `CALL`'s
-                        // `native_type`s come from its real (post-execution)
-                        // columns rather than the empty prepare-time set.
-                        cols.iter().map(|c| c.column_type()).collect(),
-                    )
-                }
-            };
-            let mut rows = Vec::new();
-            if is_select {
-                for row in res.by_ref() {
+                let col_names = cols
+                    .iter()
+                    .map(|column| column_display_name(column, conn.fetch_table_names))
+                    .collect::<Vec<_>>();
+                let col_kinds = cols.iter().map(ColKind::from_column).collect::<Vec<_>>();
+                let col_types = cols
+                    .iter()
+                    .map(|column| column.column_type())
+                    .collect::<Vec<_>>();
+                let col_tables = cols
+                    .iter()
+                    .map(|column| column.table_str().into_owned())
+                    .collect::<Vec<_>>();
+                let col_flags = cols.iter().map(Column::flags).collect::<Vec<_>>();
+                let col_lengths = cols.iter().map(Column::column_length).collect::<Vec<_>>();
+                let col_precisions = cols.iter().map(Column::decimals).collect::<Vec<_>>();
+                let mut rows = Vec::new();
+                for row in set.by_ref() {
                     rows.push(decode_row(row?.unwrap(), &col_kinds));
                 }
+                rowsets.push(MyRowset {
+                    affected,
+                    last_id,
+                    col_names,
+                    col_kinds,
+                    col_types,
+                    col_tables,
+                    col_flags,
+                    col_lengths,
+                    col_precisions,
+                    rows,
+                });
             }
-            let affected = res.affected_rows() as i64;
-            drop(res);
-            Ok((
-                affected, last, rows, is_select, col_names, col_kinds, col_types,
-            ))
+            Ok(rowsets)
         })();
+        let warnings = conn.conn.warnings();
         match outcome {
-            Ok((affected, last, rows, is_select, col_names, col_kinds, col_types)) => {
-                conn.changes = if is_select {
-                    rows.len() as i64
-                } else {
-                    affected
-                };
-                conn.note_last_id(last);
+            Ok(mut rowsets) => {
                 conn.errcode = 0;
                 conn.sqlstate = "00000".to_string();
-                self.col_names = col_names;
-                self.col_kinds = col_kinds;
-                self.col_types = col_types;
-                self.rows = rows;
-                self.executed = true;
+                conn.warning_count = warnings;
+                let first = if rowsets.is_empty() {
+                    MyRowset {
+                        affected: 0,
+                        last_id: None,
+                        col_names: self.col_names.clone(),
+                        col_kinds: self.col_kinds.clone(),
+                        col_types: self.col_types.clone(),
+                        col_tables: self.col_tables.clone(),
+                        col_flags: self.col_flags.clone(),
+                        col_lengths: self.col_lengths.clone(),
+                        col_precisions: self.col_precisions.clone(),
+                        rows: Vec::new(),
+                    }
+                } else {
+                    rowsets.remove(0)
+                };
+                self.remaining_rowsets = rowsets;
+                self.install_rowset(conn, first);
+                conn.note_transaction_sql(&self.query_string);
                 Ok(())
             }
             Err(e) => {
                 conn.sqlstate = err_sqlstate(&e);
                 conn.errmsg = e.to_string();
                 conn.errcode = err_code(&e);
+                Err(-1)
+            }
+        }
+    }
+
+    /// Executes an emulated MySQL statement through the text protocol after
+    /// client-side placeholder substitution and materializes its first result.
+    fn execute_emulated(&mut self, conn: &mut MyConn) -> Result<(), i64> {
+        if self.bound.iter().any(|bound| !bound) {
+            conn.sqlstate = "HY093".to_string();
+            conn.errcode = 1;
+            conn.errmsg = "Invalid parameter number: number of bound variables does not match number of tokens".to_string();
+            return Err(-1);
+        }
+        let values = self.build_values();
+        let national = self.build_national_flags();
+        let sql = match interpolate_emulated_sql(
+            self.emulated_sql
+                .as_deref()
+                .expect("emulated MySQL statement missing SQL"),
+            &values,
+            &national,
+            self.no_backslash_escape,
+        ) {
+            Ok(sql) => sql,
+            Err(message) => {
+                conn.sqlstate = "HY093".to_string();
+                conn.errcode = 1;
+                conn.errmsg = message;
+                return Err(-1);
+            }
+        };
+        self.sent_sql = sql.clone();
+        let outcome = (|| {
+            let mut result = conn.conn.query_iter(sql)?;
+            let mut rowsets = Vec::new();
+            while let Some(mut set) = result.iter() {
+                let last_id = set.last_insert_id();
+                let affected = set.affected_rows() as i64;
+                let columns = set.columns();
+                let columns: &[Column] = columns.as_ref();
+                let col_names = columns
+                    .iter()
+                    .map(|column| column_display_name(column, conn.fetch_table_names))
+                    .collect::<Vec<_>>();
+                let col_kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
+                let col_types = columns
+                    .iter()
+                    .map(|column| column.column_type())
+                    .collect::<Vec<_>>();
+                let col_tables = columns
+                    .iter()
+                    .map(|column| column.table_str().into_owned())
+                    .collect::<Vec<_>>();
+                let col_flags = columns.iter().map(Column::flags).collect::<Vec<_>>();
+                let col_lengths = columns
+                    .iter()
+                    .map(Column::column_length)
+                    .collect::<Vec<_>>();
+                let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
+                let mut rows = Vec::new();
+                for row in set.by_ref() {
+                    rows.push(decode_row(row?.unwrap(), &col_kinds));
+                }
+                rowsets.push(MyRowset {
+                    affected,
+                    last_id,
+                    col_names,
+                    col_kinds,
+                    col_types,
+                    col_tables,
+                    col_flags,
+                    col_lengths,
+                    col_precisions,
+                    rows,
+                });
+            }
+            Ok::<_, mysql::Error>(rowsets)
+        })();
+        let warnings = conn.conn.warnings();
+        match outcome {
+            Ok(mut rowsets) => {
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                conn.warning_count = warnings;
+                let first = if rowsets.is_empty() {
+                    MyRowset {
+                        affected: 0,
+                        last_id: None,
+                        col_names: Vec::new(),
+                        col_kinds: Vec::new(),
+                        col_types: Vec::new(),
+                        col_tables: Vec::new(),
+                        col_flags: Vec::new(),
+                        col_lengths: Vec::new(),
+                        col_precisions: Vec::new(),
+                        rows: Vec::new(),
+                    }
+                } else {
+                    rowsets.remove(0)
+                };
+                self.remaining_rowsets = rowsets;
+                self.install_rowset(conn, first);
+                conn.note_transaction_sql(&self.query_string);
+                Ok(())
+            }
+            Err(error) => {
+                conn.sqlstate = err_sqlstate(&error);
+                conn.errmsg = error.to_string();
+                conn.errcode = err_code(&error);
                 Err(-1)
             }
         }
@@ -1348,6 +2146,7 @@ impl MyStmt {
         if (self.cursor as usize) < self.rows.len() {
             1
         } else {
+            conn.unbuffered_active = false;
             0
         }
     }
@@ -1380,7 +2179,10 @@ impl MyStmt {
     /// zero, for a `CALL` with no internal `SELECT`) count and this reports it
     /// unconditionally — the placeholder only ever applies pre-execution.
     pub fn column_count(&self) -> i64 {
-        if self.is_call && !self.executed && self.col_names.is_empty() {
+        if (self.is_call || self.emulated_sql.is_some())
+            && !self.executed
+            && self.col_names.is_empty()
+        {
             1
         } else {
             self.col_names.len() as i64
@@ -1417,6 +2219,47 @@ impl MyStmt {
             .get(i as usize)
             .map(|&t| native_type_name(t).to_string())
             .unwrap_or_default()
+    }
+
+    /// Returns the server-provided table label for result column `i`.
+    pub fn column_table_name(&self, i: i64) -> String {
+        if i < 0 {
+            return String::new();
+        }
+        self.col_tables.get(i as usize).cloned().unwrap_or_default()
+    }
+
+    /// Returns the raw MySQL `ColumnFlags` bits for result column `i`.
+    pub fn column_flags(&self, i: i64) -> i64 {
+        if i < 0 {
+            return 0;
+        }
+        self.col_flags
+            .get(i as usize)
+            .map(|flags| i64::from(flags.bits()))
+            .unwrap_or(0)
+    }
+
+    /// Returns MySQL's declared maximum column byte length.
+    pub fn column_len(&self, i: i64) -> i64 {
+        if i < 0 {
+            return 0;
+        }
+        self.col_lengths
+            .get(i as usize)
+            .map(|length| i64::from(*length))
+            .unwrap_or(0)
+    }
+
+    /// Returns MySQL's native decimals/precision marker for the column.
+    pub fn column_precision(&self, i: i64) -> i64 {
+        if i < 0 {
+            return 0;
+        }
+        self.col_precisions
+            .get(i as usize)
+            .map(|precision| i64::from(*precision))
+            .unwrap_or(0)
     }
 
     /// SQLite-compatible type code for the current row's column `i`:
@@ -1468,6 +2311,40 @@ impl MyStmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Emulated interpolation skips quoted/comment markers and escapes a real
+    /// placeholder value through mysql_common's protocol-aware literal renderer.
+    #[test]
+    fn emulated_interpolation_replaces_only_real_placeholders() {
+        let (sql, _, order, mixed) = translate_placeholders(
+            "SELECT '?', /* ? */ :first, :name, ??",
+            false,
+        );
+        assert!(!mixed);
+        assert_eq!(order, vec![1, 2]);
+        let rendered = interpolate_emulated_sql(
+            &sql,
+            &[Value::Bytes(b"O'Reilly".to_vec()), Value::Int(7)],
+            &[false, false],
+            false,
+        )
+        .expect("emulated SQL renders");
+        assert_eq!(rendered, "SELECT '?', /* ? */ 'O\\'Reilly', 7, ??");
+    }
+
+    /// National string parameters add the `N` introducer only to the matching
+    /// emulated placeholder and leave ordinary strings unchanged.
+    #[test]
+    fn emulated_interpolation_marks_national_strings() {
+        let rendered = interpolate_emulated_sql(
+            "SELECT ?, ?",
+            &[Value::Bytes(b"national".to_vec()), Value::Bytes(b"plain".to_vec())],
+            &[true, false],
+            false,
+        )
+        .expect("emulated national SQL renders");
+        assert_eq!(rendered, "SELECT N'national', 'plain'");
+    }
 
     /// Extracts the `Cell::Text` payload, or fails naming the wrong variant (no
     /// `Debug` derive on `Cell` elsewhere in the bridge, so this keeps the tests
@@ -1612,7 +2489,7 @@ mod tests {
     #[test]
     fn build_opts_maps_connect_timeout_dsn_key() {
         let (opts, _charset) =
-            build_opts("mysql:host=localhost;dbname=testdb;connect_timeout=5", false).unwrap();
+            build_opts("mysql:host=localhost;dbname=testdb;connect_timeout=5", false, false).unwrap();
         let opts: mysql::Opts = opts.into();
         assert_eq!(opts.get_tcp_connect_timeout(), Some(Duration::from_secs(5)));
     }
@@ -1626,12 +2503,57 @@ mod tests {
     /// to a black-holed host far longer than real PHP does.
     #[test]
     fn build_opts_defaults_connect_timeout_to_30s() {
-        let (opts, _charset) = build_opts("mysql:host=localhost;dbname=testdb", false).unwrap();
+        let (opts, _charset) =
+            build_opts("mysql:host=localhost;dbname=testdb", false, false).unwrap();
         let opts: mysql::Opts = opts.into();
         assert_eq!(
             opts.get_tcp_connect_timeout(),
             Some(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
         );
+    }
+
+    /// Packed PDO driver options preserve all supported boolean selections and
+    /// reject security-sensitive options the native client cannot honor.
+    #[test]
+    fn driver_options_parse_supported_flags_and_reject_inert_security_options() {
+        let options = parse_driver_options(
+            "local=1;compress=1;ignore=1;multi=0;buffered=0;",
+        )
+        .expect("supported PDO MySQL options should parse");
+        assert!(options.local_infile);
+        assert!(options.compress);
+        assert!(options.ignore_space);
+        assert!(!options.multi_statements);
+        assert!(!options.buffered_query);
+        let error = parse_driver_options("serverkey=/tmp/key.pem;")
+            .expect_err("an inert server public key must fail loudly");
+        assert!(error.contains("ATTR_SERVER_PUBLIC_KEY"));
+    }
+
+    /// `ATTR_IGNORE_SPACE` reaches the MySQL handshake capability only when
+    /// requested, alongside but independently from `ATTR_FOUND_ROWS`.
+    #[test]
+    fn build_opts_sets_ignore_space_capability() {
+        let (opts, _) =
+            build_opts("mysql:host=localhost;dbname=testdb", false, true).unwrap();
+        let opts: mysql::Opts = opts.into();
+        assert!(
+            opts.get_additional_capabilities()
+                .contains(CapabilityFlags::CLIENT_IGNORE_SPACE)
+        );
+    }
+
+    /// Multi-statement detection ignores semicolons inside every quoted/comment
+    /// region and accepts one trailing separator, while finding real second SQL.
+    #[test]
+    fn multi_statement_detection_is_sql_aware() {
+        assert!(!sql_has_multiple_statements("SELECT ';';", false));
+        assert!(!sql_has_multiple_statements(
+            "SELECT 1 /* ; SELECT 2 */; -- tail ;\n",
+            false,
+        ));
+        assert!(sql_has_multiple_statements("SELECT 1; SELECT 2", false));
+        assert!(sql_has_multiple_statements("SELECT `a;b`; CALL p()", false));
     }
 
     /// P2-3: a `charset=<name>` DSN key is captured (for `MyConn::open` to turn
@@ -1640,7 +2562,12 @@ mod tests {
     #[test]
     fn build_opts_captures_valid_charset() {
         let (_opts, charset) =
-            build_opts("mysql:host=localhost;dbname=testdb;charset=utf8mb4", false).unwrap();
+            build_opts(
+                "mysql:host=localhost;dbname=testdb;charset=utf8mb4",
+                false,
+                false,
+            )
+            .unwrap();
         assert_eq!(charset.as_deref(), Some("utf8mb4"));
     }
 
@@ -1655,6 +2582,7 @@ mod tests {
         let (_opts, charset) = build_opts(
             "mysql:host=localhost;dbname=testdb;charset=utf8mb4' OR '1'='1",
             false,
+            false,
         )
         .unwrap();
         assert_eq!(charset, None);
@@ -1663,7 +2591,8 @@ mod tests {
     /// A DSN with no `charset` key leaves it unset.
     #[test]
     fn build_opts_leaves_charset_unset_by_default() {
-        let (_opts, charset) = build_opts("mysql:host=localhost;dbname=testdb", false).unwrap();
+        let (_opts, charset) =
+            build_opts("mysql:host=localhost;dbname=testdb", false, false).unwrap();
         assert_eq!(charset, None);
     }
 
@@ -1677,6 +2606,7 @@ mod tests {
         let (opts, _charset) = build_opts(
             "mysql:host=127.0.0.1;user=admin;password=a%3Bb%25c",
             false,
+            false,
         )
         .unwrap();
         let opts: mysql::Opts = opts.into();
@@ -1689,7 +2619,12 @@ mod tests {
     #[test]
     fn build_opts_leaves_a_plain_password_byte_identical() {
         let (opts, _charset) =
-            build_opts("mysql:host=127.0.0.1;user=admin;password=secret", false).unwrap();
+            build_opts(
+                "mysql:host=127.0.0.1;user=admin;password=secret",
+                false,
+                false,
+            )
+            .unwrap();
         let opts: mysql::Opts = opts.into();
         assert_eq!(opts.get_pass(), Some("secret"));
     }

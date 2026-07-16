@@ -1483,6 +1483,39 @@ echo count($g), "|", count($g["k"]), "|", $g["k"][0], $g["k"][1], "|", count($g[
     assert_eq!(out.stdout, "2|2|12|1|9\n");
 }
 
+/// Verifies an initially empty indexed outer array is inferred as an array of
+/// arrays when PHP auto-vivifies an integer-keyed nested append.
+#[test]
+fn test_indexed_nested_append_auto_vivifies_empty_outer_array() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$groups = [];
+$groups[0][] = 1;
+$groups[0][] = 2;
+echo count($groups[0]), ":", $groups[0][0], $groups[0][1], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:12\n");
+}
+
+/// Verifies a stabilized dynamic integer key uses the same indexed
+/// auto-vivification path and is evaluated once.
+#[test]
+fn test_indexed_nested_append_auto_vivifies_dynamic_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$groups = [];
+$key = 1;
+$groups[$key][] = 7;
+$groups[$key][] = 8;
+echo count($groups[1]), ":", $groups[1][0], $groups[1][1], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:78\n");
+}
+
 /// Negative control for the nested-append fusion: copy-on-write must still fire when the bucket
 /// is genuinely shared.
 ///
@@ -1499,6 +1532,44 @@ $a = ["k" => [1]];
 $c = $a["k"];
 $a["k"][] = 2;
 echo count($c), ":", count($a["k"]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:2\n");
+}
+
+/// Verifies the same nested-append COW hand-off for an integer-keyed outer array.
+///
+/// Indexed and associative containers share PHP value semantics: detaching the outer slot may
+/// make an unaliased bucket unique, but an independently held bucket value must still force the
+/// append to split. This pins the indexed `SlotDetach` path specifically.
+#[test]
+fn test_indexed_nested_append_still_copies_a_shared_bucket() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$groups = [];
+$groups[0][] = 1;
+$copy = $groups[0];
+$groups[0][] = 2;
+echo count($copy), ":", count($groups[0]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:2\n");
+}
+
+/// Verifies an indexed-array bucket read creates an independent PHP array owner.
+///
+/// This is the primitive COW contract used by nested append: appending through the copied local
+/// must split it from the bucket still stored in the outer array.
+#[test]
+fn test_indexed_bucket_read_still_copies_before_direct_append() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$groups = [[1]];
+$copy = $groups[0];
+$copy[] = 2;
+echo count($groups[0]), ":", count($copy), "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
@@ -1615,6 +1686,36 @@ echo $src[0], $src[1], $src[2], ":", $copy[0], $copy[1], $copy[2], "\n";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "123:9923\n");
+}
+
+/// Verifies hash storage hidden behind a static `Array(Mixed)` type is released by runtime kind.
+///
+/// A boxed string key promotes indexed storage to a hash without changing the EIR result type.
+/// Releasing that value through the indexed deep-free walker stranded the hash plus its key/value
+/// children at refcount zero, leaking three blocks per rebuild cycle.
+#[test]
+fn test_mixed_key_write_promotion_keeps_the_refcount_ledger_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function write_key(array $array, mixed $key, mixed $value): array {
+    $array[$key] = $value;
+    return $array;
+}
+$result = [];
+for ($i = 0; $i < 64; $i++) {
+    $result = write_key([], "name", $i);
+    $result = write_key($result, 0, $i);
+}
+echo $result["name"], ":", $result[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "63:63");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies PHP's by-value array parameter semantics: mutating an `array` parameter must NOT
@@ -2497,4 +2598,29 @@ f(1);
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1 s s \n");
+}
+
+/// Verifies `array_key_exists()` dispatches a boxed Mixed receiver to packed or
+/// associative storage and still distinguishes a present null value from a missing key.
+#[test]
+fn test_array_key_exists_on_mixed_array_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamicArray(bool $assoc): mixed {
+    if ($assoc) { return ["k" => null]; }
+    return [null];
+}
+$packed = dynamicArray(false);
+$hash = dynamicArray(true);
+if (is_array($packed)) {
+    echo (array_key_exists(0, $packed) ? "p1" : "p0") . "|";
+    echo (array_key_exists(1, $packed) ? "p1" : "p0") . "|";
+}
+if (is_array($hash)) {
+    echo (array_key_exists("k", $hash) ? "h1" : "h0") . "|";
+    echo (array_key_exists("missing", $hash) ? "h1" : "h0");
+}
+"#,
+    );
+    assert_eq!(out, "p1|p0|h1|h0");
 }
