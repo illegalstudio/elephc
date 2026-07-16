@@ -102,3 +102,11 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_method_return_type_values)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_method_return_type_values)'
+slow-timeout = { period = "180s", terminate-after = 1 }
