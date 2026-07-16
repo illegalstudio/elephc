@@ -33,6 +33,8 @@ mod pdo;
 mod pdo_dblib;
 #[cfg(feature = "pdo-firebird")]
 mod pdo_firebird;
+#[cfg(feature = "pdo-odbc")]
+mod pdo_odbc;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;

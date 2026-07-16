@@ -31,7 +31,7 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -105,6 +105,7 @@ jobs:
       ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
       ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
       ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
+      ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
       # or dropped from this job would make a live test that executed NOTHING look
@@ -144,7 +145,9 @@ jobs:
             libpq-dev \
             libssl-dev \
             pkg-config \
+            odbc-postgresql \
             tzdata \
+            unixodbc-dev \
             zlib1g-dev
 
       - name: Configure the MySQL live-test server
@@ -325,3 +328,17 @@ jobs:
         env:
           ELEPHC_PDO_FIREBIRD: '1'
         run: cargo test --features pdo-firebird --test codegen_tests -- --ignored pdo_firebird --test-threads=1
+
+      - name: Build the unixODBC PDO_ODBC bridge staticlib
+        run: cargo build -p elephc-pdo --features odbc
+
+      - name: PDO_ODBC bridge unit tests
+        run: 'cargo test -p elephc-pdo --features odbc odbc::tests::'
+
+      - name: Live unixODBC bridge tests (in-crate, PostgreSQL driver)
+        run: 'cargo test -p elephc-pdo --features odbc odbc::tests::live_odbc_round_trip -- --ignored --test-threads=1'
+
+      - name: Live unixODBC codegen tests (PDO_ODBC over PostgreSQL)
+        env:
+          ELEPHC_PDO_ODBC: '1'
+        run: cargo test --features pdo-odbc --test codegen_tests -- --ignored pdo_odbc --test-threads=1

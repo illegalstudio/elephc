@@ -62,7 +62,7 @@ fn name_is_pdo_drivers(name: &Name) -> bool {
 }
 
 /// Returns whether `name` denotes one of PHP 8.4's `Pdo\` driver subclasses
-/// (`Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, `Pdo\Dblib`). Matched only as a two-segment name
+/// (`Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, plus optional drivers). Matched only as a two-segment name
 /// whose namespace segment is `Pdo` and short name is a driver, both compared
 /// case-insensitively, so `Pdo\Sqlite` and `\Pdo\Mysql` are recognized while an
 /// unrelated `App\Sqlite` or a deeper `Vendor\Pdo\Sqlite` is not. Injecting the
@@ -76,7 +76,9 @@ fn name_is_pdo_driver_subclass(name: &Name) -> bool {
                 && (driver.eq_ignore_ascii_case("Sqlite")
                     || driver.eq_ignore_ascii_case("Mysql")
                     || driver.eq_ignore_ascii_case("Pgsql")
-                    || driver.eq_ignore_ascii_case("Dblib"))
+                    || driver.eq_ignore_ascii_case("Dblib")
+                    || driver.eq_ignore_ascii_case("Firebird")
+                    || driver.eq_ignore_ascii_case("Odbc"))
     )
 }
 
@@ -654,6 +656,22 @@ mod tests {
     fn detects_dblib_driver_subclass() {
         assert!(program_uses_pdo(&parse(
             r#"<?php $db = new Pdo\Dblib("dblib:host=localhost");"#
+        )));
+    }
+
+    /// The optional PHP 8.4 Firebird subclass triggers PDO prelude injection.
+    #[test]
+    fn detects_firebird_driver_subclass() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new Pdo\Firebird("firebird:dbname=test.fdb");"#
+        )));
+    }
+
+    /// The optional PHP 8.4 ODBC subclass triggers PDO prelude injection.
+    #[test]
+    fn detects_odbc_driver_subclass() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new Pdo\Odbc("odbc:example");"#
         )));
     }
 

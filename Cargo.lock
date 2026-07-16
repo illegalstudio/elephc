@@ -636,6 +636,7 @@ dependencies = [
  "libpq",
  "libsqlite3-sys",
  "mysql",
+ "odbc-sys",
  "rsfbclient",
  "rust_decimal",
  "rustls",
@@ -1740,6 +1741,12 @@ checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "odbc-sys"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "245cb4fe8236df4fd352ba96075d754233c6509d654d9f1c1482158b7d6c083d"
 
 [[package]]
 name = "once_cell"

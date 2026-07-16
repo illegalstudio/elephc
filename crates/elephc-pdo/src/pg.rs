@@ -541,6 +541,7 @@ pub(crate) fn explicit_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>
         .strip_prefix("pgsql:")
         .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
     let mut explicit = parse_option_pairs(body, "PostgreSQL DSN")?;
+    explicit.retain(|key, _| !key.starts_with("elephc_odbc_"));
     for key in ["user", "password"] {
         if let Some(value) = explicit.get_mut(key) {
             *value = percent_decode_credential(value);

@@ -78,6 +78,8 @@ pdo-libpq-gss = ["elephc-pdo/libpq-gss"]
 pdo-dblib = ["elephc-pdo/dblib"]
 # Keeps codegen fixtures and the PDO archive on the pure-Rust PDO_FIREBIRD profile.
 pdo-firebird = ["elephc-pdo/firebird"]
+# Keeps codegen fixtures and the PDO archive on the system ODBC-manager profile.
+pdo-odbc = ["elephc-pdo/odbc"]
 
 # PDO needs two mysql client controls that upstream 28.0.0 does not expose:
 # caller-supplied authentication RSA keys and rustls cipher-suite selection.

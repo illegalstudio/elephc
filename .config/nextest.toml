@@ -46,3 +46,13 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
+# also rebuild the optional system-client archive on a cold local cache.
+[[profile.default.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }

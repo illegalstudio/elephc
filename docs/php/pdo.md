@@ -1,13 +1,13 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, and optional PDO_FIREBIRD: connections, prepared statements, fetch modes, transactions, and php-src divergences."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, and PDO_ODBC: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
 
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, **MySQL / MariaDB**, optional **FreeTDS
-PDO_DBLIB**, and optional **PDO_FIREBIRD** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+PDO_DBLIB**, optional **PDO_FIREBIRD**, and optional **PDO_ODBC** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
 PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
 transactions. The DSN prefix selects the driver.
 
@@ -15,8 +15,9 @@ The default drivers are linked statically (SQLite is bundled; PostgreSQL and MyS
 use pure-Rust clients), so their compiled PDO binaries have **no system
 database-client dependency**. The optional DBLIB profile deliberately follows PHP
 and links the target platform's FreeTDS `libsybdb`; the resulting binary therefore
-needs a compatible system client at build and runtime. The Firebird profile uses
-the pure-Rust wire protocol and adds no client-library runtime dependency.
+needs a compatible system client at build and runtime. PDO_ODBC likewise links
+unixODBC and delegates database protocols to installed ODBC drivers. The Firebird
+profile uses the pure-Rust wire protocol and adds no client-library runtime dependency.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -36,8 +37,8 @@ Patch versions and values outside this range are rejected.
 | 8.0 | Core classes and legacy SQLite/PostgreSQL driver methods; no public `queryString`, namespaced driver classes, or `PDO::connect()`. |
 | 8.1 | Public `PDOStatement::$queryString` and `PDORow::$queryString`. |
 | 8.2–8.3 | Password parameters carry `#[SensitiveParameter]`; otherwise the 8.1 PDO surface. |
-| 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, plus `Pdo\Dblib` / `Pdo\Firebird` when their profiles are enabled; historical high-bit fetch flags. |
-| 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, PostgreSQL transaction-constant deprecations, and deprecations for the legacy DBLIB/Firebird constant aliases. |
+| 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, plus `Pdo\Dblib` / `Pdo\Firebird` / `Pdo\Odbc` when their profiles are enabled; historical high-bit fetch flags. |
+| 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, PostgreSQL transaction-constant deprecations, and deprecations for the legacy DBLIB/Firebird/ODBC constant aliases. |
 | 8.6 | The 8.5 public surface plus PostgreSQL persistent-session cleanup with `DISCARD ALL` when the final owner releases a pooled handle. |
 
 The version switch currently governs PDO first; it does not claim that every unrelated
@@ -64,10 +65,13 @@ $tds = new PDO("dblib:host=127.0.0.1;port=1433;dbname=app", "sa", "secret");
 
 // Firebird through the optional pure-Rust wire-protocol profile.
 $firebird = new PDO("firebird:dbname=localhost/3050:/data/app.fdb;charset=UTF8", "SYSDBA", "secret");
+
+// Any installed unixODBC driver through the optional PDO_ODBC profile.
+$odbc = new PDO("odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Database=app", "me", "secret");
 ```
 
 The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
-`dblib:` or `firebird:`. A colonless value may
+`dblib:`, `firebird:`, or `odbc:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -388,19 +392,19 @@ relationship matches PHP.
 | Attribute | Behavior |
 | --- | --- |
 | `ATTR_ERRMODE` | Silent / Warning / Exception (default). |
-| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, `"mysql"`, optional `"dblib"`, or optional `"firebird"`. |
+| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, `"mysql"`, optional `"dblib"`, `"firebird"`, or `"odbc"`. |
 | `ATTR_PERSISTENT` | Pool selection (constructor only, in practice). |
 | `ATTR_TIMEOUT` | Seconds. SQLite: busy-timeout. pgsql/mysql: initial connect timeout. DBLIB: login and query timeout unless a DBLIB-specific timeout overrides it. |
 | `ATTR_DEFAULT_FETCH_MODE` | Mode used by a no-argument `fetch()`; inherited by statements at `prepare()` time. |
-| `ATTR_SERVER_VERSION` | The server's version string for the default drivers and Firebird. DBLIB follows IM001 and exposes negotiated TDS through its driver-specific attribute. |
-| `ATTR_CLIENT_VERSION` | SQLite's embedded library version; PostgreSQL/MySQL/Firebird report their statically linked pure-Rust client implementation and version. DBLIB follows IM001 and exposes FreeTDS through its driver-specific attribute. |
-| `ATTR_SERVER_INFO` | PostgreSQL: live PID/session parameters. MySQL: live server statistics. Firebird: server version information. SQLite follows IM001. |
+| `ATTR_SERVER_VERSION` | The server's version string for the default drivers, Firebird, and ODBC. DBLIB follows IM001 and exposes negotiated TDS through its driver-specific attribute. |
+| `ATTR_CLIENT_VERSION` | SQLite's embedded library version; PostgreSQL/MySQL/Firebird report their statically linked client; ODBC reports `ODBC-unixODBC`. DBLIB follows IM001 and exposes FreeTDS through its driver-specific attribute. |
+| `ATTR_SERVER_INFO` | PostgreSQL: live PID/session parameters. MySQL: live server statistics. Firebird: version information. ODBC: DBMS name. SQLite follows IM001. |
 | `ATTR_CONNECTION_STATUS` | PostgreSQL: live connected/closed status in libpq's wording. MySQL: actual TCP/socket transport description. Firebird: boolean liveness. SQLite follows IM001. |
 | `ATTR_CASE` | Folds fetched column-name keys upper/lowercase. |
 | `ATTR_ORACLE_NULLS` | Folds `NULL` ↔ `""` in fetched scalar values. |
 | `ATTR_STRINGIFY_FETCHES` | Stringifies fetched INTEGER/FLOAT values. |
 | `ATTR_EMULATE_PREPARES` | MySQL text protocol (default `true`) or PostgreSQL simple-query protocol (default `false`). DBLIB is read-only `true`, because DB-Library has no native prepare API. SQLite rejects it. |
-| `ATTR_AUTOCOMMIT` | Live MySQL session autocommit state. |
+| `ATTR_AUTOCOMMIT` | Live MySQL or ODBC autocommit state. |
 | `ATTR_DEFAULT_STR_PARAM` | MySQL and DBLIB default `PARAM_STR_CHAR`/`PARAM_STR_NATL` string binding. |
 | `Pdo\Dblib::ATTR_CONNECTION_TIMEOUT` | Constructor-only DB-Library login timeout in seconds. |
 | `Pdo\Dblib::ATTR_QUERY_TIMEOUT` | Constructor and live query timeout in seconds; write-only, matching php-src. |
@@ -411,6 +415,8 @@ relationship matches PHP.
 | `Pdo\Firebird::ATTR_DATE_FORMAT` / `ATTR_TIME_FORMAT` / `ATTR_TIMESTAMP_FORMAT` | `strftime`-style output formats for Firebird temporal values. |
 | `Pdo\Firebird::TRANSACTION_ISOLATION_LEVEL` | `READ_COMMITTED`, `REPEATABLE_READ` (default), or `SERIALIZABLE` for the next manual transaction. |
 | `Pdo\Firebird::WRITABLE_TRANSACTION` | Selects read/write (default) or read-only manual transactions. |
+| `Pdo\Odbc::ATTR_USE_CURSOR_LIBRARY` | Constructor-only ODBC driver-manager cursor selection. |
+| `Pdo\Odbc::ATTR_ASSUME_UTF8` | Live ODBC UTF-8 conversion flag. |
 | `Pdo\Sqlite::ATTR_OPEN_FLAGS` | Raw `sqlite3_open_v2` flags at open time. A `file:` DSN body always gets `SQLITE_OPEN_URI` OR-ed in. |
 | `Pdo\Sqlite::ATTR_READONLY_STATEMENT` | Live `sqlite3_stmt_readonly()` read (statement-level). |
 | `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` | Wired: with it on, `errorInfo()[1]` is the *extended* code (`2067` SQLITE_CONSTRAINT_UNIQUE, not the coarse `19`). Write-only, exactly as in php-src — `getAttribute()` follows IM001. |
@@ -609,6 +615,39 @@ the Firebird 4/5 client API targeted by the backend.
 - **Client identity.** `ATTR_CLIENT_VERSION` identifies `rsfbclient-rust 0.27`
   rather than a dynamically installed `libfbclient`; server behavior and protocol
   results remain the authoritative compatibility boundary.
+
+## PDO_ODBC notes
+
+Install unixODBC and the database-specific ODBC driver, then enable the profile:
+
+```bash
+brew install unixodbc                 # macOS
+sudo apt install unixodbc-dev         # Debian/Ubuntu build dependency
+cargo run --features pdo-odbc -- app.php
+```
+
+The profile follows php-src's architecture: PDO calls the ODBC 3 driver-manager ABI,
+and the installed driver owns the database protocol. It exposes `PDO_ODBC_TYPE`
+(`"unixODBC"`), the historical `PDO::ODBC_*` aliases on PHP 8.0–8.6, and
+`Pdo\Odbc` on PHP 8.4+. PHP 8.5 deprecates the aliases in favor of the namespaced
+constants.
+
+- **DSNs.** `odbc:<data-source-name>` calls `SQLConnect`; a body containing `=` is
+  passed to `SQLDriverConnect`. Braced values preserve embedded semicolons and escaped
+  closing braces. Constructor credentials are appended only when the direct string
+  does not already contain `UID=` / `PWD=`, matching PDO_ODBC.
+- **Values and metadata.** Non-NULL result values are fetched as strings, including
+  numeric database values. `getColumnMeta()` returns only `pdo_type => PDO::PARAM_STR`,
+  matching php-src's deliberately small descriptor.
+- **Attributes.** Autocommit and `Pdo\Odbc::ATTR_ASSUME_UTF8` are live connection
+  attributes. `ATTR_USE_CURSOR_LIBRARY` is a pre-connect option. Cursor names,
+  native scroll-cursor selection, and `nextRowset()` use the statement's ODBC handle;
+  fetched scroll rows are materialized before PDO orientation is applied.
+- **Unsupported hooks.** PDO_ODBC has no quoter, last-insert-id hook, or connection-
+  status attribute; these paths raise the same IM001 class as php-src.
+- **Targets.** Every supported target links its native unixODBC library (`libodbc`).
+  The selected database driver must exist for that target and be registered with the
+  driver manager.
 
 ## TLS / encrypted connections
 
@@ -959,8 +998,8 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
-  profile; DBLIB and Firebird are available through their optional profiles. php-src's
-  ODBC and OCI drivers are not compiled yet. The central registry intentionally reports
+  profile; DBLIB, Firebird, and ODBC are available through their optional profiles.
+  php-src's OCI driver is not compiled yet. The central registry intentionally reports
   only drivers present in the selected archive rather than advertising inert names.
 
 ### Driver-specific client options

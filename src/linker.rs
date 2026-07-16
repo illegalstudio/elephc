@@ -27,6 +27,11 @@ fn pdo_firebird_enabled() -> bool {
     cfg!(feature = "pdo-firebird") || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some()
 }
 
+/// Reports whether the optional system ODBC driver-manager profile is selected.
+fn pdo_odbc_enabled() -> bool {
+    cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
+}
+
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
 /// wrapper or PDO). Each entry in [`BRIDGES`] fully describes how to locate and
@@ -188,7 +193,8 @@ impl BridgeStaticlib {
         if self.lib_name == "elephc_pdo"
             && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
                 || pdo_dblib_enabled()
-                || pdo_firebird_enabled())
+                || pdo_firebird_enabled()
+                || pdo_odbc_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
                 if !self.build_staticlib(&workspace) {
@@ -261,6 +267,9 @@ impl BridgeStaticlib {
             }
             if pdo_firebird_enabled() {
                 features.push("firebird");
+            }
+            if pdo_odbc_enabled() {
+                features.push("odbc");
             }
             if !features.is_empty() {
                 cmd.args(["--features", &features.join(",")]);
@@ -349,6 +358,8 @@ pub(crate) fn link(
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
     let needs_dblib =
         extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled();
+    let needs_odbc =
+        extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_odbc_enabled();
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -391,6 +402,14 @@ pub(crate) fn link(
                     }
                 }
                 cmd.arg("-lsybdb");
+            }
+            if needs_odbc {
+                for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
+                    if Path::new(path).exists() {
+                        cmd.arg(format!("-L{path}"));
+                    }
+                }
+                cmd.arg("-lodbc");
             }
             cmd.args(["-lSystem", "-syslibroot"]);
             cmd.arg(&sdk_path);
@@ -564,6 +583,18 @@ pub(crate) fn link(
         }
         if target.platform != Platform::MacOS {
             ld_cmd.arg("-lsybdb");
+        }
+    }
+    // PDO_ODBC delegates to the platform ODBC driver manager, like php-src.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_odbc_enabled() {
+        if target.platform == Platform::MacOS {
+            for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
+                if Path::new(path).exists() {
+                    ld_cmd.arg(format!("-L{path}"));
+                }
+            }
+        } else {
+            ld_cmd.arg("-lodbc");
         }
     }
     if target.platform == Platform::Linux && !extra_link_libs.is_empty() {

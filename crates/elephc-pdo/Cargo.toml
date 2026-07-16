@@ -43,6 +43,9 @@ rust_decimal = { version = "1", features = ["db-postgres"] }
 # protocol-backed profile keeps elephc's supported target matrix standalone
 # while preserving PDO_FIREBIRD's SQL, transaction, and scalar semantics.
 rsfbclient = { version = "0.27", default-features = false, features = ["pure_rust"], optional = true }
+# Thin ODBC 3.8 C ABI bindings. The selected profile links the platform's
+# unixODBC driver manager, matching php-src's delegation model.
+odbc-sys = { version = "0.31", default-features = false, features = ["odbc_version_3_80"], optional = true }
 # The synchronous, pure-Rust MySQL/MariaDB client. `default-features = false` with
 # `minimal-rust` drops the optional TLS backends and selects flate2's pure-Rust
 # (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
@@ -89,3 +92,5 @@ libpq-gss = ["dep:libpq"]
 # profile must also link `libsybdb`.
 dblib = []
 firebird = ["dep:rsfbclient"]
+# Matches php-src's PDO_ODBC backend through the system ODBC driver manager.
+odbc = ["dep:odbc-sys"]

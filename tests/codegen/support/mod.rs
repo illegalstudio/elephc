@@ -28,6 +28,7 @@ pub(crate) static BRIDGE_STATICLIB_BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::n
 pub(crate) static LIBPQ_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static DBLIB_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static FIREBIRD_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static ODBC_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
 pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 

@@ -7,14 +7,20 @@
 //!
 //! Key details:
 //! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
+//! - The generated PDO constructor bypasses DCE to avoid exponential tail analysis over its option dispatcher.
 
 use super::*;
 
 /// Applies DCE to a class method, recording the class context for effect tracking.
 /// `class_name` is used for effect correlation; `parent_name` tracks inheritance
 /// when present. Preserves observable effects (throws, calls, writes) while
-/// removing unreachable tails and dead branches within the method body.
+/// removing unreachable tails and dead branches within the method body. The
+/// compiler-owned PDO constructor is retained verbatim because its large option
+/// dispatch makes tail-sensitive DCE exponential while offering no semantic benefit.
 pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Option<&str>) -> ClassMethod {
+    if class_name.eq_ignore_ascii_case("PDO") && method.name.eq_ignore_ascii_case("__construct") {
+        return method;
+    }
     let context = ClassEffectContext {
         class_name: class_name.to_string(),
         parent_name: parent_name.map(str::to_string),

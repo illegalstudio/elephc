@@ -154,6 +154,13 @@ extern "elephc_pdo" {
     function elephc_pdo_firebird_column_pdo_type(int $stmt, int $column): int;
     function elephc_pdo_firebird_stmt_set_cursor_name(int $stmt, string $name): int;
     function elephc_pdo_firebird_stmt_cursor_name(int $stmt): string;
+    // v51: optional PDO_ODBC connection and statement attributes.
+    function elephc_pdo_odbc_set_attribute(int $conn, int $attribute, int $value): int;
+    function elephc_pdo_odbc_attribute(int $conn, int $attribute): int;
+    function elephc_pdo_odbc_stmt_set_cursor_name(int $stmt, string $name): int;
+    function elephc_pdo_odbc_stmt_cursor_name(int $stmt): string;
+    function elephc_pdo_odbc_stmt_set_assume_utf8(int $stmt, int $enabled): int;
+    function elephc_pdo_odbc_stmt_assume_utf8(int $stmt): int;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -1034,6 +1041,10 @@ final class __ElephcPDOPgsqlLobStream {
     public function stream_close(): void {}
 }
 
+// -- elephc optional PDO_ODBC global type begin --
+const PDO_ODBC_TYPE = "unixODBC";
+// -- elephc optional PDO_ODBC global type end --
+
 class PDO {
     const FETCH_ASSOC = 2;
     const FETCH_NUM = 3;
@@ -1149,6 +1160,13 @@ class PDO {
     const FB_ATTR_TIME_FORMAT = 1001;
     const FB_ATTR_TIMESTAMP_FORMAT = 1002;
     // -- elephc optional PDO_FIREBIRD aliases end --
+    // -- elephc optional PDO_ODBC aliases begin --
+    const ODBC_ATTR_USE_CURSOR_LIBRARY = 1000;
+    const ODBC_ATTR_ASSUME_UTF8 = 1001;
+    const ODBC_SQL_USE_IF_NEEDED = 0;
+    const ODBC_SQL_USE_ODBC = 1;
+    const ODBC_SQL_USE_DRIVER = 2;
+    // -- elephc optional PDO_ODBC aliases end --
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
@@ -1355,6 +1373,9 @@ class PDO {
         } elseif (str_starts_with($dsn, "firebird:")) {
             $_dsnDriver = "firebird";
             $_dsnClass = "Pdo\\Firebird";
+        } elseif (str_starts_with($dsn, "odbc:")) {
+            $_dsnDriver = "odbc";
+            $_dsnClass = "Pdo\\Odbc";
         }
         if ($_dsnDriver === "") {
             return;
@@ -1602,7 +1623,7 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
             $_dsnIsFirebird = str_starts_with($_dsn, "firebird:");
@@ -1652,6 +1673,11 @@ class PDO {
                     $_dsn = $_dsn . ";datetime_convert=" . ($this->attrBoolValue($this->attributes[1006]) ? "1" : "0");
                 }
             }
+            $_odbcCursorLibrary = isset($this->attributes[1000]) ? $this->attrIntValue($this->attributes[1000]) : 0;
+            $_odbcAssumeUtf8 = isset($this->attributes[1001]) && $this->attrBoolValue($this->attributes[1001]);
+            $_dsn = $_dsn . ";elephc_odbc_cursor_library=" . $_odbcCursorLibrary
+                . ";elephc_odbc_assume_utf8=" . ($_odbcAssumeUtf8 ? "1" : "0")
+                . ";elephc_odbc_autocommit=" . ($this->autoCommit ? "1" : "0");
         }
         // Serialize the collected Pdo\Mysql::ATTR_SSL_* options into the packed
         // string the bridge parses (only the keys that were actually set are
@@ -2012,7 +2038,7 @@ class PDO {
 
     public function setAttribute(int $attribute, $value): bool {
         $_driver = elephc_pdo_driver_name($this->conn);
-        if ($attribute == 0 && $_driver === "mysql") {
+        if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc")) {
             $_autocommit = $this->attrBoolValue($value);
             if (elephc_pdo_set_autocommit($this->conn, $_autocommit ? 1 : 0) !== 1) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
@@ -2110,7 +2136,10 @@ class PDO {
             return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrBoolValue($value) ? 1 : 0) === 1;
         } elseif (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && $_driver === "firebird") {
             return elephc_pdo_firebird_set_attribute_text($this->conn, $attribute, (string) $value) === 1;
-        } elseif (($attribute == 14 || $attribute == 1003 || $attribute == 1007) && $_driver === "firebird") {
+        } elseif ((($attribute == 14 || $attribute == 1003 || $attribute == 1007) && $_driver === "firebird") || ($attribute == 1001 && $_driver === "odbc")) {
+            if ($_driver === "odbc") {
+                return elephc_pdo_odbc_set_attribute($this->conn, 1001, $this->attrBoolValue($value) ? 1 : 0) === 1;
+            }
             $_firebirdValue = ($attribute == 14 || $attribute == 1007)
                 ? ($this->attrBoolValue($value) ? 1 : 0)
                 : $this->attrIntValue($value);
@@ -2155,7 +2184,13 @@ class PDO {
     protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
-        if (($attribute == 0 || $attribute == 14 || $attribute == 1003 || $attribute == 1007) && elephc_pdo_driver_name($this->conn) === "firebird") {
+        if ((($attribute == 0 || $attribute == 1001) && elephc_pdo_driver_name($this->conn) === "odbc") || (($attribute == 0 || $attribute == 14 || $attribute == 1003 || $attribute == 1007) && elephc_pdo_driver_name($this->conn) === "firebird")) {
+            if (elephc_pdo_driver_name($this->conn) === "odbc") {
+                $_odbcValue = elephc_pdo_odbc_attribute($this->conn, $attribute);
+                if ($_odbcValue >= 0) {
+                    return $_odbcValue === 1;
+                }
+            }
             $_firebirdValue = elephc_pdo_firebird_attribute_int($this->conn, $attribute);
             if ($_firebirdValue >= 0) {
                 return ($attribute == 0 || $attribute == 14 || $attribute == 1007) ? ($_firebirdValue === 1) : $_firebirdValue;
@@ -2164,7 +2199,7 @@ class PDO {
         if (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && elephc_pdo_driver_name($this->conn) === "firebird") {
             return elephc_pdo_firebird_attribute_text($this->conn, $attribute);
         }
-        if ($attribute == 0 && elephc_pdo_driver_name($this->conn) === "mysql") {
+        if ($attribute == 0 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "odbc")) {
             return elephc_pdo_autocommit($this->conn) === 1;
         }
         if ($attribute == 14 && elephc_pdo_driver_name($this->conn) === "mysql") {
@@ -2244,7 +2279,7 @@ class PDO {
             }
             return $serverInfo;
         }
-        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib") {
+        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib" && elephc_pdo_driver_name($this->conn) !== "odbc") {
             return elephc_pdo_connection_status($this->conn);
         }
         // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES is write-only. Its get hook returns
@@ -2310,7 +2345,7 @@ class PDO {
             if ($_driver === "sqlite" && $_cursorMode !== 0) {
                 return false;
             }
-            if ($_driver === "pgsql" && $_cursorMode === 1) {
+            if (($_driver === "pgsql" || $_driver === "odbc") && $_cursorMode === 1) {
                 $_scrollable = true;
             }
         }
@@ -2327,6 +2362,9 @@ class PDO {
             $_emulated = $this->attrBoolValue($options[1004]);
         }
         $_simple = (($_driver === "mysql" && $_emulated) || ($_driver === "pgsql" && ($_emulated || $_disable || $_scrollable))) ? 1 : 0;
+        if ($_driver === "odbc" && $_scrollable) {
+            $_simple = 2;
+        }
         $this->hasOperation = true;
         $_handle = elephc_pdo_prepare($this->conn, $query, $_simple);
         if ($_handle < 0) {
@@ -2560,6 +2598,13 @@ class PDO {
             $_driverStatus = 5;
         }
         // -- elephc optional PDO_FIREBIRD connect dispatch end --
+        // -- elephc optional PDO_ODBC connect dispatch begin --
+        elseif (str_starts_with($_dsn, "odbc:")) {
+            $_driver = "odbc";
+            $_driverClass = "Pdo\\Odbc";
+            $_driverStatus = 6;
+        }
+        // -- elephc optional PDO_ODBC connect dispatch end --
         if ($_driver === "") {
             if ($calledStatus === 0) {
                 throw new PDOException("could not find driver");
@@ -2587,8 +2632,13 @@ class PDO {
         }
         // -- elephc optional PDO_DBLIB connect construction end --
         // -- elephc optional PDO_FIREBIRD connect construction begin --
-        return new \Pdo\Firebird($_dsn, $username, $password, $options);
+        if ($_driverStatus === 5) {
+            return new \Pdo\Firebird($_dsn, $username, $password, $options);
+        }
         // -- elephc optional PDO_FIREBIRD connect construction end --
+        // -- elephc optional PDO_ODBC connect construction begin --
+        return new \Pdo\Odbc($_dsn, $username, $password, $options);
+        // -- elephc optional PDO_ODBC connect construction end --
     }
     // -- elephc PHP >= 8.4 PDO::connect end --
 
@@ -2779,7 +2829,7 @@ class PDO {
         return [$_sqlstate, elephc_pdo_errcode($this->conn), $_message];
     }
 
-    public function quote(string $string, int $type = 2): string {
+    public function quote(string $string, int $type = 2): string|bool {
         // Driver-aware string-literal quoting. PDO::PARAM_LOB (3, P1-e) selects a
         // driver-native binary literal instead of the plain string-escaping path;
         // every other $type value is accepted for PHP signature compatibility but
@@ -2789,6 +2839,10 @@ class PDO {
         // syntax, so it branches on the driver name.
         $this->hasOperation = true;
         $_driver = elephc_pdo_driver_name($this->conn);
+        if ($_driver === "odbc") {
+            $this->failCode("IM001", "driver does not support quoting");
+            return false;
+        }
         if ($_driver === "mysql") {
             if (elephc_pdo_no_backslash_escapes($this->conn) != 0) {
                 // P1-f (SECURITY): under the MySQL NO_BACKSLASH_ESCAPES sql_mode,
@@ -4813,6 +4867,13 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function getAttribute(int $name): mixed {
+        if ($name == 9 && elephc_pdo_driver_name($this->conn) === "odbc") {
+            $_cursorName = elephc_pdo_odbc_stmt_cursor_name($this->stmt);
+            return $_cursorName === "" ? null : $_cursorName;
+        }
+        if ($name == 1001 && elephc_pdo_driver_name($this->conn) === "odbc") {
+            return elephc_pdo_odbc_stmt_assume_utf8($this->stmt) === 1;
+        }
         if ($name == 9 && elephc_pdo_driver_name($this->conn) === "firebird") {
             $_cursorName = elephc_pdo_firebird_stmt_cursor_name($this->stmt);
             return $_cursorName === "" ? null : $_cursorName;
@@ -4855,6 +4916,12 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function setAttribute(int $attribute, mixed $value): bool {
+        if ($attribute == 9 && elephc_pdo_driver_name($this->conn) === "odbc") {
+            return elephc_pdo_odbc_stmt_set_cursor_name($this->stmt, (string) $value) === 1;
+        }
+        if ($attribute == 1001 && elephc_pdo_driver_name($this->conn) === "odbc") {
+            return elephc_pdo_odbc_stmt_set_assume_utf8($this->stmt, $value ? 1 : 0) === 1;
+        }
         if ($attribute == 9 && elephc_pdo_driver_name($this->conn) === "firebird") {
             $_cursorName = (string) $value;
             if (strlen($_cursorName) > 31) {
@@ -4901,7 +4968,7 @@ class PDOStatement implements IteratorAggregate {
         // requests that). Advancing resets the row cursor and refreshes
         // rowCount()/column metadata for the new set.
         $_rowsetDriver = elephc_pdo_driver_name($this->conn);
-        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib") {
+        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib" || $_rowsetDriver === "odbc") {
             if (elephc_pdo_next_rowset($this->stmt) !== 1) {
                 return false;
             }
@@ -5018,6 +5085,9 @@ class PDOStatement implements IteratorAggregate {
         $_driver = elephc_pdo_driver_name($this->conn);
         if ($_driver === "firebird") {
             return ["pdo_type" => elephc_pdo_firebird_column_pdo_type($this->stmt, $column)];
+        }
+        if ($_driver === "odbc") {
+            return ["pdo_type" => 2];
         }
         if ($_driver === "dblib") {
             $_dblibNativeId = elephc_pdo_dblib_column_native_type_id($this->stmt, $column);
@@ -5352,6 +5422,24 @@ namespace Pdo {
         }
     }
     // -- elephc optional PDO_FIREBIRD class end --
+
+    // -- elephc optional PDO_ODBC class begin --
+    class Odbc extends \PDO {
+        const ATTR_USE_CURSOR_LIBRARY = 1000;
+        const ATTR_ASSUME_UTF8 = 1001;
+        const SQL_USE_IF_NEEDED = 0;
+        const SQL_USE_ODBC = 1;
+        const SQL_USE_DRIVER = 2;
+
+        public function __construct(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null) {
+            $_operation = get_class($this) . "::__construct";
+            $_odbcDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_odbcDsn = self::resolveDsnUri($_odbcDsn, $_operation);
+            $this->checkDriverSubclassDsn($_odbcDsn, "Pdo\\Odbc", "odbc");
+            parent::__construct($_odbcDsn, $username, $password, $options);
+        }
+    }
+    // -- elephc optional PDO_ODBC class end --
 
     class Sqlite extends \PDO {
         // SQLite driver-specific constants (ext/pdo_sqlite). ATTR_* start at
@@ -6054,6 +6142,56 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
             );
         }
     }
+
+    let odbc_enabled = cfg!(feature = "pdo-odbc")
+        || std::env::var_os("ELEPHC_PDO_ODBC").is_some();
+    if !odbc_enabled {
+        remove_version_block(
+            source,
+            "// -- elephc optional PDO_ODBC global type begin --",
+            "// -- elephc optional PDO_ODBC global type end --",
+        );
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_ODBC aliases begin --",
+            "    // -- elephc optional PDO_ODBC aliases end --",
+        );
+        if php_version >= PhpVersion::Php84 {
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_ODBC connect dispatch begin --",
+                "        // -- elephc optional PDO_ODBC connect dispatch end --",
+            );
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_ODBC connect construction begin --",
+                "        // -- elephc optional PDO_ODBC connect construction end --",
+            );
+            remove_version_block(
+                source,
+                "    // -- elephc optional PDO_ODBC class begin --",
+                "    // -- elephc optional PDO_ODBC class end --",
+            );
+        }
+    } else if php_version >= PhpVersion::Php85 {
+        for (legacy_name, namespaced_name) in [
+            ("ODBC_ATTR_USE_CURSOR_LIBRARY", "ATTR_USE_CURSOR_LIBRARY"),
+            ("ODBC_ATTR_ASSUME_UTF8", "ATTR_ASSUME_UTF8"),
+            ("ODBC_SQL_USE_IF_NEEDED", "SQL_USE_IF_NEEDED"),
+            ("ODBC_SQL_USE_ODBC", "SQL_USE_ODBC"),
+            ("ODBC_SQL_USE_DRIVER", "SQL_USE_DRIVER"),
+        ] {
+            assert!(
+                source.contains(&format!("    const {legacy_name} =")),
+                "missing PDO_ODBC alias {legacy_name}"
+            );
+            *source = source.replacen(
+                &format!("    const {legacy_name} ="),
+                &format!("    #[\\Deprecated(\"use Pdo\\\\Odbc::{namespaced_name} instead\")]\n    const {legacy_name} ="),
+                1,
+            );
+        }
+    }
 }
 
 /// Removes one inclusive source fragment delimited by stable version-gate comments.
@@ -6211,6 +6349,29 @@ mod version_tests {
             "#[\\Deprecated(\"use Pdo\\\\Firebird::ATTR_DATE_FORMAT instead\")]"
         ));
         assert!(!php85.contains("const FB_TRANSACTION_ISOLATION_LEVEL"));
+    }
+
+    /// PDO_ODBC keeps global/legacy constants on all targets, adds `Pdo\Odbc`
+    /// in PHP 8.4, and deprecates legacy aliases beginning with PHP 8.5.
+    #[cfg(feature = "pdo-odbc")]
+    #[test]
+    fn odbc_surface_and_alias_deprecations_are_version_gated() {
+        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        assert!(php83.contains("const PDO_ODBC_TYPE = \"unixODBC\";"));
+        assert!(php83.contains("const ODBC_ATTR_ASSUME_UTF8 = 1001;"));
+        assert!(!php83.contains("class Odbc extends \\PDO"));
+
+        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        assert!(php84.contains("class Odbc extends \\PDO"));
+        assert!(php84.contains("const ATTR_USE_CURSOR_LIBRARY = 1000;"));
+        assert!(!php84.contains("use Pdo\\Odbc::ATTR_ASSUME_UTF8 instead"));
+
+        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        assert!(php85.contains(
+            "#[\\Deprecated(\"use Pdo\\\\Odbc::ATTR_ASSUME_UTF8 instead\")]"
+        ));
+        let tokens = crate::lexer::tokenize(php85.as_ref()).expect("tokenize PHP 8.5 ODBC prelude");
+        crate::parser::parse(&tokens).expect("parse PHP 8.5 ODBC prelude");
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while
