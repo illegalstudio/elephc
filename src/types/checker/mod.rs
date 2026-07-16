@@ -236,6 +236,7 @@ pub fn check_types(
         .iter()
         .map(|(name, decl)| (name.clone(), collect_attribute_args(&decl.attributes)))
         .collect();
+    let return_alias_summaries = crate::types::collect_return_alias_summaries(program);
     dedupe_warnings(&mut warnings);
 
     Ok(CheckResult {
@@ -244,6 +245,7 @@ pub fn check_types(
         function_attribute_names,
         function_attribute_args,
         callable_param_sigs: checker.callable_param_sigs,
+        return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,
         interfaces: checker.interfaces,

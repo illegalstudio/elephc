@@ -22,6 +22,7 @@ builtin! {
     area: String,
     params: [string: Str],
     returns: Str,
+    returns_independent_storage: true,
     lower: lower,
     summary: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space.",
     php_manual: "https://www.php.net/manual/en/function.rawurldecode.php",

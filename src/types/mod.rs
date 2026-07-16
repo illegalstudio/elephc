@@ -34,6 +34,8 @@ pub(crate) mod json_constants;
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
 pub(crate) mod preg_constants;
+/// Return-to-argument storage alias summaries used by ownership lowering.
+mod return_alias;
 /// Type checker result types and the `check` entry point.
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
@@ -53,6 +55,9 @@ pub(crate) use array_keys::{
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
+pub(crate) use return_alias::{
+    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+};
 pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,

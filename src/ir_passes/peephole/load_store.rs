@@ -13,7 +13,7 @@
 //!   (neutralized). State resets at block boundaries and is invalidated by any
 //!   other instruction that names the slot.
 //! - Forwarding is restricted to `NonHeap` values on non-escaping
-//!   `PhpLocal`/`HiddenTemp`/`NamedArgTemp` slots. A slot *escapes* when its
+//!   `PhpLocal`/`HiddenTemp`/`BorrowedTemp`/`NamedArgTemp` slots. A slot *escapes* when its
 //!   address can be taken: a load of it feeds an op that is not a pure by-value
 //!   consumer (any call may pass it by reference), or it is referenced by a
 //!   ref-cell promote/alias/release or invoker-ref op. Escaping slots are skipped
@@ -253,7 +253,10 @@ fn is_tracked_slot(function: &Function, slot: LocalSlotId) -> bool {
     };
     matches!(
         local.kind,
-        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::NamedArgTemp
+        LocalKind::PhpLocal
+            | LocalKind::HiddenTemp
+            | LocalKind::BorrowedTemp
+            | LocalKind::NamedArgTemp
     )
 }
 

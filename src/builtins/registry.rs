@@ -46,6 +46,8 @@ pub struct BuiltinDef {
     pub return_type: PhpType,
     /// Whether refcounted result variants are freshly allocated for the caller.
     pub returns_fresh_storage: bool,
+    /// Whether the result cannot reuse any argument's storage.
+    pub returns_independent_storage: bool,
     /// Whether this function returns by reference.
     pub by_ref_return: bool,
     /// Reference back to the original static `BuiltinSpec` for hooks and metadata.
@@ -104,6 +106,8 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             variadic: spec.variadic.map(str::to_string),
             return_type: type_spec_to_php(&spec.returns),
             returns_fresh_storage: spec.returns_fresh_storage,
+            returns_independent_storage: spec.returns_fresh_storage
+                || spec.returns_independent_storage,
             by_ref_return: spec.by_ref_return,
             spec,
         };
@@ -136,6 +140,11 @@ pub fn is_supported(name: &str) -> bool {
 /// Returns whether a builtin declares fresh caller-owned refcounted result storage.
 pub fn returns_fresh_storage(name: &str) -> bool {
     lookup(name).is_some_and(|def| def.returns_fresh_storage)
+}
+
+/// Returns whether a builtin result cannot alias any of its argument storage.
+pub fn returns_independent_storage(name: &str) -> bool {
+    lookup(name).is_some_and(|def| def.returns_independent_storage)
 }
 
 /// Returns an iterator over all registered canonical builtin names in sorted order.
@@ -384,6 +393,17 @@ mod tests {
     }
 
     builtin! {
+        name: "__registry_probe_independent",
+        area: Internal,
+        params: [value: Str],
+        returns: Str,
+        returns_independent_storage: true,
+        lower: noop_lower,
+        summary: "registry independent-result probe",
+        internal: true,
+    }
+
+    builtin! {
         name: "__registry_probe_variadic",
         area: Internal,
         params: [fmt: Str],
@@ -473,6 +493,19 @@ mod tests {
         assert!(!returns_fresh_storage("__registry_probe_opt"));
         assert!(!returns_fresh_storage("__registry_probe_variadic"));
         assert!(!returns_fresh_storage("__not_a_real_builtin_xyz"));
+    }
+
+    /// Verifies fresh and explicitly independent results both reject argument aliasing.
+    #[test]
+    fn independent_result_storage_metadata_is_queryable() {
+        assert!(returns_independent_storage("__REGISTRY_PROBE_OWNED"));
+        assert!(returns_independent_storage("__registry_probe_independent"));
+        assert!(returns_independent_storage("htmlspecialchars"));
+        assert!(returns_independent_storage("htmlentities"));
+        assert!(returns_independent_storage("implode"));
+        assert!(returns_independent_storage("rawurldecode"));
+        assert!(!returns_independent_storage("__registry_probe_opt"));
+        assert!(!returns_independent_storage("__not_a_real_builtin_xyz"));
     }
 
     /// Verifies `is_supported` returns true for registered builtins.

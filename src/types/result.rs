@@ -18,7 +18,7 @@ use crate::span::Span;
 
 use super::{
     checker, AttrArgEntry, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
+    InterfaceInfo, PackedClassInfo, PhpType, ReturnAliasSummaries, TypeEnv,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -62,6 +62,8 @@ pub struct CheckResult {
     pub function_attribute_names: HashMap<String, Vec<String>>,
     pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Proven return-to-parameter storage aliases for source-declared callables.
+    pub(crate) return_alias_summaries: ReturnAliasSummaries,
     #[allow(dead_code)]
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     #[allow(dead_code)]

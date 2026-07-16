@@ -249,6 +249,7 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    BorrowedTemp,
     OwnedTemp,
     TryHandler,
     ClosureCapture,
@@ -263,10 +264,12 @@ pub enum LocalKind {
 
 `LocalSlot` exists even in SSA form because PHP locals, globals, statics,
 references, try handlers, and hidden temporaries have addressable storage or
-observable lifetime behavior. `OwnedTemp` carries cleanup-owning temporaries;
-the three eval slot kinds hold the optional interpreter context, activation
-scope, and program-global scope. Fully native literal eval paths do not declare
-those slots.
+observable lifetime behavior. `BorrowedTemp` is transform-only storage that
+never owns the value written into it and is therefore excluded from epilogue
+cleanup; `OwnedTemp` carries cleanup-owning temporaries. The three eval slot
+kinds hold the optional interpreter context, activation scope, and
+program-global scope. Fully native literal eval paths do not declare those
+slots.
 
 ## Value Ownership
 
@@ -318,6 +321,31 @@ Ownership operations:
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
+
+Borrowed property and indexed-read results may be stabilized with a provisional
+`Acquire` before an owning receiver is released. Its consumer must either
+transfer that owner or emit a matching `Release`; scalar casts and calls with a
+proven-independent result cannot alias the input and therefore release it after
+consumption. The retain must not be removed merely because final slot typing
+prunes the receiver release: a later call argument can still mutate the receiver
+local before the read is consumed. ABI materialization follows the same balance
+rule. Mixed-to-string parameters are converted into owned EIR values before the
+backend, allowing the call's alias summary to transfer or release them normally;
+the conversion must not stay hidden inside register materialization because a
+string result can be an interior slice of its argument. ABI-created boxed-Mixed
+arguments use explicit post-call cleanup slots, including for constructors, and
+an exact pointer check transfers the box when a passthrough result reuses it.
+
+Before lowering releases an owning call-argument temporary, the checker provides
+a conservative return-to-parameter alias summary for each source function and
+method. A proven-fresh result permits cleanup of unrelated arguments; a direct
+passthrough protects only the returned parameter. Unknown calls, indirect
+storage reads, and every possible descendant override merge to the conservative
+result, so a type-compatible true alias remains live. Builtins and extern calls
+continue to use their separate ownership contracts and conservative fallback.
+The builtin registry can additionally declare result storage independent from
+all arguments, including scratch-backed results that are not fresh heap blocks;
+that contract feeds both direct-call cleanup and summaries for source wrappers.
 
 ## Effects
 
@@ -918,12 +946,12 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   keeps them correct if it ever does.)
 - **Load/store forwarding and dead stores** — a per-block value-numbering tracks
   the value resident in each scalar (`NonHeap`) `PhpLocal`/`HiddenTemp`/
-  `NamedArgTemp` slot. A `load_local` of a slot with a known resident value folds
-  to it; a `store_local` of the resident value is dropped. Any instruction naming
-  the slot (unset, ref-cell promote/alias/release/store) invalidates it, and state
-  resets at block boundaries — writes through aliases are never crossed. By-ref
-  locals use ref cells, not plain load/store, so plain scalar slots are not
-  aliased.
+  `BorrowedTemp`/`NamedArgTemp` slot. A `load_local` of a slot with a known
+  resident value folds to it; a `store_local` of the resident value is dropped.
+  Any instruction naming the slot (unset, ref-cell promote/alias/release/store)
+  invalidates it, and state resets at block boundaries — writes through aliases
+  are never crossed. By-ref locals use ref cells, not plain load/store, so plain
+  scalar slots are not aliased.
 - **Paired acquire/release cancellation** — an `acquire` whose result is used
   exactly once, by its `release`, drops both. The single-use guard makes this
   refcount-neutral on every path regardless of distance between the two ops.
@@ -1133,7 +1161,7 @@ ref-cell/static/global/capture locals).
 Correctness across the boundary is preserved without an explicit epilogue: the
 splice replaces `return` with `br`, bypassing the callee's implicit codegen
 epilogue cleanup, so the transplant reproduces that cleanup's per-slot decisions —
-parameter slots and directly-returned slots become epilogue-excluded `HiddenTemp`
+parameter slots and directly-returned slots become epilogue-excluded `BorrowedTemp`
 (matching the callee, whose argument is borrowed and whose return ownership is
 moved to the caller), while ordinary refcounted internal locals stay `PhpLocal` and
 are still freed by the host epilogue. The destructor-free restriction makes the one

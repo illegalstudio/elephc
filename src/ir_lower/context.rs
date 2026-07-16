@@ -22,7 +22,7 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
-    ThrowAccessInfo, TypeEnv,
+    ReturnAliasSummaries, ThrowAccessInfo, TypeEnv,
 };
 
 /// Value returned by expression lowering with its PHP metadata.
@@ -106,6 +106,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
     pub callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
+    pub(crate) return_alias_summaries: &'m ReturnAliasSummaries,
     pub(crate) fiber_return_sigs: &'m HashMap<String, FunctionSig>,
     pub classes: &'m HashMap<String, ClassInfo>,
     pub enums: &'m HashMap<String, EnumInfo>,
@@ -174,6 +175,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
         extern_globals: &'m HashMap<String, PhpType>,
         callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
+        return_alias_summaries: &'m ReturnAliasSummaries,
         fiber_return_sigs: &'m HashMap<String, FunctionSig>,
         classes: &'m HashMap<String, ClassInfo>,
         enums: &'m HashMap<String, EnumInfo>,
@@ -202,6 +204,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             extern_functions,
             extern_globals,
             callable_param_sigs,
+            return_alias_summaries,
             fiber_return_sigs,
             classes,
             enums,

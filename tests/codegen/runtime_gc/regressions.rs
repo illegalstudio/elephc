@@ -1123,13 +1123,12 @@ echo "x";
 /// function that accepts an array and returns it typed as `iterable`
 /// (`function id(iterable $x): iterable`) aliases its argument. Releasing owned
 /// call-argument temporaries must not free that shared payload, or the returned
-/// value would be corrupted (read back as null/garbage). This asserts correctness
-/// only — the conservative alias guard intentionally keeps the argument alive when
-/// it might be the return value, which leaves a pre-existing passthrough leak that
-/// is out of scope for the call-argument-release fix.
+/// value would be corrupted (read back as null/garbage). The retained temporary
+/// owner transfers to the function result, so normal result cleanup must also leave
+/// the heap balanced.
 #[test]
 fn test_iterable_passthrough_arg_not_freed() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
 function id(iterable $x): iterable { return $x; }
 $total = 0;
@@ -1140,7 +1139,13 @@ for ($i = 0; $i < 100; $i++) {
 echo $total;
 "#,
     );
-    assert_eq!(out, "600");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "600");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// Regression test for the call-argument-temporary leak: a fresh array literal passed
@@ -1173,7 +1178,7 @@ echo $t;
 /// not return it is an owning temporary that must be released after the call, the same
 /// way method and builtin calls do. Before the fix, user (and extern) calls never
 /// released owned argument temporaries, leaking one array per iteration. The alias
-/// guard still keeps a passthrough result alive (see
+/// guard still transfers a passthrough owner to the result (see
 /// `test_iterable_passthrough_arg_not_freed`); here the argument is discarded, so the
 /// heap must stay flat.
 #[test]
@@ -1190,6 +1195,130 @@ echo $t;
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "600");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #540 root cause 5: an Array-returning method whose
+/// result is fresh must not keep an unrelated inline Array argument alive. The
+/// old type-only alias guard treated every `Array -> Array` call as a possible
+/// passthrough and leaked the argument plus its two boxed string elements on
+/// every invocation.
+#[test]
+fn test_regression_540_fresh_method_array_result_releases_inline_array_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CallAliasScanner {
+    public function scan(array $delimiters): array {
+        $tokens = [];
+        $count = count($delimiters);
+        for ($i = 0; $i < $count; $i++) {
+            $tokens[] = $delimiters[$i];
+        }
+        return $tokens;
+    }
+}
+$scanner = new CallAliasScanner();
+for ($i = 0; $i < 40; $i++) {
+    $tokens = $scanner->scan(['//', '#']);
+}
+$copy = $tokens;
+$copy[] = 'tail';
+echo $tokens[0] . ':' . count($tokens) . ':' . count($copy);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "//:2:3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the precise call-result summary keeps only the argument a method
+/// actually returns. The unrelated first temporary must be released, while the
+/// second temporary transfers its owner to the result and remains COW-safe.
+#[test]
+fn test_regression_540_method_passthrough_preserves_only_aliased_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CallAliasChooser {
+    public function choose(array $discard, array $keep): array {
+        return $keep;
+    }
+}
+$chooser = new CallAliasChooser();
+for ($i = 0; $i < 40; $i++) {
+    $value = $chooser->choose(['drop'], ['keep']);
+}
+$copy = $value;
+$copy[] = 'tail';
+echo $value[0] . ':' . count($value) . ':' . count($copy);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "keep:1:2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a non-final receiver summary includes descendant overrides. The base
+/// implementation returns fresh storage, but the child returns its argument; a
+/// call through the base type must retain that possible alias without leaking.
+#[test]
+fn test_regression_540_method_alias_summary_includes_overrides() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CallAliasBase {
+    public function choose(array $value): array { return []; }
+}
+class CallAliasChild extends CallAliasBase {
+    public function choose(array $value): array { return $value; }
+}
+function chooseThroughBase(CallAliasBase $chooser): array {
+    return $chooser->choose(['child']);
+}
+for ($i = 0; $i < 40; $i++) {
+    $value = chooseThroughBase(new CallAliasChild());
+}
+echo $value[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "child");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the same precise cleanup applies to a source function that returns
+/// a locally-created array containing a value retained from its argument.
+#[test]
+fn test_regression_540_fresh_function_result_releases_inline_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function copyFirst(array $source): array {
+    $copy = [];
+    $copy[] = $source[0];
+    return $copy;
+}
+for ($i = 0; $i < 40; $i++) {
+    $functionResult = copyFirst(['function']);
+}
+echo $functionResult[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "function");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
@@ -2535,6 +2664,685 @@ echo $present;
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected both nullsafe receiver branches to be clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #540's post-fix residual: scalar casts and builtins with
+/// independent results must release inline-read stabilization owners even when a
+/// concrete receiver's provisional release is later pruned.
+#[test]
+fn test_regression_540_inline_array_reads_do_not_keep_stabilization_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $fields = ["bench", "php", "1720000000", "0"];
+    $expiresAt = (int) $fields[3];
+    $title = rawurldecode((string) $fields[0]);
+    $createdAt = (int) $fields[2];
+    $sum += $expiresAt + $createdAt + strlen($title);
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "172000000500");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected inline Array reads to be heap-clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #540's post-fix residual: nullable-object property reads
+/// reach a typed constructor as Mixed operands. EIR-created Mixed-to-string copies
+/// are caller-owned temporaries and must be released after the constructor returns.
+#[test]
+fn test_regression_540_constructor_releases_mixed_string_conversion_temporaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualMetadata {
+    public function __construct(public string $id, public string $title) {}
+}
+function loadResidualMetadata(int $n): ?ResidualMetadata {
+    return new ResidualMetadata("id" . $n, "title");
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $metadata = loadResidualMetadata($i);
+    if ($metadata instanceof ResidualMetadata) {
+        $metadata = new ResidualMetadata($metadata->id, $metadata->title);
+        $sum += strlen($metadata->id) + strlen($metadata->title);
+    }
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "890");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected constructor conversion temporaries to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #540's post-fix residual: a method returning `implode()`
+/// storage cannot alias its string parameters. Property-read argument owners from a
+/// Mixed-backed object local must therefore be released after the call.
+#[test]
+fn test_regression_540_implode_return_summary_releases_property_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualPair {
+    public function __construct(public string $left, public string $right) {}
+}
+class ResidualJoiner {
+    public function join(string $left, string $right): string {
+        $parts = [$left, $right];
+        return implode('', $parts);
+    }
+}
+function maybeResidualPair(): ?ResidualPair {
+    return new ResidualPair("left", "right");
+}
+$joiner = new ResidualJoiner();
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $pair = maybeResidualPair();
+    if ($pair instanceof ResidualPair) {
+        $pair = new ResidualPair("left", "right");
+        $joined = $joiner->join($pair->left, $pair->right);
+        $sum += strlen($joined);
+    }
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "900");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property arguments to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies Mixed-to-string EIR cleanup transfers rather than frees a temporary
+/// when a typed passthrough method returns the exact argument storage.
+#[test]
+fn test_regression_540_mixed_string_conversion_preserves_passthrough_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualStringBox {
+    public function __construct(public string $value) {}
+}
+class ResidualStringIdentity {
+    public function keep(string $value): string {
+        return $value;
+    }
+}
+function maybeResidualStringBox(int $n): ?ResidualStringBox {
+    return new ResidualStringBox("value" . $n);
+}
+$identity = new ResidualStringIdentity();
+$last = "";
+for ($i = 0; $i < 100; $i++) {
+    $box = maybeResidualStringBox($i);
+    if ($box instanceof ResidualStringBox) {
+        $box = new ResidualStringBox("value" . $i);
+        $last = $identity->keep(value: $box->value);
+    }
+}
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "value99");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected passthrough conversion ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies read-stabilization cleanup does not release a borrowed dynamic string
+/// after a retaining array write has copied it into another container.
+#[test]
+fn test_regression_540_read_stabilization_cleanup_preserves_borrowed_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$seed = "value" . $argc;
+$source = [$seed];
+$copy = [$source[0]];
+echo $source[0] . "|" . $copy[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "value1|value1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both dynamic string owners to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a wrapper returning independent HTML-escape storage releases a
+/// stabilized property argument instead of treating the result as a passthrough.
+#[test]
+fn test_regression_540_html_escape_summary_releases_property_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualEscaper {
+    public function escape(string $value): string {
+        return htmlspecialchars($value);
+    }
+}
+class ResidualLabel {
+    public function __construct(public string $lang) {}
+}
+function maybeResidualLabel(): ?ResidualLabel {
+    return new ResidualLabel("<php>");
+}
+$escaper = new ResidualEscaper();
+$last = "";
+for ($i = 0; $i < 100; $i++) {
+    $label = maybeResidualLabel();
+    if ($label instanceof ResidualLabel) {
+        $label = new ResidualLabel("<php>");
+        $last = $escaper->escape($label->lang);
+    }
+}
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "&lt;php&gt;");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected HTML escape argument ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a stabilized first argument survives a later by-reference argument
+/// that replaces the same receiver before the callee consumes the read value.
+#[test]
+fn test_regression_540_read_stabilization_survives_later_receiver_mutation() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function replaceResidualValues(array &$values): int {
+    $values = ["new"];
+    return 0;
+}
+function consumeResidualValue(string $value, int $ignored): int {
+    return strlen($value);
+}
+$values = ["old"];
+$length = consumeResidualValue($values[0], replaceResidualValues($values));
+echo $length . "|" . $values[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3|new");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the stabilized argument and replaced receiver to be clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies constructor ABI materialization releases a temporary boxed-Mixed
+/// argument after the constructor has retained it in promoted property storage.
+#[test]
+fn test_regression_540_constructor_releases_scalar_to_mixed_abi_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualMixedSink {
+    public function __construct(public mixed $value) {}
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sink = new ResidualMixedSink($i);
+    $sum += (int) $sink->value;
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4950");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected constructor ABI boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Canonical issue #500 repro: an integer expression whose binary operator has a
+/// parenthesized compound operand (`($i * 7 + 1) & 0xFFFF`) must not leak the
+/// checked-arithmetic Mixed box per evaluation. Both the split (`comboVar`) and
+/// direct (`comboParen`) variants must complete with a clean heap.
+#[test]
+fn test_regression_500_paren_compound_operand_combo() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function comboParen(): int { $acc = 0; for ($i = 0; $i < 3000; $i++) { $acc = ($i * 7 + 1) & 0xFFFF; } return $acc; }
+function comboVar(): int   { $acc = 0; for ($i = 0; $i < 3000; $i++) { $v = $i * 7 + 1; $acc = $v & 0xFFFF; } return $acc; }
+for ($k = 0; $k < 600; $k++) { comboVar(); }  echo "comboVar ok\n";
+for ($k = 0; $k < 600; $k++) { comboParen(); } echo "comboParen ok\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "comboVar ok\ncomboParen ok\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected checked-arithmetic operand boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: every bitwise/shift operator consuming a parenthesized compound
+/// operand must release the checked-arithmetic Mixed box it coerces to int.
+#[test]
+fn test_regression_500_bitops_release_checked_operand_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = 0; $b = 0; $c = 0; $d = 0; $e = 0;
+for ($i = 0; $i < 2000; $i++) {
+    $a = ($i * 7 + 1) & 0xFFFF;
+    $b = ($i * 3 + 1) | 16;
+    $c = ($i * 5 + 1) ^ 255;
+    $d = ($i + 1) << 2;
+    $e = ($i + 3) >> 1;
+}
+echo $a, "|", $b, "|", $c, "|", $d, "|", $e;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "13994|6014|10227|8000|1001");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected bitop int coercion to release owned Mixed operands, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: `%` coerces both operands to int; a parenthesized compound left
+/// operand must not leak its checked-arithmetic Mixed box.
+#[test]
+fn test_regression_500_mod_releases_checked_operand_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = 0;
+for ($i = 0; $i < 3000; $i++) { $m = ($i * 7 + 1) % 65536; }
+echo $m;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20994");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected modulo int coercion to release owned Mixed operands, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 (exponentiation flavour): `**` consumes its operands through the
+/// float-coercion path, so a checked-arithmetic Mixed box used as either the
+/// base or the exponent must be released like the bitwise/modulo consumers.
+/// Each of these loops leaked one box per evaluation before the fix.
+#[test]
+fn test_regression_500_pow_releases_checked_operand_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$acc = 0;
+for ($i = 0; $i < 2000; $i++) { $acc = ($i % 7 + 1) ** 2; }
+echo $acc, "\n";
+$f = 0.0;
+for ($i = 0; $i < 2000; $i++) { $f = ($i * 7 + 1) ** 0.5; }
+echo ($f > 118.29 && $f < 118.30) ? "sqrt ok" : "sqrt bad", "\n";
+$r = 0;
+for ($i = 0; $i < 2000; $i++) { $r = 2 ** ($i % 3 + 1); }
+echo $r, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "25\nsqrt ok\n4\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected exponentiation to release checked-arithmetic operand boxes (issue #500), got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: an int-coerced array index built from a parenthesized compound
+/// expression (`$SIN[($i * 7 + 5) & 1023]`) must release the inner Mixed box.
+#[test]
+fn test_regression_500_coerced_array_index_releases_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$SIN = [];
+for ($j = 0; $j < 1024; $j++) { $SIN[] = $j * 2; }
+$s = 0;
+for ($i = 0; $i < 2000; $i++) { $s = $SIN[($i * 7 + 5) & 1023]; }
+echo $s;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1372");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected coerced array index boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: a computed index consumed directly by an array read
+/// (`$B[$i + 1]`) goes through the mixed-key read path; the owned boxed index
+/// must be released after the read.
+#[test]
+fn test_regression_500_mixed_key_index_releases_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$B = [];
+for ($j = 0; $j < 2002; $j++) { $B[] = $j * 3; }
+$x = 0;
+for ($i = 0; $i < 2000; $i++) { $x = $B[$i + 1]; }
+echo $x;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6000");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected mixed-key index boxes to be released after the read, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: a comparison with a parenthesized compound operand
+/// (`($i * 7 + 1) < 500`) must release the original Mixed box, not just the
+/// rebound post-coercion scalar.
+#[test]
+fn test_regression_500_comparison_releases_checked_operand_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$cnt = 0;
+for ($i = 0; $i < 2000; $i++) {
+    if (($i * 7 + 1) < 500) { $cnt++; }
+}
+echo $cnt;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "72");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected comparison int coercion to release owned Mixed operands, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: unary minus over a compound operand (`-($i * 7 + 1)`) lowers
+/// through the mixed numeric sub helper and must release the owned operand box.
+#[test]
+fn test_regression_500_unary_minus_releases_checked_operand_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 3000; $i++) { $n = -($i * 7 + 1); }
+echo $n;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "-20994");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected unary minus to release its owned Mixed operand, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: nested masking (`(($i + 1) & 0xFF) & 0xF`) creates exactly one
+/// checked-arithmetic box per iteration; it must be released exactly once.
+#[test]
+fn test_regression_500_nested_masking_releases_box_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = 0;
+for ($i = 0; $i < 2000; $i++) { $h = (($i + 1) & 0xFF) & 0xF; }
+echo $h;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected exactly one release per nested-mask iteration, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500: single checked ops (`+`, `-`, `*`) as direct bitand operands
+/// must each release their Mixed result box.
+#[test]
+fn test_regression_500_single_checked_ops_release_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$p = 0; $q = 0; $r = 0;
+for ($i = 0; $i < 2000; $i++) {
+    $p = ($i + 1) & 1;
+    $q = ($i - 1) & 1;
+    $r = ($i * 2) & 3;
+}
+echo $p, "|", $q, "|", $r;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0|0|2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected single checked-op operand boxes to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: splitting the compound operand into a local
+/// (`$v = $i * 7 + 1; $acc = $v & 0xFFFF`) routes the box through slot
+/// ownership. The borrowed local load must NOT be over-released.
+#[test]
+fn test_regression_500_split_statement_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$acc = 0;
+for ($i = 0; $i < 3000; $i++) { $v = $i * 7 + 1; $acc = $v & 0xFFFF; }
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20994");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected borrowed local operands to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: plain scalar shapes (`$i & 0xFFFF`, `$i * 7 + 1` stored
+/// straight into a local) must stay clean and produce unchanged results.
+#[test]
+fn test_regression_500_plain_scalar_shapes_stay_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = 0; $b = 0;
+for ($i = 0; $i < 3000; $i++) { $a = $i & 0xFFFF; $b = $i * 7 + 1; }
+echo $a, "|", $b;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2999|20994");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected plain scalar arithmetic to stay clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: a chained mixed addition (`($i + 1) + ($i + 2)`) already
+/// releases its operand boxes; the fix must not double-release them.
+#[test]
+fn test_regression_500_chained_mixed_add_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$l = 0;
+for ($i = 0; $i < 2000; $i++) { $l = ($i + 1) + ($i + 2); }
+echo $l;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4001");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected chained mixed adds to release each operand exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: a chained sum of array-read values must stay clean and
+/// correct (operand releases at the mixed binop sites must not double up).
+#[test]
+fn test_regression_500_chained_array_read_sum_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$A = [10, 20, 30];
+$v = 0;
+for ($i = 0; $i < 2000; $i++) { $v = $A[0] + $A[1] + $A[2]; }
+echo $v;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "60");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected chained array-read sums to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: a checked-arithmetic result passed as a call argument
+/// (`intdiv($i * 7 + 1, 3)`) is released by the call-argument path; the fix
+/// must not add a second release.
+#[test]
+fn test_regression_500_call_argument_box_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$t = 0;
+for ($i = 0; $i < 2000; $i++) { $t = intdiv($i * 7 + 1, 3); }
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4664");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected call-argument boxes to be released exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: a checked-arithmetic result flowing into a string
+/// concatenation is released by the issue-#527 string coercion path; it must
+/// not be double-released.
+#[test]
+fn test_regression_500_string_coercion_box_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$str = "";
+for ($i = 0; $i < 1000; $i++) { $str = ($i * 7 + 1) . "x"; }
+echo $str;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6994x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected stringified boxes to be released exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: array literal elements built from checked-arithmetic
+/// expressions exercise the element storage coercion path; the caller-side
+/// release there must not double up with the coercer-internal release.
+#[test]
+fn test_regression_500_array_literal_element_box_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$last = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $pair = [$i + 1, $i * 2];
+    $last = $pair[0] + $pair[1];
+}
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2998");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected array literal element boxes to be released exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control: a loop-carried accumulator (`$acc = ($acc + $i) & 0xFFFF`)
+/// feeds the next iteration through its slot; the coercion release must not
+/// free the live local.
+#[test]
+fn test_regression_500_loop_carried_accumulator_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$acc = 0;
+for ($i = 0; $i < 2000; $i++) { $acc = ($acc + $i) & 0xFFFF; }
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "32920");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the loop-carried accumulator to survive operand releases, got: {}",
+        out.stderr
+    );
+}
+
+/// Issue #500 control (issue #369 parity): runtime-overflowing int arithmetic
+/// with non-constant operands must still promote to float. A relational
+/// consumer of the overflowed box (`($a * 2) > 0`) is deliberately not
+/// asserted here: the comparison path truncates the float payload through
+/// `__rt_mixed_cast_int`, whose float→int conversion is architecture-divergent
+/// on overflow (ARM64 `fcvtzs` saturates to INT64_MAX, x86_64 `cvttsd2si`
+/// yields INT64_MIN) — a pre-existing parity gap independent of this leak fix.
+/// Release-through-comparison is covered by the non-overflowing
+/// `test_regression_500_comparison_releases_checked_operand_box`.
+#[test]
+fn test_regression_500_overflow_to_float_parity_preserved() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = $argc > 0 ? PHP_INT_MAX : 0;
+$b = $argc > 0 ? 2 : 0;
+$r = $a * $b;
+echo gettype($r), "\n";
+$s = $a + 1;
+echo gettype($s), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "double\ndouble\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected overflow-promoted boxes to be read then released cleanly, got: {}",
         out.stderr
     );
 }

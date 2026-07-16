@@ -200,6 +200,13 @@ pub struct BuiltinSpec {
     /// results that can alias argument or runtime storage; releasing those would corrupt
     /// their original owner. Non-refcounted result variants are unaffected.
     pub returns_fresh_storage: bool,
+    /// Whether a non-fresh result is guaranteed not to reuse any argument's storage.
+    ///
+    /// Fresh heap ownership implies independence without this flag; this field
+    /// covers scratch-backed independent results. EIR uses the effective contract
+    /// to release owning argument temporaries after the call and to derive
+    /// return/argument alias summaries for source wrappers.
+    pub returns_independent_storage: bool,
     /// Whether the function returns by reference.
     pub by_ref_return: bool,
     /// An optional type-checking hook for builtins whose return type depends
@@ -243,8 +250,9 @@ mod macro_tests {
         -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
     builtin! { name: "__macro_owned_probe", area: Internal, params: [], returns: Mixed, returns_fresh_storage: true, lower: lower, summary: "owned probe", internal: true }
+    builtin! { name: "__macro_independent_probe", area: Internal, params: [value: Str], returns: Str, returns_independent_storage: true, lower: lower, summary: "independent probe", internal: true }
 
-    /// Verifies macro registration and the default/explicit fresh-storage metadata values.
+    /// Verifies macro registration and the fresh/independent storage metadata defaults.
     #[test]
     fn macro_registers_builtin() {
         let default_spec = inventory::iter::<BuiltinSpec>
@@ -255,8 +263,14 @@ mod macro_tests {
             .into_iter()
             .find(|s| s.name == "__macro_owned_probe")
             .expect("owned macro probe must be registered");
+        let independent_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_independent_probe")
+            .expect("independent macro probe must be registered");
         assert!(!default_spec.returns_fresh_storage);
+        assert!(!default_spec.returns_independent_storage);
         assert!(owned_spec.returns_fresh_storage);
+        assert!(independent_spec.returns_independent_storage);
     }
 }
 
@@ -272,6 +286,7 @@ mod tests {
             name: "strlen", area: Area::String, params: P, variadic: None,
             max_args: None, min_args: None, arity_error: None,
             returns: TypeSpec::Int, returns_fresh_storage: false,
+            returns_independent_storage: false,
             by_ref_return: false, check: None, lazy_check: false,
             lower: noop_lower, summary: "len", examples: &[], php_manual: None,
             deprecation: None, internal: false,
@@ -279,6 +294,7 @@ mod tests {
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);
         assert!(!S.returns_fresh_storage);
+        assert!(!S.returns_independent_storage);
     }
     /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
     fn noop_lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)

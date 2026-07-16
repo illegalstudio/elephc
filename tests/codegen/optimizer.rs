@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
+#[path = "optimizer/call_result_alias.rs"]
+mod call_result_alias;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
 #[path = "optimizer/constant_propagation.rs"]
@@ -33,6 +35,8 @@ mod identity_arithmetic;
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
 mod property_receiver_ownership;
+#[path = "optimizer/read_result_cleanup.rs"]
+mod read_result_cleanup;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]

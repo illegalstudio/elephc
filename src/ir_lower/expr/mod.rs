@@ -29,7 +29,7 @@ use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic,
     merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
-    ThrowAccessKind,
+    ReturnArgAlias, ThrowAccessKind,
 };
 use std::collections::HashSet;
 
@@ -982,7 +982,11 @@ fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
-            lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr)
+            let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+            // Mirror the binary mixed-op path: an owning boxed operand (e.g.
+            // `-($i * 7 + 1)`, issue #500) must be released once consumed.
+            release_binary_operand_temporary(ctx, value, expr.span);
+            result
         }
         _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span)),
     }
@@ -1858,7 +1862,13 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         // Plain extern calls release owned argument temporaries the same way method
         // and builtin calls do, so a fresh owned temporary passed as an argument is
         // not leaked once per call. The alias guard keeps a pass-through result alive.
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            &ReturnArgAlias::Unknown,
+            expr.span,
+        );
         return call;
     }
     if is_user_function {
@@ -1874,7 +1884,18 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        let return_alias = ctx
+            .return_alias_summaries
+            .function(canonical)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            &return_alias,
+            expr.span,
+        );
         return call;
     }
     if ctx.has_eval_barrier()
@@ -1926,7 +1947,18 @@ fn emit_builtin_call_value(
         effects,
         Some(span),
     );
-    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span);
+    let return_alias = if crate::builtins::registry::returns_independent_storage(name) {
+        ReturnArgAlias::None
+    } else {
+        ReturnArgAlias::Unknown
+    };
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        Some(call.value),
+        &return_alias,
+        span,
+    );
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
@@ -5660,14 +5692,12 @@ fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
-/// Coerces a positional argument's storage to match a declared scalar parameter type.
+/// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
-/// EIR passes each call argument in its natural storage. A declared `float` parameter is
-/// materialized into the callee's floating-point register/slot, so an integer argument must be
-/// converted with `IToF` first: without it the raw 64-bit integer bit-pattern lands in the
-/// float slot and the callee reads garbage (and, when other float arguments are present, the
-/// unconverted slot is overwritten by a neighbouring float argument). Only the int→float case
-/// is adjusted; every other argument/parameter storage combination is passed through unchanged.
+/// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
+/// conversion is also explicit here because it allocates caller-owned storage whose lifetime
+/// depends on the call's return/argument alias contract; leaving that conversion hidden in ABI
+/// materialization would give EIR no value to transfer or release after the call.
 fn coerce_scalar_arg_to_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -5678,21 +5708,23 @@ fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    if value.ir_type == IrType::I64 && param_ty.codegen_repr() == PhpType::Float {
+    let param_ty = param_ty.codegen_repr();
+    if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
+    }
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return coerce_to_string(ctx, value, arg);
     }
     value
 }
 
-/// Widens positional call operands to their declared scalar parameter types.
+/// Normalizes reordered call operands to their declared scalar parameter storage.
 ///
-/// The C/native ABI places an argument in an integer or floating-point register based
-/// on the *value's* type, while the callee reads each parameter from the register class
-/// of the *parameter's* type. Without this step an `int` (or `bool`) argument passed to
-/// a `float` parameter is deposited in an integer register and then read back as garbage
-/// from a floating-point slot. Only pure `float` parameters receiving an integer/bool
-/// operand are rewritten with an int→float conversion; by-reference parameters and the
-/// variadic tail operand are left untouched.
+/// Named and spread arguments are evaluated in source order and then reordered, so their
+/// int-to-float and Mixed-to-string conversions happen here in parameter order. By-reference
+/// parameters and the variadic tail remain untouched. String conversions become owned EIR
+/// values so normal alias-aware call cleanup can transfer or release them safely.
 fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -5707,19 +5739,24 @@ fn coerce_operands_to_params(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
-        if param_ty.codegen_repr() != PhpType::Float {
-            continue;
-        }
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        if !matches!(operand_ty, PhpType::Int | PhpType::Bool) {
-            continue;
+        let param_ty = param_ty.codegen_repr();
+        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+            let lowered = LoweredValue {
+                value,
+                ir_type: IrType::I64,
+            };
+            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+        } else if param_ty == PhpType::Str
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
         }
-        let lowered = LoweredValue {
-            value,
-            ir_type: IrType::I64,
-        };
-        operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
     }
     operands
 }
@@ -7912,7 +7949,14 @@ fn coerce_array_literal_element_to_storage_type(
         PhpType::Str if value.ir_type != IrType::Str => coerce_to_string(ctx, value, expr),
         _ => value,
     };
-    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+    // The scalar coercers release owning heap-repr sources internally (see
+    // `release_coerced_source_if_owned`); releasing those here again would
+    // double-free the element box. This caller-side release only covers the
+    // remaining reprs (e.g. an owned string temp narrowed through `StrToI`).
+    if coerced.value != value.value
+        && !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(value.value))
+        && ctx.value_is_owning_temporary(value)
+    {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     coerced
@@ -8584,6 +8628,13 @@ fn lower_array_access_from_value(
         op.default_effects(),
         Some(expr.span),
     );
+    // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
+    // path) is consumed by the read without any runtime refcount operation on
+    // the key, and the result is freshly allocated storage that never aliases
+    // it — release it here or it leaks per read (issue #500). Int-coerced
+    // index paths rebound `index_value` to a non-owning raw cast, so the
+    // owning-temporary gate makes this a no-op for them.
+    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
     // Array access consumes an owning receiver produced by an earlier read,
     // call, or one-shot temp. Preserve borrowed string/callable payloads before
     // dropping that receiver; boxed and retained container reads are already
@@ -8933,13 +8984,17 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
         Some(expr.span),
     );
     if matches!(target, CastType::String) {
-        release_stringified_source_if_owned(ctx, value, Some(expr.span));
+        release_coerced_source_if_owned(ctx, value, Some(expr.span));
+    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
+        && ctx.value_is_owning_temporary(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
 }
 
-/// Releases an owning temporary when stringification cannot alias its source storage.
-fn release_stringified_source_if_owned(
+/// Releases an owning temporary when a scalar coercion cannot alias its source storage.
+fn release_coerced_source_if_owned(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Option<crate::span::Span>,
@@ -8947,27 +9002,34 @@ fn release_stringified_source_if_owned(
     if !ctx.value_is_owning_temporary(source) {
         return;
     }
-    match ctx.builder.value_php_type(source.value).codegen_repr() {
-        // Boxed Mixed sources are safe to release here as well: the backend
-        // lowers `cast Mixed -> Str` through `__rt_mixed_cast_string`. String
-        // payloads are persisted into an independent allocation; scalar and
-        // null payloads return source-independent conversion storage. The
-        // produced string therefore never aliases the released Mixed cell.
-        // Skipping Mixed leaked every owned boxed temporary that flowed into a
-        // string coercion — e.g. `echo $row[1] . "\n"` inside a by-value
-        // `foreach` leaked the `$row[1]` element box each iteration (issue
-        // #527). `release_if_owned` only type-gates the EIR Release; backend
-        // ownership filtering releases Owned/MaybeOwned and skips NonHeap,
-        // Borrowed, Persistent, and Moved. Non-null unions such as int|string
-        // codegen-repr to Mixed; tagged nullable-int unions bypass this arm.
-        PhpType::Object(_)
-        | PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Mixed => {
-            crate::ir_lower::ownership::release_if_owned(ctx, source, span);
-        }
-        _ => {}
+    if !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(source.value)) {
+        return;
     }
+    crate::ir_lower::ownership::release_if_owned(ctx, source, span);
+}
+
+/// Returns true when a coerced source's codegen repr is a heap shape the scalar
+/// coercion casts never alias, so the coercers can release it internally.
+///
+/// Boxed Mixed sources are safe to release: the backend lowers
+/// `cast Mixed -> Str/I64/F64` through `__rt_mixed_cast_string` /
+/// `__rt_mixed_cast_int` / `__rt_mixed_cast_float`. String payloads are
+/// persisted into an independent allocation; scalar and null payloads return
+/// source-independent conversion storage or raw scalars. The produced value
+/// therefore never aliases the released Mixed cell. Skipping Mixed leaked
+/// every owned boxed temporary that flowed into a string coercion — e.g.
+/// `echo $row[1] . "\n"` inside a by-value `foreach` leaked the `$row[1]`
+/// element box each iteration (issue #527) — and every checked-arithmetic
+/// box consumed directly by `%`, bitops, comparisons, or array indexes
+/// (issue #500). `release_if_owned` only type-gates the EIR Release; backend
+/// ownership filtering releases Owned/MaybeOwned and skips NonHeap, Borrowed,
+/// Persistent, and Moved. Non-null unions such as int|string codegen-repr to
+/// Mixed; tagged nullable-int unions bypass this predicate.
+fn coerced_source_repr_is_releasable(php_type: &PhpType) -> bool {
+    matches!(
+        php_type.codegen_repr(),
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    )
 }
 
 /// Returns the PHP type produced by a cast.
@@ -9967,7 +10029,13 @@ fn emit_fixed_object_new(
         Op::ObjectNew.default_effects(),
         Some(span),
     );
-    release_owned_call_arg_temporaries(ctx, &operands, None, span);
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        span,
+    );
     object
 }
 
@@ -10854,7 +10922,14 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    release_owned_call_arg_temporaries(
+        ctx,
+        &arg_values,
+        Some(call.value),
+        &return_alias,
+        expr.span,
+    );
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
@@ -13456,7 +13531,14 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    release_owned_call_arg_temporaries(
+        ctx,
+        &arg_values,
+        Some(call.value),
+        &return_alias,
+        expr.span,
+    );
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
@@ -13499,16 +13581,19 @@ fn release_owned_call_arg_temporaries(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[crate::ir::ValueId],
     result: Option<crate::ir::ValueId>,
+    return_alias: &ReturnArgAlias,
     span: Span,
 ) {
-    for value in args {
+    for (parameter_index, value) in args.iter().enumerate() {
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,
             ir_type: value_ir_type(&php_type),
         };
         if ctx.value_is_owning_temporary(lowered) {
-            if call_result_may_alias_arg(ctx, *value, result) {
+            if return_alias.may_alias_parameter(parameter_index)
+                && call_result_may_alias_arg(ctx, *value, result)
+            {
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
@@ -13627,6 +13712,80 @@ fn method_signature(
         return common_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// Returns the conservative return-to-argument alias summary for a method dispatch.
+///
+/// A non-final receiver type includes every closed-world descendant implementation,
+/// because runtime dispatch can select an override. Missing or synthetic summaries
+/// therefore fall back to `Unknown` rather than enabling unsafe cleanup.
+fn method_return_arg_alias(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> ReturnArgAlias {
+    let object_ty = ctx.builder.value_php_type(object);
+    let method_key = php_symbol_key(method);
+    let mut summary: Option<ReturnArgAlias> = None;
+    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+        let base_class = class_name.trim_start_matches('\\');
+        let Some(base_info) = ctx.classes.get(base_class) else {
+            return ReturnArgAlias::Unknown;
+        };
+        if base_info.is_final || base_info.final_methods.contains(&method_key) {
+            return class_method_return_arg_alias(ctx, base_class, &method_key)
+                .unwrap_or(ReturnArgAlias::Unknown);
+        }
+        for candidate in ctx.classes.keys() {
+            if !is_same_or_descendant_class(ctx, candidate, base_class) {
+                continue;
+            }
+            let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
+                continue;
+            };
+            summary = Some(match summary {
+                Some(current) => current.merge(&alias),
+                None => alias,
+            });
+        }
+        return summary.unwrap_or(ReturnArgAlias::Unknown);
+    }
+    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        if ctx.has_eval_barrier() {
+            return ReturnArgAlias::Unknown;
+        }
+        for candidate in ctx.classes.keys() {
+            let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
+                continue;
+            };
+            summary = Some(match summary {
+                Some(current) => current.merge(&alias),
+                None => alias,
+            });
+        }
+    }
+    summary.unwrap_or(ReturnArgAlias::Unknown)
+}
+
+/// Resolves one concrete class's dispatched implementation and its source summary.
+fn class_method_return_arg_alias(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method_key: &str,
+) -> Option<ReturnArgAlias> {
+    class_method_signature(ctx, class_name, method_key)?;
+    let class_info = ctx.classes.get(class_name)?;
+    let impl_class = class_info
+        .method_impl_classes
+        .get(method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    Some(
+        ctx.return_alias_summaries
+            .method(impl_class, method_key)
+            .cloned()
+            .unwrap_or(ReturnArgAlias::Unknown),
+    )
 }
 
 /// Returns a class/interface method signature, preferring the implementing class metadata.
@@ -14500,14 +14659,23 @@ pub(crate) fn coerce_to_int_at_span(
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
         IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::I64)),
-            PhpType::Int,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::I64)),
+                PhpType::Int,
+                Op::Cast.default_effects(),
+                span,
+            );
+            // The cast lowers to `__rt_mixed_cast_int`, which returns a raw
+            // scalar that never aliases the source box. Dropping the owning
+            // reference here leaked one checked-arithmetic Mixed cell per
+            // evaluation for `%`, bitops, comparisons, and coerced array
+            // indexes with a compound operand (issue #500).
+            release_coerced_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 
@@ -14525,14 +14693,21 @@ fn coerce_to_float_at_span(
     match value.ir_type {
         IrType::F64 => value,
         IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::F64)),
-            PhpType::Float,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::F64)),
+                PhpType::Float,
+                Op::Cast.default_effects(),
+                span,
+            );
+            // Mirror of the int coercion above: `__rt_mixed_cast_float`
+            // returns a raw scalar, so the owning source box (e.g. a checked
+            // `pow` operand, issue #500) must be released here.
+            release_coerced_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 
@@ -14570,7 +14745,7 @@ fn coerce_to_string_at_span(
                 Op::Cast.default_effects(),
                 span,
             );
-            release_stringified_source_if_owned(ctx, value, span);
+            release_coerced_source_if_owned(ctx, value, span);
             result
         }
     }
