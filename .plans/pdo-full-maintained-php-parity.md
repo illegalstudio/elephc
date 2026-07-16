@@ -26,6 +26,35 @@ externally afterwards. The PHP manual also lists PDO_CUBRID, PDO_IBM, PDO_INFORM
 PDO_SQLSRV. Those external drivers are in scope: their upstream extension sources and
 released binaries, not generic PDO behavior alone, define their driver-specific contract.
 
+## Frozen upstream matrix (2026-07-16)
+
+| Driver | PHP 8.2 | PHP 8.3 | PHP 8.4 | PHP 8.5 | Native client/reference |
+| --- | --- | --- | --- | --- | --- |
+| mysql | php-src | php-src | php-src | php-src | mysqlnd behavior; Rust wire client must match it |
+| pgsql | php-src | php-src | php-src | php-src | libpq behavior; `libpq-gss` for GSS paths |
+| sqlite | php-src | php-src | php-src | php-src | SQLite C API |
+| dblib | php-src legacy class | php-src legacy class | `Pdo\Dblib` + aliases | class + deprecated aliases | FreeTDS DB-Library (`libsybdb`) |
+| firebird | php-src legacy class | php-src legacy class | `Pdo\Firebird` + aliases | class + deprecated aliases | Firebird client (`fbclient`) |
+| odbc | php-src | php-src | php-src | php-src | unixODBC/iODBC + selected ODBC driver |
+| oci | bundled php-src | bundled php-src / PECL transition | PECL | PECL | Oracle Instant Client OCI |
+| sqlsrv | Microsoft 5.12 line | Microsoft 5.12 line | Microsoft 5.12+ | Microsoft 5.13+ | Microsoft ODBC Driver 17/18 |
+| ibm | PECL | PECL | `Pdo\Ibm` in PECL 1.7 | class + deprecated aliases | IBM CLI/ODBC |
+| informix | PECL | PECL | PECL | PECL | Informix CSDK CLI |
+| cubrid | external CUBRID extension | external CUBRID extension | external CUBRID extension | external CUBRID extension | CUBRID CCI |
+
+Normative external sources are the maintained upstream repositories/releases:
+
+- PDO_OCI: <https://github.com/php/pecl-database-pdo_oci>
+- PDO_SQLSRV: <https://github.com/microsoft/msphpsql>
+- PDO_IBM: <https://github.com/php/pecl-database-pdo_ibm>
+- PDO_INFORMIX: <https://pecl.php.net/package/PDO_INFORMIX>
+- PDO_CUBRID: <https://github.com/CUBRID/cubrid-pdo>
+
+The word “legacy class” means the driver is usable through `PDO`, while its namespaced
+`Pdo\<Driver>` subclass has not yet been introduced by that PHP/extension version. Old
+driver constants remain available on `PDO`; where PHP 8.5 moves them to a namespaced
+class, the aliases remain present with the same deprecation behavior.
+
 ## Compatibility contract
 
 For every driver and PHP target, parity covers:
