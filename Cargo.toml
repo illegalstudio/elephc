@@ -76,6 +76,8 @@ rustls-pemfile = "2"
 pdo-libpq-gss = ["elephc-pdo/libpq-gss"]
 # Keeps codegen fixtures and the PDO archive on the FreeTDS-backed PDO_DBLIB profile.
 pdo-dblib = ["elephc-pdo/dblib"]
+# Keeps codegen fixtures and the PDO archive on the pure-Rust PDO_FIREBIRD profile.
+pdo-firebird = ["elephc-pdo/firebird"]
 
 # PDO needs two mysql client controls that upstream 28.0.0 does not expose:
 # caller-supplied authentication RSA keys and rustls cipher-suite selection.

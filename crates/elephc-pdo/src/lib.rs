@@ -29,11 +29,14 @@
 //!   of surfacing a catchable `PDOException`.
 //! - The default drivers are bundled (SQLite) / pure-Rust (PostgreSQL,
 //!   MySQL/MariaDB), so their binaries have no system database-client runtime
-//!   dependency. The optional PDO_DBLIB profile links FreeTDS like php-src.
+//!   dependency. The optional PDO_DBLIB profile links FreeTDS like php-src;
+//!   PDO_FIREBIRD uses the pure-Rust Firebird wire protocol on every target.
 
 mod driver;
 #[cfg(feature = "dblib")]
 mod dblib;
+#[cfg(feature = "firebird")]
+mod firebird;
 mod ini;
 mod my;
 #[path = "pg.rs"]
@@ -56,6 +59,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 enum Conn {
     #[cfg(feature = "dblib")]
     Dblib(dblib::DblibConn),
+    #[cfg(feature = "firebird")]
+    Firebird(firebird::FirebirdConn),
     Sqlite(sqlite::SqliteConn),
     Postgres(pg::PgConn),
     Mysql(my::MyConn),
@@ -67,6 +72,8 @@ impl Conn {
         match self {
             #[cfg(feature = "dblib")]
             Self::Dblib(_) => driver::DriverKind::Dblib,
+            #[cfg(feature = "firebird")]
+            Self::Firebird(_) => driver::DriverKind::Firebird,
             Self::Sqlite(_) => driver::DriverKind::Sqlite,
             Self::Postgres(_) => driver::DriverKind::Pgsql,
             Self::Mysql(_) => driver::DriverKind::Mysql,
@@ -78,6 +85,8 @@ impl Conn {
 enum Stmt {
     #[cfg(feature = "dblib")]
     Dblib(dblib::DblibStmt),
+    #[cfg(feature = "firebird")]
+    Firebird(firebird::FirebirdStmt),
     Sqlite(sqlite::SqliteStmt),
     Postgres(pg::PgStmt),
     Mysql(my::MyStmt),
@@ -288,6 +297,12 @@ fn dblib_stmt_os_errmsg_cell() -> &'static Mutex<CString> {
     CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
 }
 
+/// Shared return buffer for textual PDO_FIREBIRD attributes.
+fn firebird_attribute_cell() -> &'static Mutex<CString> {
+    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+}
+
 /// Static buffer for the most recent `elephc_pdo_server_version` result.
 fn server_version_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -408,6 +423,8 @@ fn open_conn_for_dsn(
     match driver::DriverKind::from_dsn(dsn) {
         #[cfg(feature = "dblib")]
         Some(driver::DriverKind::Dblib) => dblib::DblibConn::open(dsn).map(Conn::Dblib),
+        #[cfg(feature = "firebird")]
+        Some(driver::DriverKind::Firebird) => firebird::FirebirdConn::open(dsn).map(Conn::Firebird),
         Some(driver::DriverKind::Sqlite) => {
             let path = dsn.strip_prefix(driver::DriverKind::Sqlite.dsn_prefix()).unwrap_or_default();
             sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
@@ -466,6 +483,8 @@ fn persistent_connection_is_live(conn_id: i64) -> bool {
     match guard.get_mut(&conn_id) {
         #[cfg(feature = "dblib")]
         Some(Conn::Dblib(connection)) => connection.is_alive(),
+        #[cfg(feature = "firebird")]
+        Some(Conn::Firebird(connection)) => connection.is_alive(),
         Some(Conn::Sqlite(_)) => true,
         Some(Conn::Mysql(connection)) => connection.is_alive(),
         Some(Conn::Postgres(connection)) => !connection.is_closed(),
@@ -479,6 +498,8 @@ fn evict_persistent_connection(conn_id: i64) {
     lock_recover(stmts()).retain(|_, statement| match statement {
         #[cfg(feature = "dblib")]
         Stmt::Dblib(statement) => statement.conn_id != conn_id,
+        #[cfg(feature = "firebird")]
+        Stmt::Firebird(statement) => statement.conn_id != conn_id,
         Stmt::Sqlite(_) => true,
         Stmt::Postgres(statement) => statement.conn_id != conn_id,
         Stmt::Mysql(statement) => statement.conn_id != conn_id,
@@ -675,13 +696,14 @@ fn open_persistent_dsn(
 /// equivalent bounded size/read/write operations for SQLite incremental BLOBs.
 /// v47 enables PHP 8.5+'s demand-driven simple-query protocol per statement.
 /// v48 exposes the compiled-driver registry and runtime `pdo.dsn.*` INI aliases.
-/// v49 adds the optional PDO_DBLIB driver and its live attribute controls.
+/// v49 adds the optional PDO_DBLIB driver and its live attribute controls. v50
+/// adds the optional PDO_FIREBIRD backend and its driver-specific attributes.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(49, || 49)
+    ffi_guard(50, || 50)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -721,6 +743,8 @@ pub extern "C" fn elephc_pdo_available_driver_name(index: i64) -> *const c_char 
         match kind {
             #[cfg(feature = "dblib")]
             driver::DriverKind::Dblib => static_cstr(b"dblib\0"),
+            #[cfg(feature = "firebird")]
+            driver::DriverKind::Firebird => static_cstr(b"firebird\0"),
             driver::DriverKind::Mysql => static_cstr(b"mysql\0"),
             driver::DriverKind::Pgsql => static_cstr(b"pgsql\0"),
             driver::DriverKind::Sqlite => static_cstr(b"sqlite\0"),
@@ -898,6 +922,8 @@ fn release_connection(conn_id: i64, reset_pgsql_session: bool) {
                 Stmt::Sqlite(st) if sqlite_db == Some(st.db) => Some(*k),
                 Stmt::Postgres(p) if p.conn_id == conn_id => Some(*k),
                 Stmt::Mysql(m) if m.conn_id == conn_id => Some(*k),
+                #[cfg(feature = "firebird")]
+                Stmt::Firebird(f) if f.conn_id == conn_id => Some(*k),
                 _ => None,
             })
             .collect();
@@ -955,6 +981,11 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
                 Some(sql) => c.execute(sql).map_or(-1, |_| c.changes),
                 None => -1,
             },
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => match cstr_arg(sql) {
+                Some(sql) => c.execute(sql, Vec::new()).map_or(-1, |_| c.changes),
+                None => -1,
+            },
             Some(Conn::Postgres(c)) => match cstr_arg(sql) {
                 Some(s) => c.exec(s),
                 None => -1,
@@ -993,6 +1024,8 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
                     dblib::DblibCell::Null => None,
                 })
                 .unwrap_or(0),
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(_)) => 0,
             Some(Conn::Sqlite(c)) => c.last_insert_id(),
             Some(Conn::Postgres(c)) => c.last_insert_id(cstr_arg(name)),
             Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)),
@@ -1034,6 +1067,8 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
                         dblib::DblibCell::Null => String::new(),
                     })
                     .unwrap_or_default(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(_)) => String::new(),
                 Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
                 Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
                 Some(Conn::Mysql(c)) => c.last_insert_id_text(cstr_arg(name)),
@@ -1053,6 +1088,8 @@ pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
         match guard.get(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.changes,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.changes,
             Some(Conn::Sqlite(c)) => c.changes(),
             Some(Conn::Postgres(c)) => c.changes,
             Some(Conn::Mysql(c)) => c.changes,
@@ -1070,6 +1107,8 @@ pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("BEGIN TRANSACTION", true) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.begin() as i64,
             Some(Conn::Sqlite(c)) => c.begin_transaction(),
             Some(Conn::Postgres(c)) => c.exec_simple("BEGIN"),
             Some(Conn::Mysql(c)) => c.exec_simple("BEGIN"),
@@ -1087,6 +1126,8 @@ pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("COMMIT TRANSACTION", false) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.commit() as i64,
             Some(Conn::Sqlite(c)) => c.exec_simple(b"COMMIT"),
             Some(Conn::Postgres(c)) => c.exec_simple("COMMIT"),
             Some(Conn::Mysql(c)) => c.exec_simple("COMMIT"),
@@ -1104,6 +1145,8 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("ROLLBACK TRANSACTION", false) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.rollback() as i64,
             Some(Conn::Sqlite(c)) => c.exec_simple(b"ROLLBACK"),
             Some(Conn::Postgres(c)) => c.exec_simple("ROLLBACK"),
             Some(Conn::Mysql(c)) => c.exec_simple("ROLLBACK"),
@@ -1129,6 +1172,8 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
         match guard.get(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.in_transaction as i64,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.in_transaction as i64,
             Some(Conn::Sqlite(c)) => c.in_transaction(),
             Some(Conn::Postgres(c)) => c.in_transaction as i64,
             Some(Conn::Mysql(c)) => c.in_transaction as i64,
@@ -1239,6 +1284,8 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
         match guard.get(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.errcode(),
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(c)) => c.errcode(),
             Some(Conn::Sqlite(c)) => c.errcode(),
             Some(Conn::Postgres(c)) => c.errcode,
             Some(Conn::Mysql(c)) => c.errcode,
@@ -1257,6 +1304,8 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
             match guard.get(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.errmsg().to_string(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.errmsg().to_string(),
                 Some(Conn::Sqlite(c)) => c.errmsg(),
                 Some(Conn::Postgres(c)) => c.errmsg.clone(),
                 Some(Conn::Mysql(c)) => c.errmsg.clone(),
@@ -1280,6 +1329,8 @@ pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
             match guard.get(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.sqlstate().to_string(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.sqlstate().to_string(),
                 Some(Conn::Sqlite(c)) => c.sqlstate(),
                 Some(Conn::Postgres(c)) => c.sqlstate.clone(),
                 Some(Conn::Mysql(c)) => c.sqlstate.clone(),
@@ -1301,6 +1352,8 @@ pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
         match guard.get(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 1,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(_)) => 1,
             Some(Conn::Sqlite(c)) => c.set_busy_timeout(ms),
             Some(Conn::Postgres(_)) => 1,
             Some(Conn::Mysql(_)) => 1,
@@ -1384,6 +1437,138 @@ pub extern "C" fn elephc_pdo_dblib_os_errmsg(conn_id: i64) -> *const c_char {
     })
 }
 
+/// Applies an integer or boolean PDO_FIREBIRD connection attribute.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_firebird_set_attribute_int(
+    conn_id: i64,
+    attribute: i64,
+    value: i64,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "firebird")]
+        if let Some(Conn::Firebird(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+            return connection.set_attribute_int(attribute, value) as i64;
+        }
+        let _ = (conn_id, attribute, value);
+        0
+    })
+}
+
+/// Applies a textual PDO_FIREBIRD date/time formatting attribute.
+///
+/// # Safety
+/// `value` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_firebird_set_attribute_text(
+    conn_id: i64,
+    attribute: i64,
+    value: *const c_char,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "firebird")]
+        if let (Some(value), Some(Conn::Firebird(connection))) =
+            (cstr_arg(value), lock_recover(conns()).get_mut(&conn_id))
+        {
+            return connection.set_attribute_text(attribute, value.to_string()) as i64;
+        }
+        let _ = (conn_id, attribute, value);
+        0
+    })
+}
+
+/// Reads an integer or boolean PDO_FIREBIRD connection attribute, or `-1` when
+/// the attribute/handle is unsupported.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_firebird_attribute_int(conn_id: i64, attribute: i64) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "firebird")]
+        if let Some(Conn::Firebird(connection)) = lock_recover(conns()).get(&conn_id) {
+            return connection.attribute_int(attribute).unwrap_or(-1);
+        }
+        let _ = (conn_id, attribute);
+        -1
+    })
+}
+
+/// Reads a textual PDO_FIREBIRD date/time formatting attribute. Unsupported
+/// attributes and handles return an empty string.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_firebird_attribute_text(
+    conn_id: i64,
+    attribute: i64,
+) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let value = {
+            #[cfg(feature = "firebird")]
+            if let Some(Conn::Firebird(connection)) = lock_recover(conns()).get(&conn_id) {
+                connection.attribute_text(attribute).unwrap_or_default().to_string()
+            } else {
+                String::new()
+            }
+            #[cfg(not(feature = "firebird"))]
+            String::new()
+        };
+        let _ = (conn_id, attribute);
+        store_cstr(firebird_attribute_cell(), &value)
+    })
+}
+
+/// Returns the PDO parameter type reported by PDO_FIREBIRD `getColumnMeta()` for
+/// one result column, or `2` (`PDO::PARAM_STR`) for unsupported input.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_firebird_column_pdo_type(stmt_id: i64, column: i64) -> i64 {
+    ffi_guard(2, || {
+        #[cfg(feature = "firebird")]
+        if let Some(Stmt::Firebird(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_pdo_type(column);
+        }
+        let _ = (stmt_id, column);
+        2
+    })
+}
+
+/// Stores PDO_FIREBIRD's statement cursor name after enforcing libfbclient's
+/// 31-byte limit.
+///
+/// # Safety
+/// `name` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_firebird_stmt_set_cursor_name(
+    stmt_id: i64,
+    name: *const c_char,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "firebird")]
+        if let (Some(name), Some(Stmt::Firebird(statement))) =
+            (cstr_arg(name), lock_recover(stmts()).get_mut(&stmt_id))
+        {
+            return statement.set_cursor_name(name.to_string()) as i64;
+        }
+        let _ = (stmt_id, name);
+        0
+    })
+}
+
+/// Returns PDO_FIREBIRD's configured statement cursor name, or an empty string
+/// when no cursor name is set or the handle belongs to another driver.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_firebird_stmt_cursor_name(stmt_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let name = {
+            #[cfg(feature = "firebird")]
+            if let Some(Stmt::Firebird(statement)) = lock_recover(stmts()).get(&stmt_id) {
+                statement.cursor_name().unwrap_or_default().to_string()
+            } else {
+                String::new()
+            }
+            #[cfg(not(feature = "firebird"))]
+            String::new()
+        };
+        let _ = stmt_id;
+        store_cstr(firebird_attribute_cell(), &name)
+    })
+}
+
 /// Enables or disables SQLite's extended result codes for a `sqlite:` connection
 /// (`sqlite3_extended_result_codes`), backing
 /// `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` (1002, F-SQLT-02): with it on,
@@ -1431,6 +1616,8 @@ pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
             match guard.get_mut(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.tds_version().to_string(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.server_version(),
                 Some(Conn::Sqlite(c)) => c.server_version(),
                 Some(Conn::Postgres(c)) => c.server_version(),
                 Some(Conn::Mysql(c)) => c.server_version(),
@@ -1453,6 +1640,8 @@ pub extern "C" fn elephc_pdo_client_version(conn_id: i64) -> *const c_char {
             match guard.get(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.client_version(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.client_version(),
                 Some(Conn::Sqlite(c)) => c.client_version(),
                 Some(Conn::Postgres(c)) => c.client_version(),
                 Some(Conn::Mysql(c)) => c.client_version(),
@@ -1475,6 +1664,8 @@ pub extern "C" fn elephc_pdo_server_info(conn_id: i64) -> *const c_char {
             match guard.get_mut(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(_)) => String::new(),
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.server_version(),
                 Some(Conn::Postgres(c)) => c.server_info(),
                 Some(Conn::Mysql(c)) => c.server_info(),
                 Some(Conn::Sqlite(_)) | None => String::new(),
@@ -1492,12 +1683,14 @@ pub extern "C" fn elephc_pdo_server_info(conn_id: i64) -> *const c_char {
 pub extern "C" fn elephc_pdo_connection_status(conn_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
         let status = {
-            let guard = lock_recover(conns());
-            match guard.get(&conn_id) {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => {
                     if c.is_alive() { "Connection OK".to_string() } else { "Connection failed".to_string() }
                 }
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(c)) => c.connection_status(),
                 Some(Conn::Postgres(c)) => c.connection_status(),
                 Some(Conn::Mysql(c)) => c.connection_status(),
                 Some(Conn::Sqlite(_)) | None => String::new(),
@@ -1517,6 +1710,8 @@ pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 0,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(_)) => 0,
             Some(Conn::Postgres(c)) => c.backend_pid(),
             Some(Conn::Sqlite(_)) => 0,
             Some(Conn::Mysql(_)) => 0,
@@ -1535,6 +1730,8 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 0,
+            #[cfg(feature = "firebird")]
+            Some(Conn::Firebird(_)) => 0,
             Some(Conn::Mysql(c)) => c.warning_count(),
             Some(Conn::Sqlite(_)) => 0,
             Some(Conn::Postgres(_)) => 0,
@@ -2077,6 +2274,17 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
                     },
                     None => Err(()),
                 },
+                #[cfg(feature = "firebird")]
+                Some(Conn::Firebird(connection)) => match cstr_arg(sql) {
+                    Some(sql) => match firebird::FirebirdStmt::new(conn_id, sql) {
+                        Ok(statement) => Ok(Stmt::Firebird(statement)),
+                        Err(message) => {
+                            connection.set_error("HY093", message);
+                            Err(())
+                        }
+                    },
+                    None => Err(()),
+                },
                 Some(Conn::Postgres(c)) => match cstr_arg(sql) {
                     Some(s) => match c.prepare(s, emulated != 0) {
                         Ok(mut st) => {
@@ -2126,6 +2334,8 @@ pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *co
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.parameter_index(name),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.parameter_index(name),
             Some(Stmt::Sqlite(s)) => s.bind_parameter_index(name),
             Some(Stmt::Postgres(s)) => s.bind_parameter_index(name),
             Some(Stmt::Mysql(s)) => s.bind_parameter_index(name),
@@ -2143,6 +2353,8 @@ pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_int(idx, val) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.bind_int(idx, val) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_int(idx, val),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Int(val)),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(val)),
@@ -2160,6 +2372,8 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_double(idx, val) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.bind_double(idx, val) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_double(idx, val),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Float(val)),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Float(val)),
@@ -2194,6 +2408,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(
                     s.bind_null(idx) as i64
                 } else {
                     s.bind_text(idx, bytes_arg(val, len), false) as i64
+                }
+            }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len)) as i64
                 }
             }
             Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
@@ -2243,6 +2465,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text_national(
                     s.bind_text(idx, bytes_arg(val, len), true) as i64
                 }
             }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len)) as i64
+                }
+            }
             Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
             Some(Stmt::Postgres(s)) => {
                 let bind = if val.is_null() {
@@ -2276,6 +2506,8 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_null(idx) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.bind_null(idx) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_null(idx),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Null),
@@ -2297,6 +2529,8 @@ pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_int(idx, truthy) as i64,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.bind_int(idx, truthy) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_int(idx, truthy),
             Some(Stmt::Postgres(s)) => {
                 let text = if truthy != 0 { "t" } else { "f" };
@@ -2330,6 +2564,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_blob(
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
+                if ptr.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_blob(idx, bytes_arg(ptr, len)) as i64
+                }
+            }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
                 if ptr.is_null() {
                     s.bind_null(idx) as i64
                 } else {
@@ -2370,6 +2612,11 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
                 s.reset();
                 1
             }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
+                s.reset();
+                1
+            }
             Some(Stmt::Sqlite(s)) => s.reset(),
             Some(Stmt::Postgres(s)) => {
                 let mut connections = lock_recover(conns());
@@ -2398,6 +2645,11 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
         match guard.get_mut(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
+                s.clear_bindings();
+                1
+            }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
                 s.clear_bindings();
                 1
             }
@@ -2440,6 +2692,22 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
                     let mut cguard = lock_recover(conns());
                     match cguard.get_mut(&conn_id) {
                         Some(Conn::Dblib(c)) => {
+                            if s.execute(c).is_err() {
+                                return -1;
+                            }
+                        }
+                        _ => return -1,
+                    }
+                }
+                s.step()
+            }
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => {
+                if s.needs_execute() {
+                    let conn_id = s.conn_id;
+                    let mut cguard = lock_recover(conns());
+                    match cguard.get_mut(&conn_id) {
+                        Some(Conn::Firebird(c)) => {
                             if s.execute(c).is_err() {
                                 return -1;
                             }
@@ -2492,6 +2760,8 @@ pub extern "C" fn elephc_pdo_step_oriented(
             }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(_)) => 0,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(_)) => 0,
             Some(Stmt::Sqlite(_)) | Some(Stmt::Mysql(_)) => 0,
             None => -1,
         }
@@ -2605,6 +2875,10 @@ pub extern "C" fn elephc_pdo_next_rowset(stmt_id: i64) -> i64 {
             }
             return 1;
         }
+        #[cfg(feature = "firebird")]
+        if matches!(sguard.get(&stmt_id), Some(Stmt::Firebird(_))) {
+            return 0;
+        }
         let Some(Stmt::Mysql(statement)) = sguard.get_mut(&stmt_id) else {
             return 0;
         };
@@ -2626,6 +2900,8 @@ pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_count(),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.column_count(),
             Some(Stmt::Sqlite(s)) => s.column_count(),
             Some(Stmt::Postgres(s)) => s.column_count(),
             Some(Stmt::Mysql(s)) => s.column_count(),
@@ -2644,6 +2920,8 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
             match guard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_name(i),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.column_name(i),
                 Some(Stmt::Sqlite(s)) => s.column_name(i),
                 Some(Stmt::Postgres(s)) => s.column_name(i),
                 Some(Stmt::Mysql(s)) => s.column_name(i),
@@ -2664,6 +2942,8 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_type(i),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.column_type(i),
             Some(Stmt::Sqlite(s)) => s.column_type(i),
             Some(Stmt::Postgres(s)) => s.column_type(i),
             Some(Stmt::Mysql(s)) => s.column_type(i),
@@ -2720,6 +3000,8 @@ pub extern "C" fn elephc_pdo_column_native_type(stmt_id: i64, i: i64) -> *const 
             match guard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_native_type(i),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.column_native_type(i),
                 Some(Stmt::Postgres(s)) => s.column_native_type(i),
                 Some(Stmt::Mysql(s)) => s.column_native_type(i),
                 _ => String::new(),
@@ -2741,6 +3023,8 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
             match guard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(_)) => String::new(),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(_)) => String::new(),
                 Some(Stmt::Sqlite(statement)) => statement.column_table_name(i),
                 Some(Stmt::Postgres(statement)) => statement.column_table_name(i),
                 Some(Stmt::Mysql(statement)) => statement.column_table_name(i),
@@ -2827,6 +3111,8 @@ pub extern "C" fn elephc_pdo_column_len(stmt_id: i64, i: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_len(i),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(_)) => -1,
             Some(Stmt::Postgres(s)) => s.column_len(i),
             Some(Stmt::Mysql(s)) => s.column_len(i),
             _ => -1,
@@ -2855,6 +3141,8 @@ pub extern "C" fn elephc_pdo_column_precision(stmt_id: i64, i: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_precision(i),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(_)) => -1,
             Some(Stmt::Postgres(s)) => s.column_precision(i),
             Some(Stmt::Mysql(s)) => s.column_precision(i),
             Some(Stmt::Sqlite(_)) => 0,
@@ -3076,6 +3364,8 @@ pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_int(i),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.column_int(i),
             Some(Stmt::Sqlite(s)) => s.column_int(i),
             Some(Stmt::Postgres(s)) => s.column_int(i),
             Some(Stmt::Mysql(s)) => s.column_int(i),
@@ -3093,6 +3383,8 @@ pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_double(i),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.column_double(i),
             Some(Stmt::Sqlite(s)) => s.column_double(i),
             Some(Stmt::Postgres(s)) => s.column_double(i),
             Some(Stmt::Mysql(s)) => s.column_double(i),
@@ -3113,6 +3405,8 @@ pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
         match guard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_data(i).len() as i64,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Mysql(s)) => s.column_data(i).len() as i64,
@@ -3133,6 +3427,8 @@ pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_c
             match guard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_data(i),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.column_data(i),
                 Some(Stmt::Sqlite(s)) => s.column_data(i),
                 Some(Stmt::Postgres(s)) => s.column_data(i),
                 Some(Stmt::Mysql(s)) => s.column_data(i),
@@ -3156,6 +3452,8 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
             match guard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_data(i),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.column_data(i),
                 Some(Stmt::Sqlite(s)) => s.column_data(i),
                 Some(Stmt::Postgres(s)) => s.column_data(i),
                 Some(Stmt::Mysql(s)) => s.column_data(i),
@@ -3175,6 +3473,8 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
         match lock_recover(stmts()).remove(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(_)) => 1,
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(_)) => 1,
             Some(Stmt::Sqlite(s)) => {
                 s.finalize();
                 1
@@ -3256,6 +3556,8 @@ pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
         match sguard.get(&stmt_id) {
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.errcode(),
+            #[cfg(feature = "firebird")]
+            Some(Stmt::Firebird(s)) => s.errcode(),
             Some(Stmt::Sqlite(s)) => s.errcode(),
             Some(Stmt::Postgres(s)) => {
                 let conn_id = s.conn_id;
@@ -3290,6 +3592,8 @@ pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
             match sguard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.errmsg().to_string(),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.errmsg().to_string(),
                 Some(Stmt::Sqlite(s)) => s.errmsg(),
                 Some(Stmt::Postgres(s)) => {
                     let conn_id = s.conn_id;
@@ -3368,6 +3672,8 @@ pub extern "C" fn elephc_pdo_stmt_sent_sql(stmt_id: i64) -> *const c_char {
             match sguard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.sent_sql.clone(),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.sent_sql.clone(),
                 Some(Stmt::Postgres(s)) => s.sent_sql.clone(),
                 Some(Stmt::Mysql(s)) => s.sent_sql.clone(),
                 Some(Stmt::Sqlite(_)) | None => String::new(),
@@ -3392,6 +3698,8 @@ pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
             match sguard.get(&stmt_id) {
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.sqlstate().to_string(),
+                #[cfg(feature = "firebird")]
+                Some(Stmt::Firebird(s)) => s.sqlstate().to_string(),
                 Some(Stmt::Sqlite(s)) => s.sqlstate(),
                 Some(Stmt::Postgres(s)) => {
                     let conn_id = s.conn_id;
@@ -3502,11 +3810,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v49 exposes
-    /// the optional DBLIB backend and driver-specific live attributes.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v50 exposes
+    /// the optional Firebird backend and driver-specific live attributes.
     #[test]
-    fn version_is_v49() {
-        assert_eq!(elephc_pdo_version(), 49);
+    fn version_is_v50() {
+        assert_eq!(elephc_pdo_version(), 50);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

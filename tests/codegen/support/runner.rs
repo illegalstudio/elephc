@@ -21,6 +21,11 @@ fn pdo_dblib_enabled() -> bool {
     cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
 }
 
+/// Reports whether codegen fixtures should build the pure-Rust Firebird PDO profile.
+fn pdo_firebird_enabled() -> bool {
+    cfg!(feature = "pdo-firebird") || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some()
+}
+
 /// Describes a Rust bridge staticlib needed by codegen integration fixtures.
 struct TestBridgeStaticlib {
     /// Linker library name requested by the compiled program.
@@ -175,8 +180,12 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         let requires_dblib_profile = bridge.lib_name == "elephc_pdo"
             && pdo_dblib_enabled()
             && DBLIB_BRIDGE_BUILT.get().is_none();
+        let requires_firebird_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_firebird_enabled()
+            && FIREBIRD_BRIDGE_BUILT.get().is_none();
         if !requires_libpq_profile
             && !requires_dblib_profile
+            && !requires_firebird_profile
             && !bridge_staticlib_needs_build(&archive_path, bridge.package)
         {
             continue;
@@ -191,6 +200,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             }
             if pdo_dblib_enabled() {
                 features.push("dblib");
+            }
+            if pdo_firebird_enabled() {
+                features.push("firebird");
             }
             if !features.is_empty() {
                 command.args(["--features", &features.join(",")]);
@@ -221,6 +233,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         }
         if requires_dblib_profile {
             let _ = DBLIB_BRIDGE_BUILT.set(());
+        }
+        if requires_firebird_profile {
+            let _ = FIREBIRD_BRIDGE_BUILT.set(());
         }
     }
 }

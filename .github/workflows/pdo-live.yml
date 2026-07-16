@@ -31,7 +31,7 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -78,6 +78,20 @@ jobs:
           --health-timeout 10s
           --health-retries 30
 
+      firebird:
+        image: firebirdsql/firebird:5.0.4-trixie
+        env:
+          FIREBIRD_ROOT_PASSWORD: Elephc_Firebird!2026_Test
+          FIREBIRD_DATABASE: elephc.fdb
+          FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+        ports:
+          - 3050:3050
+        options: >-
+          --health-cmd "bash -c '</dev/tcp/127.0.0.1/3050'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
     env:
       # ONE family of variables now drives BOTH live suites. The codegen suites
       # (tests/codegen/pdo_pgsql.rs, tests/codegen/pdo_mysql.rs) read these names
@@ -90,6 +104,7 @@ jobs:
       ELEPHC_MY_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
       ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
       ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
+      ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
       # or dropped from this job would make a live test that executed NOTHING look
@@ -299,3 +314,14 @@ jobs:
         env:
           ELEPHC_PDO_DBLIB: '1'
         run: cargo test --features pdo-dblib --test codegen_tests -- --ignored pdo_dblib --test-threads=1
+
+      - name: Build the pure-Rust PDO_FIREBIRD bridge staticlib
+        run: cargo build -p elephc-pdo --features firebird
+
+      - name: Live Firebird bridge tests (in-crate, elephc-pdo)
+        run: 'cargo test -p elephc-pdo --features firebird firebird::tests:: -- --ignored --test-threads=1'
+
+      - name: Live Firebird codegen tests (PDO_FIREBIRD)
+        env:
+          ELEPHC_PDO_FIREBIRD: '1'
+        run: cargo test --features pdo-firebird --test codegen_tests -- --ignored pdo_firebird --test-threads=1

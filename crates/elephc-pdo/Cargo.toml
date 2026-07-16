@@ -39,6 +39,10 @@ chrono = "0.4"
 serde_json = "1"
 uuid = "1"
 rust_decimal = { version = "1", features = ["db-postgres"] }
+# Optional pure-Rust Firebird wire client. php-src uses libfbclient, but the
+# protocol-backed profile keeps elephc's supported target matrix standalone
+# while preserving PDO_FIREBIRD's SQL, transaction, and scalar semantics.
+rsfbclient = { version = "0.27", default-features = false, features = ["pure_rust"], optional = true }
 # The synchronous, pure-Rust MySQL/MariaDB client. `default-features = false` with
 # `minimal-rust` drops the optional TLS backends and selects flate2's pure-Rust
 # (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
@@ -84,3 +88,4 @@ libpq-gss = ["dep:libpq"]
 # The default bridge remains system-client-free; final binaries using this
 # profile must also link `libsybdb`.
 dblib = []
+firebird = ["dep:rsfbclient"]

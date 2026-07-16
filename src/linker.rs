@@ -22,6 +22,11 @@ fn pdo_dblib_enabled() -> bool {
     cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
 }
 
+/// Reports whether the optional pure-Rust Firebird PDO profile is selected.
+fn pdo_firebird_enabled() -> bool {
+    cfg!(feature = "pdo-firebird") || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some()
+}
+
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
 /// wrapper or PDO). Each entry in [`BRIDGES`] fully describes how to locate and
@@ -181,7 +186,9 @@ impl BridgeStaticlib {
         // link and the PDO archive profile. Cargo's no-op rebuild is cheap and
         // prevents a previously built default archive from being reused by mistake.
         if self.lib_name == "elephc_pdo"
-            && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() || pdo_dblib_enabled())
+            && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+                || pdo_dblib_enabled()
+                || pdo_firebird_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
                 if !self.build_staticlib(&workspace) {
@@ -251,6 +258,9 @@ impl BridgeStaticlib {
             }
             if pdo_dblib_enabled() {
                 features.push("dblib");
+            }
+            if pdo_firebird_enabled() {
+                features.push("firebird");
             }
             if !features.is_empty() {
                 cmd.args(["--features", &features.join(",")]);

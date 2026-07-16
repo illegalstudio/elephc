@@ -146,6 +146,14 @@ extern "elephc_pdo" {
     function elephc_pdo_dblib_stmt_os_errcode(int $stmt): int;
     function elephc_pdo_dblib_stmt_severity(int $stmt): int;
     function elephc_pdo_dblib_stmt_os_errmsg(int $stmt): string;
+    // v50: optional PDO_FIREBIRD connection attributes.
+    function elephc_pdo_firebird_set_attribute_int(int $conn, int $attribute, int $value): int;
+    function elephc_pdo_firebird_set_attribute_text(int $conn, int $attribute, string $value): int;
+    function elephc_pdo_firebird_attribute_int(int $conn, int $attribute): int;
+    function elephc_pdo_firebird_attribute_text(int $conn, int $attribute): string;
+    function elephc_pdo_firebird_column_pdo_type(int $stmt, int $column): int;
+    function elephc_pdo_firebird_stmt_set_cursor_name(int $stmt, string $name): int;
+    function elephc_pdo_firebird_stmt_cursor_name(int $stmt): string;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -1136,6 +1144,11 @@ class PDO {
     const DBLIB_ATTR_SKIP_EMPTY_ROWSETS = 1005;
     const DBLIB_ATTR_DATETIME_CONVERT = 1006;
     // -- elephc optional PDO_DBLIB aliases end --
+    // -- elephc optional PDO_FIREBIRD aliases begin --
+    const FB_ATTR_DATE_FORMAT = 1000;
+    const FB_ATTR_TIME_FORMAT = 1001;
+    const FB_ATTR_TIMESTAMP_FORMAT = 1002;
+    // -- elephc optional PDO_FIREBIRD aliases end --
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
@@ -1339,6 +1352,9 @@ class PDO {
         } elseif (str_starts_with($dsn, "dblib:")) {
             $_dsnDriver = "dblib";
             $_dsnClass = "Pdo\\Dblib";
+        } elseif (str_starts_with($dsn, "firebird:")) {
+            $_dsnDriver = "firebird";
+            $_dsnClass = "Pdo\\Firebird";
         }
         if ($_dsnDriver === "") {
             return;
@@ -1586,14 +1602,15 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
-            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || !str_contains($_dsn, "user="))) {
+            $_dsnIsFirebird = str_starts_with($_dsn, "firebird:");
+            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || !str_contains($_dsn, "user="))) {
                 $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
                 $_dsn = $_dsn . ";user=" . $_encUser;
             }
-            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || !str_contains($_dsn, "password="))) {
+            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || !str_contains($_dsn, "password="))) {
                 $_encPass = str_replace(";", "%3B", str_replace("%", "%25", $password));
                 $_dsn = $_dsn . ";password=" . $_encPass;
             }
@@ -1711,6 +1728,20 @@ class PDO {
             }
         } elseif (str_starts_with($_dsn, "pgsql:") && isset($this->attributes[1])) {
             elephc_pdo_set_prefetch($this->conn, $this->attrBoolValue($this->attributes[1]) ? 1 : 0);
+        } elseif (str_starts_with($_dsn, "firebird:")) {
+            foreach ([0, 14, 1003, 1007] as $_firebirdIntAttribute) {
+                if (isset($this->attributes[$_firebirdIntAttribute])) {
+                    $_firebirdValue = ($_firebirdIntAttribute == 0 || $_firebirdIntAttribute == 14 || $_firebirdIntAttribute == 1007)
+                        ? ($this->attrBoolValue($this->attributes[$_firebirdIntAttribute]) ? 1 : 0)
+                        : $this->attrIntValue($this->attributes[$_firebirdIntAttribute]);
+                    elephc_pdo_firebird_set_attribute_int($this->conn, $_firebirdIntAttribute, $_firebirdValue);
+                }
+            }
+            foreach ([1000, 1001, 1002] as $_firebirdTextAttribute) {
+                if (isset($this->attributes[$_firebirdTextAttribute])) {
+                    elephc_pdo_firebird_set_attribute_text($this->conn, $_firebirdTextAttribute, (string) $this->attributes[$_firebirdTextAttribute]);
+                }
+            }
         }
         // ATTR_TIMEOUT needs a live connection, so apply it after the open (the
         // pre-open loop only records it). PHP's value is in seconds; SQLite's
@@ -1988,6 +2019,12 @@ class PDO {
                 return false;
             }
             $this->autoCommit = $_autocommit;
+        } elseif ($attribute == 0 && $_driver === "firebird") {
+            $_autocommit = $this->attrBoolValue($value);
+            if (elephc_pdo_firebird_set_attribute_int($this->conn, 0, $_autocommit ? 1 : 0) !== 1) {
+                return false;
+            }
+            $this->autoCommit = $_autocommit;
         } elseif ($attribute == 3) {
             // F-CORE-03: the shape check runs BEFORE the range check, exactly as
             // php-src's pdo_get_long_param() does — see attrIntValue() for why a
@@ -2071,6 +2108,13 @@ class PDO {
                 return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrIntValue($value)) === 1;
             }
             return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrBoolValue($value) ? 1 : 0) === 1;
+        } elseif (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && $_driver === "firebird") {
+            return elephc_pdo_firebird_set_attribute_text($this->conn, $attribute, (string) $value) === 1;
+        } elseif (($attribute == 14 || $attribute == 1003 || $attribute == 1007) && $_driver === "firebird") {
+            $_firebirdValue = ($attribute == 14 || $attribute == 1007)
+                ? ($this->attrBoolValue($value) ? 1 : 0)
+                : $this->attrIntValue($value);
+            return elephc_pdo_firebird_set_attribute_int($this->conn, $attribute, $_firebirdValue) === 1;
         } else {
             // F-CORE-04 (CORRECTED — the finalization spec was WRONG about this, and an
             // earlier pass implemented the spec's version): an UNKNOWN attribute number
@@ -2111,6 +2155,15 @@ class PDO {
     protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
+        if (($attribute == 0 || $attribute == 14 || $attribute == 1003 || $attribute == 1007) && elephc_pdo_driver_name($this->conn) === "firebird") {
+            $_firebirdValue = elephc_pdo_firebird_attribute_int($this->conn, $attribute);
+            if ($_firebirdValue >= 0) {
+                return ($attribute == 0 || $attribute == 14 || $attribute == 1007) ? ($_firebirdValue === 1) : $_firebirdValue;
+            }
+        }
+        if (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && elephc_pdo_driver_name($this->conn) === "firebird") {
+            return elephc_pdo_firebird_attribute_text($this->conn, $attribute);
+        }
         if ($attribute == 0 && elephc_pdo_driver_name($this->conn) === "mysql") {
             return elephc_pdo_autocommit($this->conn) === 1;
         }
@@ -2131,6 +2184,9 @@ class PDO {
         }
         if ($attribute == 16) {
             return elephc_pdo_driver_name($this->conn);
+        }
+        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) === "firebird") {
+            return elephc_pdo_connection_status($this->conn) === "1";
         }
         if ($attribute == 19) {
             return $this->defaultFetchMode;
@@ -2497,6 +2553,13 @@ class PDO {
             $_driverStatus = 4;
         }
         // -- elephc optional PDO_DBLIB connect dispatch end --
+        // -- elephc optional PDO_FIREBIRD connect dispatch begin --
+        elseif (str_starts_with($_dsn, "firebird:")) {
+            $_driver = "firebird";
+            $_driverClass = "Pdo\\Firebird";
+            $_driverStatus = 5;
+        }
+        // -- elephc optional PDO_FIREBIRD connect dispatch end --
         if ($_driver === "") {
             if ($calledStatus === 0) {
                 throw new PDOException("could not find driver");
@@ -2519,8 +2582,13 @@ class PDO {
             return new \Pdo\Pgsql($_dsn, $username, $password, $options);
         }
         // -- elephc optional PDO_DBLIB connect construction begin --
-        return new \Pdo\Dblib($_dsn, $username, $password, $options);
+        if ($_driverStatus === 4) {
+            return new \Pdo\Dblib($_dsn, $username, $password, $options);
+        }
         // -- elephc optional PDO_DBLIB connect construction end --
+        // -- elephc optional PDO_FIREBIRD connect construction begin --
+        return new \Pdo\Firebird($_dsn, $username, $password, $options);
+        // -- elephc optional PDO_FIREBIRD connect construction end --
     }
     // -- elephc PHP >= 8.4 PDO::connect end --
 
@@ -4745,6 +4813,10 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function getAttribute(int $name): mixed {
+        if ($name == 9 && elephc_pdo_driver_name($this->conn) === "firebird") {
+            $_cursorName = elephc_pdo_firebird_stmt_cursor_name($this->stmt);
+            return $_cursorName === "" ? null : $_cursorName;
+        }
         if ($name == 1001 && elephc_pdo_driver_name($this->conn) === "pgsql") {
             $this->hasOperation = true;
             $_memory = elephc_pdo_result_memory_size($this->stmt);
@@ -4783,6 +4855,13 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function setAttribute(int $attribute, mixed $value): bool {
+        if ($attribute == 9 && elephc_pdo_driver_name($this->conn) === "firebird") {
+            $_cursorName = (string) $value;
+            if (strlen($_cursorName) > 31) {
+                throw new ValueError("Cursor name must not be longer than 31 bytes");
+            }
+            return elephc_pdo_firebird_stmt_set_cursor_name($this->stmt, $_cursorName) === 1;
+        }
         if ($attribute == 1004 && elephc_pdo_driver_name($this->conn) === "sqlite") {
             if (!is_int($value)) {
                 throw new TypeError("explain mode must be of type int, " . $this->argValueTypeName($value) . " given");
@@ -4937,6 +5016,9 @@ class PDOStatement implements IteratorAggregate {
             return $_pgMeta;
         }
         $_driver = elephc_pdo_driver_name($this->conn);
+        if ($_driver === "firebird") {
+            return ["pdo_type" => elephc_pdo_firebird_column_pdo_type($this->stmt, $column)];
+        }
         if ($_driver === "dblib") {
             $_dblibNativeId = elephc_pdo_dblib_column_native_type_id($this->stmt, $column);
             $_dblibPdoType = 2;
@@ -5245,6 +5327,31 @@ namespace Pdo {
         }
     }
     // -- elephc optional PDO_DBLIB class end --
+
+    // -- elephc optional PDO_FIREBIRD class begin --
+    class Firebird extends \PDO {
+        const ATTR_DATE_FORMAT = 1000;
+        const ATTR_TIME_FORMAT = 1001;
+        const ATTR_TIMESTAMP_FORMAT = 1002;
+        const TRANSACTION_ISOLATION_LEVEL = 1003;
+        const READ_COMMITTED = 1004;
+        const REPEATABLE_READ = 1005;
+        const SERIALIZABLE = 1006;
+        const WRITABLE_TRANSACTION = 1007;
+
+        public function __construct(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null) {
+            $_operation = get_class($this) . "::__construct";
+            $_firebirdDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_firebirdDsn = self::resolveDsnUri($_firebirdDsn, $_operation);
+            $this->checkDriverSubclassDsn($_firebirdDsn, "Pdo\\Firebird", "firebird");
+            parent::__construct($_firebirdDsn, $username, $password, $options);
+        }
+
+        public static function getApiVersion(): int {
+            return 40;
+        }
+    }
+    // -- elephc optional PDO_FIREBIRD class end --
 
     class Sqlite extends \PDO {
         // SQLite driver-specific constants (ext/pdo_sqlite). ATTR_* start at
@@ -5883,10 +5990,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
                 "    // -- elephc optional PDO_DBLIB class end --",
             );
         }
-        return;
-    }
-
-    if php_version >= PhpVersion::Php85 {
+    } else if php_version >= PhpVersion::Php85 {
         for (legacy_name, namespaced_name) in [
             ("DBLIB_ATTR_CONNECTION_TIMEOUT", "ATTR_CONNECTION_TIMEOUT"),
             ("DBLIB_ATTR_QUERY_TIMEOUT", "ATTR_QUERY_TIMEOUT"),
@@ -5903,6 +6007,49 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
             *source = source.replacen(
                 &format!("    const {legacy_name} ="),
                 &format!("    #[\\Deprecated(\"use Pdo\\\\Dblib::{namespaced_name} instead\")]\n    const {legacy_name} ="),
+                1,
+            );
+        }
+    }
+
+    let firebird_enabled = cfg!(feature = "pdo-firebird")
+        || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some();
+    if !firebird_enabled {
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_FIREBIRD aliases begin --",
+            "    // -- elephc optional PDO_FIREBIRD aliases end --",
+        );
+        if php_version >= PhpVersion::Php84 {
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_FIREBIRD connect dispatch begin --",
+                "        // -- elephc optional PDO_FIREBIRD connect dispatch end --",
+            );
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_FIREBIRD connect construction begin --",
+                "        // -- elephc optional PDO_FIREBIRD connect construction end --",
+            );
+            remove_version_block(
+                source,
+                "    // -- elephc optional PDO_FIREBIRD class begin --",
+                "    // -- elephc optional PDO_FIREBIRD class end --",
+            );
+        }
+    } else if php_version >= PhpVersion::Php85 {
+        for (legacy_name, namespaced_name) in [
+            ("FB_ATTR_DATE_FORMAT", "ATTR_DATE_FORMAT"),
+            ("FB_ATTR_TIME_FORMAT", "ATTR_TIME_FORMAT"),
+            ("FB_ATTR_TIMESTAMP_FORMAT", "ATTR_TIMESTAMP_FORMAT"),
+        ] {
+            assert!(
+                source.contains(&format!("    const {legacy_name} =")),
+                "missing PDO_FIREBIRD alias {legacy_name}"
+            );
+            *source = source.replacen(
+                &format!("    const {legacy_name} ="),
+                &format!("    #[\\Deprecated(\"use Pdo\\\\Firebird::{namespaced_name} instead\")]\n    const {legacy_name} ="),
                 1,
             );
         }
@@ -6043,6 +6190,27 @@ mod version_tests {
 
         let php85 = prelude_source_for_version(PhpVersion::Php85);
         assert!(php85.contains("#[\\Deprecated(\"use Pdo\\\\Dblib::ATTR_CONNECTION_TIMEOUT instead\")]"));
+    }
+
+    /// PDO_FIREBIRD keeps its three legacy aliases on old targets, adds the
+    /// namespaced driver in PHP 8.4, and deprecates only those aliases in 8.5.
+    #[cfg(feature = "pdo-firebird")]
+    #[test]
+    fn firebird_surface_and_alias_deprecations_are_version_gated() {
+        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        assert!(php83.contains("const FB_ATTR_DATE_FORMAT = 1000;"));
+        assert!(!php83.contains("class Firebird extends \\PDO"));
+
+        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        assert!(php84.contains("class Firebird extends \\PDO"));
+        assert!(php84.contains("public static function getApiVersion(): int"));
+        assert!(!php84.contains("use Pdo\\Firebird::ATTR_DATE_FORMAT instead"));
+
+        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        assert!(php85.contains(
+            "#[\\Deprecated(\"use Pdo\\\\Firebird::ATTR_DATE_FORMAT instead\")]"
+        ));
+        assert!(!php85.contains("const FB_TRANSACTION_ISOLATION_LEVEL"));
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while
