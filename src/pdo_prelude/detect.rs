@@ -11,8 +11,8 @@
 //! - Runs before name resolution, so `Name`s are raw source text: a reference may
 //!   be written `PDO`, `\PDO`, or `\Some\PDO`, and PHP class names are
 //!   case-insensitive. The walk therefore matches the unqualified last segment
-//!   case-insensitively. The PHP 8.4 driver subclasses `Pdo\Sqlite`, `Pdo\Mysql`,
-//!   and `Pdo\Pgsql` are additionally matched as two-segment `Pdo\<driver>` names
+//!   case-insensitively. PHP 8.4 driver subclasses, including optional `Pdo\Dblib`,
+//!   are additionally matched as two-segment `Pdo\<driver>` names
 //!   so that a program referencing only a subclass still injects the prelude.
 //! - Soundness over precision: a missed reference would drop the prelude and break
 //!   compilation, so the `match`es are exhaustive (no wildcard arm). Adding an AST
@@ -62,7 +62,7 @@ fn name_is_pdo_drivers(name: &Name) -> bool {
 }
 
 /// Returns whether `name` denotes one of PHP 8.4's `Pdo\` driver subclasses
-/// (`Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`). Matched only as a two-segment name
+/// (`Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, `Pdo\Dblib`). Matched only as a two-segment name
 /// whose namespace segment is `Pdo` and short name is a driver, both compared
 /// case-insensitively, so `Pdo\Sqlite` and `\Pdo\Mysql` are recognized while an
 /// unrelated `App\Sqlite` or a deeper `Vendor\Pdo\Sqlite` is not. Injecting the
@@ -75,7 +75,8 @@ fn name_is_pdo_driver_subclass(name: &Name) -> bool {
             if namespace.eq_ignore_ascii_case("Pdo")
                 && (driver.eq_ignore_ascii_case("Sqlite")
                     || driver.eq_ignore_ascii_case("Mysql")
-                    || driver.eq_ignore_ascii_case("Pgsql"))
+                    || driver.eq_ignore_ascii_case("Pgsql")
+                    || driver.eq_ignore_ascii_case("Dblib"))
     )
 }
 
@@ -645,6 +646,14 @@ mod tests {
     fn detects_driver_subclass_case_insensitive() {
         assert!(program_uses_pdo(&parse(
             r#"<?php $db = new \pdo\PGSQL("pgsql:host=localhost");"#
+        )));
+    }
+
+    /// The optional PHP 8.4 DBLIB subclass also triggers PDO prelude injection.
+    #[test]
+    fn detects_dblib_driver_subclass() {
+        assert!(program_uses_pdo(&parse(
+            r#"<?php $db = new Pdo\Dblib("dblib:host=localhost");"#
         )));
     }
 

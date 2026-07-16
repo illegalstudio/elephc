@@ -11,6 +11,8 @@
 /// Identifies a PDO backend compiled into this bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DriverKind {
+    #[cfg(feature = "dblib")]
+    Dblib,
     Mysql,
     Pgsql,
     Sqlite,
@@ -18,6 +20,8 @@ pub(crate) enum DriverKind {
 
 /// Drivers exposed to PHP, in the stable order used by the existing bridge.
 pub(crate) const AVAILABLE: &[DriverKind] = &[
+    #[cfg(feature = "dblib")]
+    DriverKind::Dblib,
     DriverKind::Mysql,
     DriverKind::Pgsql,
     DriverKind::Sqlite,
@@ -27,6 +31,8 @@ impl DriverKind {
     /// Returns the lowercase PDO driver name exposed by PHP.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            #[cfg(feature = "dblib")]
+            Self::Dblib => "dblib",
             Self::Mysql => "mysql",
             Self::Pgsql => "pgsql",
             Self::Sqlite => "sqlite",
@@ -36,6 +42,8 @@ impl DriverKind {
     /// Returns the DSN prefix, including its separating colon.
     pub(crate) const fn dsn_prefix(self) -> &'static str {
         match self {
+            #[cfg(feature = "dblib")]
+            Self::Dblib => "dblib:",
             Self::Mysql => "mysql:",
             Self::Pgsql => "pgsql:",
             Self::Sqlite => "sqlite:",
@@ -59,7 +67,10 @@ mod tests {
     #[test]
     fn available_driver_order_is_stable() {
         let names: Vec<_> = AVAILABLE.iter().map(|driver| driver.name()).collect();
+        #[cfg(not(feature = "dblib"))]
         assert_eq!(names, ["mysql", "pgsql", "sqlite"]);
+        #[cfg(feature = "dblib")]
+        assert_eq!(names, ["dblib", "mysql", "pgsql", "sqlite"]);
     }
 
     /// Dispatches only exact lowercase PDO prefixes followed by a colon.
@@ -68,6 +79,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("sqlite::memory:"), Some(DriverKind::Sqlite));
         assert_eq!(DriverKind::from_dsn("pgsql:host=localhost"), Some(DriverKind::Pgsql));
         assert_eq!(DriverKind::from_dsn("mysql:host=localhost"), Some(DriverKind::Mysql));
+        #[cfg(feature = "dblib")]
+        assert_eq!(DriverKind::from_dsn("dblib:host=localhost"), Some(DriverKind::Dblib));
         assert_eq!(DriverKind::from_dsn("SQLite::memory:"), None);
         assert_eq!(DriverKind::from_dsn("sqlite"), None);
     }

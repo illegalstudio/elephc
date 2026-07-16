@@ -1,20 +1,21 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with the SQLite, PostgreSQL, and MySQL/MariaDB drivers: connections, prepared statements, fetch modes, transactions, and the divergences from php-src worth knowing about."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, and optional FreeTDS PDO_DBLIB: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
 
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
-**SQLite**, **PostgreSQL**, and **MySQL / MariaDB** drivers. `PDO`, `PDOStatement`,
-and `PDOException` behave like their PHP counterparts for everyday use: connect,
-execute, prepare/bind, fetch, and run transactions. The DSN prefix selects the driver,
-so the same code works against any of the databases.
+**SQLite**, **PostgreSQL**, **MySQL / MariaDB**, and optional **FreeTDS
+PDO_DBLIB** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
+transactions. The DSN prefix selects the driver.
 
-Every driver is linked statically (SQLite is bundled; PostgreSQL and MySQL use
-pure-Rust clients), so a compiled PDO binary has **no system database-client
-dependency** — it runs anywhere the elephc binary runs. SQLite runs in-process;
-PostgreSQL and MySQL connect to a running server over the network.
+The default drivers are linked statically (SQLite is bundled; PostgreSQL and MySQL
+use pure-Rust clients), so their compiled PDO binaries have **no system
+database-client dependency**. The optional DBLIB profile deliberately follows PHP
+and links the target platform's FreeTDS `libsybdb`; the resulting binary therefore
+needs a compatible system client at build and runtime.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -34,7 +35,7 @@ Patch versions and values outside this range are rejected.
 | 8.0 | Core classes and legacy SQLite/PostgreSQL driver methods; no public `queryString`, namespaced driver classes, or `PDO::connect()`. |
 | 8.1 | Public `PDOStatement::$queryString` and `PDORow::$queryString`. |
 | 8.2–8.3 | Password parameters carry `#[SensitiveParameter]`; otherwise the 8.1 PDO surface. |
-| 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`; historical high-bit fetch flags. |
+| 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, plus `Pdo\Dblib` when DBLIB is enabled; historical high-bit fetch flags. |
 | 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, plus PostgreSQL transaction-constant deprecations. |
 | 8.6 | The 8.5 public surface plus PostgreSQL persistent-session cleanup with `DISCARD ALL` when the final owner releases a pooled handle. |
 
@@ -56,9 +57,13 @@ $pg = new PDO("pgsql:host=localhost;dbname=app", "me", "secret");
 // MySQL / MariaDB — credentials in the DSN or as constructor arguments.
 $my = new PDO("mysql:host=127.0.0.1;port=3306;dbname=app;user=me;password=secret");
 $my = new PDO("mysql:host=127.0.0.1;dbname=app", "me", "secret");
+
+// SQL Server / Sybase through the optional FreeTDS PDO_DBLIB profile.
+$tds = new PDO("dblib:host=127.0.0.1;port=1433;dbname=app", "sa", "secret");
 ```
 
-The DSN normally starts with `sqlite:`, `pgsql:`, or `mysql:`. A colonless value may
+The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
+`dblib:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -98,6 +103,8 @@ colon throws a `PDOException`.
 - **MySQL / MariaDB**: the **constructor argument wins** over a DSN key. `new
   PDO("mysql:host=h;user=readonly", "admin", $pw)` connects as `admin`, exactly as in
   real PHP.
+- **DBLIB**: like php-src, constructor credentials become the DB-Library login
+  credentials and take precedence over credentials embedded in the DSN.
 
 ### Persistent connections
 
@@ -319,6 +326,9 @@ validates the argument before any driver dispatch).
 - **MySQL** reports its wire type (`LONG`, `VAR_STRING`, `NEWDECIMAL`, …), PDO type,
   source table, declared length/precision, and native flags such as `not_null`,
   `primary_key`, `multiple_key`, `unique_key`, and `blob`.
+- **DBLIB** reports php-src's exact DB-Library descriptor keys: `max_length`,
+  `precision`, `scale`, `column_source`, `native_type`, `native_type_id`,
+  `native_usertype_id`, and `pdo_type`.
 
 ### `FETCH_GROUP` and `FETCH_UNIQUE`
 
@@ -374,20 +384,26 @@ relationship matches PHP.
 | Attribute | Behavior |
 | --- | --- |
 | `ATTR_ERRMODE` | Silent / Warning / Exception (default). |
-| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, or `"mysql"`. |
+| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, `"mysql"`, or optional `"dblib"`. |
 | `ATTR_PERSISTENT` | Pool selection (constructor only, in practice). |
-| `ATTR_TIMEOUT` | Seconds. SQLite: busy-timeout. pgsql/mysql: folded into the DSN as `connect_timeout`, bounding the initial connect. |
+| `ATTR_TIMEOUT` | Seconds. SQLite: busy-timeout. pgsql/mysql: initial connect timeout. DBLIB: login and query timeout unless a DBLIB-specific timeout overrides it. |
 | `ATTR_DEFAULT_FETCH_MODE` | Mode used by a no-argument `fetch()`; inherited by statements at `prepare()` time. |
-| `ATTR_SERVER_VERSION` | The server's version string. |
-| `ATTR_CLIENT_VERSION` | SQLite's embedded library version; PostgreSQL/MySQL report the statically linked pure-Rust client implementation and version. |
+| `ATTR_SERVER_VERSION` | The server's version string for the default drivers. DBLIB follows IM001 and exposes negotiated TDS through its driver-specific attribute. |
+| `ATTR_CLIENT_VERSION` | SQLite's embedded library version; PostgreSQL/MySQL report the statically linked pure-Rust client implementation and version. DBLIB follows IM001 and exposes FreeTDS through its driver-specific attribute. |
 | `ATTR_SERVER_INFO` | PostgreSQL: live PID/session parameters. MySQL: live server statistics. SQLite follows IM001. |
 | `ATTR_CONNECTION_STATUS` | PostgreSQL: live connected/closed status in libpq's wording. MySQL: actual TCP/socket transport description. SQLite follows IM001. |
 | `ATTR_CASE` | Folds fetched column-name keys upper/lowercase. |
 | `ATTR_ORACLE_NULLS` | Folds `NULL` ↔ `""` in fetched scalar values. |
 | `ATTR_STRINGIFY_FETCHES` | Stringifies fetched INTEGER/FLOAT values. |
-| `ATTR_EMULATE_PREPARES` | MySQL text protocol (default `true`) or PostgreSQL simple-query protocol (default `false`). SQLite rejects it. |
+| `ATTR_EMULATE_PREPARES` | MySQL text protocol (default `true`) or PostgreSQL simple-query protocol (default `false`). DBLIB is read-only `true`, because DB-Library has no native prepare API. SQLite rejects it. |
 | `ATTR_AUTOCOMMIT` | Live MySQL session autocommit state. |
-| `ATTR_DEFAULT_STR_PARAM` | MySQL default `PARAM_STR_CHAR`/`PARAM_STR_NATL` string binding. |
+| `ATTR_DEFAULT_STR_PARAM` | MySQL and DBLIB default `PARAM_STR_CHAR`/`PARAM_STR_NATL` string binding. |
+| `Pdo\Dblib::ATTR_CONNECTION_TIMEOUT` | Constructor-only DB-Library login timeout in seconds. |
+| `Pdo\Dblib::ATTR_QUERY_TIMEOUT` | Constructor and live query timeout in seconds; write-only, matching php-src. |
+| `Pdo\Dblib::ATTR_STRINGIFY_UNIQUEIDENTIFIER` | Returns SQL Server `uniqueidentifier` values as uppercase canonical strings instead of 16 raw bytes. |
+| `Pdo\Dblib::ATTR_VERSION` / `ATTR_TDS_VERSION` | FreeTDS client version and negotiated TDS protocol version (read-only). |
+| `Pdo\Dblib::ATTR_SKIP_EMPTY_ROWSETS` | Omits DB-Library results without columns while traversing `nextRowset()`. |
+| `Pdo\Dblib::ATTR_DATETIME_CONVERT` | Selects FreeTDS text conversion; disabled uses php-src's fixed `YYYY-MM-DD HH:MM:SS` representation. |
 | `Pdo\Sqlite::ATTR_OPEN_FLAGS` | Raw `sqlite3_open_v2` flags at open time. A `file:` DSN body always gets `SQLITE_OPEN_URI` OR-ed in. |
 | `Pdo\Sqlite::ATTR_READONLY_STATEMENT` | Live `sqlite3_stmt_readonly()` read (statement-level). |
 | `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` | Wired: with it on, `errorInfo()[1]` is the *extended* code (`2067` SQLITE_CONSTRAINT_UNIQUE, not the coarse `19`). Write-only, exactly as in php-src — `getAttribute()` follows IM001. |
@@ -525,10 +541,43 @@ The MySQL driver behaves like the others, with a few database-specific points:
 - **Connect timeout.** Defaults to **30 s** (php-src's `PDO::ATTR_TIMEOUT` default) when
   neither the DSN's `connect_timeout` key nor `ATTR_TIMEOUT` supplies one.
 
+## FreeTDS PDO_DBLIB notes
+
+PDO_DBLIB is an optional system-client profile because php-src itself delegates this
+driver to DB-Library. Install FreeTDS (`brew install freetds` on macOS or
+`apt install freetds-dev` on Debian/Ubuntu), then compile with:
+
+```bash
+cargo run --features pdo-dblib -- app.php
+```
+
+The profile makes `dblib:` available through `PDO::getAvailableDrivers()`, enables
+the legacy `PDO::DBLIB_ATTR_*` constants on every supported PHP compatibility target,
+and adds `Pdo\Dblib` on PHP 8.4+. PHP 8.5 marks the legacy aliases deprecated and
+points callers to the namespaced constants, matching php-src's stubs.
+
+- **DSN.** `host`, `dbname`, `charset`, `appname`, `user`, and `password` follow
+  PDO_DBLIB. `port` is accepted as a direct FreeTDS login property for local and CI
+  instances that do not use a `freetds.conf` server alias.
+- **Prepared statements.** DB-Library has no native prepare API. Placeholders are
+  scanned and safely rendered as T-SQL literals; mixed named/positional styles and
+  missing binds fail with HY093. `ATTR_EMULATE_PREPARES` is consequently fixed at
+  `true` and attempting to disable it returns `false`.
+- **Results.** Every `dbresults()` result is materialized and exposed through
+  `nextRowset()`. `ATTR_SKIP_EMPTY_ROWSETS` controls whether results without columns
+  remain visible. Integer/float/binary types retain their PHP scalar shapes;
+  `uniqueidentifier` and datetime conversion follow the driver attributes above.
+- **Native diagnostics.** FreeTDS client callbacks and SQL Server/Sybase messages
+  populate the same SQLSTATE/native-code/message triples as the other bridge drivers.
+- **Targets.** The Rust backend is target-neutral; each supported target must provide
+  a target-compatible `libsybdb`. macOS linking deliberately resolves FreeTDS before
+  `libSystem`, whose unrelated Berkeley DB API exports the same `dbopen` symbol.
+
 ## TLS / encrypted connections
 
-Both network drivers connect over TLS with [rustls](https://github.com/rustls/rustls).
-SQLite is in-process and unaffected.
+PostgreSQL and MySQL connect over TLS with [rustls](https://github.com/rustls/rustls).
+DBLIB encryption is negotiated by the installed FreeTDS configuration, just as it is
+for php-src; SQLite is in-process and unaffected.
 
 **PostgreSQL** — ships in the default build (ring provider, no aws-lc-rs). Configure it
 with the usual libpq DSN keys:
@@ -626,11 +675,13 @@ try {
 ```
 
 `PDO::errorCode()` returns the 5-character `SQLSTATE` for the last operation (`"00000"`
-on success) and `PDO::errorInfo()` returns `[SQLSTATE, driver-specific code, message]`,
-with `["00000", null, null]` on success. Every driver surfaces a real `SQLSTATE`: SQLite
-through a php-src-matching table, MySQL from the `ERR` packet's `#`-marked field, and
-PostgreSQL from the `ErrorResponse` `C` field. `PDOStatement` tracks its own error state
-through the same `errorCode()` / `errorInfo()` pair.
+on success) and `PDO::errorInfo()` starts with `[SQLSTATE, driver-specific code,
+message]`, with `["00000", null, null]` on success. Every driver surfaces a real
+`SQLSTATE`: SQLite through a php-src-matching table, MySQL from the `ERR` packet's
+`#`-marked field, and PostgreSQL from the `ErrorResponse` `C` field. DBLIB follows
+php-src's extended failure shape by appending the operating-system error code and
+severity, then the operating-system message when present. `PDOStatement` tracks its
+own error state through the same `errorCode()` / `errorInfo()` pair.
 
 The error mode is configurable through `ATTR_ERRMODE`:
 
@@ -870,9 +921,10 @@ preserve source SQL evaluation order, and retain the rendered text for
 
 ### Driver matrix boundary
 
-- **Other PDO drivers.** Only SQLite, PostgreSQL, and MySQL / MariaDB; the bridge is
-  structured around a central compiled-driver registry so optional drivers can join the
-  same dispatch and availability surface.
+- **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
+  profile; DBLIB is available through the optional FreeTDS profile. php-src's Firebird,
+  ODBC, and OCI drivers are not compiled yet. The central registry intentionally reports
+  only drivers present in the selected archive rather than advertising inert names.
 
 ### Driver-specific client options
 
@@ -888,6 +940,9 @@ preserve source SQL evaluation order, and retain the rendered text for
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.
+- PDO_DBLIB's full 1000–1006 attribute range is implemented. Connection timeout is
+  constructor-only; query timeout is write-only; version attributes are read-only;
+  boolean value options are readable and writable, matching the driver's php-src hook.
 - `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected
   when the active driver has no corresponding php-src hook/capability.
 

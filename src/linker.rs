@@ -17,6 +17,11 @@ use std::process::{self, Command};
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 
+/// Reports whether the optional FreeTDS PDO archive/link profile is selected.
+fn pdo_dblib_enabled() -> bool {
+    cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
+}
+
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
 /// wrapper or PDO). Each entry in [`BRIDGES`] fully describes how to locate and
@@ -176,7 +181,7 @@ impl BridgeStaticlib {
         // link and the PDO archive profile. Cargo's no-op rebuild is cheap and
         // prevents a previously built default archive from being reused by mistake.
         if self.lib_name == "elephc_pdo"
-            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+            && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() || pdo_dblib_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
                 if !self.build_staticlib(&workspace) {
@@ -239,10 +244,17 @@ impl BridgeStaticlib {
             .is_some_and(|dir| dir.file_name().is_some_and(|name| name == "release"));
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "-p", self.crate_name]);
-        if self.lib_name == "elephc_pdo"
-            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
-        {
-            cmd.args(["--features", "libpq-gss"]);
+        if self.lib_name == "elephc_pdo" {
+            let mut features = Vec::new();
+            if std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() {
+                features.push("libpq-gss");
+            }
+            if pdo_dblib_enabled() {
+                features.push("dblib");
+            }
+            if !features.is_empty() {
+                cmd.args(["--features", &features.join(",")]);
+            }
         }
         if release {
             cmd.arg("--release");
@@ -325,6 +337,8 @@ pub(crate) fn link(
     // `--with-<crate>` (`forced_whole_archive`), which guarantees the staticlib
     // is retained even when no program symbol references it.
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
+    let needs_dblib =
+        extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled();
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -358,6 +372,16 @@ pub(crate) fn link(
             cmd.arg(bin_path);
             cmd.arg(obj_path);
             cmd.arg(runtime_object_path);
+            // FreeTDS and libSystem both export `dbopen`; resolve the DB-Library
+            // symbol first or macOS binds PDO_DBLIB to Berkeley DB's incompatible ABI.
+            if needs_dblib {
+                for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                    if Path::new(path).exists() {
+                        cmd.arg(format!("-L{path}"));
+                    }
+                }
+                cmd.arg("-lsybdb");
+            }
             cmd.args(["-lSystem", "-syslibroot"]);
             cmd.arg(&sdk_path);
             cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
@@ -518,6 +542,19 @@ pub(crate) fn link(
         && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
     {
         ld_cmd.arg("-lpq");
+    }
+    // PDO_DBLIB delegates to FreeTDS's DB-Library exactly like php-src.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled() {
+        if target.platform == Platform::MacOS {
+            for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                if Path::new(path).exists() {
+                    ld_cmd.arg(format!("-L{path}"));
+                }
+            }
+        }
+        if target.platform != Platform::MacOS {
+            ld_cmd.arg("-lsybdb");
+        }
     }
     if target.platform == Platform::Linux && !extra_link_libs.is_empty() {
         ld_cmd.arg("-Wl,--as-needed");

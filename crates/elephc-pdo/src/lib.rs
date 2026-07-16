@@ -27,10 +27,13 @@
 //!   would poison that mutex and brick PDO for the whole process, and the unwind
 //!   out of a plain `extern "C"` function would abort the compiled program instead
 //!   of surfacing a catchable `PDOException`.
-//! - The drivers are bundled (SQLite) / pure-Rust (PostgreSQL, MySQL/MariaDB), so
-//!   compiled PHP binaries have no system database-client runtime dependency.
+//! - The default drivers are bundled (SQLite) / pure-Rust (PostgreSQL,
+//!   MySQL/MariaDB), so their binaries have no system database-client runtime
+//!   dependency. The optional PDO_DBLIB profile links FreeTDS like php-src.
 
 mod driver;
+#[cfg(feature = "dblib")]
+mod dblib;
 mod ini;
 mod my;
 #[path = "pg.rs"]
@@ -51,6 +54,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// A live connection, tagged by its driver.
 enum Conn {
+    #[cfg(feature = "dblib")]
+    Dblib(dblib::DblibConn),
     Sqlite(sqlite::SqliteConn),
     Postgres(pg::PgConn),
     Mysql(my::MyConn),
@@ -60,6 +65,8 @@ impl Conn {
     /// Returns the central registry identity for this live connection.
     fn driver_kind(&self) -> driver::DriverKind {
         match self {
+            #[cfg(feature = "dblib")]
+            Self::Dblib(_) => driver::DriverKind::Dblib,
             Self::Sqlite(_) => driver::DriverKind::Sqlite,
             Self::Postgres(_) => driver::DriverKind::Pgsql,
             Self::Mysql(_) => driver::DriverKind::Mysql,
@@ -69,6 +76,8 @@ impl Conn {
 
 /// A live prepared statement, tagged by its driver.
 enum Stmt {
+    #[cfg(feature = "dblib")]
+    Dblib(dblib::DblibStmt),
     Sqlite(sqlite::SqliteStmt),
     Postgres(pg::PgStmt),
     Mysql(my::MyStmt),
@@ -219,6 +228,12 @@ fn native_type_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Return buffer for PDO_DBLIB column-source metadata.
+fn dblib_column_source_cell() -> &'static Mutex<CString> {
+    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+}
+
 /// Static buffer for the most recent emulated statement SQL result.
 fn stmt_sent_sql_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -259,6 +274,18 @@ fn stmt_sqlstate_cell() -> &'static Mutex<CString> {
 fn stmt_errmsg_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Return buffer for PDO_DBLIB connection operating-system diagnostics.
+fn dblib_os_errmsg_cell() -> &'static Mutex<CString> {
+    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+}
+
+/// Return buffer for PDO_DBLIB statement operating-system diagnostics.
+fn dblib_stmt_os_errmsg_cell() -> &'static Mutex<CString> {
+    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
 }
 
 /// Static buffer for the most recent `elephc_pdo_server_version` result.
@@ -379,6 +406,8 @@ fn open_conn_for_dsn(
     my_driver_config: &str,
 ) -> Result<Conn, String> {
     match driver::DriverKind::from_dsn(dsn) {
+        #[cfg(feature = "dblib")]
+        Some(driver::DriverKind::Dblib) => dblib::DblibConn::open(dsn).map(Conn::Dblib),
         Some(driver::DriverKind::Sqlite) => {
             let path = dsn.strip_prefix(driver::DriverKind::Sqlite.dsn_prefix()).unwrap_or_default();
             sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
@@ -435,6 +464,8 @@ fn open_nonpersistent_dsn(
 fn persistent_connection_is_live(conn_id: i64) -> bool {
     let mut guard = lock_recover(conns());
     match guard.get_mut(&conn_id) {
+        #[cfg(feature = "dblib")]
+        Some(Conn::Dblib(connection)) => connection.is_alive(),
         Some(Conn::Sqlite(_)) => true,
         Some(Conn::Mysql(connection)) => connection.is_alive(),
         Some(Conn::Postgres(connection)) => !connection.is_closed(),
@@ -446,6 +477,8 @@ fn persistent_connection_is_live(conn_id: i64) -> bool {
 /// it before a replacement handle is registered.
 fn evict_persistent_connection(conn_id: i64) {
     lock_recover(stmts()).retain(|_, statement| match statement {
+        #[cfg(feature = "dblib")]
+        Stmt::Dblib(statement) => statement.conn_id != conn_id,
         Stmt::Sqlite(_) => true,
         Stmt::Postgres(statement) => statement.conn_id != conn_id,
         Stmt::Mysql(statement) => statement.conn_id != conn_id,
@@ -642,12 +675,13 @@ fn open_persistent_dsn(
 /// equivalent bounded size/read/write operations for SQLite incremental BLOBs.
 /// v47 enables PHP 8.5+'s demand-driven simple-query protocol per statement.
 /// v48 exposes the compiled-driver registry and runtime `pdo.dsn.*` INI aliases.
+/// v49 adds the optional PDO_DBLIB driver and its live attribute controls.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(48, || 48)
+    ffi_guard(49, || 49)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -685,6 +719,8 @@ pub extern "C" fn elephc_pdo_available_driver_name(index: i64) -> *const c_char 
             return static_cstr(b"\0");
         };
         match kind {
+            #[cfg(feature = "dblib")]
+            driver::DriverKind::Dblib => static_cstr(b"dblib\0"),
             driver::DriverKind::Mysql => static_cstr(b"mysql\0"),
             driver::DriverKind::Pgsql => static_cstr(b"pgsql\0"),
             driver::DriverKind::Sqlite => static_cstr(b"sqlite\0"),
@@ -914,6 +950,11 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
         }
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => match cstr_arg(sql) {
+                Some(sql) => c.execute(sql).map_or(-1, |_| c.changes),
+                None => -1,
+            },
             Some(Conn::Postgres(c)) => match cstr_arg(sql) {
                 Some(s) => c.exec(s),
                 None => -1,
@@ -938,6 +979,20 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c
+                .execute("SELECT @@IDENTITY")
+                .ok()
+                .and_then(|sets| sets.into_iter().next())
+                .and_then(|set| set.rows.into_iter().next())
+                .and_then(|row| row.into_iter().next())
+                .and_then(|cell| match cell {
+                    dblib::DblibCell::Int(value) => Some(value),
+                    dblib::DblibCell::Float(value) => Some(value as i64),
+                    dblib::DblibCell::Bytes(value, _) => String::from_utf8(value).ok()?.parse().ok(),
+                    dblib::DblibCell::Null => None,
+                })
+                .unwrap_or(0),
             Some(Conn::Sqlite(c)) => c.last_insert_id(),
             Some(Conn::Postgres(c)) => c.last_insert_id(cstr_arg(name)),
             Some(Conn::Mysql(c)) => c.last_insert_id(cstr_arg(name)),
@@ -965,6 +1020,20 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
         let text = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => c
+                    .execute("SELECT @@IDENTITY")
+                    .ok()
+                    .and_then(|sets| sets.into_iter().next())
+                    .and_then(|set| set.rows.into_iter().next())
+                    .and_then(|row| row.into_iter().next())
+                    .map(|cell| match cell {
+                        dblib::DblibCell::Int(value) => value.to_string(),
+                        dblib::DblibCell::Float(value) => value.to_string(),
+                        dblib::DblibCell::Bytes(value, _) => String::from_utf8_lossy(&value).into_owned(),
+                        dblib::DblibCell::Null => String::new(),
+                    })
+                    .unwrap_or_default(),
                 Some(Conn::Sqlite(c)) => c.last_insert_id().to_string(),
                 Some(Conn::Postgres(c)) => c.last_insert_id_text(cstr_arg(name)),
                 Some(Conn::Mysql(c)) => c.last_insert_id_text(cstr_arg(name)),
@@ -982,6 +1051,8 @@ pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.changes,
             Some(Conn::Sqlite(c)) => c.changes(),
             Some(Conn::Postgres(c)) => c.changes,
             Some(Conn::Mysql(c)) => c.changes,
@@ -997,6 +1068,8 @@ pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.transaction("BEGIN TRANSACTION", true) as i64,
             Some(Conn::Sqlite(c)) => c.begin_transaction(),
             Some(Conn::Postgres(c)) => c.exec_simple("BEGIN"),
             Some(Conn::Mysql(c)) => c.exec_simple("BEGIN"),
@@ -1012,6 +1085,8 @@ pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.transaction("COMMIT TRANSACTION", false) as i64,
             Some(Conn::Sqlite(c)) => c.exec_simple(b"COMMIT"),
             Some(Conn::Postgres(c)) => c.exec_simple("COMMIT"),
             Some(Conn::Mysql(c)) => c.exec_simple("COMMIT"),
@@ -1027,6 +1102,8 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.transaction("ROLLBACK TRANSACTION", false) as i64,
             Some(Conn::Sqlite(c)) => c.exec_simple(b"ROLLBACK"),
             Some(Conn::Postgres(c)) => c.exec_simple("ROLLBACK"),
             Some(Conn::Mysql(c)) => c.exec_simple("ROLLBACK"),
@@ -1050,6 +1127,8 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.in_transaction as i64,
             Some(Conn::Sqlite(c)) => c.in_transaction(),
             Some(Conn::Postgres(c)) => c.in_transaction as i64,
             Some(Conn::Mysql(c)) => c.in_transaction as i64,
@@ -1158,6 +1237,8 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(c)) => c.errcode(),
             Some(Conn::Sqlite(c)) => c.errcode(),
             Some(Conn::Postgres(c)) => c.errcode,
             Some(Conn::Mysql(c)) => c.errcode,
@@ -1174,6 +1255,8 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
         let msg = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => c.errmsg().to_string(),
                 Some(Conn::Sqlite(c)) => c.errmsg(),
                 Some(Conn::Postgres(c)) => c.errmsg.clone(),
                 Some(Conn::Mysql(c)) => c.errmsg.clone(),
@@ -1195,6 +1278,8 @@ pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
         let state = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => c.sqlstate().to_string(),
                 Some(Conn::Sqlite(c)) => c.sqlstate(),
                 Some(Conn::Postgres(c)) => c.sqlstate.clone(),
                 Some(Conn::Mysql(c)) => c.sqlstate.clone(),
@@ -1214,11 +1299,88 @@ pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(_)) => 1,
             Some(Conn::Sqlite(c)) => c.set_busy_timeout(ms),
             Some(Conn::Postgres(_)) => 1,
             Some(Conn::Mysql(_)) => 1,
             None => 0,
         }
+    })
+}
+
+/// Applies a writable PDO_DBLIB driver attribute. Returns `1` when DBLIB accepts
+/// it and `0` for a read-only/unknown attribute, another driver, or a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_set_attribute(
+    conn_id: i64,
+    attribute: i64,
+    value: i64,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Conn::Dblib(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+            return connection.set_attribute(attribute, value) as i64;
+        }
+        let _ = (conn_id, attribute, value);
+        0
+    })
+}
+
+/// Reads a boolean PDO_DBLIB driver attribute. Returns `0`/`1`, or `-1` when
+/// the attribute is not readable, the handle uses another driver, or a panic occurs.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_attribute_bool(conn_id: i64, attribute: i64) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Conn::Dblib(connection)) = lock_recover(conns()).get(&conn_id) {
+            return connection.attribute_bool(attribute).map_or(-1, i64::from);
+        }
+        let _ = (conn_id, attribute);
+        -1
+    })
+}
+
+/// Returns PDO_DBLIB's operating-system error code for connection errorInfo.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_os_errcode(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Conn::Dblib(connection)) = lock_recover(conns()).get(&conn_id) {
+            return connection.os_errcode();
+        }
+        let _ = conn_id;
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's error severity for connection errorInfo.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_severity(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Conn::Dblib(connection)) = lock_recover(conns()).get(&conn_id) {
+            return connection.severity();
+        }
+        let _ = conn_id;
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's operating-system diagnostic for a connection. The pointer
+/// remains valid until the next call; unsupported or unknown handles return empty.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_os_errmsg(conn_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let message = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(connection)) => connection.os_errmsg().to_string(),
+                _ => String::new(),
+            }
+        };
+        store_cstr(dblib_os_errmsg_cell(), &message)
     })
 }
 
@@ -1267,6 +1429,8 @@ pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
         let version = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => c.tds_version().to_string(),
                 Some(Conn::Sqlite(c)) => c.server_version(),
                 Some(Conn::Postgres(c)) => c.server_version(),
                 Some(Conn::Mysql(c)) => c.server_version(),
@@ -1287,6 +1451,8 @@ pub extern "C" fn elephc_pdo_client_version(conn_id: i64) -> *const c_char {
         let version = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => c.client_version(),
                 Some(Conn::Sqlite(c)) => c.client_version(),
                 Some(Conn::Postgres(c)) => c.client_version(),
                 Some(Conn::Mysql(c)) => c.client_version(),
@@ -1307,6 +1473,8 @@ pub extern "C" fn elephc_pdo_server_info(conn_id: i64) -> *const c_char {
         let info = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(_)) => String::new(),
                 Some(Conn::Postgres(c)) => c.server_info(),
                 Some(Conn::Mysql(c)) => c.server_info(),
                 Some(Conn::Sqlite(_)) | None => String::new(),
@@ -1326,6 +1494,10 @@ pub extern "C" fn elephc_pdo_connection_status(conn_id: i64) -> *const c_char {
         let status = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(c)) => {
+                    if c.is_alive() { "Connection OK".to_string() } else { "Connection failed".to_string() }
+                }
                 Some(Conn::Postgres(c)) => c.connection_status(),
                 Some(Conn::Mysql(c)) => c.connection_status(),
                 Some(Conn::Sqlite(_)) | None => String::new(),
@@ -1343,6 +1515,8 @@ pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(_)) => 0,
             Some(Conn::Postgres(c)) => c.backend_pid(),
             Some(Conn::Sqlite(_)) => 0,
             Some(Conn::Mysql(_)) => 0,
@@ -1359,6 +1533,8 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "dblib")]
+            Some(Conn::Dblib(_)) => 0,
             Some(Conn::Mysql(c)) => c.warning_count(),
             Some(Conn::Sqlite(_)) => 0,
             Some(Conn::Postgres(_)) => 0,
@@ -1890,6 +2066,17 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
         } else {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "dblib")]
+                Some(Conn::Dblib(connection)) => match cstr_arg(sql) {
+                    Some(sql) => match dblib::DblibStmt::new(conn_id, sql) {
+                        Ok(statement) => Ok(Stmt::Dblib(statement)),
+                        Err(message) => {
+                            connection.set_error("HY093", 0, message);
+                            Err(())
+                        }
+                    },
+                    None => Err(()),
+                },
                 Some(Conn::Postgres(c)) => match cstr_arg(sql) {
                     Some(s) => match c.prepare(s, emulated != 0) {
                         Ok(mut st) => {
@@ -1937,6 +2124,8 @@ pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *co
             return 0;
         };
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.parameter_index(name),
             Some(Stmt::Sqlite(s)) => s.bind_parameter_index(name),
             Some(Stmt::Postgres(s)) => s.bind_parameter_index(name),
             Some(Stmt::Mysql(s)) => s.bind_parameter_index(name),
@@ -1952,6 +2141,8 @@ pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.bind_int(idx, val) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_int(idx, val),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Int(val)),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Int(val)),
@@ -1967,6 +2158,8 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.bind_double(idx, val) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_double(idx, val),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Float(val)),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Float(val)),
@@ -1995,6 +2188,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len), false) as i64
+                }
+            }
             Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
             Some(Stmt::Postgres(s)) => {
                 let bind = if val.is_null() {
@@ -2034,6 +2235,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text_national(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len), true) as i64
+                }
+            }
             Some(Stmt::Sqlite(s)) => s.bind_text(idx, val, len),
             Some(Stmt::Postgres(s)) => {
                 let bind = if val.is_null() {
@@ -2065,6 +2274,8 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.bind_null(idx) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_null(idx),
             Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
             Some(Stmt::Mysql(s)) => s.bind(idx, my::Bind::Null),
@@ -2084,6 +2295,8 @@ pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 
         let truthy = (val != 0) as i64;
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.bind_int(idx, truthy) as i64,
             Some(Stmt::Sqlite(s)) => s.bind_int(idx, truthy),
             Some(Stmt::Postgres(s)) => {
                 let text = if truthy != 0 { "t" } else { "f" };
@@ -2115,6 +2328,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_blob(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                if ptr.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_blob(idx, bytes_arg(ptr, len)) as i64
+                }
+            }
             Some(Stmt::Sqlite(s)) => s.bind_blob(idx, ptr, len),
             Some(Stmt::Postgres(s)) => {
                 let bind = if ptr.is_null() {
@@ -2144,6 +2365,11 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                s.reset();
+                1
+            }
             Some(Stmt::Sqlite(s)) => s.reset(),
             Some(Stmt::Postgres(s)) => {
                 let mut connections = lock_recover(conns());
@@ -2170,6 +2396,11 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                s.clear_bindings();
+                1
+            }
             Some(Stmt::Sqlite(s)) => s.clear_bindings(),
             Some(Stmt::Postgres(s)) => s.clear_bindings(),
             Some(Stmt::Mysql(s)) => s.clear_bindings(),
@@ -2202,6 +2433,22 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
         }
         let mut sguard = lock_recover(stmts());
         match sguard.get_mut(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => {
+                if s.needs_execute() {
+                    let conn_id = s.conn_id;
+                    let mut cguard = lock_recover(conns());
+                    match cguard.get_mut(&conn_id) {
+                        Some(Conn::Dblib(c)) => {
+                            if s.execute(c).is_err() {
+                                return -1;
+                            }
+                        }
+                        _ => return -1,
+                    }
+                }
+                s.step()
+            }
             Some(Stmt::Postgres(s)) => {
                 let conn_id = s.conn_id;
                 let mut cguard = lock_recover(conns());
@@ -2243,9 +2490,73 @@ pub extern "C" fn elephc_pdo_step_oriented(
                     _ => -1,
                 }
             }
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(_)) => 0,
             Some(Stmt::Sqlite(_)) | Some(Stmt::Mysql(_)) => 0,
             None => -1,
         }
+    })
+}
+
+/// Returns PDO_DBLIB's native DB-Library type identifier for one result column,
+/// or `0` for another driver, an invalid handle/index, or a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_column_native_type_id(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_native_type_id(i);
+        }
+        let _ = (stmt_id, i);
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's native server user-type identifier for one result column,
+/// or `0` for another driver, invalid input, or a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_column_user_type_id(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_user_type_id(i);
+        }
+        let _ = (stmt_id, i);
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's scale for one result column, or `0` for another driver,
+/// invalid input, or a caught panic.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_column_scale(stmt_id: i64, i: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_scale(i);
+        }
+        let _ = (stmt_id, i);
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's source label for one result column. The pointer remains
+/// valid until the next call to this accessor; unsupported/invalid input is empty.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_column_source(
+    stmt_id: i64,
+    i: i64,
+) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let source = {
+            #[cfg(feature = "dblib")]
+            if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+                return store_cstr(dblib_column_source_cell(), &statement.column_source(i));
+            }
+            let _ = (stmt_id, i);
+            String::new()
+        };
+        store_cstr(dblib_column_source_cell(), &source)
     })
 }
 
@@ -2282,6 +2593,18 @@ pub extern "C" fn elephc_pdo_result_memory_size(stmt_id: i64) -> i64 {
 pub extern "C" fn elephc_pdo_next_rowset(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut sguard = lock_recover(stmts());
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = sguard.get_mut(&stmt_id) {
+            if !statement.next_rowset() {
+                return 0;
+            }
+            let conn_id = statement.conn_id;
+            let row_count = statement.current_row_count();
+            if let Some(Conn::Dblib(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+                connection.changes = row_count;
+            }
+            return 1;
+        }
         let Some(Stmt::Mysql(statement)) = sguard.get_mut(&stmt_id) else {
             return 0;
         };
@@ -2301,6 +2624,8 @@ pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_count(),
             Some(Stmt::Sqlite(s)) => s.column_count(),
             Some(Stmt::Postgres(s)) => s.column_count(),
             Some(Stmt::Mysql(s)) => s.column_count(),
@@ -2317,6 +2642,8 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
         let name = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.column_name(i),
                 Some(Stmt::Sqlite(s)) => s.column_name(i),
                 Some(Stmt::Postgres(s)) => s.column_name(i),
                 Some(Stmt::Mysql(s)) => s.column_name(i),
@@ -2335,6 +2662,8 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(5, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_type(i),
             Some(Stmt::Sqlite(s)) => s.column_type(i),
             Some(Stmt::Postgres(s)) => s.column_type(i),
             Some(Stmt::Mysql(s)) => s.column_type(i),
@@ -2389,6 +2718,8 @@ pub extern "C" fn elephc_pdo_column_native_type(stmt_id: i64, i: i64) -> *const 
         let native = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.column_native_type(i),
                 Some(Stmt::Postgres(s)) => s.column_native_type(i),
                 Some(Stmt::Mysql(s)) => s.column_native_type(i),
                 _ => String::new(),
@@ -2408,6 +2739,8 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
         let table = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(_)) => String::new(),
                 Some(Stmt::Sqlite(statement)) => statement.column_table_name(i),
                 Some(Stmt::Postgres(statement)) => statement.column_table_name(i),
                 Some(Stmt::Mysql(statement)) => statement.column_table_name(i),
@@ -2492,6 +2825,8 @@ pub extern "C" fn elephc_pdo_column_len(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_len(i),
             Some(Stmt::Postgres(s)) => s.column_len(i),
             Some(Stmt::Mysql(s)) => s.column_len(i),
             _ => -1,
@@ -2518,6 +2853,8 @@ pub extern "C" fn elephc_pdo_column_precision(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_precision(i),
             Some(Stmt::Postgres(s)) => s.column_precision(i),
             Some(Stmt::Mysql(s)) => s.column_precision(i),
             Some(Stmt::Sqlite(_)) => 0,
@@ -2737,6 +3074,8 @@ pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_int(i),
             Some(Stmt::Sqlite(s)) => s.column_int(i),
             Some(Stmt::Postgres(s)) => s.column_int(i),
             Some(Stmt::Mysql(s)) => s.column_int(i),
@@ -2752,6 +3091,8 @@ pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
     ffi_guard(0.0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_double(i),
             Some(Stmt::Sqlite(s)) => s.column_double(i),
             Some(Stmt::Postgres(s)) => s.column_double(i),
             Some(Stmt::Mysql(s)) => s.column_double(i),
@@ -2770,6 +3111,8 @@ pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
             Some(Stmt::Mysql(s)) => s.column_data(i).len() as i64,
@@ -2788,6 +3131,8 @@ pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_c
         let bytes = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.column_data(i),
                 Some(Stmt::Sqlite(s)) => s.column_data(i),
                 Some(Stmt::Postgres(s)) => s.column_data(i),
                 Some(Stmt::Mysql(s)) => s.column_data(i),
@@ -2809,6 +3154,8 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
         let bytes = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.column_data(i),
                 Some(Stmt::Sqlite(s)) => s.column_data(i),
                 Some(Stmt::Postgres(s)) => s.column_data(i),
                 Some(Stmt::Mysql(s)) => s.column_data(i),
@@ -2826,6 +3173,8 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
 pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         match lock_recover(stmts()).remove(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(_)) => 1,
             Some(Stmt::Sqlite(s)) => {
                 s.finalize();
                 1
@@ -2905,6 +3254,8 @@ pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
     ffi_guard(-1, || {
         let sguard = lock_recover(stmts());
         match sguard.get(&stmt_id) {
+            #[cfg(feature = "dblib")]
+            Some(Stmt::Dblib(s)) => s.errcode(),
             Some(Stmt::Sqlite(s)) => s.errcode(),
             Some(Stmt::Postgres(s)) => {
                 let conn_id = s.conn_id;
@@ -2937,6 +3288,8 @@ pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
         let msg = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.errmsg().to_string(),
                 Some(Stmt::Sqlite(s)) => s.errmsg(),
                 Some(Stmt::Postgres(s)) => {
                     let conn_id = s.conn_id;
@@ -2961,6 +3314,49 @@ pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
     })
 }
 
+/// Returns PDO_DBLIB's operating-system error code for statement errorInfo.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_stmt_os_errcode(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.os_errcode();
+        }
+        let _ = stmt_id;
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's error severity for statement errorInfo.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_stmt_severity(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "dblib")]
+        if let Some(Stmt::Dblib(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.severity();
+        }
+        let _ = stmt_id;
+        0
+    })
+}
+
+/// Returns PDO_DBLIB's operating-system statement diagnostic. The pointer remains
+/// valid until the next call; unsupported or unknown handles return empty.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_dblib_stmt_os_errmsg(stmt_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let message = {
+            let guard = lock_recover(stmts());
+            match guard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(statement)) => statement.os_errmsg().to_string(),
+                _ => String::new(),
+            }
+        };
+        store_cstr(dblib_stmt_os_errmsg_cell(), &message)
+    })
+}
+
 /// Returns the most recently rendered SQL for an emulated MySQL/PostgreSQL
 /// statement. Native and SQLite statements, unknown handles and caught panics return
 /// an empty string. Valid until the next `elephc_pdo_stmt_sent_sql` call.
@@ -2970,6 +3366,8 @@ pub extern "C" fn elephc_pdo_stmt_sent_sql(stmt_id: i64) -> *const c_char {
         let sql = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.sent_sql.clone(),
                 Some(Stmt::Postgres(s)) => s.sent_sql.clone(),
                 Some(Stmt::Mysql(s)) => s.sent_sql.clone(),
                 Some(Stmt::Sqlite(_)) | None => String::new(),
@@ -2992,6 +3390,8 @@ pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
         let state = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "dblib")]
+                Some(Stmt::Dblib(s)) => s.sqlstate().to_string(),
                 Some(Stmt::Sqlite(s)) => s.sqlstate(),
                 Some(Stmt::Postgres(s)) => {
                     let conn_id = s.conn_id;
@@ -3102,11 +3502,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v48 exposes
-    /// PHP-version-selected simple-query streaming.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v49 exposes
+    /// the optional DBLIB backend and driver-specific live attributes.
     #[test]
-    fn version_is_v48() {
-        assert_eq!(elephc_pdo_version(), 48);
+    fn version_is_v49() {
+        assert_eq!(elephc_pdo_version(), 49);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

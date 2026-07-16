@@ -52,7 +52,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Install native test dependencies
-        run: brew install pcre2
+        run: brew install freetds pcre2
 
       - name: Check (no warnings)
         shell: bash
@@ -60,6 +60,9 @@ jobs:
           set -o pipefail
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -118,6 +121,7 @@ jobs:
             binutils \
             build-essential \
             file \
+            freetds-dev \
             libbz2-dev \
             libpcre2-dev \
             libssl-dev \
@@ -131,6 +135,9 @@ jobs:
           set -o pipefail
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -189,6 +196,7 @@ jobs:
             binutils \
             build-essential \
             file \
+            freetds-dev \
             libbz2-dev \
             libpcre2-dev \
             libssl-dev \
@@ -202,6 +210,9 @@ jobs:
           set -o pipefail
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge

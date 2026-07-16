@@ -31,7 +31,7 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -65,6 +65,19 @@ jobs:
           --health-timeout 5s
           --health-retries 20
 
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Elephc_Pdo!2026_Test
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Elephc_Pdo!2026_Test' -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
     env:
       # ONE family of variables now drives BOTH live suites. The codegen suites
       # (tests/codegen/pdo_pgsql.rs, tests/codegen/pdo_mysql.rs) read these names
@@ -76,6 +89,7 @@ jobs:
       ELEPHC_PG_DSN: 'pgsql:host=127.0.0.1;port=5432;dbname=testdb;user=test;password=test;sslmode=disable'
       ELEPHC_MY_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
       ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+      ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
       # or dropped from this job would make a live test that executed NOTHING look
@@ -108,6 +122,7 @@ jobs:
             binutils \
             build-essential \
             file \
+            freetds-dev \
             krb5-user \
             libbz2-dev \
             libpcre2-dev \
@@ -270,3 +285,17 @@ jobs:
         env:
           ELEPHC_PDO_LIBPQ: '1'
         run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored mysql --test-threads=4
+
+      - name: Build the FreeTDS PDO_DBLIB bridge staticlib
+        # PDO_DBLIB follows php-src and delegates the TDS protocol to libsybdb.
+        # The system-client profile is optional so ordinary PDO binaries retain
+        # their standalone pure-Rust/embedded-driver contract.
+        run: cargo build -p elephc-pdo --features dblib
+
+      - name: Live FreeTDS bridge tests (in-crate, elephc-pdo)
+        run: 'cargo test -p elephc-pdo --features dblib dblib::tests:: -- --ignored --test-threads=1'
+
+      - name: Live FreeTDS codegen tests (PDO_DBLIB)
+        env:
+          ELEPHC_PDO_DBLIB: '1'
+        run: cargo test --features pdo-dblib --test codegen_tests -- --ignored pdo_dblib --test-threads=1

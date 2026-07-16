@@ -80,3 +80,7 @@ default = ["tls", "mysql-tls"]
 tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pemfile"]
 mysql-tls = ["tls", "mysql/rustls-tls-ring"]
 libpq-gss = ["dep:libpq"]
+# Matches php-src's PDO_DBLIB backend by linking the system FreeTDS DB-Library.
+# The default bridge remains system-client-free; final binaries using this
+# profile must also link `libsybdb`.
+dblib = []

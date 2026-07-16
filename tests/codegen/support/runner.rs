@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Reports whether codegen fixtures should build and link the FreeTDS PDO profile.
+fn pdo_dblib_enabled() -> bool {
+    cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
+}
+
 /// Describes a Rust bridge staticlib needed by codegen integration fixtures.
 struct TestBridgeStaticlib {
     /// Linker library name requested by the compiled program.
@@ -167,7 +172,11 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
             && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
             && LIBPQ_BRIDGE_BUILT.get().is_none();
+        let requires_dblib_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_dblib_enabled()
+            && DBLIB_BRIDGE_BUILT.get().is_none();
         if !requires_libpq_profile
+            && !requires_dblib_profile
             && !bridge_staticlib_needs_build(&archive_path, bridge.package)
         {
             continue;
@@ -175,10 +184,17 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
 
         let mut command = Command::new("cargo");
         command.args(["build", "-p", bridge.package]);
-        if bridge.lib_name == "elephc_pdo"
-            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
-        {
-            command.args(["--features", "libpq-gss"]);
+        if bridge.lib_name == "elephc_pdo" {
+            let mut features = Vec::new();
+            if std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() {
+                features.push("libpq-gss");
+            }
+            if pdo_dblib_enabled() {
+                features.push("dblib");
+            }
+            if !features.is_empty() {
+                command.args(["--features", &features.join(",")]);
+            }
         }
         let status = command
             .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -202,6 +218,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         );
         if requires_libpq_profile {
             let _ = LIBPQ_BRIDGE_BUILT.set(());
+        }
+        if requires_dblib_profile {
+            let _ = DBLIB_BRIDGE_BUILT.set(());
         }
     }
 }
@@ -300,6 +319,8 @@ pub(crate) fn link_binary(
     }
     let needs_libpq = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
         && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some();
+    let needs_dblib = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
+        && pdo_dblib_enabled();
 
     match target().platform {
         Platform::MacOS => {
@@ -308,6 +329,15 @@ pub(crate) fn link_binary(
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
+            // Resolve FreeTDS's `dbopen` before libSystem's Berkeley DB symbol.
+            if needs_dblib {
+                for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                    if Path::new(path).exists() {
+                        ld_cmd.arg(format!("-L{path}"));
+                    }
+                }
+                ld_cmd.arg("-lsybdb");
+            }
             ld_cmd.args(["-lSystem", "-syslibroot"]);
             ld_cmd.arg(get_sdk_path());
             ld_cmd.args([
@@ -324,6 +354,13 @@ pub(crate) fn link_binary(
                     "/opt/homebrew/opt/libpq/lib",
                     "/usr/local/opt/libpq/lib",
                 ] {
+                    if Path::new(path).exists() {
+                        ld_cmd.arg(format!("-L{path}"));
+                    }
+                }
+            }
+            if needs_dblib {
+                for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
                     if Path::new(path).exists() {
                         ld_cmd.arg(format!("-L{path}"));
                     }
@@ -373,6 +410,9 @@ pub(crate) fn link_binary(
             }
             for lib in &actual_link_libs {
                 ld_cmd.arg(format!("-l{}", lib));
+            }
+            if needs_dblib {
+                ld_cmd.arg("-lsybdb");
             }
             if needs_libpq {
                 ld_cmd.arg("-lpq");

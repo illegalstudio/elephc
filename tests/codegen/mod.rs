@@ -29,6 +29,8 @@ mod magic_constants;
 mod strings;
 mod io;
 mod pdo;
+#[cfg(feature = "pdo-dblib")]
+mod pdo_dblib;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;

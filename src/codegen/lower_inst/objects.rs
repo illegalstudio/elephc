@@ -1539,8 +1539,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_class_status(
 
 /// Classifies a runtime class name for PHP 8.4+'s late-static `PDO::connect()`.
 ///
-/// Status 0 is exactly PDO, 1/2/3 are the SQLite/MySQL/PostgreSQL driver-class
-/// hierarchies, 4 is a generic PDO subclass, and 5 is unknown or outside PDO.
+/// Status 0 is exactly PDO, 1/2/3/4 are the SQLite/MySQL/PostgreSQL/DBLIB
+/// driver-class hierarchies, 5 is a generic PDO subclass, and 6 is unknown.
 pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1549,7 +1549,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
     let unknown_label = ctx.next_label("pdo_called_class_unknown");
     let done_label = ctx.next_label("pdo_called_class_done");
     if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &unknown_label)? {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 6);
         return store_if_result(ctx, inst);
     }
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
@@ -1567,10 +1567,12 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
                 2
             } else if class_extends_class(ctx, class_name, "Pdo\\Pgsql") {
                 3
-            } else if class_extends_class(ctx, class_name, "PDO") {
+            } else if class_extends_class(ctx, class_name, "Pdo\\Dblib") {
                 4
-            } else {
+            } else if class_extends_class(ctx, class_name, "PDO") {
                 5
+            } else {
+                6
             };
             let label = ctx.next_label("pdo_called_class_match");
             emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
@@ -1579,7 +1581,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
         .collect::<Vec<_>>();
 
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 6);
     abi::emit_jump(ctx.emitter, &done_label);
     for (label, status) in classified {
         ctx.emitter.label(&label);
@@ -1588,7 +1590,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_called_class_status(
         abi::emit_jump(ctx.emitter, &done_label);
     }
     ctx.emitter.label(&unknown_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 6);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }

@@ -137,6 +137,15 @@ extern "elephc_pdo" {
     function elephc_pdo_stmt_sent_sql(int $stmt): string;
     function elephc_pdo_bind_bool(int $stmt, int $idx, int $val): int;
     function elephc_pdo_set_busy_timeout(int $conn, int $ms): int;
+    // v49: writable/readable PDO_DBLIB-specific connection attributes.
+    function elephc_pdo_dblib_set_attribute(int $conn, int $attribute, int $value): int;
+    function elephc_pdo_dblib_attribute_bool(int $conn, int $attribute): int;
+    function elephc_pdo_dblib_os_errcode(int $conn): int;
+    function elephc_pdo_dblib_severity(int $conn): int;
+    function elephc_pdo_dblib_os_errmsg(int $conn): string;
+    function elephc_pdo_dblib_stmt_os_errcode(int $stmt): int;
+    function elephc_pdo_dblib_stmt_severity(int $stmt): int;
+    function elephc_pdo_dblib_stmt_os_errmsg(int $stmt): string;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -298,6 +307,11 @@ extern "elephc_pdo" {
     function elephc_pdo_column_table_oid(int $stmt, int $i): int;
     function elephc_pdo_column_len(int $stmt, int $i): int;
     function elephc_pdo_column_precision(int $stmt, int $i): int;
+    // v49: the remaining PDO_DBLIB `getColumnMeta()` descriptor fields.
+    function elephc_pdo_dblib_column_native_type_id(int $stmt, int $i): int;
+    function elephc_pdo_dblib_column_user_type_id(int $stmt, int $i): int;
+    function elephc_pdo_dblib_column_scale(int $stmt, int $i): int;
+    function elephc_pdo_dblib_column_source(int $stmt, int $i): string;
 }
 
 // F-SURF-01: php-src's ext/pdo/pdo.stub.php declares a GLOBAL `pdo_drivers(): array`
@@ -1113,6 +1127,15 @@ class PDO {
     const SQLITE_OPEN_READONLY = 1;
     const SQLITE_OPEN_READWRITE = 2;
     const SQLITE_OPEN_CREATE = 4;
+    // -- elephc optional PDO_DBLIB aliases begin --
+    const DBLIB_ATTR_CONNECTION_TIMEOUT = 1000;
+    const DBLIB_ATTR_QUERY_TIMEOUT = 1001;
+    const DBLIB_ATTR_STRINGIFY_UNIQUEIDENTIFIER = 1002;
+    const DBLIB_ATTR_VERSION = 1003;
+    const DBLIB_ATTR_TDS_VERSION = 1004;
+    const DBLIB_ATTR_SKIP_EMPTY_ROWSETS = 1005;
+    const DBLIB_ATTR_DATETIME_CONVERT = 1006;
+    // -- elephc optional PDO_DBLIB aliases end --
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
@@ -1313,6 +1336,9 @@ class PDO {
         } elseif (str_starts_with($dsn, "pgsql:")) {
             $_dsnDriver = "pgsql";
             $_dsnClass = "Pdo\\Pgsql";
+        } elseif (str_starts_with($dsn, "dblib:")) {
+            $_dsnDriver = "dblib";
+            $_dsnClass = "Pdo\\Dblib";
         }
         if ($_dsnDriver === "") {
             return;
@@ -1341,7 +1367,7 @@ class PDO {
         $this->stringifyFetches = false;
         $this->attrCase = 0;
         $this->oracleNulls = 0;
-        $this->emulatePrepares = substr($_dsn, 0, 6) === "mysql:";
+        $this->emulatePrepares = substr($_dsn, 0, 6) === "mysql:" || substr($_dsn, 0, 6) === "dblib:";
         $this->disablePrepares = false;
         $this->prepareOperation = "PDO::prepare";
         $this->pdoUdfCallbacks = [];
@@ -1440,11 +1466,18 @@ class PDO {
                     $this->defaultFetchMode = $_ctorFetchMode;
                 } elseif ($_iattr == 17) {
                     $this->stringifyFetches = $this->attrBoolValue($_val);
-                } elseif ($_iattr == 21 && str_starts_with($_dsn, "mysql:")) {
+                } elseif ($_iattr == 21 && (str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:"))) {
                     $_defaultStringType = $this->attrIntValue($_val);
                     $this->defaultStrParam = ($_defaultStringType == 0x40000000) ? 0x40000000 : 0x20000000;
                 } elseif ($_iattr == 20) {
-                    $this->emulatePrepares = $this->attrBoolValue($_val);
+                    // DB-Library has no native prepare API. php-src therefore
+                    // reports emulation as permanently enabled even when this
+                    // constructor option asks for native prepares.
+                    if (str_starts_with($_dsn, "dblib:")) {
+                        $this->emulatePrepares = true;
+                    } else {
+                        $this->emulatePrepares = $this->attrBoolValue($_val);
+                    }
                 } elseif ($_iattr == 8) {
                     // P2-e: same ATTR_CASE value validation as setAttribute() below.
                     $_ctorCase = $this->attrIntValue($_val);
@@ -1553,13 +1586,14 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
-            if ($username !== null && ($_dsnIsMysql || !str_contains($_dsn, "user="))) {
+            $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
+            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || !str_contains($_dsn, "user="))) {
                 $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
                 $_dsn = $_dsn . ";user=" . $_encUser;
             }
-            if ($password !== null && ($_dsnIsMysql || !str_contains($_dsn, "password="))) {
+            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || !str_contains($_dsn, "password="))) {
                 $_encPass = str_replace(";", "%3B", str_replace("%", "%25", $password));
                 $_dsn = $_dsn . ";password=" . $_encPass;
             }
@@ -1570,8 +1604,36 @@ class PDO {
             // `key=value` pairs their respective parsers already understand, so
             // folding this into the DSN needs no further bridge change — only
             // applied when the DSN does not already specify it.
-            if (isset($this->attributes[2]) && !str_contains($_dsn, "connect_timeout=")) {
-                $_dsn = $_dsn . ";connect_timeout=" . ((int) $this->attributes[2]);
+            if (isset($this->attributes[2])) {
+                if ($_dsnIsDblib) {
+                    // PDO_DBLIB applies ATTR_TIMEOUT to both login and statement
+                    // timeouts unless either driver-specific option overrides it.
+                    if (!isset($this->attributes[1000]) && !str_contains($_dsn, "connection_timeout=")) {
+                        $_dsn = $_dsn . ";connection_timeout=" . ((int) $this->attributes[2]);
+                    }
+                    if (!isset($this->attributes[1001]) && !str_contains($_dsn, "query_timeout=")) {
+                        $_dsn = $_dsn . ";query_timeout=" . ((int) $this->attributes[2]);
+                    }
+                } elseif (!str_contains($_dsn, "connect_timeout=")) {
+                    $_dsn = $_dsn . ";connect_timeout=" . ((int) $this->attributes[2]);
+                }
+            }
+            if ($_dsnIsDblib) {
+                if (isset($this->attributes[1000])) {
+                    $_dsn = $_dsn . ";connection_timeout=" . ((int) $this->attributes[1000]);
+                }
+                if (isset($this->attributes[1001])) {
+                    $_dsn = $_dsn . ";query_timeout=" . ((int) $this->attributes[1001]);
+                }
+                if (isset($this->attributes[1002])) {
+                    $_dsn = $_dsn . ";stringify_uniqueidentifier=" . ($this->attrBoolValue($this->attributes[1002]) ? "1" : "0");
+                }
+                if (isset($this->attributes[1005])) {
+                    $_dsn = $_dsn . ";skip_empty_rowsets=" . ($this->attrBoolValue($this->attributes[1005]) ? "1" : "0");
+                }
+                if (isset($this->attributes[1006])) {
+                    $_dsn = $_dsn . ";datetime_convert=" . ($this->attrBoolValue($this->attributes[1006]) ? "1" : "0");
+                }
             }
         }
         // Serialize the collected Pdo\Mysql::ATTR_SSL_* options into the packed
@@ -1656,8 +1718,26 @@ class PDO {
         // harmless no-op layered on top of the connect_timeout DSN key above,
         // which is what actually bounds the connect-time wait (P2-1).
         if (isset($this->attributes[2])) {
-            elephc_pdo_set_busy_timeout($this->conn, ((int) $this->attributes[2]) * 1000);
+            if (str_starts_with($_dsn, "dblib:")) {
+                elephc_pdo_dblib_set_attribute($this->conn, 2, (int) $this->attributes[2]);
+            } else {
+                elephc_pdo_set_busy_timeout($this->conn, ((int) $this->attributes[2]) * 1000);
+            }
         }
+    }
+
+    private function dblibErrorInfo(string $message): array {
+        $_sqlstate = elephc_pdo_sqlstate($this->conn);
+        $_native = elephc_pdo_errcode($this->conn);
+        $_osCode = elephc_pdo_dblib_os_errcode($this->conn);
+        $_severity = elephc_pdo_dblib_severity($this->conn);
+        $_formatted = $message . " [" . $_native . "] (severity " . $_severity . ") []";
+        $_info = [$_sqlstate, $_native, $_formatted, $_osCode, $_severity];
+        $_osMessage = elephc_pdo_dblib_os_errmsg($this->conn);
+        if ($_osMessage !== "") {
+            $_info[] = $_osMessage;
+        }
+        return $_info;
     }
 
     private function fail(string $message): void {
@@ -1674,9 +1754,14 @@ class PDO {
         // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
         // description, native code, driver message); errorInfo keeps the raw
         // [state, native, message] triple frameworks read via $e->errorInfo.
+        $_errorInfo = [$_sqlstate, $_native, $message];
+        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+            $_errorInfo = $this->dblibErrorInfo($message);
+            $message = (string) $_errorInfo[2];
+        }
         $_full = "SQLSTATE[" . $_sqlstate . "]: " . __elephc_pdo_sqlstate_description($_sqlstate) . ": " . $_native . " " . $message;
         if ($this->errMode == 2) {
-            throw PDOException::__elephcFromErrorInfo($_full, [$_sqlstate, $_native, $message]);
+            throw PDOException::__elephcFromErrorInfo($_full, $_errorInfo);
         }
         fwrite(STDERR, "PDO error: " . $_full . "\n");
     }
@@ -1921,13 +2006,15 @@ class PDO {
             // seconds, SQLite's is milliseconds. Other drivers accept it as a
             // no-op (see the bridge).
             elephc_pdo_set_busy_timeout($this->conn, $this->attrIntValue($value) * 1000);
+        } elseif ($attribute == 2 && $_driver === "dblib") {
+            return elephc_pdo_dblib_set_attribute($this->conn, 2, $this->attrIntValue($value)) === 1;
         } elseif ($attribute == 19) {
             $_attrFetchMode = $this->attrIntValue($value);
             $this->checkDefaultFetchMode($_attrFetchMode);
             $this->defaultFetchMode = $_attrFetchMode;
         } elseif ($attribute == 17) {
             $this->stringifyFetches = $this->attrBoolValue($value);
-        } elseif ($attribute == 21 && $_driver === "mysql") {
+        } elseif ($attribute == 21 && ($_driver === "mysql" || $_driver === "dblib")) {
             $_defaultStringType = $this->attrIntValue($value);
             $this->defaultStrParam = ($_defaultStringType == 0x40000000) ? 0x40000000 : 0x20000000;
         } elseif ($attribute == 14 && $_driver === "mysql") {
@@ -1937,6 +2024,11 @@ class PDO {
         } elseif ($attribute == 1 && $_driver === "pgsql") {
             return elephc_pdo_set_prefetch($this->conn, $this->attrBoolValue($value) ? 1 : 0) === 1;
         } elseif ($attribute == 20) {
+            if ($_driver === "dblib") {
+                // php-src exposes emulation as read-only true: DB-Library has no
+                // native prepare API and its set_attribute hook rejects this key.
+                return false;
+            }
             if ($_driver !== "mysql" && $_driver !== "pgsql") {
                 return false;
             }
@@ -1974,6 +2066,11 @@ class PDO {
             $this->disablePrepares = $this->attrBoolValue($value);
         } elseif ($attribute == 1004 && $_driver === "mysql") {
             $this->emulatePrepares = $this->attrBoolValue($value);
+        } elseif (($attribute == 1001 || $attribute == 1002 || $attribute == 1005 || $attribute == 1006) && $_driver === "dblib") {
+            if ($attribute == 1001) {
+                return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrIntValue($value)) === 1;
+            }
+            return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrBoolValue($value) ? 1 : 0) === 1;
         } else {
             // F-CORE-04 (CORRECTED — the finalization spec was WRONG about this, and an
             // earlier pass implemented the spec's version): an UNKNOWN attribute number
@@ -2041,8 +2138,11 @@ class PDO {
         if ($attribute == 17) {
             return $this->stringifyFetches;
         }
-        if ($attribute == 21 && elephc_pdo_driver_name($this->conn) === "mysql") {
+        if ($attribute == 21 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "dblib")) {
             return $this->defaultStrParam;
+        }
+        if ($attribute == 20 && elephc_pdo_driver_name($this->conn) === "dblib") {
+            return true;
         }
         if ($attribute == 20 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "pgsql")) {
             return $this->emulatePrepares;
@@ -2059,16 +2159,28 @@ class PDO {
         if ($attribute == 11) {
             return $this->oracleNulls;
         }
-        if ($attribute == 4) {
+        if ($attribute == 4 && elephc_pdo_driver_name($this->conn) !== "dblib") {
             return elephc_pdo_server_version($this->conn);
         }
         if ($attribute == 1005 && elephc_pdo_driver_name($this->conn) === "sqlite") {
             return elephc_pdo_transaction_mode($this->conn);
         }
-        if ($attribute == 5) {
+        if ($attribute == 5 && elephc_pdo_driver_name($this->conn) !== "dblib") {
             return elephc_pdo_client_version($this->conn);
         }
-        if ($attribute == 6 && elephc_pdo_driver_name($this->conn) !== "sqlite") {
+        if ($attribute == 1002 && elephc_pdo_driver_name($this->conn) === "dblib") {
+            return elephc_pdo_dblib_attribute_bool($this->conn, $attribute) === 1;
+        }
+        if ($attribute == 1003 && elephc_pdo_driver_name($this->conn) === "dblib") {
+            return elephc_pdo_client_version($this->conn);
+        }
+        if ($attribute == 1004 && elephc_pdo_driver_name($this->conn) === "dblib") {
+            return elephc_pdo_server_version($this->conn);
+        }
+        if (($attribute == 1005 || $attribute == 1006) && elephc_pdo_driver_name($this->conn) === "dblib") {
+            return elephc_pdo_dblib_attribute_bool($this->conn, $attribute) === 1;
+        }
+        if ($attribute == 6 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib") {
             $serverInfo = elephc_pdo_server_info($this->conn);
             if ($serverInfo === "") {
                 $this->failCode("HY000", "failed to read server information");
@@ -2076,7 +2188,7 @@ class PDO {
             }
             return $serverInfo;
         }
-        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite") {
+        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib") {
             return elephc_pdo_connection_status($this->conn);
         }
         // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES is write-only. Its get hook returns
@@ -2378,6 +2490,13 @@ class PDO {
             $_driverClass = "Pdo\\Pgsql";
             $_driverStatus = 3;
         }
+        // -- elephc optional PDO_DBLIB connect dispatch begin --
+        elseif (str_starts_with($_dsn, "dblib:")) {
+            $_driver = "dblib";
+            $_driverClass = "Pdo\\Dblib";
+            $_driverStatus = 4;
+        }
+        // -- elephc optional PDO_DBLIB connect dispatch end --
         if ($_driver === "") {
             if ($calledStatus === 0) {
                 throw new PDOException("could not find driver");
@@ -2396,7 +2515,12 @@ class PDO {
         if ($_driverStatus === 2) {
             return new \Pdo\Mysql($_dsn, $username, $password, $options);
         }
-        return new \Pdo\Pgsql($_dsn, $username, $password, $options);
+        if ($_driverStatus === 3) {
+            return new \Pdo\Pgsql($_dsn, $username, $password, $options);
+        }
+        // -- elephc optional PDO_DBLIB connect construction begin --
+        return new \Pdo\Dblib($_dsn, $username, $password, $options);
+        // -- elephc optional PDO_DBLIB connect construction end --
     }
     // -- elephc PHP >= 8.4 PDO::connect end --
 
@@ -2580,7 +2704,11 @@ class PDO {
         if ($_sqlstate === "00000") {
             return ["00000", null, null];
         }
-        return [$_sqlstate, elephc_pdo_errcode($this->conn), elephc_pdo_errmsg($this->conn)];
+        $_message = elephc_pdo_errmsg($this->conn);
+        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+            return $this->dblibErrorInfo($_message);
+        }
+        return [$_sqlstate, elephc_pdo_errcode($this->conn), $_message];
     }
 
     public function quote(string $string, int $type = 2): string {
@@ -2641,6 +2769,15 @@ class PDO {
                 return "E'" . str_replace("\\", "\\\\", $_doubled) . "'";
             }
             return "'" . $_doubled . "'";
+        }
+        if ($_driver === "dblib") {
+            $_stringFlags = $type & 0x60000000;
+            $_national = $_stringFlags == 0x40000000
+                || ($_stringFlags == 0 && $this->defaultStrParam == 0x40000000);
+            if ($_stringFlags == 0x20000000) {
+                $_national = false;
+            }
+            return ($_national ? "N" : "") . "'" . str_replace("'", "''", $string) . "'";
         }
         // SQLite (and the default): standard SQL ''-doubling is correct, and
         // $type is ignored here too — matching php-src's own sqlite quoter,
@@ -3032,6 +3169,24 @@ class PDOStatement implements IteratorAggregate {
         $this->scrollable = $scrollable;
     }
 
+    private function dblibStatementErrorInfo(string $message): array {
+        $_sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
+        $_native = elephc_pdo_stmt_errcode($this->stmt);
+        $_osCode = elephc_pdo_dblib_stmt_os_errcode($this->stmt);
+        $_severity = elephc_pdo_dblib_stmt_severity($this->stmt);
+        $_query = elephc_pdo_stmt_sent_sql($this->stmt);
+        if ($_query === "") {
+            $_query = $this->queryString;
+        }
+        $_formatted = $message . " [" . $_native . "] (severity " . $_severity . ") [" . $_query . "]";
+        $_info = [$_sqlstate, $_native, $_formatted, $_osCode, $_severity];
+        $_osMessage = elephc_pdo_dblib_stmt_os_errmsg($this->stmt);
+        if ($_osMessage !== "") {
+            $_info[] = $_osMessage;
+        }
+        return $_info;
+    }
+
     private function fail(string $message): void {
         // Per-statement error state (W1): the SQLSTATE, native code, and message
         // are read from the statement's own error slots and attached to errorInfo.
@@ -3043,9 +3198,14 @@ class PDOStatement implements IteratorAggregate {
         // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
         // description, native code, driver message); errorInfo keeps the raw
         // [state, native, message] triple frameworks read via $e->errorInfo.
+        $_errorInfo = [$_sqlstate, $_native, $message];
+        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+            $_errorInfo = $this->dblibStatementErrorInfo($message);
+            $message = (string) $_errorInfo[2];
+        }
         $_full = "SQLSTATE[" . $_sqlstate . "]: " . __elephc_pdo_sqlstate_description($_sqlstate) . ": " . $_native . " " . $message;
         if ($this->errMode == 2) {
-            throw PDOException::__elephcFromErrorInfo($_full, [$_sqlstate, $_native, $message]);
+            throw PDOException::__elephcFromErrorInfo($_full, $_errorInfo);
         }
         fwrite(STDERR, "PDO error: " . $_full . "\n");
     }
@@ -3085,7 +3245,11 @@ class PDOStatement implements IteratorAggregate {
         if ($_sqlstate === "00000") {
             return ["00000", null, null];
         }
-        return [$_sqlstate, elephc_pdo_stmt_errcode($this->stmt), elephc_pdo_stmt_errmsg($this->stmt)];
+        $_message = elephc_pdo_stmt_errmsg($this->stmt);
+        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+            return $this->dblibStatementErrorInfo($_message);
+        }
+        return [$_sqlstate, elephc_pdo_stmt_errcode($this->stmt), $_message];
     }
 
     // P3: propagates ATTR_DEFAULT_FETCH_MODE to a freshly prepared statement,
@@ -3599,9 +3763,22 @@ class PDOStatement implements IteratorAggregate {
             $this->failCode("HY093", $_bindDetail);
             return false;
         }
-        // A statement with no result columns (INSERT/UPDATE/DELETE/DDL) is run
-        // now.
-        if (elephc_pdo_column_count($this->stmt) == 0) {
+        // DB-Library cannot describe a batch before it executes. Run it once here,
+        // then inspect the materialized rowset shape; cache a first row exactly as
+        // the ordinary SELECT prefetch path below does.
+        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+            $_step = elephc_pdo_step($this->stmt);
+            if ($_step < 0) {
+                $this->fail(elephc_pdo_errmsg($this->conn));
+                $this->rowCount = elephc_pdo_changes($this->conn);
+                return false;
+            }
+            if (elephc_pdo_column_count($this->stmt) > 0) {
+                $this->pendingStep = $_step;
+                $this->hasPendingStep = true;
+            }
+        // A statement with no result columns (INSERT/UPDATE/DELETE/DDL) is run now.
+        } elseif (elephc_pdo_column_count($this->stmt) == 0) {
             $_step = elephc_pdo_step($this->stmt);
             if ($this->owner !== null && elephc_pdo_driver_name($this->conn) === "pgsql") {
                 $this->owner->__elephcDrainPgsqlNotices();
@@ -4640,9 +4817,12 @@ class PDOStatement implements IteratorAggregate {
         // errMode-aware like every other statement failure.
         //
         // MySQL retains every protocol result set during execute(), including
-        // empty OK-packet sets between SELECT-like sets. Advancing resets the
-        // row cursor and refreshes rowCount()/column metadata for the new set.
-        if (elephc_pdo_driver_name($this->conn) === "mysql") {
+        // empty OK-packet sets between SELECT-like sets. DBLIB likewise exposes
+        // each `dbresults()` result (or skips empty ones when its driver option
+        // requests that). Advancing resets the row cursor and refreshes
+        // rowCount()/column metadata for the new set.
+        $_rowsetDriver = elephc_pdo_driver_name($this->conn);
+        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib") {
             if (elephc_pdo_next_rowset($this->stmt) !== 1) {
                 return false;
             }
@@ -4757,6 +4937,24 @@ class PDOStatement implements IteratorAggregate {
             return $_pgMeta;
         }
         $_driver = elephc_pdo_driver_name($this->conn);
+        if ($_driver === "dblib") {
+            $_dblibNativeId = elephc_pdo_dblib_column_native_type_id($this->stmt, $column);
+            $_dblibPdoType = 2;
+            if ($_dblibNativeId == 48 || $_dblibNativeId == 50
+                || $_dblibNativeId == 52 || $_dblibNativeId == 56) {
+                $_dblibPdoType = 1;
+            }
+            return [
+                "max_length" => elephc_pdo_column_len($this->stmt, $column),
+                "precision" => elephc_pdo_column_precision($this->stmt, $column),
+                "scale" => elephc_pdo_dblib_column_scale($this->stmt, $column),
+                "column_source" => elephc_pdo_dblib_column_source($this->stmt, $column),
+                "native_type" => elephc_pdo_column_native_type($this->stmt, $column),
+                "native_type_id" => $_dblibNativeId,
+                "native_usertype_id" => elephc_pdo_dblib_column_user_type_id($this->stmt, $column),
+                "pdo_type" => $_dblibPdoType,
+            ];
+        }
         if ($_driver === "mysql") {
             $_myNative = elephc_pdo_column_native_type($this->stmt, $column);
             $_myType = 2;
@@ -5028,6 +5226,26 @@ final class __ElephcPDOStatementIterator implements Iterator {
 // every name-resolution path.
 // -- elephc PHP >= 8.4 namespaced PDO drivers begin --
 namespace Pdo {
+    // -- elephc optional PDO_DBLIB class begin --
+    class Dblib extends \PDO {
+        const ATTR_CONNECTION_TIMEOUT = 1000;
+        const ATTR_QUERY_TIMEOUT = 1001;
+        const ATTR_STRINGIFY_UNIQUEIDENTIFIER = 1002;
+        const ATTR_VERSION = 1003;
+        const ATTR_TDS_VERSION = 1004;
+        const ATTR_SKIP_EMPTY_ROWSETS = 1005;
+        const ATTR_DATETIME_CONVERT = 1006;
+
+        public function __construct(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null) {
+            $_operation = get_class($this) . "::__construct";
+            $_dblibDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_dblibDsn = self::resolveDsnUri($_dblibDsn, $_operation);
+            $this->checkDriverSubclassDsn($_dblibDsn, "Pdo\\Dblib", "dblib");
+            parent::__construct($_dblibDsn, $username, $password, $options);
+        }
+    }
+    // -- elephc optional PDO_DBLIB class end --
+
     class Sqlite extends \PDO {
         // SQLite driver-specific constants (ext/pdo_sqlite). ATTR_* start at
         // PDO_ATTR_DRIVER_SPECIFIC (1000); OPEN_* mirror the SQLite C open flags;
@@ -5529,6 +5747,7 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --",
         );
+        configure_optional_drivers(&mut source, php_version);
         return Cow::Owned(source);
     }
 
@@ -5561,6 +5780,7 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
         if php_version < PhpVersion::Php82 {
             source = source.replace("#[\\SensitiveParameter] ", "");
         }
+        configure_optional_drivers(&mut source, php_version);
         return Cow::Owned(source);
     }
 
@@ -5632,7 +5852,61 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
             "elephc_pdo_release($this->conn, 1);",
         );
     }
+    configure_optional_drivers(&mut source, php_version);
     Cow::Owned(source)
+}
+
+/// Applies build-profile and PHP-version gates for optional system-client drivers.
+fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
+    let dblib_enabled = cfg!(feature = "pdo-dblib")
+        || std::env::var_os("ELEPHC_PDO_DBLIB").is_some();
+    if !dblib_enabled {
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_DBLIB aliases begin --",
+            "    // -- elephc optional PDO_DBLIB aliases end --",
+        );
+        if php_version >= PhpVersion::Php84 {
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_DBLIB connect dispatch begin --",
+                "        // -- elephc optional PDO_DBLIB connect dispatch end --",
+            );
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_DBLIB connect construction begin --",
+                "        // -- elephc optional PDO_DBLIB connect construction end --",
+            );
+            remove_version_block(
+                source,
+                "    // -- elephc optional PDO_DBLIB class begin --",
+                "    // -- elephc optional PDO_DBLIB class end --",
+            );
+        }
+        return;
+    }
+
+    if php_version >= PhpVersion::Php85 {
+        for (legacy_name, namespaced_name) in [
+            ("DBLIB_ATTR_CONNECTION_TIMEOUT", "ATTR_CONNECTION_TIMEOUT"),
+            ("DBLIB_ATTR_QUERY_TIMEOUT", "ATTR_QUERY_TIMEOUT"),
+            ("DBLIB_ATTR_STRINGIFY_UNIQUEIDENTIFIER", "ATTR_STRINGIFY_UNIQUEIDENTIFIER"),
+            ("DBLIB_ATTR_VERSION", "ATTR_VERSION"),
+            ("DBLIB_ATTR_TDS_VERSION", "ATTR_TDS_VERSION"),
+            ("DBLIB_ATTR_SKIP_EMPTY_ROWSETS", "ATTR_SKIP_EMPTY_ROWSETS"),
+            ("DBLIB_ATTR_DATETIME_CONVERT", "ATTR_DATETIME_CONVERT"),
+        ] {
+            assert!(
+                source.contains(&format!("    const {legacy_name} =")),
+                "missing PDO_DBLIB alias {legacy_name}"
+            );
+            *source = source.replacen(
+                &format!("    const {legacy_name} ="),
+                &format!("    #[\\Deprecated(\"use Pdo\\\\Dblib::{namespaced_name} instead\")]\n    const {legacy_name} ="),
+                1,
+            );
+        }
+    }
 }
 
 /// Removes one inclusive source fragment delimited by stable version-gate comments.
@@ -5751,6 +6025,24 @@ mod version_tests {
             .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
         assert!(prelude_source_for_version(PhpVersion::Php86)
             .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
+    }
+
+    /// PDO_DBLIB keeps legacy constants on older targets, adds `Pdo\Dblib` in
+    /// PHP 8.4, and deprecates only the legacy aliases beginning with PHP 8.5.
+    #[cfg(feature = "pdo-dblib")]
+    #[test]
+    fn dblib_surface_and_alias_deprecations_are_version_gated() {
+        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        assert!(php83.contains("const DBLIB_ATTR_CONNECTION_TIMEOUT = 1000;"));
+        assert!(!php83.contains("class Dblib extends \\PDO"));
+        assert!(!php83.contains("use Pdo\\Dblib::ATTR_CONNECTION_TIMEOUT instead"));
+
+        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        assert!(php84.contains("class Dblib extends \\PDO"));
+        assert!(!php84.contains("#[\\Deprecated(\"use Pdo\\\\Dblib::ATTR_CONNECTION_TIMEOUT instead\")]"));
+
+        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        assert!(php85.contains("#[\\Deprecated(\"use Pdo\\\\Dblib::ATTR_CONNECTION_TIMEOUT instead\")]"));
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while
