@@ -22,8 +22,8 @@
 use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
-    ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+    AttributeGroup, CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty,
+    EnumCaseDecl, Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
 
@@ -48,6 +48,12 @@ fn reject(errors: &mut Vec<CompileError>, span: Span, lead: &str) {
 
 /// Pushes a violation when `name`'s bare (last) segment uses the
 /// compiler-reserved `__elephc_` prefix.
+///
+/// Applied to free-function declarations and call targets only: the compiler
+/// reserves the prefix exclusively for internal builtins and synthesized
+/// functions, which live in the function namespace. Class, method, and property
+/// names are separate PHP symbol spaces the compiler never synthesizes
+/// `__elephc_*` names into, so they are deliberately not checked.
 fn reject_reserved_name(errors: &mut Vec<CompileError>, span: Span, name: &Name) {
     let bare = name.parts.last().map(String::as_str).unwrap_or_default();
     if bare.to_ascii_lowercase().starts_with("__elephc_") {
@@ -66,10 +72,23 @@ fn audit_stmts(stmts: &[Stmt], errors: &mut Vec<CompileError>) {
     }
 }
 
+/// Audits PHP attribute groups: attribute arguments are ordinary expressions
+/// (`#[Foo(buffer_new<int>(4))]` is a real call site once the attribute is
+/// reflected), so they get the same expression audit as any other code.
+fn audit_attribute_groups(groups: &[AttributeGroup], errors: &mut Vec<CompileError>) {
+    for group in groups {
+        for attribute in &group.attributes {
+            audit_exprs(&attribute.args, errors);
+        }
+    }
+}
+
 /// Audits one statement: rejects extension statement forms and recurses into
-/// every nested expression, type annotation, and statement body.
+/// every nested expression, type annotation, statement body, and the
+/// statement's own attribute arguments.
 fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
     let span = stmt.span;
+    audit_attribute_groups(&stmt.attributes, errors);
     match &stmt.kind {
         StmtKind::Echo(expr) => audit_expr(expr, errors),
         StmtKind::Assign { name: _, value } => audit_expr(value, errors),
@@ -217,7 +236,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         StmtKind::FunctionDecl {
             name,
             params,
-            param_attributes: _,
+            param_attributes,
             variadic: _,
             variadic_by_ref: _,
             variadic_type,
@@ -226,6 +245,9 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             body,
         } => {
             reject_reserved_name(errors, span, &Name::unqualified(name));
+            for groups in param_attributes {
+                audit_attribute_groups(groups, errors);
+            }
             audit_params(params, span, errors);
             if let Some(variadic_type) = variadic_type {
                 audit_type(variadic_type, span, errors);
@@ -282,11 +304,12 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
                 name: _,
                 value,
                 span: case_span,
-                attributes: _,
+                attributes,
             } in cases
             {
+                let _ = case_span;
+                audit_attribute_groups(attributes, errors);
                 if let Some(value) = value {
-                    let _ = case_span;
                     audit_expr(value, errors);
                 }
             }
@@ -388,6 +411,7 @@ fn audit_class_members(
     errors: &mut Vec<CompileError>,
 ) {
     for property in properties {
+        audit_attribute_groups(&property.attributes, errors);
         if let Some(type_expr) = &property.type_expr {
             audit_type(type_expr, property.span, errors);
         }
@@ -396,6 +420,10 @@ fn audit_class_members(
         }
     }
     for method in methods {
+        audit_attribute_groups(&method.attributes, errors);
+        for groups in &method.param_attributes {
+            audit_attribute_groups(groups, errors);
+        }
         audit_params(&method.params, method.span, errors);
         if let Some(variadic_type) = &method.variadic_type {
             audit_type(variadic_type, method.span, errors);
@@ -406,6 +434,7 @@ fn audit_class_members(
         audit_stmts(&method.body, errors);
     }
     for constant in constants {
+        audit_attribute_groups(&constant.attributes, errors);
         if let Some(type_expr) = &constant.type_expr {
             audit_type(type_expr, constant.span, errors);
         }

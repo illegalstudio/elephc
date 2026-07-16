@@ -16,11 +16,10 @@
 use super::*;
 
 /// Runs [`check_source`] with strict-PHP mode enabled for the duration.
+/// The RAII guard restores the previous state even when the checked pipeline panics.
 fn check_source_strict(src: &str) -> Result<(), String> {
-    elephc::strict_php::set_enabled(true);
-    let result = check_source(src);
-    elephc::strict_php::set_enabled(false);
-    result
+    let _guard = elephc::strict_php::scoped_enable();
+    check_source(src)
 }
 
 /// Asserts that `src` fails under strict mode with a message containing `expected_substr`.
@@ -244,6 +243,53 @@ fn test_audit_rejects_reserved_elephc_call() {
     );
 }
 
+/// Verifies extension expressions inside PHP attribute arguments on a function
+/// declaration are rejected: attribute args are ordinary expressions and must
+/// not be an audit blind spot.
+#[test]
+fn test_audit_rejects_extension_in_function_attribute_args() {
+    expect_audit_violation(
+        "<?php #[Foo(buffer_new<int>(4))] function f(): void {} echo \"ok\";",
+        "`buffer_new<T>` is an elephc extension",
+    );
+}
+
+/// Verifies extension expressions inside parameter attribute arguments are rejected.
+#[test]
+fn test_audit_rejects_extension_in_param_attribute_args() {
+    expect_audit_violation(
+        "<?php function f(#[Foo(buffer_new<int>(2))] int $x): void {}",
+        "`buffer_new<T>` is an elephc extension",
+    );
+}
+
+/// Verifies extension expressions inside property attribute arguments are rejected.
+#[test]
+fn test_audit_rejects_extension_in_property_attribute_args() {
+    expect_audit_violation(
+        "<?php class C { #[Foo(buffer_new<int>(1))] public int $x = 0; }",
+        "`buffer_new<T>` is an elephc extension",
+    );
+}
+
+/// Verifies extension expressions inside method attribute arguments are rejected.
+#[test]
+fn test_audit_rejects_extension_in_method_attribute_args() {
+    expect_audit_violation(
+        "<?php class C { #[Foo(buffer_new<int>(1))] public function m(): void {} }",
+        "`buffer_new<T>` is an elephc extension",
+    );
+}
+
+/// Verifies compiler-reserved `__elephc_*` calls inside attribute arguments are rejected.
+#[test]
+fn test_audit_rejects_reserved_call_in_attribute_args() {
+    expect_audit_violation(
+        "<?php #[Foo(__elephc_ptr_read_string(1, 2))] function f(): void {}",
+        "reserved for the compiler",
+    );
+}
+
 /// Verifies the audit collects multiple violations in one pass instead of
 /// stopping at the first, so users can fix a file in one round.
 #[test]
@@ -279,14 +325,15 @@ fn resolve_files_strict(
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
 
-    elephc::strict_php::set_enabled(true);
-    let result = (|| -> Result<(), elephc::errors::CompileError> {
-        let tokens = tokenize(&source)?;
-        let ast = parse(&tokens)?;
-        let _ = elephc::resolver::resolve(ast, base_dir)?;
-        Ok(())
-    })();
-    elephc::strict_php::set_enabled(false);
+    let result = {
+        let _guard = elephc::strict_php::scoped_enable();
+        (|| -> Result<(), elephc::errors::CompileError> {
+            let tokens = tokenize(&source)?;
+            let ast = parse(&tokens)?;
+            let _ = elephc::resolver::resolve(ast, base_dir)?;
+            Ok(())
+        })()
+    };
 
     let _ = fs::remove_dir_all(&dir);
     result
