@@ -463,6 +463,35 @@ pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
 }
 
+/// Compiles and runs PHP source with an isolated `PHPRC` file containing `ini`.
+pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_ini_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let ini_path = dir.join("php.ini");
+    fs::write(&ini_path, ini).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        &[("PHPRC", ini_path.as_os_str())],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
 /// Compiles and runs PHP source with an explicit PHP compatibility version.
 pub(crate) fn compile_and_run_with_php_version(
     source: &str,

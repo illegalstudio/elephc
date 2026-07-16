@@ -42,6 +42,10 @@ mod detect;
 pub const PDO_PRELUDE_SRC: &str = r#"<?php
 
 extern "elephc_pdo" {
+    function elephc_pdo_available_driver_count(): int;
+    function elephc_pdo_available_driver_name(int $index): string;
+    function elephc_pdo_ini_dsn_defined(string $name): int;
+    function elephc_pdo_ini_dsn_value(string $name): string;
     function elephc_pdo_open(string $dsn): int;
     // v17 adds $sqlite_flags: the raw sqlite3_open_v2 flags for a `sqlite:` DSN
     // (0 = default READWRITE|CREATE), ignored for pgsql:/mysql: DSNs. Backs
@@ -302,12 +306,13 @@ extern "elephc_pdo" {
 // (`in_array('pgsql', pdo_drivers(), true)`). It was absent here entirely, so such a
 // probe failed to compile rather than reporting the drivers this build has.
 //
-// The list is duplicated from PDO::getAvailableDrivers() rather than delegated to it: a
-// global function calling a static method is a dispatch shape this prelude uses nowhere
-// else, and the value is a one-line literal. The two MUST be kept in lockstep.
-//
 function pdo_drivers(): array {
-    return ["mysql", "pgsql", "sqlite"];
+    $_drivers = [];
+    $_count = elephc_pdo_available_driver_count();
+    for ($_index = 0; $_index < $_count; $_index++) {
+        $_drivers[] = elephc_pdo_available_driver_name($_index);
+    }
+    return $_drivers;
 }
 
 // Maps a SQLSTATE to the human-readable class description PDO interpolates into a
@@ -1221,6 +1226,25 @@ class PDO {
         return $_resolved;
     }
 
+    // PHP resolves a colonless constructor/factory DSN through the startup
+    // configuration key `pdo.dsn.<name>` before URI handling and driver dispatch.
+    // The bridge reads PHPRC/php.ini and PHP_INI_SCAN_DIR fragments at runtime so
+    // aliases remain deployment configuration rather than compiler constants.
+    protected static function resolveDsnAlias(string $dsn, string $operation): string {
+        if (strpos($dsn, ":") !== false) {
+            return $dsn . "";
+        }
+        $_key = "pdo.dsn." . $dsn;
+        if (elephc_pdo_ini_dsn_defined($dsn) !== 1) {
+            throw new PDOException($operation . "(): Argument #1 (\$dsn) must be a valid data source name");
+        }
+        $_resolved = elephc_pdo_ini_dsn_value($dsn);
+        if (strpos($_resolved, ":") === false) {
+            throw new PDOException("invalid data source name (via INI: " . $_key . ")");
+        }
+        return $_resolved;
+    }
+
     // F-CORE-13: php-src validates the DSN in two steps, with two DIFFERENT messages,
     // both before any driver is asked to connect (pdo_dbh.c:346-372):
     //   1. no colon at all -> the ARGUMENT-ERROR message shape
@@ -1228,12 +1252,9 @@ class PDO {
     //   2. a colon but no driver registered for the prefix -> the BARE message
     //      "could not find driver" (php-src deliberately keeps the DSN out of that text:
     //      it may carry a password).
-    // Neither existed here: the constructor let the bridge fail the open and surfaced ITS
-    // message, "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are
-    // supported)", while PDO::connect() threw php-src's bare text — two different messages
-    // for one failure inside one class, and a colonless DSN got neither. The helpful
-    // driver list survives in this comment and in docs/php/pdo.md rather than in an
-    // exception message callers may match on.
+    // Neither existed here originally: the constructor let the bridge fail the open
+    // while PDO::connect() threw php-src's bare text, so one failure had two messages
+    // inside one class and a colonless DSN got neither.
     //
     // BOTH are PDOExceptions — VERIFIED against a real PHP 8.5.6 CLI, and worth stating
     // because the C source misleads: case 1 is raised with
@@ -1253,7 +1274,8 @@ class PDO {
         if (strpos($dsn, ":") === false) {
             throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source name");
         }
-        if (!str_starts_with($dsn, "sqlite:") && !str_starts_with($dsn, "pgsql:") && !str_starts_with($dsn, "mysql:")) {
+        $_driver = substr($dsn, 0, (int) strpos($dsn, ":"));
+        if (!in_array($_driver, pdo_drivers(), true)) {
             throw new PDOException("could not find driver");
         }
     }
@@ -1303,7 +1325,9 @@ class PDO {
         // FIRST — php-src does both ahead of the options loop and the driver connect
         // (pdo_dbh.c:346-372). Every later DSN test in this method reads $_dsn, never the
         // raw $dsn parameter, which for a `uri:` DSN still says "uri:…".
-        $_dsn = self::resolveDsnUri($dsn, get_class($this) . "::__construct");
+        $_operation = get_class($this) . "::__construct";
+        $_dsn = self::resolveDsnAlias($dsn, $_operation);
+        $_dsn = self::resolveDsnUri($_dsn, $_operation);
         $this->checkDsnIsSupported($_dsn);
         $this->errMode = 2;
         $this->persistent = false;
@@ -2314,8 +2338,12 @@ class PDO {
     }
 
     public static function getAvailableDrivers(): array {
-        // The drivers this bridge can dispatch to from a DSN prefix.
-        return ["mysql", "pgsql", "sqlite"];
+        $_drivers = [];
+        $_count = elephc_pdo_available_driver_count();
+        for ($_index = 0; $_index < $_count; $_index++) {
+            $_drivers[] = elephc_pdo_available_driver_name($_index);
+        }
+        return $_drivers;
     }
 
     // -- elephc PHP >= 8.4 PDO::connect begin --
@@ -2331,7 +2359,9 @@ class PDO {
         //
         $calledClass = static::class;
         $calledStatus = __elephc_pdo_called_class_status($calledClass);
-        $_dsn = self::resolveDsnUri($dsn, $calledClass . "::connect");
+        $_operation = $calledClass . "::connect";
+        $_dsn = self::resolveDsnAlias($dsn, $_operation);
+        $_dsn = self::resolveDsnUri($_dsn, $_operation);
         $_driver = "";
         $_driverClass = "";
         $_driverStatus = -1;
@@ -5011,7 +5041,9 @@ namespace Pdo {
             // a DSN belonging to another driver BEFORE any connection is attempted. The
             // resolved DSN is what goes up to \PDO, so the file is read exactly once —
             // resolveDsnUri() is a no-op on an already-resolved DSN.
-            $_sqliteDsn = self::resolveDsnUri($dsn, get_class($this) . "::__construct");
+            $_operation = get_class($this) . "::__construct";
+            $_sqliteDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_sqliteDsn = self::resolveDsnUri($_sqliteDsn, $_operation);
             $this->checkDriverSubclassDsn($_sqliteDsn, "Pdo\\Sqlite", "sqlite");
             // Forward to \PDO to open the connection, then initialise the callback
             // root (an uninitialised typed array property is not implicitly []).
@@ -5169,7 +5201,9 @@ namespace Pdo {
             // object. The override exists solely to run the driver guard (and the `uri:`
             // resolution it depends on) before any connection is attempted; it adds no
             // MySQL-specific state of its own. See \PDO::checkDriverSubclassDsn().
-            $_mysqlDsn = self::resolveDsnUri($dsn, get_class($this) . "::__construct");
+            $_operation = get_class($this) . "::__construct";
+            $_mysqlDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_mysqlDsn = self::resolveDsnUri($_mysqlDsn, $_operation);
             $this->checkDriverSubclassDsn($_mysqlDsn, "Pdo\\Mysql", "mysql");
             parent::__construct($_mysqlDsn, $username, $password, $options);
         }
@@ -5201,7 +5235,9 @@ namespace Pdo {
             // F-CORE-01/F-CORE-11: resolve an indirect `uri:` DSN, then reject a DSN
             // belonging to another driver, both BEFORE any connection is attempted — see
             // \PDO::checkDriverSubclassDsn().
-            $_pgsqlDsn = self::resolveDsnUri($dsn, get_class($this) . "::__construct");
+            $_operation = get_class($this) . "::__construct";
+            $_pgsqlDsn = self::resolveDsnAlias($dsn, $_operation);
+            $_pgsqlDsn = self::resolveDsnUri($_pgsqlDsn, $_operation);
             $this->checkDriverSubclassDsn($_pgsqlDsn, "Pdo\\Pgsql", "pgsql");
             // Forward to \PDO to open the connection. The base connection object owns
             // a virtual drain hook so prepared statements can dispatch here too.

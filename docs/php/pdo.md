@@ -58,11 +58,20 @@ $my = new PDO("mysql:host=127.0.0.1;port=3306;dbname=app;user=me;password=secret
 $my = new PDO("mysql:host=127.0.0.1;dbname=app", "me", "secret");
 ```
 
-The DSN must start with `sqlite:`, `pgsql:`, or `mysql:`. A DSN with no colon at all
-throws a `PDOException` naming the argument (`PDO::__construct(): Argument #1 ($dsn)
-must be a valid data source name`); a colon-bearing DSN with an unknown prefix throws
-`PDOException("could not find driver")` — both before any connection is attempted,
-matching php-src.
+The DSN normally starts with `sqlite:`, `pgsql:`, or `mysql:`. A colonless value may
+instead name a runtime PHP configuration alias such as
+`pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
+DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
+explicit `PHPRC` directory) followed by alphabetically sorted `.ini` fragments from
+`PHP_INI_SCAN_DIR`, with the last assignment winning as in PHP. Alias names are
+case-sensitive. An absent alias throws the normal argument-shaped `PDOException`; an
+alias whose value contains no colon throws
+`PDOException("invalid data source name (via INI: pdo.dsn.<name>)")`.
+
+A colon-bearing DSN with an unknown prefix throws `PDOException("could not find
+driver")` before any connection is attempted, matching php-src. The resolved alias
+value is also authoritative for driver-specific subclasses, `PDO::connect()`,
+credentials, and persistent-pool identity.
 
 For SQLite, the `$username` / `$password` arguments are accepted for signature
 compatibility but ignored; constructor options still seed PDO attributes. A failed
@@ -862,8 +871,8 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Other PDO drivers.** Only SQLite, PostgreSQL, and MySQL / MariaDB; the bridge is
-  structured to add more behind the same prelude.
-- `php.ini`-based DSN aliases (`pdo.dsn.*`) are not available in standalone binaries.
+  structured around a central compiled-driver registry so optional drivers can join the
+  same dispatch and availability surface.
 
 ### Driver-specific client options
 

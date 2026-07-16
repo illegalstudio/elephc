@@ -2,8 +2,8 @@
 //! Multi-driver database bridge for the elephc PDO implementation. Exposes a
 //! small, stable, driver-agnostic C ABI (`elephc_pdo_*`) that the elephc PDO
 //! prelude calls through `extern "elephc_pdo"` declarations; each call dispatches
-//! to the SQLite, PostgreSQL, or MySQL/MariaDB driver based on the handle's
-//! driver, selected from the DSN prefix at `open()`.
+//! to a registered PDO driver based on the handle's driver, selected from the
+//! DSN prefix at `open()`.
 //!
 //! Called from:
 //! - Compiled PHP programs that use PDO, via the elephc-PHP prelude's `extern`
@@ -30,6 +30,8 @@
 //! - The drivers are bundled (SQLite) / pure-Rust (PostgreSQL, MySQL/MariaDB), so
 //!   compiled PHP binaries have no system database-client runtime dependency.
 
+mod driver;
+mod ini;
 mod my;
 #[path = "pg.rs"]
 #[cfg_attr(feature = "libpq-gss", allow(dead_code))]
@@ -52,6 +54,17 @@ enum Conn {
     Sqlite(sqlite::SqliteConn),
     Postgres(pg::PgConn),
     Mysql(my::MyConn),
+}
+
+impl Conn {
+    /// Returns the central registry identity for this live connection.
+    fn driver_kind(&self) -> driver::DriverKind {
+        match self {
+            Self::Sqlite(_) => driver::DriverKind::Sqlite,
+            Self::Postgres(_) => driver::DriverKind::Pgsql,
+            Self::Mysql(_) => driver::DriverKind::Mysql,
+        }
+    }
 }
 
 /// A live prepared statement, tagged by its driver.
@@ -224,6 +237,12 @@ fn drivername_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static buffer for the most recently resolved `pdo.dsn.*` INI alias.
+fn dsn_alias_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// Static buffer for the most recent `elephc_pdo_sqlstate` result.
 fn sqlstate_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -359,24 +378,21 @@ fn open_conn_for_dsn(
     my_found_rows: bool,
     my_driver_config: &str,
 ) -> Result<Conn, String> {
-    if let Some(path) = dsn.strip_prefix("sqlite:") {
-        sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
-    } else if dsn.starts_with("pgsql:") {
-        pg::PgConn::open(dsn).map(Conn::Postgres)
-    } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(
+    match driver::DriverKind::from_dsn(dsn) {
+        Some(driver::DriverKind::Sqlite) => {
+            let path = dsn.strip_prefix(driver::DriverKind::Sqlite.dsn_prefix()).unwrap_or_default();
+            sqlite::SqliteConn::open(path, sqlite_open_flags).map(Conn::Sqlite)
+        }
+        Some(driver::DriverKind::Pgsql) => pg::PgConn::open(dsn).map(Conn::Postgres),
+        Some(driver::DriverKind::Mysql) => my::MyConn::open(
             dsn,
             my_init_command,
             my_ssl_config,
             my_found_rows,
             my_driver_config,
         )
-        .map(Conn::Mysql)
-    } else {
-        Err(
-            "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
-                .to_string(),
-        )
+        .map(Conn::Mysql),
+        None => Err("could not find driver".to_string()),
     }
 }
 
@@ -625,12 +641,13 @@ fn open_persistent_dsn(
 /// adds bounded PostgreSQL large-object size/read/write operations. v46 adds the
 /// equivalent bounded size/read/write operations for SQLite incremental BLOBs.
 /// v47 enables PHP 8.5+'s demand-driven simple-query protocol per statement.
+/// v48 exposes the compiled-driver registry and runtime `pdo.dsn.*` INI aliases.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(47, || 47)
+    ffi_guard(48, || 48)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -640,13 +657,66 @@ pub extern "C" fn elephc_pdo_version() -> i32 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_driver_name(conn_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
-        let name = match lock_recover(conns()).get(&conn_id) {
-            Some(Conn::Sqlite(_)) => "sqlite",
-            Some(Conn::Postgres(_)) => "pgsql",
-            Some(Conn::Mysql(_)) => "mysql",
-            None => "",
-        };
+        let name = lock_recover(conns())
+            .get(&conn_id)
+            .map(Conn::driver_kind)
+            .map(driver::DriverKind::name)
+            .unwrap_or_default();
         store_cstr(drivername_cell(), name)
+    })
+}
+
+/// Returns the number of PDO drivers compiled into this bridge.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_available_driver_count() -> i64 {
+    ffi_guard(0, || driver::AVAILABLE.len() as i64)
+}
+
+/// Returns the lowercase name of the available driver at `index`, or an empty
+/// string when `index` is outside the registry. The pointer remains valid for the
+/// process lifetime because registry names are static string literals.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_available_driver_name(index: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let Some(kind) = usize::try_from(index)
+            .ok()
+            .and_then(|index| driver::AVAILABLE.get(index))
+        else {
+            return static_cstr(b"\0");
+        };
+        match kind {
+            driver::DriverKind::Mysql => static_cstr(b"mysql\0"),
+            driver::DriverKind::Pgsql => static_cstr(b"pgsql\0"),
+            driver::DriverKind::Sqlite => static_cstr(b"sqlite\0"),
+        }
+    })
+}
+
+/// Returns `1` when runtime PHP configuration defines `pdo.dsn.<name>`, and `0`
+/// otherwise. Alias names are case-sensitive like php-src's configuration table.
+///
+/// # Safety
+/// `name` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_ini_dsn_defined(name: *const c_char) -> i64 {
+    ffi_guard(0, || {
+        cstr_arg(name)
+            .and_then(ini::lookup)
+            .map_or(0, |_| 1)
+    })
+}
+
+/// Returns the configured value of `pdo.dsn.<name>`, or an empty string for an
+/// absent/invalid name. Callers use `elephc_pdo_ini_dsn_defined()` to distinguish
+/// an absent alias from a deliberately configured empty value.
+///
+/// # Safety
+/// `name` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_ini_dsn_value(name: *const c_char) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let value = cstr_arg(name).and_then(ini::lookup).unwrap_or_default();
+        store_cstr(dsn_alias_cell(), value)
     })
 }
 
@@ -3032,11 +3102,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v47 exposes
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v48 exposes
     /// PHP-version-selected simple-query streaming.
     #[test]
-    fn version_is_v47() {
-        assert_eq!(elephc_pdo_version(), 47);
+    fn version_is_v48() {
+        assert_eq!(elephc_pdo_version(), 48);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

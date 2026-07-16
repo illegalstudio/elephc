@@ -5943,6 +5943,68 @@ try {
     );
 }
 
+/// Resolves a colonless PDO DSN from the runtime `pdo.dsn.*` configuration and
+/// uses the resolved driver for both construction and driver-name reporting.
+#[test]
+fn test_pdo_ini_dsn_alias_opens_resolved_sqlite_driver() {
+    let out = compile_and_run_with_php_ini(
+        r#"<?php
+$db = new PDO("memory");
+echo $db->getAttribute(PDO::ATTR_DRIVER_NAME) . "|";
+$db->exec("CREATE TABLE aliases (value TEXT)");
+$db->exec("INSERT INTO aliases VALUES ('ok')");
+echo $db->query("SELECT value FROM aliases")->fetchColumn();
+"#,
+        "pdo.dsn.memory = \"sqlite::memory:\"\n",
+    );
+    assert_eq!(out, "sqlite|ok");
+}
+
+/// Reports php-src's distinct error when an INI alias exists but its configured
+/// value is itself not a colon-bearing data source name.
+#[test]
+fn test_pdo_ini_dsn_alias_rejects_invalid_configured_value() {
+    let out = compile_and_run_with_php_ini(
+        r#"<?php
+try {
+    $db = new PDO("broken");
+} catch (PDOException $e) {
+    echo $e->getMessage();
+}
+"#,
+        "pdo.dsn.broken = \"not-a-dsn\"\n",
+    );
+    assert_eq!(out, "invalid data source name (via INI: pdo.dsn.broken)");
+}
+
+/// Applies PHP's last-assignment precedence across repeated alias directives.
+#[test]
+fn test_pdo_ini_dsn_alias_last_assignment_wins() {
+    let out = compile_and_run_with_php_ini(
+        r#"<?php
+$db = new PDO("database");
+echo $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+"#,
+        "pdo.dsn.database = \"unknown:value\"\npdo.dsn.database = \"sqlite::memory:\"\n",
+    );
+    assert_eq!(out, "sqlite");
+}
+
+/// Resolves aliases before PHP 8.4 factory/subclass validation so both entry
+/// points select and enforce the class belonging to the configured driver.
+#[test]
+fn test_pdo_ini_dsn_alias_drives_connect_and_subclass_dispatch() {
+    let out = compile_and_run_with_php_ini(
+        r#"<?php
+$factory = PDO::connect("memory");
+$direct = new \Pdo\Sqlite("memory");
+echo get_class($factory) . "|" . get_class($direct);
+"#,
+        "pdo.dsn.memory = \"sqlite::memory:\"\n",
+    );
+    assert_eq!(out, "Pdo\\Sqlite|Pdo\\Sqlite");
+}
+
 /// F-SQLT-05: php-src validates the extension name as an ARGUMENT, before any driver
 /// dispatch — `pdo_sqlite.c:80-87` is `if (ZSTR_LEN(extension) == 0) {
 /// zend_argument_must_not_be_empty_error(1); RETURN_THROWS(); }`, a `ValueError`. elephc

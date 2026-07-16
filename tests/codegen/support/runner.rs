@@ -404,6 +404,16 @@ pub(crate) fn link_binary(
 /// On other platform/arch combinations, execs the binary natively.
 /// Used for post-link execution of already-assembled test binaries.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
+    run_binary_with_env(bin_path, dir, &[])
+}
+
+/// Runs a compiled binary with isolated environment overrides, using qemu for
+/// cross-architecture Linux AArch64 fixtures when required.
+pub(crate) fn run_binary_with_env(
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Output {
     if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -412,11 +422,11 @@ pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path).current_dir(dir);
+        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     } else {
         let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir);
+        cmd.current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     }
 }
@@ -519,6 +529,38 @@ pub(crate) fn assemble_and_run(
         String::from_utf8_lossy(&output.stderr)
     );
 
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Assembles, links, and runs a happy-path fixture with per-process environment
+/// overrides, returning its UTF-8 stdout.
+pub(crate) fn assemble_and_run_with_env(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    env: &[(&str, &std::ffi::OsStr)],
+) -> String {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
+    let output = run_binary_with_env(&bin_path, dir, env);
+    assert!(
+        output.status.success(),
+        "binary exited with error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
