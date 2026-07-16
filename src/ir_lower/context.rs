@@ -1786,7 +1786,8 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         // Array/mixed-returning builtins that allocate fresh result storage.
-        "array_chunk"
+        "__elephc_new_without_constructor"
+            | "array_chunk"
             | "array_column"
             | "array_combine"
             | "array_diff"

@@ -2206,7 +2206,9 @@ fn acquire_returned_this(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This)) {
+    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This))
+        || ctx.value_is_owning_temporary(value)
+    {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
@@ -3072,9 +3074,6 @@ fn release_rewritten_property_value_after_retaining_store(
 fn property_store_keeps_independent_ref(property_ty: &PhpType, value_ty: &PhpType) -> bool {
     let property_ty = property_ty.codegen_repr();
     let value_ty = value_ty.codegen_repr();
-    if matches!((&property_ty, &value_ty), (PhpType::Mixed, PhpType::Mixed)) {
-        return false;
-    }
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
         && matches!(property_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
     {
@@ -3255,14 +3254,21 @@ fn coerce_to_return_type(
             coerce_return_scalar_source(ctx, value, span, coerce_to_tagged_scalar)
         }
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
-            ctx.emit_value(
+            let boxed = ctx.emit_value(
                 Op::MixedBox,
                 vec![value.value],
                 None,
                 ctx.return_php_type.clone(),
                 Op::MixedBox.default_effects(),
                 span,
-            )
+            );
+            // MixedBox retains a heap-backed child. Returning a fresh object or
+            // container therefore transfers the source owner into the box by
+            // releasing that original +1; borrowed locals keep their own owner.
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            boxed
         }
         IrType::Heap(_) => ctx.emit_value(
             Op::RuntimeCall,

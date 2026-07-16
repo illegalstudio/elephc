@@ -466,9 +466,13 @@ $db->beginTransaction();
 $oid = $db->pgsqlLOBCreate();
 $opened = $oid === false ? false : $db->pgsqlLOBOpen((string) $oid);
 $unlinked = $oid === false ? false : $db->pgsqlLOBUnlink((string) $oid);
+$rowCount = -1;
+if (is_array($rows)) {
+    $rowCount = count($rows);
+}
 $db->rollBack();
 $db->exec("DROP TABLE pg_legacy");
-echo ($copied ? "copy" : "bad") . ":" . count($rows) . ":";
+echo ($copied ? "copy" : "bad") . ":" . $rowCount . ":";
 echo ($pid > 0 ? "pid" : "bad") . ":" . ($none === false ? "none" : "bad") . ":";
 echo (($opened !== false && $unlinked) ? "lob" : "bad");
 "#,
@@ -600,12 +604,13 @@ echo (count($n) === 0) ? "none" : ($n["message"] . ":" . $n["payload"] . ":" . (
 fn test_pgsql_attr_timeout_fails_fast() {
     let out = compile_and_run(
         r#"<?php
-$start = microtime(true);
+class PgTimeoutClock { public static float $start = 0.0; }
+PgTimeoutClock::$start = microtime(true);
 try {
     $conn = new \Pdo\Pgsql("pgsql:host=192.0.2.1;port=5432;dbname=testdb", null, null, [PDO::ATTR_TIMEOUT => 2]);
     echo "connected";
 } catch (PDOException $e) {
-    $elapsed = microtime(true) - $start;
+    $elapsed = microtime(true) - PgTimeoutClock::$start;
     echo ($elapsed < 10.0) ? "fast" : "slow";
 }
 "#,
@@ -970,12 +975,13 @@ echo $row["dq"] . "|" . $row["n"];
 fn test_pgsql_default_connect_timeout_bounds_unreachable_host() {
     let out = compile_and_run(
         r#"<?php
-$start = microtime(true);
+class PgDefaultTimeoutClock { public static float $start = 0.0; }
+PgDefaultTimeoutClock::$start = microtime(true);
 try {
     $conn = new \Pdo\Pgsql("pgsql:host=10.255.255.1;port=5432;dbname=testdb;user=test;password=test");
     echo "connected";
 } catch (PDOException $e) {
-    $elapsed = microtime(true) - $start;
+    $elapsed = microtime(true) - PgDefaultTimeoutClock::$start;
     echo ($elapsed < 45.0) ? "bounded" : "unbounded";
 }
 "#,

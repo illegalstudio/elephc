@@ -4227,7 +4227,11 @@ mod tests {
         };
         let dsn = cs(&dsn);
         let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
-        assert!(conn > 0, "pg open failed");
+        assert!(
+            conn > 0,
+            "pg open failed: {}",
+            unsafe { read(elephc_pdo_last_open_error()) }
+        );
 
         let version = unsafe { read(elephc_pdo_server_version(conn)) };
         assert!(!version.is_empty(), "server_version was empty");
@@ -4591,7 +4595,11 @@ mod tests {
         };
         let dsn = cs(&dsn);
         let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
-        assert!(conn > 0, "mysql open failed");
+        assert!(
+            conn > 0,
+            "mysql open failed: {}",
+            unsafe { read(elephc_pdo_last_open_error()) }
+        );
         assert_eq!(unsafe { read(elephc_pdo_driver_name(conn)) }, "mysql");
 
         let version = unsafe { read(elephc_pdo_server_version(conn)) };

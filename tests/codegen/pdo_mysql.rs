@@ -89,7 +89,7 @@ $db->exec("DROP TABLE my_names");
 fn test_mysql_buffered_and_multi_statement_options() {
     let out = compile_and_run(
         r#"<?php
-$dsn = (string) getenv("ELEPHC_MYSQL_DSN");
+$dsn = (string) getenv("ELEPHC_MY_DSN");
 $db = new \Pdo\Mysql($dsn, null, null, [
     \Pdo\Mysql::ATTR_USE_BUFFERED_QUERY => false,
     \Pdo\Mysql::ATTR_MULTI_STATEMENTS => false,
@@ -124,7 +124,7 @@ fn test_mysql_local_infile_directory_upload() {
         r#"<?php
 $path = sys_get_temp_dir() . "/elephc-pdo-local-infile.tsv";
 file_put_contents($path, "1\tAda\n2\tBob\n");
-$db = new \Pdo\Mysql((string) getenv("ELEPHC_MYSQL_DSN"), null, null, [
+$db = new \Pdo\Mysql((string) getenv("ELEPHC_MY_DSN"), null, null, [
     \Pdo\Mysql::ATTR_LOCAL_INFILE => true,
     \Pdo\Mysql::ATTR_LOCAL_INFILE_DIRECTORY => sys_get_temp_dir(),
 ]);
@@ -454,12 +454,13 @@ echo $row[1];
 fn test_mysql_attr_timeout_fails_fast() {
     let out = compile_and_run(
         r#"<?php
-$start = microtime(true);
+class MysqlTimeoutClock { public static float $start = 0.0; }
+MysqlTimeoutClock::$start = microtime(true);
 try {
     $conn = new \Pdo\Mysql("mysql:host=192.0.2.1;port=3306;dbname=testdb", null, null, [PDO::ATTR_TIMEOUT => 2]);
     echo "connected";
 } catch (PDOException $e) {
-    $elapsed = microtime(true) - $start;
+    $elapsed = microtime(true) - MysqlTimeoutClock::$start;
     echo ($elapsed < 10.0) ? "fast" : "slow";
 }
 "#,
@@ -883,12 +884,13 @@ echo "warm";
     std::thread::spawn(move || {
         let out = compile_and_run(
             r#"<?php
-$start = microtime(true);
+class MysqlDefaultTimeoutClock { public static float $start = 0.0; }
+MysqlDefaultTimeoutClock::$start = microtime(true);
 try {
     $conn = new \Pdo\Mysql("mysql:host=192.0.2.1;port=3306;dbname=testdb");
     echo "connected";
 } catch (PDOException $e) {
-    $elapsed = microtime(true) - $start;
+    $elapsed = microtime(true) - MysqlDefaultTimeoutClock::$start;
     echo ($elapsed < 35.0) ? "fast" : "slow";
 }
 "#,

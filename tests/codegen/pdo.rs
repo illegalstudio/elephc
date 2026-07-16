@@ -1506,6 +1506,32 @@ echo $stillDirty . ":" . (($pid === $samePid) ? "same" : "new") . ":[" . $reset 
     assert_eq!(out, "elephc-dirty:same:[]");
 }
 
+/// Releasing a dynamically allocated PDOStatement drops its rooted PDO owner, so
+/// overwriting the connection's last userland reference runs its destructor.
+#[test]
+fn test_pdo_statement_release_drops_connection_owner() {
+    let out = compile_and_run(
+        r#"<?php
+class TrackedPDO extends PDO {
+    public static int $alive = 0;
+    public function __construct(string $dsn = "sqlite::memory:", ?string $username = null, ?string $password = null, ?array $options = null) {
+        parent::__construct("sqlite::memory:");
+        TrackedPDO::$alive = 1;
+    }
+    public function __destruct() {
+        TrackedPDO::$alive = 0;
+    }
+}
+$db = new TrackedPDO();
+$stmt = $db->query("SELECT 1");
+unset($stmt);
+$db = null;
+echo TrackedPDO::$alive;
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 /// Verifies PHP 8.5's SQLite authorizer receives the five php-src arguments,
 /// controls statement preparation, and can be removed with a nullable reset.
 #[test]

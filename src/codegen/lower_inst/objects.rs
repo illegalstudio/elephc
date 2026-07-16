@@ -17,7 +17,10 @@
 
 use std::collections::HashSet;
 
-use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime_value_tag};
+use crate::codegen::{
+    abi, callable_descriptor, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, runtime_value_tag,
+};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::intrinsics::IntrinsicCall;
@@ -1808,7 +1811,7 @@ fn emit_dynamic_new_mixed_candidate(
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_box_current_value_as_mixed(
+    emit_box_current_owned_value_as_mixed(
         ctx.emitter,
         &PhpType::Object(candidate.class_name.clone()),
     );
@@ -1846,7 +1849,10 @@ fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object("SplFixedArray".to_string()));
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Object("SplFixedArray".to_string()),
+    );
     ctx.store_result_value(result)
 }
 
@@ -1862,7 +1868,7 @@ fn emit_dynamic_new_mixed_spl_dll_candidate(
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
     ctx.store_result_value(result)
 }
 
@@ -1982,7 +1988,10 @@ fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
             ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // registry miss returns PHP null for dynamic construction
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object(String::new()),
+            );
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip null boxing after a registry allocation
             ctx.emitter.label(&null_label);
             emit_boxed_null(ctx);
@@ -1993,7 +2002,10 @@ fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
             ctx.emitter.instruction("test rax, rax");                           // registry miss returns PHP null for dynamic construction
             ctx.emitter.instruction(&format!("jz {}", null_label));             // box PHP null when no runtime class table entry matched
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object(String::new()),
+            );
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip null boxing after a registry allocation
             ctx.emitter.label(&null_label);
             emit_boxed_null(ctx);
@@ -5331,9 +5343,11 @@ fn load_property_store_value_to_result(
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
         ctx.load_value_to_result(value)?;
-        if !ctx.value_can_own_mixed_box_source(value)? {
-            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
-        }
+        // Declared property stores retain their source uniformly. EIR releases an
+        // owning temporary after PropSet, while borrowed SSA values keep their
+        // existing owner; transferring only selected producers made the two paths
+        // disagree and either leaked assignments or freed iterator rows early.
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
         return Ok(());
     }
     if can_convert_indexed_array_to_mixed_property(&value_ty, slot_ty) {

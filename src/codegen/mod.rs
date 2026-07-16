@@ -984,7 +984,9 @@ fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String>
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if matches!(inst.op, Op::DynamicObjectNewMixed) {
+            if matches!(inst.op, Op::DynamicObjectNewMixed)
+                || is_dynamic_new_mixed_builtin(module, inst)
+            {
                 names.extend(
                     module
                         .class_infos
@@ -1012,6 +1014,24 @@ fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String>
         }
     }
     names
+}
+
+/// Returns whether a builtin call lowers to the generic dynamic-object factory.
+///
+/// Internal factories remain `BuiltinCall` instructions until assembly lowering,
+/// so metadata discovery must recognize them before their backend hook emits the
+/// same allocation candidates as `DynamicObjectNewMixed`.
+fn is_dynamic_new_mixed_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    if !matches!(inst.op, Op::BuiltinCall) {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    php_symbol_key(name.trim_start_matches('\\')) == "__elephc_new_without_constructor"
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.

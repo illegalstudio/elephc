@@ -4489,6 +4489,7 @@ class PDOStatement implements IteratorAggregate {
 
     public function getAttribute(int $name): mixed {
         if ($name == 1001 && elephc_pdo_driver_name($this->conn) === "pgsql") {
+            $this->hasOperation = true;
             $_memory = elephc_pdo_result_memory_size($this->stmt);
             return $_memory < 0 ? null : $_memory;
         }
@@ -4865,6 +4866,11 @@ class PDOStatement implements IteratorAggregate {
         // when the owning PDO connection was closed first (its close() already
         // finalized this statement).
         elephc_pdo_finalize($this->stmt);
+        // Drop the explicit connection root while the object is still fully
+        // initialized. This makes the final PDO owner observable immediately and
+        // avoids relying on post-destructor property sweeping for a nullable object
+        // slot whose runtime representation is boxed Mixed.
+        $this->owner = null;
     }
 
     // P2-17: mirrors \PDO::__clone() — PHP marks PDOStatement uncloneable too. A
