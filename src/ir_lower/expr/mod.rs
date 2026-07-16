@@ -982,7 +982,11 @@ fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
-            lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr)
+            let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
+            // Mirror the binary mixed-op path: an owning boxed operand (e.g.
+            // `-($i * 7 + 1)`, issue #500) must be released once consumed.
+            release_binary_operand_temporary(ctx, value, expr.span);
+            result
         }
         _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span)),
     }
@@ -7934,7 +7938,14 @@ fn coerce_array_literal_element_to_storage_type(
         PhpType::Str if value.ir_type != IrType::Str => coerce_to_string(ctx, value, expr),
         _ => value,
     };
-    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+    // The scalar coercers release owning heap-repr sources internally (see
+    // `release_coerced_source_if_owned`); releasing those here again would
+    // double-free the element box. This caller-side release only covers the
+    // remaining reprs (e.g. an owned string temp narrowed through `StrToI`).
+    if coerced.value != value.value
+        && !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(value.value))
+        && ctx.value_is_owning_temporary(value)
+    {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     coerced
@@ -8606,6 +8617,13 @@ fn lower_array_access_from_value(
         op.default_effects(),
         Some(expr.span),
     );
+    // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
+    // path) is consumed by the read without any runtime refcount operation on
+    // the key, and the result is freshly allocated storage that never aliases
+    // it — release it here or it leaks per read (issue #500). Int-coerced
+    // index paths rebound `index_value` to a non-owning raw cast, so the
+    // owning-temporary gate makes this a no-op for them.
+    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
     // Array access consumes an owning receiver produced by an earlier read,
     // call, or one-shot temp. Preserve borrowed string/callable payloads before
     // dropping that receiver; boxed and retained container reads are already
@@ -8955,7 +8973,7 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
         Some(expr.span),
     );
     if matches!(target, CastType::String) {
-        release_stringified_source_if_owned(ctx, value, Some(expr.span));
+        release_coerced_source_if_owned(ctx, value, Some(expr.span));
     } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
         && ctx.value_is_owning_temporary(value)
     {
@@ -8964,8 +8982,8 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     result
 }
 
-/// Releases an owning temporary when stringification cannot alias its source storage.
-fn release_stringified_source_if_owned(
+/// Releases an owning temporary when a scalar coercion cannot alias its source storage.
+fn release_coerced_source_if_owned(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Option<crate::span::Span>,
@@ -8973,27 +8991,34 @@ fn release_stringified_source_if_owned(
     if !ctx.value_is_owning_temporary(source) {
         return;
     }
-    match ctx.builder.value_php_type(source.value).codegen_repr() {
-        // Boxed Mixed sources are safe to release here as well: the backend
-        // lowers `cast Mixed -> Str` through `__rt_mixed_cast_string`. String
-        // payloads are persisted into an independent allocation; scalar and
-        // null payloads return source-independent conversion storage. The
-        // produced string therefore never aliases the released Mixed cell.
-        // Skipping Mixed leaked every owned boxed temporary that flowed into a
-        // string coercion — e.g. `echo $row[1] . "\n"` inside a by-value
-        // `foreach` leaked the `$row[1]` element box each iteration (issue
-        // #527). `release_if_owned` only type-gates the EIR Release; backend
-        // ownership filtering releases Owned/MaybeOwned and skips NonHeap,
-        // Borrowed, Persistent, and Moved. Non-null unions such as int|string
-        // codegen-repr to Mixed; tagged nullable-int unions bypass this arm.
-        PhpType::Object(_)
-        | PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Mixed => {
-            crate::ir_lower::ownership::release_if_owned(ctx, source, span);
-        }
-        _ => {}
+    if !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(source.value)) {
+        return;
     }
+    crate::ir_lower::ownership::release_if_owned(ctx, source, span);
+}
+
+/// Returns true when a coerced source's codegen repr is a heap shape the scalar
+/// coercion casts never alias, so the coercers can release it internally.
+///
+/// Boxed Mixed sources are safe to release: the backend lowers
+/// `cast Mixed -> Str/I64/F64` through `__rt_mixed_cast_string` /
+/// `__rt_mixed_cast_int` / `__rt_mixed_cast_float`. String payloads are
+/// persisted into an independent allocation; scalar and null payloads return
+/// source-independent conversion storage or raw scalars. The produced value
+/// therefore never aliases the released Mixed cell. Skipping Mixed leaked
+/// every owned boxed temporary that flowed into a string coercion — e.g.
+/// `echo $row[1] . "\n"` inside a by-value `foreach` leaked the `$row[1]`
+/// element box each iteration (issue #527) — and every checked-arithmetic
+/// box consumed directly by `%`, bitops, comparisons, or array indexes
+/// (issue #500). `release_if_owned` only type-gates the EIR Release; backend
+/// ownership filtering releases Owned/MaybeOwned and skips NonHeap, Borrowed,
+/// Persistent, and Moved. Non-null unions such as int|string codegen-repr to
+/// Mixed; tagged nullable-int unions bypass this predicate.
+fn coerced_source_repr_is_releasable(php_type: &PhpType) -> bool {
+    matches!(
+        php_type.codegen_repr(),
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    )
 }
 
 /// Returns the PHP type produced by a cast.
@@ -14623,14 +14648,23 @@ pub(crate) fn coerce_to_int_at_span(
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
         IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::I64)),
-            PhpType::Int,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::I64)),
+                PhpType::Int,
+                Op::Cast.default_effects(),
+                span,
+            );
+            // The cast lowers to `__rt_mixed_cast_int`, which returns a raw
+            // scalar that never aliases the source box. Dropping the owning
+            // reference here leaked one checked-arithmetic Mixed cell per
+            // evaluation for `%`, bitops, comparisons, and coerced array
+            // indexes with a compound operand (issue #500).
+            release_coerced_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 
@@ -14648,14 +14682,21 @@ fn coerce_to_float_at_span(
     match value.ir_type {
         IrType::F64 => value,
         IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::F64)),
-            PhpType::Float,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::F64)),
+                PhpType::Float,
+                Op::Cast.default_effects(),
+                span,
+            );
+            // Mirror of the int coercion above: `__rt_mixed_cast_float`
+            // returns a raw scalar, so the owning source box (e.g. a checked
+            // `pow` operand, issue #500) must be released here.
+            release_coerced_source_if_owned(ctx, value, span);
+            result
+        }
     }
 }
 
@@ -14693,7 +14734,7 @@ fn coerce_to_string_at_span(
                 Op::Cast.default_effects(),
                 span,
             );
-            release_stringified_source_if_owned(ctx, value, span);
+            release_coerced_source_if_owned(ctx, value, span);
             result
         }
     }
