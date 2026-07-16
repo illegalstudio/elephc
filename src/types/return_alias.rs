@@ -522,6 +522,11 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         | ExprKind::NewScopedObject { .. }
         | ExprKind::Clone(_)
         | ExprKind::BufferNew { .. } => ReturnArgAlias::None,
+        ExprKind::FunctionCall { name, .. }
+            if builtin_result_is_proven_independent(name.as_str()) =>
+        {
+            ReturnArgAlias::None
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -545,6 +550,11 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         | ExprKind::MagicConstant(_) => ReturnArgAlias::None,
         _ => ReturnArgAlias::Unknown,
     }
+}
+
+/// Returns whether a builtin's result storage cannot alias any caller argument.
+fn builtin_result_is_proven_independent(name: &str) -> bool {
+    crate::builtins::registry::returns_independent_storage(name.trim_start_matches('\\'))
 }
 
 /// Conservatively invalidates locals that an expression can rewrite by reference.
@@ -795,6 +805,26 @@ mod tests {
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(summaries.method("S", "scan"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies `implode()` returns storage independent of a method's string parameters.
+    #[test]
+    fn implode_return_is_independent_of_callable_parameters() {
+        let program = parse(
+            "<?php class H { function join(string $left, string $right): string { $parts = [$left, $right]; return implode('', $parts); } }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.method("H", "join"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies a scratch-backed HTML escape result cannot alias its string parameter.
+    #[test]
+    fn htmlspecialchars_return_is_independent_of_callable_parameters() {
+        let program = parse(
+            "<?php class E { function escape(string $value): string { return htmlspecialchars($value); } }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.method("E", "escape"), Some(&ReturnArgAlias::None));
     }
 
     /// Verifies direct parameter passthrough records only the returned parameter.

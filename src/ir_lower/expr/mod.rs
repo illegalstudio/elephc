@@ -1943,11 +1943,16 @@ fn emit_builtin_call_value(
         effects,
         Some(span),
     );
+    let return_alias = if crate::builtins::registry::returns_independent_storage(name) {
+        ReturnArgAlias::None
+    } else {
+        ReturnArgAlias::Unknown
+    };
     release_owned_call_arg_temporaries(
         ctx,
         &operands,
         Some(call.value),
-        &ReturnArgAlias::Unknown,
+        &return_alias,
         span,
     );
     let eval_needs_barrier = match eval_literal {
@@ -5672,14 +5677,12 @@ fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
-/// Coerces a positional argument's storage to match a declared scalar parameter type.
+/// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
-/// EIR passes each call argument in its natural storage. A declared `float` parameter is
-/// materialized into the callee's floating-point register/slot, so an integer argument must be
-/// converted with `IToF` first: without it the raw 64-bit integer bit-pattern lands in the
-/// float slot and the callee reads garbage (and, when other float arguments are present, the
-/// unconverted slot is overwritten by a neighbouring float argument). Only the int→float case
-/// is adjusted; every other argument/parameter storage combination is passed through unchanged.
+/// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
+/// conversion is also explicit here because it allocates caller-owned storage whose lifetime
+/// depends on the call's return/argument alias contract; leaving that conversion hidden in ABI
+/// materialization would give EIR no value to transfer or release after the call.
 fn coerce_scalar_arg_to_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -5690,21 +5693,23 @@ fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    if value.ir_type == IrType::I64 && param_ty.codegen_repr() == PhpType::Float {
+    let param_ty = param_ty.codegen_repr();
+    if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
+    }
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return coerce_to_string(ctx, value, arg);
     }
     value
 }
 
-/// Widens positional call operands to their declared scalar parameter types.
+/// Normalizes reordered call operands to their declared scalar parameter storage.
 ///
-/// The C/native ABI places an argument in an integer or floating-point register based
-/// on the *value's* type, while the callee reads each parameter from the register class
-/// of the *parameter's* type. Without this step an `int` (or `bool`) argument passed to
-/// a `float` parameter is deposited in an integer register and then read back as garbage
-/// from a floating-point slot. Only pure `float` parameters receiving an integer/bool
-/// operand are rewritten with an int→float conversion; by-reference parameters and the
-/// variadic tail operand are left untouched.
+/// Named and spread arguments are evaluated in source order and then reordered, so their
+/// int-to-float and Mixed-to-string conversions happen here in parameter order. By-reference
+/// parameters and the variadic tail remain untouched. String conversions become owned EIR
+/// values so normal alias-aware call cleanup can transfer or release them safely.
 fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -5719,19 +5724,24 @@ fn coerce_operands_to_params(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
-        if param_ty.codegen_repr() != PhpType::Float {
-            continue;
-        }
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        if !matches!(operand_ty, PhpType::Int | PhpType::Bool) {
-            continue;
+        let param_ty = param_ty.codegen_repr();
+        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+            let lowered = LoweredValue {
+                value,
+                ir_type: IrType::I64,
+            };
+            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+        } else if param_ty == PhpType::Str
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
         }
-        let lowered = LoweredValue {
-            value,
-            ir_type: IrType::I64,
-        };
-        operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
     }
     operands
 }
@@ -8946,6 +8956,10 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     );
     if matches!(target, CastType::String) {
         release_stringified_source_if_owned(ctx, value, Some(expr.span));
+    } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
+        && ctx.value_is_owning_temporary(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
 }

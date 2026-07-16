@@ -34,7 +34,6 @@ use super::{
     coerce_loaded_value_to_tagged_scalar, emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
-    materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     store_if_result, store_method_call_result,
 };
@@ -2416,12 +2415,20 @@ fn emit_constructor_call(
     let mut ref_params = Vec::with_capacity(constructor_ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend_from_slice(constructor_ref_params);
-    let call_args = materialize_direct_call_args_with_refs(ctx, &args, &param_types, &ref_params)?;
+    let call_args = super::materialize_direct_call_args_with_refs_and_options(
+        ctx,
+        &args,
+        &param_types,
+        &ref_params,
+        true,
+    )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(impl_class, constructor_key));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    super::emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 

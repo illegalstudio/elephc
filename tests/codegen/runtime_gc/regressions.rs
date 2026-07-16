@@ -2636,3 +2636,254 @@ echo $present;
         out.stderr
     );
 }
+
+/// Regression for issue #540's post-fix residual: scalar casts and builtins with
+/// independent results must release inline-read stabilization owners even when a
+/// concrete receiver's provisional release is later pruned.
+#[test]
+fn test_regression_540_inline_array_reads_do_not_keep_stabilization_owners() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $fields = ["bench", "php", "1720000000", "0"];
+    $expiresAt = (int) $fields[3];
+    $title = rawurldecode((string) $fields[0]);
+    $createdAt = (int) $fields[2];
+    $sum += $expiresAt + $createdAt + strlen($title);
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "172000000500");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected inline Array reads to be heap-clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #540's post-fix residual: nullable-object property reads
+/// reach a typed constructor as Mixed operands. EIR-created Mixed-to-string copies
+/// are caller-owned temporaries and must be released after the constructor returns.
+#[test]
+fn test_regression_540_constructor_releases_mixed_string_conversion_temporaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualMetadata {
+    public function __construct(public string $id, public string $title) {}
+}
+function loadResidualMetadata(int $n): ?ResidualMetadata {
+    return new ResidualMetadata("id" . $n, "title");
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $metadata = loadResidualMetadata($i);
+    if ($metadata instanceof ResidualMetadata) {
+        $metadata = new ResidualMetadata($metadata->id, $metadata->title);
+        $sum += strlen($metadata->id) + strlen($metadata->title);
+    }
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "890");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected constructor conversion temporaries to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #540's post-fix residual: a method returning `implode()`
+/// storage cannot alias its string parameters. Property-read argument owners from a
+/// Mixed-backed object local must therefore be released after the call.
+#[test]
+fn test_regression_540_implode_return_summary_releases_property_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualPair {
+    public function __construct(public string $left, public string $right) {}
+}
+class ResidualJoiner {
+    public function join(string $left, string $right): string {
+        $parts = [$left, $right];
+        return implode('', $parts);
+    }
+}
+function maybeResidualPair(): ?ResidualPair {
+    return new ResidualPair("left", "right");
+}
+$joiner = new ResidualJoiner();
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $pair = maybeResidualPair();
+    if ($pair instanceof ResidualPair) {
+        $pair = new ResidualPair("left", "right");
+        $joined = $joiner->join($pair->left, $pair->right);
+        $sum += strlen($joined);
+    }
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "900");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property arguments to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies Mixed-to-string EIR cleanup transfers rather than frees a temporary
+/// when a typed passthrough method returns the exact argument storage.
+#[test]
+fn test_regression_540_mixed_string_conversion_preserves_passthrough_result() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualStringBox {
+    public function __construct(public string $value) {}
+}
+class ResidualStringIdentity {
+    public function keep(string $value): string {
+        return $value;
+    }
+}
+function maybeResidualStringBox(int $n): ?ResidualStringBox {
+    return new ResidualStringBox("value" . $n);
+}
+$identity = new ResidualStringIdentity();
+$last = "";
+for ($i = 0; $i < 100; $i++) {
+    $box = maybeResidualStringBox($i);
+    if ($box instanceof ResidualStringBox) {
+        $box = new ResidualStringBox("value" . $i);
+        $last = $identity->keep(value: $box->value);
+    }
+}
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "value99");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected passthrough conversion ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies read-stabilization cleanup does not release a borrowed dynamic string
+/// after a retaining array write has copied it into another container.
+#[test]
+fn test_regression_540_read_stabilization_cleanup_preserves_borrowed_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$seed = "value" . $argc;
+$source = [$seed];
+$copy = [$source[0]];
+echo $source[0] . "|" . $copy[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "value1|value1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both dynamic string owners to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a wrapper returning independent HTML-escape storage releases a
+/// stabilized property argument instead of treating the result as a passthrough.
+#[test]
+fn test_regression_540_html_escape_summary_releases_property_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualEscaper {
+    public function escape(string $value): string {
+        return htmlspecialchars($value);
+    }
+}
+class ResidualLabel {
+    public function __construct(public string $lang) {}
+}
+function maybeResidualLabel(): ?ResidualLabel {
+    return new ResidualLabel("<php>");
+}
+$escaper = new ResidualEscaper();
+$last = "";
+for ($i = 0; $i < 100; $i++) {
+    $label = maybeResidualLabel();
+    if ($label instanceof ResidualLabel) {
+        $label = new ResidualLabel("<php>");
+        $last = $escaper->escape($label->lang);
+    }
+}
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "&lt;php&gt;");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected HTML escape argument ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a stabilized first argument survives a later by-reference argument
+/// that replaces the same receiver before the callee consumes the read value.
+#[test]
+fn test_regression_540_read_stabilization_survives_later_receiver_mutation() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function replaceResidualValues(array &$values): int {
+    $values = ["new"];
+    return 0;
+}
+function consumeResidualValue(string $value, int $ignored): int {
+    return strlen($value);
+}
+$values = ["old"];
+$length = consumeResidualValue($values[0], replaceResidualValues($values));
+echo $length . "|" . $values[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3|new");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the stabilized argument and replaced receiver to be clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies constructor ABI materialization releases a temporary boxed-Mixed
+/// argument after the constructor has retained it in promoted property storage.
+#[test]
+fn test_regression_540_constructor_releases_scalar_to_mixed_abi_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ResidualMixedSink {
+    public function __construct(public mixed $value) {}
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sink = new ResidualMixedSink($i);
+    $sum += (int) $sink->value;
+}
+echo $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4950");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected constructor ABI boxes to be released, got: {}",
+        out.stderr
+    );
+}

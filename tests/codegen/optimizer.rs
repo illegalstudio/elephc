@@ -35,6 +35,8 @@ mod identity_arithmetic;
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
 mod property_receiver_ownership;
+#[path = "optimizer/read_result_cleanup.rs"]
+mod read_result_cleanup;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]

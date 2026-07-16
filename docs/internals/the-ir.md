@@ -322,6 +322,20 @@ Ownership operations:
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
 
+Borrowed property and indexed-read results may be stabilized with a provisional
+`Acquire` before an owning receiver is released. Its consumer must either
+transfer that owner or emit a matching `Release`; scalar casts and calls with a
+proven-independent result cannot alias the input and therefore release it after
+consumption. The retain must not be removed merely because final slot typing
+prunes the receiver release: a later call argument can still mutate the receiver
+local before the read is consumed. ABI materialization follows the same balance
+rule. Mixed-to-string parameters are converted into owned EIR values before the
+backend, allowing the call's alias summary to transfer or release them normally;
+the conversion must not stay hidden inside register materialization because a
+string result can be an interior slice of its argument. ABI-created boxed-Mixed
+arguments use explicit post-call cleanup slots, including for constructors, and
+an exact pointer check transfers the box when a passthrough result reuses it.
+
 Before lowering releases an owning call-argument temporary, the checker provides
 a conservative return-to-parameter alias summary for each source function and
 method. A proven-fresh result permits cleanup of unrelated arguments; a direct
@@ -329,6 +343,9 @@ passthrough protects only the returned parameter. Unknown calls, indirect
 storage reads, and every possible descendant override merge to the conservative
 result, so a type-compatible true alias remains live. Builtins and extern calls
 continue to use their separate ownership contracts and conservative fallback.
+The builtin registry can additionally declare result storage independent from
+all arguments, including scratch-backed results that are not fresh heap blocks;
+that contract feeds both direct-call cleanup and summaries for source wrappers.
 
 ## Effects
 
