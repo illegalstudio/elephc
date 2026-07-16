@@ -2882,10 +2882,8 @@ class PDOStatement implements IteratorAggregate {
     // message ("Cannot modify readonly property PDOStatement::$queryString") rather than
     // pdo_stmt.c's custom "Property queryString is read only"; class and catchability match.
     public readonly string $queryString;
-    // P1-11 (best-effort): mirrors PDO::$stringifyFetches, snapshotted at
-    // prepare() time via setStringifyFetches(). Applied in columnValue() so
-    // every fetch path (assoc/num/both/named/obj/class/key-pair/fetchColumn)
-    // honors it from one place.
+    // Fallback copies used only before setOwner(); normal statements read the
+    // owning PDO's live values at fetch/description time like php-src's stmt->dbh.
     private bool $stringifyFetches;
     // MySQL's default string-parameter flag, snapshotted from the connection.
     // 0x40000000 selects national `N'…'`; 0x20000000 selects ordinary text.
@@ -2897,10 +2895,8 @@ class PDOStatement implements IteratorAggregate {
     // per-statement attribute store exists any more (setAttribute() always
     // fails; see its own comment).
     private bool $emulatePrepares;
-    // P2-e: mirrors PDO::ATTR_CASE / ATTR_ORACLE_NULLS, snapshotted at prepare()
-    // time via setAttrCase()/setOracleNulls() (see PDO::prepare()). Applied in
-    // columnName()/columnValue() so every fetch path (assoc/num/both/named/obj/
-    // class/into/key-pair/fetchColumn) honors them from one place.
+    // Fallback copies of PDO::ATTR_CASE / ATTR_ORACLE_NULLS for the brief
+    // pre-owner initialization path. Normal statement reads stay connection-live.
     private int $attrCase;
     private int $oracleNulls;
     // P1-j: roots the owning PDO object (and, transitively, its bridge
@@ -3009,6 +3005,27 @@ class PDOStatement implements IteratorAggregate {
 
     public function setOracleNulls(int $mode): void {
         $this->oracleNulls = $mode;
+    }
+
+    private function currentStringifyFetches(): bool {
+        if ($this->owner !== null) {
+            return (bool) $this->owner->getAttribute(PDO::ATTR_STRINGIFY_FETCHES);
+        }
+        return $this->stringifyFetches;
+    }
+
+    private function currentAttrCase(): int {
+        if ($this->owner !== null) {
+            return (int) $this->owner->getAttribute(PDO::ATTR_CASE);
+        }
+        return $this->attrCase;
+    }
+
+    private function currentOracleNulls(): int {
+        if ($this->owner !== null) {
+            return (int) $this->owner->getAttribute(PDO::ATTR_ORACLE_NULLS);
+        }
+        return $this->oracleNulls;
     }
 
     public function setScrollable(bool $scrollable): void {
@@ -3641,19 +3658,21 @@ class PDOStatement implements IteratorAggregate {
 
     private function columnValue(int $index): mixed {
         $_type = elephc_pdo_column_type($this->stmt, $index);
+        $_stringifyFetches = $this->currentStringifyFetches();
+        $_oracleNulls = $this->currentOracleNulls();
         if ($_type == 1) {
             $_intVal = elephc_pdo_column_int($this->stmt, $index);
             if (elephc_pdo_driver_name($this->conn) === "pgsql"
                 && elephc_pdo_column_native_type($this->stmt, $index) === "bool") {
                 return $_intVal != 0;
             }
-            if ($this->stringifyFetches) {
+            if ($_stringifyFetches) {
                 return (string) $_intVal;
             }
             return $_intVal;
         } elseif ($_type == 2) {
             $_dblVal = elephc_pdo_column_double($this->stmt, $index);
-            if ($this->stringifyFetches) {
+            if ($_stringifyFetches) {
                 return (string) $_dblVal;
             }
             return $_dblVal;
@@ -3661,7 +3680,7 @@ class PDOStatement implements IteratorAggregate {
             // NULL is never stringified, matching PHP. P2-e: ATTR_ORACLE_NULLS's
             // NULL_TO_STRING (2) converts it to "" here, mirroring php-src's
             // fetch_value() (its final `oracle_nulls == PDO_NULL_TO_STRING` check).
-            if ($this->oracleNulls == 2) {
+            if ($_oracleNulls == 2) {
                 return "";
             }
             return null;
@@ -3691,7 +3710,7 @@ class PDOStatement implements IteratorAggregate {
         // `IS_STRING && Z_STRLEN_P(dest) == 0` check, which runs before any
         // stringify handling there — moot here since TEXT/BLOB values are never
         // stringified by this method).
-        if ($this->oracleNulls == 1 && $_out === "") {
+        if ($_oracleNulls == 1 && $_out === "") {
             return null;
         }
         if ($_type == 4 && elephc_pdo_driver_name($this->conn) === "pgsql") {
@@ -3713,10 +3732,11 @@ class PDOStatement implements IteratorAggregate {
     // column's name once, shared by every fetch style that reads it.
     private function columnName(int $index): string {
         $_raw = elephc_pdo_column_name($this->stmt, $index);
-        if ($this->attrCase == 1) {
+        $_attrCase = $this->currentAttrCase();
+        if ($_attrCase == 1) {
             return strtoupper($_raw);
         }
-        if ($this->attrCase == 2) {
+        if ($_attrCase == 2) {
             return strtolower($_raw);
         }
         return $_raw;

@@ -6005,6 +6005,26 @@ echo get_class($factory) . "|" . get_class($direct);
     assert_eq!(out, "Pdo\\Sqlite|Pdo\\Sqlite");
 }
 
+/// Reads fetch conversion and column-case attributes from the owning PDO at
+/// execution/fetch time instead of freezing them when the statement is prepared.
+#[test]
+fn test_pdo_statement_observes_live_connection_fetch_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$stmt = $db->prepare("SELECT 7 AS MiXeD, '' AS EmPtY, NULL AS NuLlVaLuE");
+$db->setAttribute(PDO::ATTR_STRINGIFY_FETCHES, true);
+$db->setAttribute(PDO::ATTR_ORACLE_NULLS, PDO::NULL_EMPTY_STRING);
+$db->setAttribute(PDO::ATTR_CASE, PDO::CASE_LOWER);
+$stmt->execute();
+$row = $stmt->fetch(PDO::FETCH_ASSOC);
+echo gettype($row["mixed"]) . ":" . $row["mixed"] . "|";
+echo gettype($row["empty"]) . "|" . gettype($row["nullvalue"]);
+"#,
+    );
+    assert_eq!(out, "string:7|NULL|NULL");
+}
+
 /// F-SQLT-05: php-src validates the extension name as an ARGUMENT, before any driver
 /// dispatch — `pdo_sqlite.c:80-87` is `if (ZSTR_LEN(extension) == 0) {
 /// zend_argument_must_not_be_empty_error(1); RETURN_THROWS(); }`, a `ValueError`. elephc
