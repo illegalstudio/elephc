@@ -104,10 +104,11 @@ jobs:
         # executes real native binaries.
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
             binutils \
             build-essential \
             file \
+            krb5-user \
             libbz2-dev \
             libpcre2-dev \
             libpq-dev \
@@ -254,6 +255,12 @@ jobs:
         env:
           ELEPHC_PDO_LIBPQ: '1'
         run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored pgsql --test-threads=4
+
+      - name: Live libpq GSSAPI handshake
+        # Provisions an isolated MIT Kerberos realm, keytabs, credential cache,
+        # and PostgreSQL hostgssenc rule. The focused tests require both GSS auth
+        # and GSS transport encryption and also prove a missing cache fails closed.
+        run: ./scripts/test-pdo-gss.sh
 
       - name: Live codegen tests (mysql)
         # Every #[ignore] test under tests/codegen/pdo_mysql.rs, same parallelism

@@ -923,6 +923,13 @@ Individual keywords remain version-dependent: for example, a libpq predating
 `require_auth` rejects it exactly as the same PHP build would.
 The ordinary profile rejects these options explicitly and retains standalone pure-Rust binaries.
 
+The repository's `scripts/test-pdo-gss.sh` performs the complete integration proof:
+it starts an ephemeral MIT Kerberos realm, creates client/server principals and keytabs,
+configures PostgreSQL with `hostgssenc`, obtains a client ticket, and connects with both
+`gssencmode=require` and `require_auth=gss`. A second isolated process replaces
+`KRB5CCNAME` with an empty cache and verifies that libpq fails closed. The PDO live CI
+runs this fixture after the ordinary native and libpq suites.
+
 ### Resource and lifetime caveats
 
 - Persistent checkout is serialized and validates liveness before reuse: MySQL sends

@@ -12,6 +12,8 @@
 //!         -e POSTGRES_DB=testdb -p 55432:5432 postgres:16-alpine
 //!     ELEPHC_PG_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test' \
 //!         cargo test --test codegen_tests -- --ignored pgsql
+//!   The focused GSSAPI fixtures provision their own KDC and server through
+//!   `scripts/test-pdo-gss.sh` and require the `libpq-gss` bridge profile.
 //!
 //! Key details:
 //! - Each fixture opens its connection from `getenv("ELEPHC_PG_DSN")` and uses
@@ -25,6 +27,63 @@
 
 use crate::support::*;
 use elephc::php_version::PhpVersion;
+
+/// Reports whether the dedicated Kerberos fixture exported both required inputs,
+/// failing loudly when its script marked the integration environment as mandatory.
+fn gss_fixture_available() -> bool {
+    let available = std::env::var_os("ELEPHC_PG_GSS_DSN").is_some()
+        && std::env::var_os("ELEPHC_PG_GSS_EMPTY_CACHE").is_some();
+    if std::env::var_os("ELEPHC_PDO_GSS_REQUIRED").is_some() {
+        assert!(available, "required PDO GSSAPI fixture variables are missing");
+    }
+    available
+}
+
+/// A valid Kerberos credential cache must complete both GSS authentication and
+/// GSS transport encryption when the libpq DSN requires them explicitly.
+#[test]
+#[ignore]
+fn test_pgsql_gssapi_requires_authentication_and_encryption() {
+    if !gss_fixture_available() {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $db = new PDO((string) getenv("ELEPHC_PG_GSS_DSN"));
+    echo $db->query("SELECT current_user")->fetchColumn();
+} catch (PDOException $error) {
+    echo "gss-error:" . $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "elephc_gss");
+}
+
+/// `gssencmode=require` must fail closed when the compiled program has no
+/// credential cache, rather than falling back to TLS, password, or trust auth.
+#[test]
+#[ignore]
+fn test_pgsql_gssapi_missing_credential_cache_fails_closed() {
+    if !gss_fixture_available() {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+putenv("KRB5CCNAME=" . (string) getenv("ELEPHC_PG_GSS_EMPTY_CACHE"));
+try {
+    $db = new PDO((string) getenv("ELEPHC_PG_GSS_DSN"));
+    echo "unexpected-connection:" . $db->query("SELECT current_user")->fetchColumn();
+} catch (PDOException $error) {
+    $message = strtolower($error->getMessage());
+    echo str_contains($message, "credential") || str_contains($message, "gss")
+        ? "missing-cache-blocked"
+        : "wrong-failure:" . $message;
+}
+"#,
+    );
+    assert_eq!(out, "missing-cache-blocked");
+}
 
 /// Verifies PHP 8.4's nullable notice callback signature without requiring a live server.
 #[test]
