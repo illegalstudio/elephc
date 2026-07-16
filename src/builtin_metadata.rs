@@ -26,10 +26,14 @@ pub struct BuiltinSignatureMetadata {
 }
 
 /// Returns the compiler's PHP-visible builtin names.
+///
+/// Reads the unfiltered catalog snapshot — never the strict-PHP-filtered view —
+/// so the memoized result is independent of the thread's strict-mode state.
 pub fn php_visible_builtin_names() -> &'static [&'static str] {
     static NAMES: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        let names = crate::types::checker::builtins::supported_builtin_function_names();
+        let names =
+            crate::types::checker::builtins::catalog::all_supported_builtin_function_names();
         Box::leak(names.into_boxed_slice())
     })
 }

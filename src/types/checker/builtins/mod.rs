@@ -10,7 +10,7 @@
 
 pub(crate) mod arrays;
 mod callables;
-mod catalog;
+pub(crate) mod catalog;
 pub(crate) mod io;
 mod numeric;
 pub(crate) mod spl;

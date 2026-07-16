@@ -72,20 +72,14 @@ pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Returns the union of PHP-visible supported builtin function names from the
-/// legacy static list and the builtin registry.
+/// Returns the union of PHP-visible builtin names from the legacy static list
+/// and the builtin registry, WITHOUT the strict-PHP filter.
 ///
-/// Registry entries flagged as `internal` are excluded, mirroring the semantics
-/// of `is_php_visible_builtin_function`. Names present in both sources appear
-/// exactly once. With an empty registry this returns the legacy list unchanged,
-/// so behavior is preserved while the registry is empty. Under `--strict-php`,
-/// extension builtins are excluded entirely.
-pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
-    let mut result: Vec<&'static str> = SUPPORTED_BUILTIN_FUNCTIONS
-        .iter()
-        .copied()
-        .filter(|name| !strict_php_hidden_builtin(name))
-        .collect();
+/// This is the raw catalog snapshot for metadata consumers (parity gates, docs
+/// exporters) that memoize the result and must be independent of the thread's
+/// strict-mode state. Compilation surfaces use `supported_builtin_function_names`.
+pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
+    let mut result: Vec<&'static str> = SUPPORTED_BUILTIN_FUNCTIONS.to_vec();
     for name in crate::builtins::registry::names() {
         let def = match crate::builtins::registry::lookup(name) {
             Some(d) => d,
@@ -96,13 +90,26 @@ pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
         }
         // De-duplicate: skip names already present in the legacy list.
         let lower = name.to_ascii_lowercase();
-        if !SUPPORTED_BUILTIN_FUNCTIONS.contains(&lower.as_str())
-            && !strict_php_hidden_builtin(&lower)
-        {
+        if !SUPPORTED_BUILTIN_FUNCTIONS.contains(&lower.as_str()) {
             result.push(def.name);
         }
     }
     result
+}
+
+/// Returns the union of PHP-visible supported builtin function names from the
+/// legacy static list and the builtin registry.
+///
+/// Registry entries flagged as `internal` are excluded, mirroring the semantics
+/// of `is_php_visible_builtin_function`. Names present in both sources appear
+/// exactly once. With an empty registry this returns the legacy list unchanged,
+/// so behavior is preserved while the registry is empty. Under `--strict-php`,
+/// extension builtins are excluded entirely.
+pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
+    all_supported_builtin_function_names()
+        .into_iter()
+        .filter(|name| !strict_php_hidden_builtin(&name.to_ascii_lowercase()))
+        .collect()
 }
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
@@ -202,22 +209,28 @@ mod tests {
 
     /// Verifies strict mode hides extension builtins from every catalog surface:
     /// canonical lookup, PHP-visibility, the supported-name set, and the
-    /// `buffer_new` catalog-name-only entry. Strict state is thread-local, so
-    /// setting it here cannot affect parallel tests.
+    /// `buffer_new` catalog-name-only entry. Strict state is thread-local (and
+    /// guard-restored on panic), so this cannot affect parallel tests.
     #[test]
     fn strict_mode_hides_extension_builtins_from_catalog() {
-        crate::strict_php::set_enabled(true);
-        let canonical_ptr_get = canonical_builtin_function_name("ptr_get");
-        let visible_ptr_get = is_php_visible_builtin_function("ptr_get");
-        let canonical_buffer_new = canonical_builtin_function_name("buffer_new");
-        let visible_buffer_new = is_php_visible_builtin_function("buffer_new");
+        let _guard = crate::strict_php::scoped_enable();
+        assert!(
+            canonical_builtin_function_name("ptr_get").is_none(),
+            "strict must hide ptr_get"
+        );
+        assert!(
+            !is_php_visible_builtin_function("ptr_get"),
+            "strict must hide ptr_get from PHP visibility"
+        );
+        assert!(
+            canonical_builtin_function_name("buffer_new").is_none(),
+            "strict must hide buffer_new"
+        );
+        assert!(
+            !is_php_visible_builtin_function("buffer_new"),
+            "strict must hide buffer_new from PHP visibility"
+        );
         let names = supported_builtin_function_names();
-        crate::strict_php::set_enabled(false);
-
-        assert!(canonical_ptr_get.is_none(), "strict must hide ptr_get");
-        assert!(!visible_ptr_get, "strict must hide ptr_get from PHP visibility");
-        assert!(canonical_buffer_new.is_none(), "strict must hide buffer_new");
-        assert!(!visible_buffer_new, "strict must hide buffer_new from PHP visibility");
         assert!(
             !names.contains(&"ptr_get") && !names.contains(&"buffer_new"),
             "strict must drop extension names from the supported set"
@@ -229,22 +242,32 @@ mod tests {
     /// compiler-injected prelude code.
     #[test]
     fn strict_mode_keeps_php_builtins_and_internal_aliases() {
-        crate::strict_php::set_enabled(true);
-        let strlen = canonical_builtin_function_name("strlen");
-        let is_real = canonical_builtin_function_name("is_real");
-        let alias = canonical_builtin_function_name("__elephc_ptr_read_string");
-        crate::strict_php::set_enabled(false);
-
-        assert_eq!(strlen, Some("strlen".to_string()));
+        let _guard = crate::strict_php::scoped_enable();
         assert_eq!(
-            is_real,
+            canonical_builtin_function_name("strlen"),
+            Some("strlen".to_string())
+        );
+        assert_eq!(
+            canonical_builtin_function_name("is_real"),
             Some("is_real".to_string()),
             "is_real is treated as PHP for strict purposes"
         );
         assert!(
-            alias.is_some(),
+            canonical_builtin_function_name("__elephc_ptr_read_string").is_some(),
             "internal prelude aliases must stay resolvable in strict mode"
         );
+    }
+
+    /// Verifies the unfiltered name set ignores strict mode entirely: metadata
+    /// consumers (parity gates, docs exporters) memoize this snapshot and must
+    /// never observe a strict-filtered view.
+    #[test]
+    fn unfiltered_name_set_ignores_strict_mode() {
+        let _guard = crate::strict_php::scoped_enable();
+        let names = all_supported_builtin_function_names();
+        assert!(names.contains(&"ptr_get"));
+        assert!(names.contains(&"buffer_new"));
+        assert!(names.contains(&"strlen"));
     }
 
     /// Verifies extension builtins remain fully visible without strict mode, so
