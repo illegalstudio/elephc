@@ -164,12 +164,23 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path =
             Path::new(bridge_staticlib_dir).join(format!("lib{}.a", bridge.lib_name));
-        if !bridge_staticlib_needs_build(&archive_path, bridge.package) {
+        let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
+            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+            && LIBPQ_BRIDGE_BUILT.get().is_none();
+        if !requires_libpq_profile
+            && !bridge_staticlib_needs_build(&archive_path, bridge.package)
+        {
             continue;
         }
 
-        let status = Command::new("cargo")
-            .args(["build", "-p", bridge.package])
+        let mut command = Command::new("cargo");
+        command.args(["build", "-p", bridge.package]);
+        if bridge.lib_name == "elephc_pdo"
+            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+        {
+            command.args(["--features", "libpq-gss"]);
+        }
+        let status = command
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .unwrap_or_else(|err| {
@@ -189,6 +200,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             bridge.package,
             archive_path.display()
         );
+        if requires_libpq_profile {
+            let _ = LIBPQ_BRIDGE_BUILT.set(());
+        }
     }
 }
 
@@ -249,7 +263,8 @@ fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> b
 
 /// Links a user object file and a runtime object into a final native binary.
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
-/// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux.
+/// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux
+/// and links libpq when the PDO archive uses its php-src-compatible backend.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -283,6 +298,8 @@ pub(crate) fn link_binary(
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
+    let needs_libpq = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
+        && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some();
 
     match target().platform {
         Platform::MacOS => {
@@ -302,11 +319,24 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
             }
+            if needs_libpq {
+                for path in [
+                    "/opt/homebrew/opt/libpq/lib",
+                    "/usr/local/opt/libpq/lib",
+                ] {
+                    if Path::new(path).exists() {
+                        ld_cmd.arg(format!("-L{path}"));
+                    }
+                }
+            }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
             }
             for lib in &actual_link_libs {
                 ld_cmd.arg(format!("-l{}", lib));
+            }
+            if needs_libpq {
+                ld_cmd.arg("-lpq");
             }
             for framework in extra_frameworks {
                 ld_cmd.args(["-framework", framework]);
@@ -343,6 +373,9 @@ pub(crate) fn link_binary(
             }
             for lib in &actual_link_libs {
                 ld_cmd.arg(format!("-l{}", lib));
+            }
+            if needs_libpq {
+                ld_cmd.arg("-lpq");
             }
             if !actual_link_libs.is_empty() {
                 ld_cmd.arg("-Wl,--as-needed");

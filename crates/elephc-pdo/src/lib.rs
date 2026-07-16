@@ -31,7 +31,14 @@
 //!   compiled PHP binaries have no system database-client runtime dependency.
 
 mod my;
+#[path = "pg.rs"]
+#[cfg_attr(feature = "libpq-gss", allow(dead_code))]
+mod pg_native;
+#[cfg(feature = "libpq-gss")]
+#[path = "pg_libpq.rs"]
 mod pg;
+#[cfg(not(feature = "libpq-gss"))]
+use pg_native as pg;
 mod sqlite;
 
 use std::collections::{HashMap, HashSet};
@@ -617,12 +624,13 @@ fn open_persistent_dsn(
 /// persistent-handle release so PHP 8.6 can reset PostgreSQL session state. v45
 /// adds bounded PostgreSQL large-object size/read/write operations. v46 adds the
 /// equivalent bounded size/read/write operations for SQLite incremental BLOBs.
+/// v47 enables PHP 8.5+'s demand-driven simple-query protocol per statement.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(46, || 46)
+    ffi_guard(47, || 47)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -1059,6 +1067,16 @@ pub extern "C" fn elephc_pdo_set_prefetch(conn_id: i64, enabled: i64) -> i64 {
 pub extern "C" fn elephc_pdo_stmt_set_prefetch(stmt_id: i64, enabled: i64) -> i64 {
     ffi_guard(0, || match lock_recover(stmts()).get_mut(&stmt_id) {
         Some(Stmt::Postgres(statement)) => statement.set_prefetch(enabled != 0),
+        _ => 0,
+    })
+}
+
+/// Enables lazy simple-protocol consumption for a PostgreSQL statement compiled
+/// against PHP 8.5 or newer. Other drivers and already-executed statements reject it.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_stmt_enable_simple_streaming(stmt_id: i64) -> i64 {
+    ffi_guard(0, || match lock_recover(stmts()).get_mut(&stmt_id) {
+        Some(Stmt::Postgres(statement)) => statement.enable_simple_streaming(),
         _ => 0,
     })
 }
@@ -3014,11 +3032,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v46 exposes
-    /// bounded SQLite incremental-BLOB I/O.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v47 exposes
+    /// PHP-version-selected simple-query streaming.
     #[test]
-    fn version_is_v46() {
-        assert_eq!(elephc_pdo_version(), 46);
+    fn version_is_v47() {
+        assert_eq!(elephc_pdo_version(), 47);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

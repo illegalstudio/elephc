@@ -568,8 +568,10 @@ $db = new PDO("mysql:host=db.example.com;dbname=app", "u", "p", [
 - `ATTR_SSL_VERIFY_SERVER_CERT`: `false` disables certificate and hostname checking.
 - `ATTR_SSL_CAPATH`: a CA directory. Its PEM certificates are combined into the
   per-connection bundle rustls accepts, alongside `ATTR_SSL_CA` when both are set.
-- `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY` are rejected explicitly because the
-  `mysql` crate does not expose equivalent rustls/authentication controls.
+- `ATTR_SSL_CIPHER` restricts rustls to the named modern suites. `ATTR_SERVER_PUBLIC_KEY`
+  supplies the trusted RSA key used by non-TLS `caching_sha2_password` authentication.
+  Unsupported legacy OpenSSL cipher names fail the connection instead of silently
+  broadening the negotiated suite set.
 
 Presence of any `ATTR_SSL_*` option enables TLS. A custom minimal build that disables
 the default `mysql-tls` feature raises a `PDOException` rather than silently falling back
@@ -863,7 +865,7 @@ preserve source SQL evaluation order, and retain the rendered text for
   structured to add more behind the same prelude.
 - `php.ini`-based DSN aliases (`pdo.dsn.*`) are not available in standalone binaries.
 
-### Driver options not provided by the Rust clients
+### Driver-specific client options
 
 - MySQL constructor options implement buffered/unbuffered observation,
   `ATTR_LOCAL_INFILE` with an optional canonical `ATTR_LOCAL_INFILE_DIRECTORY` sandbox,
@@ -871,9 +873,9 @@ preserve source SQL evaluation order, and retain the rendered text for
   supported TLS key/cert/CA/verification settings. A disabled local-infile handler rejects
   the server request instead of returning a successful empty upload.
 - `Pdo\Mysql::ATTR_SSL_CAPATH` is adapted to rustls by building a deterministic
-  multi-certificate PEM bundle. `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY` still fail
-  explicitly: the upstream `mysql` crate exposes neither cipher-suite selection nor a
-  caller-supplied RSA authentication key. No security option is accepted inertly.
+  multi-certificate PEM bundle. The pinned mysql 28 patch adds `ATTR_SSL_CIPHER` and
+  `ATTR_SERVER_PUBLIC_KEY`, the two controls absent from its public API. No security option
+  is accepted inertly.
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.
@@ -898,10 +900,28 @@ configuration is resolved before `tokio-postgres`: named `service`/`servicefile`
 TLS 1.2/1.3 bounds all follow libpq-style precedence. A secure passfile is required and a
 multi-host passfile is rejected because the native client can carry only one password.
 
-Options whose protocol/security semantics cannot be reproduced — GSS encryption,
-encrypted-key passwords, `require_auth`, and replication mode — fail with an explicit
-`unsupported PostgreSQL DSN option` error. No security or transport option is silently
-dropped.
+The default bridge stays pure Rust. For the exact libpq behavior PHP delegates to — GSSAPI
+and Kerberos authentication/encryption, encrypted-key `sslpassword`, `require_auth`, and
+the `replication` startup parameter — build the PDO archive with:
+
+```bash
+cargo build -p elephc-pdo --features libpq-gss
+```
+
+With Homebrew's keg-only libpq on Apple Silicon, expose `pg_config` during that build:
+
+```bash
+PATH=/opt/homebrew/opt/libpq/bin:$PATH cargo build -p elephc-pdo --features libpq-gss
+```
+
+Then export `ELEPHC_PDO_LIBPQ=1` while compiling the PHP program so the final native link
+adds `-lpq`. This profile sends the explicit PDO options to `PQconnectdb`; service files,
+passfiles, `PG*` environment defaults, and Kerberos/GSS configuration are therefore resolved
+by libpq itself. It uses libpq for the complete PostgreSQL connection lifetime, just as
+php-src does, and requires a target-compatible libpq with the desired GSS/Kerberos support.
+Individual keywords remain version-dependent: for example, a libpq predating
+`require_auth` rejects it exactly as the same PHP build would.
+The ordinary profile rejects these options explicitly and retains standalone pure-Rust binaries.
 
 ### Resource and lifetime caveats
 
@@ -913,8 +933,9 @@ dropped.
   connection into a demand worker and decode one row per `fetch()`, reducing peak memory
   to the active row while preserving MySQL's 2014 busy diagnostic and PostgreSQL cursor
   invalidation. Buffered modes retain the complete result. PostgreSQL's emulated
-  simple-query path remains materialized because the synchronous `postgres` crate does not
-  expose `tokio-postgres::simple_query_raw`; native prepares are the streaming path.
+  simple-query path follows the selected PHP version: PHP 8.0–8.4 retains its historical
+  buffered behavior, while PHP 8.5+ consumes `simple_query_raw()` one row at a time, matching
+  php-src's `PQsendQuery()` + `PQsetSingleRowMode()` implementation.
 - **LOB streams.** SQLite `openBlob()` keeps only cursor/size state and uses bounded
   `sqlite3_blob_read` / `sqlite3_blob_write` slices; its native fixed-size rule rejects
   extending writes. PostgreSQL `lobOpen()` likewise keeps only cursor/size state: reads use

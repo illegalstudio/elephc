@@ -586,6 +586,48 @@ echo $db->query("SELECT 'capath-ok'")->fetchColumn();
     assert_eq!(out, "capath-ok");
 }
 
+/// A caller-supplied caching_sha2_password RSA key is used for a non-TLS login,
+/// matching mysqlnd's MYSQL_SERVER_PUBLIC_KEY connection option.
+#[test]
+#[ignore]
+fn mysql_server_public_key_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO(
+    (string) getenv("ELEPHC_MY_DSN"),
+    null,
+    null,
+    [Pdo\Mysql::ATTR_SERVER_PUBLIC_KEY => (string) getenv("ELEPHC_MY_SERVER_PUBLIC_KEY")]
+);
+echo $db->query("SELECT 'rsa-ok'")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "rsa-ok");
+}
+
+/// ATTR_SSL_CIPHER constrains rustls to a modern TLS 1.2 suite understood under
+/// both OpenSSL's MySQL spelling and rustls's IANA spelling.
+#[test]
+#[ignore]
+fn mysql_tls_cipher_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO(
+    (string) getenv("ELEPHC_MY_TLS_DSN"),
+    null,
+    null,
+    [
+        Pdo\Mysql::ATTR_SSL_CA => (string) getenv("ELEPHC_MY_TLS_CA"),
+        Pdo\Mysql::ATTR_SSL_CIPHER => "ECDHE-RSA-AES128-GCM-SHA256",
+    ]
+);
+$row = $db->query("SHOW STATUS LIKE 'Ssl_cipher'")->fetch(PDO::FETCH_NUM);
+echo str_contains((string) $row[1], "AES128-GCM-SHA256") ? "cipher-ok" : (string) $row[1];
+"#,
+    );
+    assert_eq!(out, "cipher-ok");
+}
+
 /// P0-B: `PDO::exec()` must return the real affected-row count for INSERT,
 /// UPDATE, and DELETE, not always `0`. Regression for `my.rs::MyConn::exec()`
 /// reading `affected_rows()` after draining the query result, at which point

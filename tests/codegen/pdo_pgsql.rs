@@ -24,6 +24,7 @@
 //!   the libpq `connect_timeout` default.
 
 use crate::support::*;
+use elephc::php_version::PhpVersion;
 
 /// Verifies PHP 8.4's nullable notice callback signature without requiring a live server.
 #[test]
@@ -166,6 +167,32 @@ echo $first . ":" . $rowCount . ":" . $closed . ":" . $bufferedCount . ":" . $st
 "#,
     );
     assert_eq!(out, "1:0:closed:2:1");
+}
+
+/// PHP 8.5 extends ATTR_PREFETCH=0 to emulated/simple-protocol statements. Only
+/// the active row may be retained even when two large rows cross the wire.
+#[test]
+#[ignore]
+fn test_php85_pgsql_emulated_prefetch_is_demand_driven() {
+    let out = compile_and_run_with_php_version(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"), null, null, [
+    \PDO::ATTR_EMULATE_PREPARES => true,
+    \PDO::ATTR_PREFETCH => false,
+]);
+$stmt = $db->prepare("SELECT repeat('a', 131072) AS value UNION ALL SELECT repeat('b', 131072)");
+$stmt->execute();
+$memory = $stmt->getAttribute(\Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE);
+$first = $stmt->fetchColumn();
+$second = $stmt->fetchColumn();
+$stmt->closeCursor();
+echo ($memory >= 131072 && $memory < 200000 ? "streamed" : "buffered")
+    . ":" . strlen((string) $first) . ":" . substr((string) $first, 0, 1)
+    . ":" . strlen((string) $second) . ":" . substr((string) $second, 0, 1);
+"#,
+        PhpVersion::Php85,
+    );
+    assert_eq!(out, "streamed:131072:a:131072:b");
 }
 
 /// Round-trip: create, insert through named placeholders, and read a row back

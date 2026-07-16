@@ -69,6 +69,18 @@ flate2 = "1"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
 
+[features]
+# Keeps the codegen test package and its PDO dev-dependency on the same libpq
+# backend profile. Without this relay, a later `cargo test` can rebuild and
+# replace the feature-built staticlib with the pure-Rust default archive.
+pdo-libpq-gss = ["elephc-pdo/libpq-gss"]
+
+# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
+# caller-supplied authentication RSA keys and rustls cipher-suite selection.
+# Keep the small audited patch in-tree until those options land upstream.
+[patch.crates-io]
+mysql = { path = "vendor/mysql-28.0.0" }
+
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces

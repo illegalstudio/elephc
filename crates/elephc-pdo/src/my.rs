@@ -110,6 +110,8 @@ struct MyDriverOptions {
     multi_statements: bool,
     buffered_query: bool,
     ssl_ca_path: Option<PathBuf>,
+    ssl_cipher: Option<String>,
+    server_public_key: Option<PathBuf>,
 }
 
 impl Default for MyDriverOptions {
@@ -123,6 +125,8 @@ impl Default for MyDriverOptions {
             multi_statements: true,
             buffered_query: true,
             ssl_ca_path: None,
+            ssl_cipher: None,
+            server_public_key: None,
         }
     }
 }
@@ -615,11 +619,9 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             "multi" => options.multi_statements = value != "0",
             "buffered" => options.buffered_query = value != "0",
             "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
-            "cipher" if !value.is_empty() => {
-                return Err("Pdo\\Mysql::ATTR_SSL_CIPHER cannot be honored by the rustls MySQL client".to_string())
-            }
+            "cipher" if !value.is_empty() => options.ssl_cipher = Some(value),
             "serverkey" if !value.is_empty() => {
-                return Err("Pdo\\Mysql::ATTR_SERVER_PUBLIC_KEY cannot be honored by the native MySQL client".to_string())
+                options.server_public_key = Some(PathBuf::from(value))
             }
             _ => {}
         }
@@ -635,6 +637,20 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             return Err(format!(
                 "Pdo\\Mysql::ATTR_LOCAL_INFILE_DIRECTORY '{}' is not a directory",
                 directory.display()
+            ));
+        }
+    }
+    if let Some(public_key) = options.server_public_key.as_mut() {
+        *public_key = public_key.canonicalize().map_err(|error| {
+            format!(
+                "Pdo\\Mysql::ATTR_SERVER_PUBLIC_KEY '{}': {error}",
+                public_key.display()
+            )
+        })?;
+        if !public_key.is_file() {
+            return Err(format!(
+                "Pdo\\Mysql::ATTR_SERVER_PUBLIC_KEY '{}' is not a file",
+                public_key.display()
             ));
         }
     }
@@ -1224,12 +1240,16 @@ fn interpolate_emulated_sql(
 /// rustls TLS for the connection. The default build enables mysql 28's ring-backed
 /// `mysql-tls` feature. An empty config leaves `opts` untouched (plaintext).
 #[cfg(feature = "mysql-tls")]
-fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, String> {
-    if ssl_config.is_empty() {
+fn apply_ssl_opts(
+    opts: OptsBuilder,
+    ssl_config: &str,
+    cipher: Option<&str>,
+) -> Result<OptsBuilder, String> {
+    if ssl_config.is_empty() && cipher.is_none() {
         return Ok(opts);
     }
     install_crypto_provider();
-    Ok(opts.ssl_opts(parse_ssl_config(ssl_config)))
+    Ok(opts.ssl_opts(parse_ssl_config(ssl_config, cipher)))
 }
 
 /// Owns a temporary PEM bundle assembled from MySQL's CA file/directory options.
@@ -1361,8 +1381,12 @@ fn append_pem_certificates(output: &mut Vec<u8>, source: &[u8]) {
 /// non-empty SSL config fails loudly; an empty config (no TLS requested) connects
 /// normally.
 #[cfg(not(feature = "mysql-tls"))]
-fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, String> {
-    if ssl_config.is_empty() {
+fn apply_ssl_opts(
+    opts: OptsBuilder,
+    ssl_config: &str,
+    cipher: Option<&str>,
+) -> Result<OptsBuilder, String> {
+    if ssl_config.is_empty() && cipher.is_none() {
         return Ok(opts);
     }
     Err("mysql TLS (Pdo\\Mysql::ATTR_SSL_*) was requested but requires the \
@@ -1395,7 +1419,7 @@ fn install_crypto_provider() {
 /// certificate and hostname validation via the crate's danger flags. Unsupported
 /// security keys never reach this parser: `parse_driver_options` rejects them first.
 #[cfg(feature = "mysql-tls")]
-fn parse_ssl_config(ssl_config: &str) -> mysql::SslOpts {
+fn parse_ssl_config(ssl_config: &str, cipher: Option<&str>) -> mysql::SslOpts {
     use mysql::{ClientIdentity, SslOpts};
     use std::path::PathBuf;
 
@@ -1431,6 +1455,15 @@ fn parse_ssl_config(ssl_config: &str) -> mysql::SslOpts {
         ssl = ssl
             .with_danger_skip_domain_validation(true)
             .with_danger_accept_invalid_certs(true);
+    }
+    if let Some(cipher) = cipher {
+        let suites = cipher
+            .split([':', ','])
+            .map(str::trim)
+            .filter(|suite| !suite.is_empty())
+            .map(str::to_string)
+            .collect();
+        ssl = ssl.with_cipher_suites(Some(suites));
     }
     ssl
 }
@@ -1470,7 +1503,10 @@ impl MyConn {
             build_opts(dsn, found_rows, driver_options.ignore_space)?;
         let (ssl_config, _ca_bundle) =
             normalize_ssl_ca_sources(ssl_config, driver_options.ssl_ca_path.as_deref())?;
-        opts = apply_ssl_opts(opts, &ssl_config)?;
+        if let Some(public_key) = driver_options.server_public_key.clone() {
+            opts = opts.server_public_key_path(Some(public_key));
+        }
+        opts = apply_ssl_opts(opts, &ssl_config, driver_options.ssl_cipher.as_deref())?;
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
         }
@@ -3131,12 +3167,12 @@ mod tests {
         );
     }
 
-    /// Packed PDO driver options preserve supported selections, including the
-    /// CA-directory path, and reject security options the client cannot honor.
+    /// Packed PDO driver options preserve supported TLS selections and validate
+    /// a caller-supplied authentication key path before the handshake.
     #[test]
     fn driver_options_parse_supported_flags_and_security_paths() {
         let options = parse_driver_options(
-            "local=1;compress=1;ignore=1;multi=0;buffered=0;capath=/tmp/mysql-ca;",
+            "local=1;compress=1;ignore=1;multi=0;buffered=0;capath=/tmp/mysql-ca;cipher=ECDHE-RSA-AES128-GCM-SHA256;",
         )
         .expect("supported PDO MySQL options should parse");
         assert!(options.local_infile);
@@ -3145,8 +3181,12 @@ mod tests {
         assert!(!options.multi_statements);
         assert!(!options.buffered_query);
         assert_eq!(options.ssl_ca_path, Some(PathBuf::from("/tmp/mysql-ca")));
+        assert_eq!(
+            options.ssl_cipher.as_deref(),
+            Some("ECDHE-RSA-AES128-GCM-SHA256")
+        );
         let error = parse_driver_options("serverkey=/tmp/key.pem;")
-            .expect_err("an inert server public key must fail loudly");
+            .expect_err("a missing server public key must fail loudly");
         assert!(error.contains("ATTR_SERVER_PUBLIC_KEY"));
     }
 
@@ -3297,7 +3337,7 @@ mod tests {
     /// An empty SSL config is always a no-op (plaintext), regardless of feature.
     #[test]
     fn apply_ssl_opts_empty_is_noop() {
-        assert!(apply_ssl_opts(OptsBuilder::new(), "").is_ok());
+        assert!(apply_ssl_opts(OptsBuilder::new(), "", None).is_ok());
     }
 
     /// In a custom build without `mysql-tls`, a non-empty SSL config fails loudly
@@ -3306,7 +3346,7 @@ mod tests {
     #[test]
     fn apply_ssl_opts_requires_feature_when_configured() {
         // `OptsBuilder` has no `Debug`, so match rather than `unwrap_err`.
-        match apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem") {
+        match apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem", None) {
             Ok(_) => panic!("expected an error when the mysql-tls feature is disabled"),
             Err(err) => assert!(err.contains("mysql-tls"), "unexpected error: {err}"),
         }
@@ -3317,7 +3357,12 @@ mod tests {
     #[cfg(feature = "mysql-tls")]
     #[test]
     fn apply_ssl_opts_builds_sslopts() {
-        assert!(apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem;verify=0").is_ok());
+        assert!(apply_ssl_opts(
+            OptsBuilder::new(),
+            "ca=/etc/ca.pem;verify=0",
+            Some("ECDHE-RSA-AES128-GCM-SHA256")
+        )
+        .is_ok());
     }
 
     /// F-MY-08 (mandatory unit test, no server needed): the wire-type -> `native_type`

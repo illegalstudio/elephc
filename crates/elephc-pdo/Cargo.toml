@@ -22,11 +22,16 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 # TCP/Unix sockets when a `pgsql:` DSN is opened. The `with-*` features add the
 # FromSql decoders for date/time, json, and uuid columns so the driver can read
 # those types back as their PHP-string representation.
-postgres = { version = "0.19", features = [
+tokio-postgres = { version = "0.7", features = [
     "with-chrono-0_4",
     "with-serde_json-1",
     "with-uuid-1",
 ] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+futures-util = { version = "0.3", features = ["sink"] }
+bytes = "1"
+whoami = "2"
+libpq = { version = "5.0.1", features = ["v12"], optional = true }
 # Type crates named directly in the column decoder (the postgres features above
 # only wire up the FromSql impls). rust_decimal's `db-postgres` feature adds the
 # numeric/decimal FromSql impl (postgres has no built-in one).
@@ -74,3 +79,4 @@ rustls-pemfile = { version = "2", optional = true }
 default = ["tls", "mysql-tls"]
 tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pemfile"]
 mysql-tls = ["tls", "mysql/rustls-tls-ring"]
+libpq-gss = ["dep:libpq"]

@@ -12,13 +12,25 @@
 //   cargo run -- examples/pdo-mysql/main.php
 //   ELEPHC_MY_DSN='mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test' \
 //       ./examples/pdo-mysql/main
+// Optional ELEPHC_MY_SERVER_PUBLIC_KEY and ELEPHC_MY_TLS_CIPHER values demonstrate
+// mysqlnd-compatible authentication-key and TLS cipher controls.
 
 $dsn = (string) getenv("ELEPHC_MY_DSN");
 if ($dsn === "") {
     $dsn = "mysql:host=127.0.0.1;port=33060;dbname=testdb;user=test;password=test";
 }
 
-$db = new PDO($dsn);
+$options = [];
+$serverPublicKey = (string) getenv("ELEPHC_MY_SERVER_PUBLIC_KEY");
+if ($serverPublicKey !== "") {
+    $options[Pdo\Mysql::ATTR_SERVER_PUBLIC_KEY] = $serverPublicKey;
+}
+$tlsCipher = (string) getenv("ELEPHC_MY_TLS_CIPHER");
+if ($tlsCipher !== "") {
+    $options[Pdo\Mysql::ATTR_SSL_CIPHER] = $tlsCipher;
+}
+
+$db = new PDO($dsn, null, null, $options);
 echo "Driver: " . $db->getAttribute(PDO::ATTR_DRIVER_NAME) . "\n\n";
 
 $db->exec("DROP TABLE IF EXISTS contacts");

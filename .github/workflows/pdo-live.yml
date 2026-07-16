@@ -33,7 +33,7 @@ jobs:
   pdo-live:
     name: PDO live suites (PostgreSQL 16 + MySQL 8.4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     services:
       postgres:
@@ -82,7 +82,6 @@ jobs:
       # exactly like a live test that passed — the precise failure mode F-QUAL-06 is
       # about.
       ELEPHC_PDO_LIVE_REQUIRED: '1'
-
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +110,7 @@ jobs:
             file \
             libbz2-dev \
             libpcre2-dev \
+            libpq-dev \
             libssl-dev \
             pkg-config \
             tzdata \
@@ -166,7 +166,9 @@ jobs:
           docker exec ${{ job.services.mysql.id }} \
             mysql -uroot -proot -e "ALTER INSTANCE RELOAD TLS;"
           docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
+          docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/public_key.pem "$RUNNER_TEMP/mysql-public-key.pem"
           echo "ELEPHC_MY_TLS_CA=$RUNNER_TEMP/mysql-ca.pem" >> "$GITHUB_ENV"
+          echo "ELEPHC_MY_SERVER_PUBLIC_KEY=$RUNNER_TEMP/mysql-public-key.pem" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/mysql-ca-dir"
           cp "$RUNNER_TEMP/mysql-ca.pem" "$RUNNER_TEMP/mysql-ca-dir/ca.pem"
           echo "ELEPHC_MY_TLS_CAPATH=$RUNNER_TEMP/mysql-ca-dir" >> "$GITHUB_ENV"
@@ -212,21 +214,20 @@ jobs:
           docker logs ${{ job.services.postgres.id }}
           exit 1
 
-      - name: Build the PDO bridge staticlib
+      - name: Build the native PDO bridge staticlib
         # The codegen runner links compiled PHP programs against libelephc_pdo.a and
         # will shell out to `cargo build -p elephc-pdo` itself if the archive is
         # missing; building it up front keeps that out of the (bounded-parallelism)
-        # test run. MySQL TLS now ships through mysql 28's ring backend; spelling
-        # the feature here keeps the live job's intended TLS dependency explicit.
-        run: cargo build -p elephc-pdo --features mysql-tls
+        # test run.
+        run: cargo build -p elephc-pdo
 
-      - name: Live bridge tests (in-crate, elephc-pdo)
+      - name: Live native bridge tests (in-crate, elephc-pdo)
         # pg_round_trip + my_round_trip. These read ELEPHC_PG_TEST_DSN /
         # ELEPHC_MY_TEST_DSN first and fall back to the ELEPHC_*_DSN names exported
         # above; ELEPHC_PDO_LIVE_REQUIRED=1 makes a missing DSN fail loudly.
-        run: cargo test -p elephc-pdo --features mysql-tls -- --ignored
+        run: cargo test -p elephc-pdo -- --ignored
 
-      - name: Live codegen tests (pgsql)
+      - name: Live native codegen tests (pgsql)
         # Every #[ignore] test under tests/codegen/pdo_pgsql.rs. `--test-threads=4`
         # is a hard requirement, not a tuning knob: the codegen suite compiles and
         # links a native binary per test and melts the runner at higher concurrency.
@@ -234,9 +235,31 @@ jobs:
         # filter intentionally includes pgsql_tls_round_trip as well.
         run: cargo test --test codegen_tests -- --ignored pgsql --test-threads=4
 
+      - name: Build the libpq PDO bridge staticlib
+        # The libpq profile is a complete PostgreSQL backend, matching php-src's
+        # delegation for GSSAPI and libpq-only connection options.
+        run: cargo build -p elephc-pdo --features mysql-tls,libpq-gss
+
+      - name: Libpq bridge unit tests
+        # Includes option-forwarding and C-parameter ABI regressions that do not
+        # require a Kerberos realm or a live database.
+        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss --lib
+
+      - name: Live libpq bridge tests (in-crate, elephc-pdo)
+        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss -- --ignored
+
+      - name: Live libpq codegen tests (pgsql)
+        # The root feature prevents Cargo from replacing the feature-built archive
+        # with the default one; the environment marker adds libpq to final PHP links.
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored pgsql --test-threads=4
+
       - name: Live codegen tests (mysql)
         # Every #[ignore] test under tests/codegen/pdo_mysql.rs, same parallelism
         # bound.
         # MySQL's generated CA is exported through ELEPHC_MY_TLS_CA and the bridge
         # archive includes mysql-tls, so this covers both MySQL TLS round-trips.
-        run: cargo test --test codegen_tests -- --ignored mysql --test-threads=4
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored mysql --test-threads=4

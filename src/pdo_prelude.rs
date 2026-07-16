@@ -231,6 +231,8 @@ extern "elephc_pdo" {
     // v42: PostgreSQL connection default and prepare-local ATTR_PREFETCH.
     function elephc_pdo_set_prefetch(int $conn, int $enabled): int;
     function elephc_pdo_stmt_set_prefetch(int $stmt, int $enabled): int;
+    // v47: PHP 8.5+ maps ATTR_PREFETCH=0 onto lazy simple-query consumption too.
+    function elephc_pdo_stmt_enable_simple_streaming(int $stmt): int;
     // v23: per-column PostgreSQL type metadata for getColumnMeta (P2-k). Both are
     // read off the prepared statement's column descriptors, so they are valid
     // regardless of the current row and describe the DECLARED column type rather
@@ -2143,6 +2145,11 @@ class PDO {
         if ($_prefetchOverride != -1) {
             elephc_pdo_stmt_set_prefetch($_handle, $_prefetchOverride);
         }
+        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --
+        if ($_driver === "pgsql") {
+            elephc_pdo_stmt_enable_simple_streaming($_handle);
+        }
+        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --
         // Inherit the connection's default fetch mode (ATTR_DEFAULT_FETCH_MODE) so
         // a statement fetched with no explicit mode uses the dbh default.
         $_stmt = __elephc_new_without_constructor($_statementClass);
@@ -5460,11 +5467,22 @@ pub fn inject_if_used_for_version(
 /// Returns the PDO prelude source with version-specific fetch constants and decoders.
 fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
     if php_version == PhpVersion::Php84 {
-        return Cow::Borrowed(PDO_PRELUDE_SRC);
+        let mut source = PDO_PRELUDE_SRC.to_owned();
+        remove_version_block(
+            &mut source,
+            "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
+            "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --",
+        );
+        return Cow::Owned(source);
     }
 
     if php_version < PhpVersion::Php84 {
         let mut source = PDO_PRELUDE_SRC.to_owned();
+        remove_version_block(
+            &mut source,
+            "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
+            "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --",
+        );
         remove_version_block(
             &mut source,
             "    // -- elephc PHP >= 8.4 PDO::connect begin --",
@@ -5666,6 +5684,17 @@ mod version_tests {
             .contains("#[\\Deprecated(\"as it has no effect\")]"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.5 PDO prelude");
         crate::parser::parse(&tokens).expect("parse PHP 8.5 PDO prelude");
+    }
+
+    /// PHP 8.5+ alone enables lazy simple-query consumption on PostgreSQL statements.
+    #[test]
+    fn pgsql_simple_streaming_is_version_gated() {
+        assert!(!prelude_source_for_version(PhpVersion::Php84)
+            .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
+        assert!(prelude_source_for_version(PhpVersion::Php85)
+            .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
+        assert!(prelude_source_for_version(PhpVersion::Php86)
+            .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while

@@ -172,6 +172,18 @@ impl BridgeStaticlib {
                 return Some(env_dir);
             }
         }
+        // In a source checkout the libpq marker selects both the final `-lpq`
+        // link and the PDO archive profile. Cargo's no-op rebuild is cheap and
+        // prevents a previously built default archive from being reused by mistake.
+        if self.lib_name == "elephc_pdo"
+            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+        {
+            if let Some(workspace) = self.find_workspace() {
+                if !self.build_staticlib(&workspace) {
+                    return None;
+                }
+            }
+        }
         if let Some(dir) = self.find_lib_dir() {
             return Some(dir);
         }
@@ -219,19 +231,25 @@ impl BridgeStaticlib {
     }
 
     /// Builds this bridge's staticlib in the current binary's debug/release
-    /// profile (best-effort; failures are ignored so callers fall back to other
-    /// discovery candidates).
-    fn build_staticlib(&self, workspace: &Path) {
+    /// profile and reports whether Cargo completed successfully.
+    fn build_staticlib(&self, workspace: &Path) -> bool {
         let release = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .is_some_and(|dir| dir.file_name().is_some_and(|name| name == "release"));
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "-p", self.crate_name]);
+        if self.lib_name == "elephc_pdo"
+            && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+        {
+            cmd.args(["--features", "libpq-gss"]);
+        }
         if release {
             cmd.arg("--release");
         }
-        let _ = cmd.current_dir(workspace).status();
+        cmd.current_dir(workspace)
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
 
@@ -493,6 +511,14 @@ pub(crate) fn link(
             }
         }
     }
+    // A PDO archive built with `libpq-gss` intentionally delegates PostgreSQL to
+    // the same system libpq as php-src. Static archives cannot encode this dynamic
+    // dependency, so the build/export environment marks that archive explicitly.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+    {
+        ld_cmd.arg("-lpq");
+    }
     if target.platform == Platform::Linux && !extra_link_libs.is_empty() {
         ld_cmd.arg("-Wl,--as-needed");
     }
@@ -692,7 +718,12 @@ fn validate_macos_sdk_path(resolved: &str) -> Result<String, String> {
 
 /// Returns common Homebrew library directories used for optional native deps on macOS.
 fn default_macos_library_paths() -> Vec<&'static str> {
-    ["/opt/homebrew/lib", "/usr/local/lib"]
+    [
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+        "/opt/homebrew/opt/libpq/lib",
+        "/usr/local/opt/libpq/lib",
+    ]
         .into_iter()
         .filter(|path| Path::new(path).exists())
         .collect()

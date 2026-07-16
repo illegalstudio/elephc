@@ -1,6 +1,7 @@
 //! Purpose:
 //! The PostgreSQL driver for the elephc PDO bridge. Connects with the pure-Rust
-//! synchronous `postgres` client (no system libpq), so compiled PHP binaries
+//! `tokio-postgres` client behind a synchronous bridge boundary (no system libpq),
+//! so compiled PHP binaries
 //! stay standalone and talk to a running PostgreSQL server over the network.
 //!
 //! Called from:
@@ -31,8 +32,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 
-use postgres::types::{to_sql_checked, IsNull, Kind, ToSql, Type};
-use postgres::{Client, Config, NoTls, Row, SimpleQueryMessage, Statement};
+use futures_util::{future::poll_fn, pin_mut, SinkExt, TryStreamExt};
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tokio_postgres::types::{to_sql_checked, IsNull, Kind, ToSql, Type};
+use tokio_postgres::{
+    AsyncMessage, Client as AsyncClient, Config, Connection, Error as PgError, NoTls, Row,
+    SimpleQueryMessage, Statement,
+};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -74,12 +80,11 @@ pub struct PgConn {
     /// connection failure rather than a server-reported error).
     pub sqlstate: String,
     /// Buffer of server NOTICE message texts captured during query execution,
-    /// backing `Pdo\Pgsql::setNoticeCallback()`. The `postgres` client's connection
-    /// task invokes the `Config::notice_callback` for every `AsyncMessage::Notice`;
-    /// that closure pushes the message here, and the prelude drains this buffer after
-    /// each `exec()`/`query()` and dispatches each message to the PHP callback. Shared
-    /// (`Arc<Mutex>`) because the callback fires from the client's connection driver,
-    /// which may run on a separate thread from the query call.
+    /// backing `Pdo\Pgsql::setNoticeCallback()`. The tokio-postgres connection task
+    /// copies every `AsyncMessage::Notice` here, and the prelude drains this buffer
+    /// after each `exec()`/`query()` and dispatches each message to the PHP callback.
+    /// Shared (`Arc<Mutex>`) because the callback fires from the client's connection
+    /// driver, which may run on a separate thread from the query call.
     pub notices: Arc<Mutex<VecDeque<String>>>,
     /// Default `PDO::ATTR_PREFETCH` state snapshotted by prepared statements.
     pub prefetch: bool,
@@ -128,6 +133,8 @@ pub struct PgStmt {
     query_generation: u64,
     /// Connection-owned demand stream used when `ATTR_PREFETCH` disables buffering.
     stream_id: Option<u64>,
+    /// Whether the selected PHP compatibility version supports lazy simple queries.
+    simple_streaming: bool,
 }
 
 impl Drop for PgConn {
@@ -143,7 +150,7 @@ struct PgClientSlot(Option<Client>);
 impl Deref for PgClientSlot {
     type Target = Client;
 
-    /// Borrows the connected client; streaming callers recover it before other operations.
+    /// Borrows the connected client while no row worker owns it.
     fn deref(&self) -> &Self::Target {
         self.0
             .as_ref()
@@ -152,11 +159,128 @@ impl Deref for PgClientSlot {
 }
 
 impl DerefMut for PgClientSlot {
-    /// Mutably borrows the connected client outside an active row stream.
+    /// Mutably borrows the connected client while no row worker owns it.
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0
             .as_mut()
             .expect("PostgreSQL client is owned by an active row stream")
+    }
+}
+
+/// One asynchronous notification copied out of the connection driver task.
+struct PgNotification {
+    channel: String,
+    process_id: i32,
+    payload: String,
+}
+
+/// Owns the asynchronous PostgreSQL client, its runtime, and notification queue
+/// while presenting synchronous methods to the C ABI bridge.
+struct Client {
+    runtime: Runtime,
+    inner: AsyncClient,
+    notifications: mpsc::Receiver<PgNotification>,
+}
+
+impl Client {
+    /// Blocks on a server-side prepare operation.
+    fn prepare(&mut self, query: &str) -> Result<Statement, PgError> {
+        self.runtime.block_on(self.inner.prepare(query))
+    }
+
+    /// Blocks on a typed query and returns all rows.
+    fn query<T>(
+        &mut self,
+        query: &T,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, PgError>
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
+    {
+        self.runtime.block_on(self.inner.query(query, params))
+    }
+
+    /// Blocks on a command and returns its affected-row count.
+    fn execute<T>(
+        &mut self,
+        query: &T,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, PgError>
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
+    {
+        self.runtime.block_on(self.inner.execute(query, params))
+    }
+
+    /// Blocks on a query expected to return exactly one row.
+    fn query_one<T>(
+        &mut self,
+        query: &T,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Row, PgError>
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
+    {
+        self.runtime.block_on(self.inner.query_one(query, params))
+    }
+
+    /// Blocks on a query expected to return zero or one row.
+    fn query_opt<T>(
+        &mut self,
+        query: &T,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<Row>, PgError>
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
+    {
+        self.runtime.block_on(self.inner.query_opt(query, params))
+    }
+
+    /// Blocks on a multi-command simple-protocol query and collects its messages.
+    fn simple_query(&mut self, query: &str) -> Result<Vec<SimpleQueryMessage>, PgError> {
+        self.runtime.block_on(self.inner.simple_query(query))
+    }
+
+    /// Executes a command batch without returning rows.
+    fn batch_execute(&mut self, query: &str) -> Result<(), PgError> {
+        self.runtime.block_on(self.inner.batch_execute(query))
+    }
+
+    /// Sends all input bytes through PostgreSQL COPY FROM STDIN.
+    fn copy_in_bytes(&mut self, query: &str, data: &[u8]) -> Result<u64, PgError> {
+        self.runtime.block_on(async {
+            let sink = self.inner.copy_in(query).await?;
+            pin_mut!(sink);
+            sink.send(bytes::Bytes::copy_from_slice(data)).await?;
+            sink.finish().await
+        })
+    }
+
+    /// Collects every PostgreSQL COPY TO STDOUT chunk.
+    fn copy_out_bytes(&mut self, query: &str) -> Result<Vec<u8>, PgError> {
+        self.runtime.block_on(async {
+            let stream = self.inner.copy_out(query).await?;
+            pin_mut!(stream);
+            let mut output = Vec::new();
+            while let Some(chunk) = stream.try_next().await? {
+                output.extend_from_slice(&chunk);
+            }
+            Ok(output)
+        })
+    }
+
+    /// Reports whether the protocol client has observed terminal connection closure.
+    fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    /// Receives one already-buffered notification or waits up to `timeout`.
+    fn notification(&self, timeout: std::time::Duration) -> Option<PgNotification> {
+        if timeout.is_zero() {
+            self.notifications.try_recv().ok()
+        } else {
+            self.notifications.recv_timeout(timeout).ok()
+        }
     }
 }
 
@@ -169,8 +293,8 @@ enum PgStreamCommand {
 /// Results returned by a PostgreSQL row-stream worker.
 enum PgStreamResponse {
     Started,
-    Row(Vec<Cell>),
-    Finished(Client),
+    Row(Vec<String>, Vec<Cell>),
+    Finished(Client, i64),
     Failed(Client, String, String),
 }
 
@@ -199,7 +323,7 @@ impl ToSql for Param {
     fn to_sql(
         &self,
         ty: &Type,
-        out: &mut postgres::types::private::BytesMut,
+        out: &mut tokio_postgres::types::private::BytesMut,
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         if let Bind::Null = self.bind {
             return Ok(IsNull::Yes);
@@ -321,16 +445,8 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
 /// Precedence matches libpq: explicit PDO DSN values win over a selected service,
 /// service values win over `PG*` environment defaults, and a password file is
 /// consulted only when no password was supplied by a higher-priority source.
-fn resolve_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
-    let body = dsn
-        .strip_prefix("pgsql:")
-        .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
-    let mut explicit = parse_option_pairs(body, "PostgreSQL DSN")?;
-    for key in ["user", "password"] {
-        if let Some(value) = explicit.get_mut(key) {
-            *value = percent_decode_credential(value);
-        }
-    }
+pub(crate) fn resolve_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
+    let explicit = explicit_dsn_options(dsn)?;
 
     let service_name = explicit
         .get("service")
@@ -364,6 +480,7 @@ fn resolve_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
         if let Some(user) = std::env::var("USER")
             .ok()
             .or_else(|| std::env::var("LOGNAME").ok())
+            .or_else(|| whoami::username().ok())
             .filter(|value| !value.is_empty())
         {
             options.insert("user".to_string(), user);
@@ -415,6 +532,21 @@ fn resolve_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
     }
     options.remove("passfile");
     Ok(options)
+}
+
+/// Parses only the explicit PDO DSN pairs without resolving libpq configuration
+/// sources, allowing the libpq backend to delegate those sources to `PQconnectdb`.
+pub(crate) fn explicit_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
+    let body = dsn
+        .strip_prefix("pgsql:")
+        .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
+    let mut explicit = parse_option_pairs(body, "PostgreSQL DSN")?;
+    for key in ["user", "password"] {
+        if let Some(value) = explicit.get_mut(key) {
+            *value = percent_decode_credential(value);
+        }
+    }
+    Ok(explicit)
 }
 
 /// Applies libpq's conventional per-user certificate, key, root, and CRL paths
@@ -972,11 +1104,22 @@ fn tls_protocol_rank(value: &str) -> Result<u8, String> {
 /// default than libpq's bare `require`, which encrypts without verifying);
 /// `verify-ca` and `verify-full` therefore behave identically here.
 #[cfg(feature = "tls")]
-fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
-    use postgres::config::SslMode;
+fn connect_tls(
+    config: &mut Config,
+    tls: &PgTls,
+    notices: Arc<Mutex<VecDeque<String>>>,
+) -> Result<Client, String> {
+    use tokio_postgres::config::SslMode;
+    let runtime = RuntimeBuilder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
     if tls.mode == "disable" {
         config.ssl_mode(SslMode::Disable);
-        return config.connect(NoTls).map_err(|e| e.to_string());
+        let connected = runtime
+            .block_on(config.connect(NoTls))
+            .map_err(|error| error.to_string())?;
+        return Ok(start_async_client(runtime, connected, notices));
     }
     let require = matches!(tls.mode.as_str(), "require" | "verify-ca" | "verify-full");
     config.ssl_mode(if require {
@@ -985,14 +1128,21 @@ fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
         SslMode::Prefer
     });
     let connector = build_tls_connector(tls)?;
-    config.connect(connector).map_err(|e| e.to_string())
+    let connected = runtime
+        .block_on(config.connect(connector))
+        .map_err(|error| error.to_string())?;
+    Ok(start_async_client(runtime, connected, notices))
 }
 
 /// The `--no-default-features` fallback: no TLS backend is linked, so a DSN that
 /// *demands* TLS fails loudly rather than silently connecting in plaintext, while
 /// `disable`/`prefer`/unset (which tolerate plaintext) still connect.
 #[cfg(not(feature = "tls"))]
-fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
+fn connect_tls(
+    config: &mut Config,
+    tls: &PgTls,
+    notices: Arc<Mutex<VecDeque<String>>>,
+) -> Result<Client, String> {
     if matches!(tls.mode.as_str(), "require" | "verify-ca" | "verify-full") {
         return Err(format!(
             "pgsql sslmode={} requires TLS, which was not compiled in \
@@ -1000,7 +1150,57 @@ fn connect_tls(config: &mut Config, tls: &PgTls) -> Result<Client, String> {
             tls.mode
         ));
     }
-    config.connect(NoTls).map_err(|e| e.to_string())
+    let runtime = RuntimeBuilder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let connected = runtime
+        .block_on(config.connect(NoTls))
+        .map_err(|error| error.to_string())?;
+    Ok(start_async_client(runtime, connected, notices))
+}
+
+/// Starts the connection driver on `runtime` and captures asynchronous notices
+/// and notifications instead of letting the default future discard them.
+fn start_async_client<S, T>(
+    runtime: Runtime,
+    connected: (AsyncClient, Connection<S, T>),
+    notices: Arc<Mutex<VecDeque<String>>>,
+) -> Client
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (inner, mut connection) = connected;
+    let (notification_tx, notification_rx) = mpsc::channel();
+    runtime.spawn(async move {
+        loop {
+            let Some(message) = poll_fn(|context| connection.poll_message(context)).await else {
+                break;
+            };
+            match message {
+                Ok(AsyncMessage::Notification(notification)) => {
+                    let _ = notification_tx.send(PgNotification {
+                        channel: notification.channel().to_string(),
+                        process_id: notification.process_id(),
+                        payload: notification.payload().to_string(),
+                    });
+                }
+                Ok(AsyncMessage::Notice(notice)) => {
+                    if let Ok(mut queue) = notices.lock() {
+                        queue.push_back(notice.message().to_string());
+                    }
+                }
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+    Client {
+        runtime,
+        inner,
+        notifications: notification_rx,
+    }
 }
 
 /// Builds a rustls `MakeRustlsConnect` for the pg connection. The `ClientConfig`
@@ -1280,7 +1480,7 @@ fn scan_pg_quoted_region(
 /// placeholder (matching php-src's `pdo_sql_parser.re`, which skips the same
 /// way), most importantly so an array slice like `data[1:5]` is left
 /// untouched instead of misreading `:5` as a bind parameter.
-fn translate_placeholders_with_markers(
+pub(crate) fn translate_placeholders_with_markers(
     sql: &str,
 ) -> (
     String,
@@ -1504,7 +1704,7 @@ fn emulated_bind_literal(bind: &Bind) -> String {
 
 /// Substitutes only markers generated by the PDO scanner, leaving any source
 /// `$1` token untouched even when the same statement also contains PDO binds.
-fn interpolate_emulated_sql(
+pub(crate) fn interpolate_emulated_sql(
     sql: &str,
     markers: &[(usize, usize, usize)],
     binds: &[Bind],
@@ -1530,7 +1730,7 @@ fn interpolate_emulated_sql(
 /// `Error::code()`, so no manual wire-protocol parsing is needed here. Errors
 /// with no server-reported code (a connection/transport failure rather than a
 /// query error) fall back to the generic `HY000`.
-fn pg_sqlstate(e: &postgres::Error) -> String {
+fn pg_sqlstate(e: &PgError) -> String {
     e.code()
         .map(|c| c.code().to_string())
         .unwrap_or_else(|| "HY000".to_string())
@@ -1539,29 +1739,33 @@ fn pg_sqlstate(e: &postgres::Error) -> String {
 /// Owns a PostgreSQL client while iterating a native query one requested row at
 /// a time, returning the same client when the stream ends or is closed.
 fn run_pg_stream_worker(
-    mut client: Client,
+    client: Client,
     statement: Statement,
     params: Vec<Param>,
     commands: mpsc::Receiver<PgStreamCommand>,
     responses: mpsc::Sender<PgStreamResponse>,
 ) {
-    use postgres::fallible_iterator::FallibleIterator;
-
-    let result: Result<(), postgres::Error> = (|| {
+    let Client {
+        runtime,
+        inner,
+        notifications,
+    } = client;
+    let result: Result<(), PgError> = (|| {
         let refs: Vec<&(dyn ToSql + Sync)> = params
             .iter()
             .map(|param| param as &(dyn ToSql + Sync))
             .collect();
-        let mut rows = client.query_raw(&statement, refs)?;
+        let rows = runtime.block_on(inner.query_raw(&statement, refs))?;
+        pin_mut!(rows);
         if responses.send(PgStreamResponse::Started).is_err() {
             return Ok(());
         }
         while let Ok(command) = commands.recv() {
             match command {
-                PgStreamCommand::Next => match rows.next()? {
+                PgStreamCommand::Next => match runtime.block_on(rows.try_next())? {
                     Some(row) => {
                         if responses
-                            .send(PgStreamResponse::Row(decode_row(&row)))
+                            .send(PgStreamResponse::Row(Vec::new(), decode_row(&row)))
                             .is_err()
                         {
                             break;
@@ -1574,9 +1778,92 @@ fn run_pg_stream_worker(
         }
         Ok(())
     })();
+    let client = Client {
+        runtime,
+        inner,
+        notifications,
+    };
     match result {
         Ok(()) => {
-            let _ = responses.send(PgStreamResponse::Finished(client));
+            let _ = responses.send(PgStreamResponse::Finished(client, 0));
+        }
+        Err(error) => {
+            let sqlstate = pg_sqlstate(&error);
+            let message = error.to_string();
+            let _ = responses.send(PgStreamResponse::Failed(client, sqlstate, message));
+        }
+    }
+}
+
+/// Owns a PostgreSQL client while consuming one simple-protocol message per
+/// caller request, preserving row-description and command-completion framing.
+fn run_pg_simple_stream_worker(
+    client: Client,
+    sql: String,
+    commands: mpsc::Receiver<PgStreamCommand>,
+    responses: mpsc::Sender<PgStreamResponse>,
+) {
+    let Client {
+        runtime,
+        inner,
+        notifications,
+    } = client;
+    let result: Result<i64, PgError> = (|| {
+        // php-src returns from execute() as soon as PQsendQuery has accepted the
+        // request; it does not wait for PostgreSQL's first protocol message. Let
+        // the owner return before polling the async request for the same timing.
+        if responses.send(PgStreamResponse::Started).is_err() {
+            return Ok(0);
+        }
+        let stream = runtime.block_on(inner.simple_query_raw(&sql))?;
+        pin_mut!(stream);
+        let mut columns = Vec::new();
+        let mut changes = 0i64;
+        while let Ok(command) = commands.recv() {
+            match command {
+                PgStreamCommand::Close => break,
+                PgStreamCommand::Next => loop {
+                    match runtime.block_on(stream.try_next())? {
+                        Some(SimpleQueryMessage::RowDescription(description)) => {
+                            columns = description
+                                .iter()
+                                .map(|column| column.name().to_string())
+                                .collect();
+                        }
+                        Some(SimpleQueryMessage::Row(row)) => {
+                            let cells = (0..row.len())
+                                .map(|index| match row.get(index) {
+                                    Some(value) => Cell::Text(value.to_string()),
+                                    None => Cell::Null,
+                                })
+                                .collect();
+                            if responses
+                                .send(PgStreamResponse::Row(columns.clone(), cells))
+                                .is_err()
+                            {
+                                return Ok(changes);
+                            }
+                            break;
+                        }
+                        Some(SimpleQueryMessage::CommandComplete(count)) => {
+                            changes = count as i64;
+                        }
+                        Some(_) => {}
+                        None => return Ok(changes),
+                    }
+                },
+            }
+        }
+        Ok(changes)
+    })();
+    let client = Client {
+        runtime,
+        inner,
+        notifications,
+    };
+    match result {
+        Ok(changes) => {
+            let _ = responses.send(PgStreamResponse::Finished(client, changes));
         }
         Err(error) => {
             let sqlstate = pg_sqlstate(&error);
@@ -1625,20 +1912,11 @@ impl PgConn {
         let conn_str = parse_resolved_dsn(&options)?;
         let client_encoding = client_encoding_from_options(&options)?;
         let tls = parse_tls_options(&options)?;
-        let mut config: Config = conn_str.parse().map_err(|e: postgres::Error| e.to_string())?;
+        let mut config: Config = conn_str.parse().map_err(|e: PgError| e.to_string())?;
         let notices: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let sink = Arc::clone(&notices);
-        // The closure param is inferred as `tokio_postgres::error::DbError`; a NOTICE
-        // carries its human-readable text in `message()`. Never blocks the driver: a
-        // poisoned lock just drops the message.
-        config.notice_callback(move |notice| {
-            if let Ok(mut queue) = sink.lock() {
-                queue.push_back(notice.message().to_string());
-            }
-        });
         // Applies `sslmode` and opens the connection over rustls (ring) when TLS is
         // requested, or plaintext otherwise (see `connect_tls`).
-        let mut client = connect_tls(&mut config, &tls)?;
+        let mut client = connect_tls(&mut config, &tls, Arc::clone(&notices))?;
         if let Some(encoding) = client_encoding {
             client
                 .batch_execute(&format!("SET client_encoding TO '{encoding}'"))
@@ -1681,8 +1959,9 @@ impl PgConn {
         let _ = active.commands.send(PgStreamCommand::Close);
         while let Ok(response) = active.responses.recv() {
             match response {
-                PgStreamResponse::Finished(client) => {
+                PgStreamResponse::Finished(client, changes) => {
                     self.client.0 = Some(client);
+                    self.changes = changes;
                     break;
                 }
                 PgStreamResponse::Failed(client, sqlstate, message) => {
@@ -1692,7 +1971,7 @@ impl PgConn {
                     self.errcode = PG_NATIVE_ERRCODE;
                     break;
                 }
-                PgStreamResponse::Started | PgStreamResponse::Row(_) => {}
+                PgStreamResponse::Started | PgStreamResponse::Row(_, _) => {}
             }
         }
         if let Some(worker) = active.worker.take() {
@@ -1744,14 +2023,15 @@ impl PgConn {
                 }
                 Err(-1)
             }
-            Ok(PgStreamResponse::Finished(client)) => {
+            Ok(PgStreamResponse::Finished(client, changes)) => {
                 self.client.0 = Some(client);
+                self.changes = changes;
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
                 Err(-1)
             }
-            Ok(PgStreamResponse::Row(_)) | Err(_) => {
+            Ok(PgStreamResponse::Row(_, _)) | Err(_) => {
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
@@ -1763,8 +2043,62 @@ impl PgConn {
         }
     }
 
+    /// Starts a demand-driven simple-protocol worker for PHP 8.5+ emulated queries.
+    fn start_simple_stream(&mut self, sql: String) -> Result<u64, i64> {
+        self.finish_active_stream();
+        let Some(client) = self.client.0.take() else {
+            self.errcode = PG_NATIVE_ERRCODE;
+            self.sqlstate = "HY000".to_string();
+            self.errmsg = "PostgreSQL connection is busy with an unbuffered query".to_string();
+            return Err(-1);
+        };
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_pg_simple_stream_worker(client, sql, command_rx, response_tx);
+        });
+        self.next_stream_id = self.next_stream_id.wrapping_add(1).max(1);
+        let id = self.next_stream_id;
+        let mut active = PgActiveStream {
+            id,
+            commands: command_tx,
+            responses: response_rx,
+            worker: Some(worker),
+        };
+        match active.responses.recv() {
+            Ok(PgStreamResponse::Started) => {
+                self.active_stream = Some(active);
+                Ok(id)
+            }
+            Ok(PgStreamResponse::Failed(client, sqlstate, message)) => {
+                self.client.0 = Some(client);
+                self.sqlstate = sqlstate;
+                self.errmsg = message;
+                self.errcode = PG_NATIVE_ERRCODE;
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(PgStreamResponse::Finished(client, changes)) => {
+                self.client.0 = Some(client);
+                self.changes = changes;
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Ok(id)
+            }
+            Ok(PgStreamResponse::Row(_, _)) | Err(_) => {
+                self.errcode = PG_NATIVE_ERRCODE;
+                self.sqlstate = "HY000".to_string();
+                self.errmsg = "PostgreSQL simple-query worker terminated unexpectedly".to_string();
+                Err(-1)
+            }
+        }
+    }
+
     /// Requests one row from the active stream, recovering the client at EOF.
-    fn next_stream_row(&mut self, id: u64) -> Result<Option<Vec<Cell>>, i64> {
+    fn next_stream_row(&mut self, id: u64) -> Result<Option<(Vec<String>, Vec<Cell>)>, i64> {
         let Some(active) = self.active_stream.as_mut() else {
             return Ok(None);
         };
@@ -1778,9 +2112,10 @@ impl PgConn {
             return Err(-1);
         }
         match active.responses.recv() {
-            Ok(PgStreamResponse::Row(row)) => Ok(Some(row)),
-            Ok(PgStreamResponse::Finished(client)) => {
+            Ok(PgStreamResponse::Row(columns, row)) => Ok(Some((columns, row))),
+            Ok(PgStreamResponse::Finished(client, changes)) => {
                 self.client.0 = Some(client);
+                self.changes = changes;
                 let mut active = self.active_stream.take().expect("active stream disappeared");
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
@@ -1851,7 +2186,7 @@ impl PgConn {
     /// the constant). Returns `-1`, the failure value of the row-count-returning
     /// entry points. Every error path of this driver funnels through here or through
     /// [`Self::fail_local`], so the native code is set in exactly those two places.
-    fn fail(&mut self, e: postgres::Error) -> i64 {
+    fn fail(&mut self, e: PgError) -> i64 {
         self.sqlstate = pg_sqlstate(&e);
         self.errmsg = e.to_string();
         self.errcode = PG_NATIVE_ERRCODE;
@@ -2198,17 +2533,8 @@ impl PgConn {
     /// the prelude), returning the number of rows copied or -1 on error. Backs
     /// `Pdo\Pgsql::copyFromArray()` / `copyFromFile()`.
     pub fn copy_in(&mut self, copy_sql: &str, data: &[u8]) -> i64 {
-        use std::io::Write;
         self.begin_query();
-        // Run the whole COPY in a closure so the writer's borrow of `self.client`
-        // ends before the connection bookkeeping fields (or `fail`) are written.
-        let result: Result<u64, postgres::Error> = (|| {
-            let mut writer = self.client.copy_in(copy_sql)?;
-            // write_all's io::Error is not a postgres::Error; a write failure is
-            // surfaced with the real server error by finish() below.
-            let _ = writer.write_all(data);
-            writer.finish()
-        })();
+        let result = self.client.copy_in_bytes(copy_sql, data);
         match result {
             Ok(rows) => {
                 self.errcode = 0;
@@ -2230,18 +2556,8 @@ impl PgConn {
     /// empty" (returns `[]`) from "the COPY failed" (returns `false`), matching the
     /// stub's `array|false` contract for `copyToArray()`.
     pub fn copy_out(&mut self, copy_sql: &str) -> String {
-        use std::io::Read;
         self.begin_query();
-        // Run the COPY in a closure so the reader's borrow of `self.client` ends
-        // before the connection bookkeeping fields (or `fail`) are written.
-        let result: Result<Vec<u8>, postgres::Error> = (|| {
-            let mut reader = self.client.copy_out(copy_sql)?;
-            let mut buf = Vec::new();
-            // read_to_end's io::Error is not a postgres::Error; a partial read still
-            // returns whatever bytes arrived.
-            let _ = reader.read_to_end(&mut buf);
-            Ok(buf)
-        })();
+        let result = self.client.copy_out_bytes(copy_sql);
         match result {
             Ok(buf) => {
                 self.errcode = 0;
@@ -2261,20 +2577,18 @@ impl PgConn {
     /// already-buffered notification). Backs `Pdo\Pgsql::getNotify()`; the prelude
     /// shapes the parts into the requested array form.
     pub fn get_notify(&mut self, timeout_ms: i64) -> String {
-        use postgres::fallible_iterator::FallibleIterator;
         use std::time::Duration;
         self.begin_query();
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-        let mut notifications = self.client.notifications();
-        let next = if timeout.is_zero() {
-            notifications.iter().next()
-        } else {
-            notifications.timeout_iter(timeout).next()
-        };
-        match next {
-            Ok(Some(n)) => format!("{}\t{}\t{}", n.channel(), n.process_id(), n.payload()),
-            _ => String::new(),
-        }
+        self.client
+            .notification(timeout)
+            .map(|notification| {
+                format!(
+                    "{}\t{}\t{}",
+                    notification.channel, notification.process_id, notification.payload
+                )
+            })
+            .unwrap_or_default()
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
@@ -2318,6 +2632,7 @@ impl PgConn {
                 buffered: self.prefetch,
                 query_generation: 0,
                 stream_id: None,
+                simple_streaming: false,
             });
         }
         match self.client.prepare(&translated) {
@@ -2366,6 +2681,7 @@ impl PgConn {
                     buffered: self.prefetch,
                     query_generation: 0,
                     stream_id: None,
+                    simple_streaming: false,
                 })
             }
             Err(e) => {
@@ -2397,6 +2713,14 @@ pub(crate) fn transaction_state_after_sql(sql: &str, current: bool) -> bool {
 }
 
 impl PgStmt {
+    /// Enables PHP 8.5+'s lazy libpq-style behavior for simple-protocol statements.
+    pub fn enable_simple_streaming(&mut self) -> i64 {
+        if self.executed {
+            return 0;
+        }
+        self.simple_streaming = true;
+        1
+    }
     /// Overrides this statement's buffering mode from prepare-time
     /// `PDO::ATTR_PREFETCH`, before its first execution.
     pub fn set_prefetch(&mut self, prefetch: bool) -> i64 {
@@ -2541,6 +2865,18 @@ impl PgStmt {
             }
         };
         self.sent_sql = sql.clone();
+        if !self.buffered && self.simple_streaming {
+            let stream_id = conn.start_simple_stream(sql)?;
+            self.rows.clear();
+            self.cursor = -1;
+            self.stream_id = Some(stream_id);
+            conn.changes = 0;
+            conn.errcode = 0;
+            conn.sqlstate = "00000".to_string();
+            self.executed = true;
+            conn.note_transaction_sql(&self.query_string);
+            return Ok(());
+        }
         match conn.client.simple_query(&sql) {
             Ok(messages) => {
                 self.rows.clear();
@@ -2605,7 +2941,11 @@ impl PgStmt {
         }
         if let Some(stream_id) = self.stream_id {
             return match conn.next_stream_row(stream_id) {
-                Ok(Some(row)) => {
+                Ok(Some((columns, row))) => {
+                    if !columns.is_empty() {
+                        self.col_names = columns;
+                        self.col_tables = vec![String::new(); self.col_names.len()];
+                    }
                     self.rows.clear();
                     self.rows.push(row);
                     self.cursor = 0;
