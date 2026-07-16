@@ -1328,6 +1328,7 @@ fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
+            elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
             _ => PhpType::Mixed,
         },
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
