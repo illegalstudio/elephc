@@ -540,15 +540,18 @@ $db = new PDO(
 - `sslrootcert`: a PEM CA bundle to trust instead of the bundled webpki roots.
 - `sslcert` + `sslkey`: a client certificate + private key for mutual TLS (both required
   together).
+- `sslcertmode`: `allow` (default), `disable`, or `require` for client certificates.
+- `sslsni`: `1` (default) or `0`; `ssl_min_protocol_version` /
+  `ssl_max_protocol_version`: TLS 1.2/1.3 bounds honored by rustls.
+- `sslcrl` / `sslcrldir`: PEM revocation lists applied to rustls verification.
 
 Unlike libpq's bare `require` (which encrypts without verifying), elephc always
 validates the server certificate once TLS is negotiated — the safer default — so
 `require`, `verify-ca`, and `verify-full` all verify against the trust roots. For a
 server with a self-signed certificate, pass its CA via `sslrootcert`.
 
-**MySQL / MariaDB** — opt-in at build time (`cargo build -p elephc-pdo --features
-mysql-tls`; see [Limitations](#limitations) for why). Configure it with the
-`Pdo\Mysql::ATTR_SSL_*` constructor options:
+**MySQL / MariaDB** — ships in the default build through mysql 28's ring-backed
+rustls feature. Configure it with the `Pdo\Mysql::ATTR_SSL_*` constructor options:
 
 ```php
 <?php
@@ -563,10 +566,13 @@ $db = new PDO("mysql:host=db.example.com;dbname=app", "u", "p", [
 - `ATTR_SSL_CA`: a PEM CA bundle to trust (in addition to the bundled webpki roots).
 - `ATTR_SSL_CERT` + `ATTR_SSL_KEY`: client certificate + key for mutual TLS.
 - `ATTR_SSL_VERIFY_SERVER_CERT`: `false` disables certificate and hostname checking.
-- `ATTR_SSL_CAPATH` and `ATTR_SSL_CIPHER` have no rustls equivalent and are ignored.
+- `ATTR_SSL_CAPATH`: a CA directory. Its PEM certificates are combined into the
+  per-connection bundle rustls accepts, alongside `ATTR_SSL_CA` when both are set.
+- `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY` are rejected explicitly because the
+  `mysql` crate does not expose equivalent rustls/authentication controls.
 
-Presence of any `ATTR_SSL_*` option enables TLS. In a build without `mysql-tls`,
-requesting TLS raises a `PDOException` at connect time rather than silently falling back
+Presence of any `ATTR_SSL_*` option enables TLS. A custom minimal build that disables
+the default `mysql-tls` feature raises a `PDOException` rather than silently falling back
 to plaintext.
 
 ## Transactions
@@ -841,9 +847,9 @@ preserve source SQL evaluation order, and retain the rendered text for
 - **PostgreSQL native error code.** The Rust PostgreSQL client exposes SQLSTATE but has no
   libpq `ExecStatusType`; `errorInfo()[1]` therefore uses stable non-zero marker `1` on
   failure instead of fabricating a `PGRES_*` enum value.
-- **Notice timing.** PostgreSQL notices are dispatched at safe PHP call boundaries; a
-  notice raised by prepared `execute()` is delivered at the next connection `exec()` or
-  `query()` rather than re-entering PHP from the client's protocol thread.
+- **Notice timing.** PostgreSQL notices are buffered on the protocol callback and
+  dispatched at the PHP boundary that completed the operation: `exec()`, `query()`, or
+  prepared `execute()`. PHP is never re-entered from the client's protocol thread.
 - **UPSTREAM php-src bug, deliberately NOT reproduced.** php-src 8.4's `copyToArray()` /
   `copyToFile()` build `COPY … TO STDIN` (`pgsql_driver.c:882,884,973,975`) — an invalid
   direction in PostgreSQL's COPY grammar. elephc correctly emits `TO STDOUT`. Do not "fix"
@@ -864,9 +870,10 @@ preserve source SQL evaluation order, and retain the rendered text for
   compression, ignore-space, multi-statement control, init command, found-rows, and the
   supported TLS key/cert/CA/verification settings. A disabled local-infile handler rejects
   the server request instead of returning a successful empty upload.
-- `Pdo\Mysql::ATTR_SSL_CAPATH`, `ATTR_SSL_CIPHER`, and `ATTR_SERVER_PUBLIC_KEY` cannot be
-  represented by the Rust rustls client and fail the constructor explicitly. Use a PEM
-  bundle through `ATTR_SSL_CA`; no security option is accepted inertly.
+- `Pdo\Mysql::ATTR_SSL_CAPATH` is adapted to rustls by building a deterministic
+  multi-certificate PEM bundle. `ATTR_SSL_CIPHER` and `ATTR_SERVER_PUBLIC_KEY` still fail
+  explicitly: the upstream `mysql` crate exposes neither cipher-suite selection nor a
+  caller-supplied RSA authentication key. No security option is accepted inertly.
 - `Pdo\Pgsql::ATTR_RESULT_MEMORY_SIZE` reports the bytes owned by the native
   result and returns `null` with HY000 before statement execution. `ATTR_PREFETCH` is
   supported at connection and prepare-option scope.
@@ -885,9 +892,15 @@ Forwarded: `user`, `password`, `dbname`, `options`,
 applied to the rustls connector.
 
 `client_encoding` is translated into a validated post-connect session setting. Libpq-only
-options the native client cannot honor — including `service`, `passfile`, GSS, TLS CRL,
-replication and fallback-application settings — now fail the connection with an explicit
-`unsupported PostgreSQL DSN option` error. No DSN security or transport option is silently
+configuration is resolved before `tokio-postgres`: named `service`/`servicefile` sections,
+`.pgpass`/`passfile`, the corresponding `PG*` environment variables,
+`fallback_application_name`, `requiressl`, `sslcompression`, `sslsni`, `sslcertmode`, and
+TLS 1.2/1.3 bounds all follow libpq-style precedence. A secure passfile is required and a
+multi-host passfile is rejected because the native client can carry only one password.
+
+Options whose protocol/security semantics cannot be reproduced — GSS encryption,
+encrypted-key passwords, `require_auth`, and replication mode — fail with an explicit
+`unsupported PostgreSQL DSN option` error. No security or transport option is silently
 dropped.
 
 ### Resource and lifetime caveats
@@ -895,16 +908,19 @@ dropped.
 - Persistent checkout is serialized and validates liveness before reuse: MySQL sends
   `COM_PING`, PostgreSQL checks the live client state, and a dead handle plus its statements
   is evicted before an atomic reconnect. SQLite needs no external-server probe.
-- **External-driver rows are internally materialized.** MySQL
-  `ATTR_USE_BUFFERED_QUERY=false` exposes php-src's row-count/connection-busy behavior,
-  and PostgreSQL `ATTR_PREFETCH=false` exposes cursor invalidation and visible-memory
-  semantics, but the Rust clients still materialize their rows internally. These modes do
-  not yet reduce peak memory for a very large result. SQLite steps lazily.
-- **BLOB/LOB streams are seekable and writable but snapshot their initial contents.**
-  SQLite `openBlob()` enforces the fixed native blob size and writes ranges back
-  immediately. PostgreSQL `lobOpen()` enforces transaction ownership, supports read/write
-  modes, zero-fills seek gaps, and writes through `lo_put`. Both are binary-safe and return
-  `false` for a missing row/OID.
+- **External-driver rows honor buffering.** MySQL
+  `ATTR_USE_BUFFERED_QUERY=false` and native PostgreSQL `ATTR_PREFETCH=false` move the
+  connection into a demand worker and decode one row per `fetch()`, reducing peak memory
+  to the active row while preserving MySQL's 2014 busy diagnostic and PostgreSQL cursor
+  invalidation. Buffered modes retain the complete result. PostgreSQL's emulated
+  simple-query path remains materialized because the synchronous `postgres` crate does not
+  expose `tokio-postgres::simple_query_raw`; native prepares are the streaming path.
+- **LOB streams.** SQLite `openBlob()` keeps only cursor/size state and uses bounded
+  `sqlite3_blob_read` / `sqlite3_blob_write` slices; its native fixed-size rule rejects
+  extending writes. PostgreSQL `lobOpen()` likewise keeps only cursor/size state: reads use
+  bounded `lo_get` slices and writes use bounded `lo_put` patches, preserving binary data,
+  seeks, sparse extension, and transaction ownership without copying the complete large
+  object into client memory.
 - **`Pdo\Sqlite::loadExtension()`** runs native code from the named library, weakening the
   standalone-binary guarantee. An empty name is a `ValueError`.
 - **SQLite bridge threadsafety invariant.** The bridge keeps its connection table and its
@@ -914,12 +930,7 @@ dropped.
   `assert_sqlite_threadsafe()` pins the invariant at the first open (it panics rather than
   corrupting memory if a future build ever flips it). Do not link a
   `SQLITE_THREADSAFE=0` amalgamation on a threaded target.
-- **MySQL TLS is opt-in at build time.** PostgreSQL TLS ships in the default build; MySQL /
-  MariaDB TLS is behind the `mysql-tls` Cargo feature. The reason is dependency hygiene: the
-  `mysql` crate's rustls backend pulls rustls with its default `aws-lc-rs` provider (a C/asm
-  library needing a build toolchain), whereas the rest of elephc's TLS — PostgreSQL, `ssl://`
-  streams — uses the pure-Rust `ring` provider and stays musl-friendly. Building without
-  `mysql-tls` keeps every PDO binary aws-lc-free; a MySQL connection that requests TLS then
-  fails loudly rather than silently downgrading to plaintext. Rebuild with `cargo build -p
-  elephc-pdo --features mysql-tls` to reach a MySQL server that *mandates* TLS (AWS
-  RDS/Aurora, PlanetScale, …).
+- **Database TLS provider.** PostgreSQL and MySQL/MariaDB TLS both ship in the default
+  build and use rustls with the ring provider. mysql 28's `rustls-tls-ring` feature removes
+  the former aws-lc-rs/C-toolchain cost. Custom `--no-default-features` builds still reject
+  a requested TLS connection loudly rather than silently downgrading it.

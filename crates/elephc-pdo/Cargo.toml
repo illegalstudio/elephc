@@ -39,9 +39,9 @@ rust_decimal = { version = "1", features = ["db-postgres"] }
 # (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
 # no `libz` dependency and compiled PHP binaries stay fully standalone (no system
 # DB client, no `-lz`) while keeping the binary wire protocol and prepared
-# statements this driver needs. Its rustls TLS backend is enabled only through the
-# opt-in `mysql-tls` feature below (it would otherwise drag in aws-lc-rs).
-mysql = { version = "25", default-features = false, features = ["minimal-rust"] }
+# statements this driver needs. mysql 28 exposes a ring-backed rustls feature, so
+# TLS no longer needs aws-lc-rs or a C/asm crypto toolchain.
+mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
 # --- TLS (gated by the `tls` / `mysql-tls` features below) ---
 # PostgreSQL TLS uses rustls with the RING crypto provider ONLY (no aws-lc-rs),
 # mirroring crates/elephc-tls so the musl/Docker images and standalone binaries
@@ -67,13 +67,10 @@ rustls-pemfile = { version = "2", optional = true }
 # TLS is ON by default, but the default `tls` feature covers PostgreSQL ONLY and
 # is aws-lc-rs-free (ring): a `pgsql:` DSN with `sslmode=require`/`verify-full`
 # works out of the box against managed Postgres (Supabase/Neon/RDS/Timescale).
-# `mysql-tls` is deliberately OPT-IN: the `mysql` crate's rustls backend pulls
-# rustls with its DEFAULT features (aws-lc-rs), which would otherwise drag the
-# aws-lc C/asm toolchain into every PDO binary (mysql is always linked). Building
-# with `--features mysql-tls` accepts that cost and, because both ring (pg/elephc-
-# tls) and aws-lc-rs (mysql) then coexist, the mysql path installs the ring
-# provider as the process default to arbitrate the two at runtime. A minimal
-# `--no-default-features` build keeps the historical NoTls behavior for both.
-default = ["tls"]
+# mysql 28's `rustls-tls-ring` keeps the MySQL path on the same provider as
+# PostgreSQL and elephc-tls, so both database TLS backends are enabled by default
+# without introducing aws-lc-rs. A minimal `--no-default-features` build keeps the
+# historical NoTls behavior for both.
+default = ["tls", "mysql-tls"]
 tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pemfile"]
-mysql-tls = ["tls", "mysql/rustls-tls"]
+mysql-tls = ["tls", "mysql/rustls-tls-ring"]

@@ -273,8 +273,9 @@ fn pg_text_result_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
-/// Static byte buffer for the most recent whole BLOB / large-object read
-/// (`elephc_pdo_blob_read` / `elephc_pdo_lob_get`), bulk-copied out through
+/// Static byte buffer for the most recent whole or bounded BLOB / large-object read
+/// (`elephc_pdo_blob_read_at`, `elephc_pdo_lob_read_at`, and their legacy whole-value
+/// variants), bulk-copied out through
 /// `elephc_pdo_blob_data_ptr` (or, on the fallback path, drained byte-by-byte through
 /// `elephc_pdo_blob_byte`). A `Vec<u8>` rather than a `CString` because BLOBs are
 /// binary and may contain embedded NUL bytes; shared because the prelude copies each
@@ -412,8 +413,8 @@ fn persistent_connection_is_live(conn_id: i64) -> bool {
     let mut guard = lock_recover(conns());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(_)) => true,
-        Some(Conn::Mysql(connection)) => connection.conn.ping().is_ok(),
-        Some(Conn::Postgres(connection)) => !connection.client.is_closed(),
+        Some(Conn::Mysql(connection)) => connection.is_alive(),
+        Some(Conn::Postgres(connection)) => !connection.is_closed(),
         None => false,
     }
 }
@@ -517,8 +518,8 @@ fn open_persistent_dsn(
 /// `Pdo\Mysql::ATTR_INIT_COMMAND`; ignored for `sqlite:`/`pgsql:` DSNs.
 /// v19 adds a `my_ssl_config` parameter to `elephc_pdo_open_persistent` (empty =
 /// no TLS) — the prelude's packed `Pdo\Mysql::ATTR_SSL_*` options applied to the
-/// MySQL/MariaDB connection's rustls backend (requires the opt-in `mysql-tls`
-/// feature) — and enables PostgreSQL TLS via the DSN's own `sslmode`/`sslrootcert`
+/// MySQL/MariaDB connection's ring-backed rustls backend (enabled by default) —
+/// and enables PostgreSQL TLS via the DSN's own `sslmode`/`sslrootcert`
 /// keys through the default `tls` feature's rustls (ring) connector. No new extern
 /// is added for pg (its TLS parameters ride the DSN).
 /// v20 adds an explicit `len` parameter to `elephc_pdo_bind_text` (the value's
@@ -613,13 +614,15 @@ fn open_persistent_dsn(
 /// v41 adds packed pdo_mysql connection options and buffered-query accessors.
 /// v42 adds PostgreSQL connection/statement prefetch controls.
 /// v43 adds source-table names and MySQL column flags. v44 adds version-aware
-/// persistent-handle release so PHP 8.6 can reset PostgreSQL session state.
+/// persistent-handle release so PHP 8.6 can reset PostgreSQL session state. v45
+/// adds bounded PostgreSQL large-object size/read/write operations. v46 adds the
+/// equivalent bounded size/read/write operations for SQLite incremental BLOBs.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(44, || 44)
+    ffi_guard(46, || 46)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -669,7 +672,7 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
 /// packed `Pdo\Mysql::ATTR_SSL_*` options (`ca=…;cert=…;key=…;verify=0|1`, empty =
 /// no TLS) applied to the `mysql:` connection's rustls backend; it is ignored for
 /// SQLite/PostgreSQL DSNs (PostgreSQL carries its own `sslmode`/`sslrootcert` in
-/// the DSN) and requires the opt-in `mysql-tls` feature to take effect.
+/// the DSN) and requires the default `mysql-tls` feature to take effect.
 /// `my_found_rows` (v25) is `1` to OR `CLIENT_FOUND_ROWS` into a `mysql:`
 /// connection's negotiated capabilities and `0` not to; it backs
 /// `Pdo\Mysql::ATTR_FOUND_ROWS` (F-MY-06), which makes an UPDATE's `rowCount()`
@@ -1465,8 +1468,114 @@ pub unsafe extern "C" fn elephc_pdo_blob_read(
     })
 }
 
-/// Reads a PostgreSQL large object whole into the shared blob buffer
-/// (`Pdo\Pgsql::lobOpen()`), returning its length in bytes, or -1 for a
+/// Returns a SQLite BLOB cell's fixed byte size without transferring its data,
+/// or `-1` for invalid input, an unknown/non-SQLite handle, or a SQLite failure.
+///
+/// # Safety
+/// `table`, `column`, and `dbname` must point to NUL-terminated strings valid for
+/// the call (`dbname` may be null, treated as `"main"`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_blob_size(
+    conn_id: i64,
+    table: *const c_char,
+    column: *const c_char,
+    rowid: i64,
+    dbname: *const c_char,
+) -> i64 {
+    ffi_guard(-1, || {
+        let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
+            return -1;
+        };
+        let dbname = cstr_arg(dbname).unwrap_or("main");
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(connection)) => connection
+                .blob_size(dbname, table, column, rowid)
+                .unwrap_or(-1),
+            _ => -1,
+        }
+    })
+}
+
+/// Reads one bounded SQLite BLOB slice into the shared binary buffer and returns
+/// its length, or `-1` for invalid input, a bad handle, or a SQLite failure.
+///
+/// # Safety
+/// `table`, `column`, and `dbname` must point to NUL-terminated strings valid for
+/// the call (`dbname` may be null, treated as `"main"`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_blob_read_at(
+    conn_id: i64,
+    table: *const c_char,
+    column: *const c_char,
+    rowid: i64,
+    dbname: *const c_char,
+    offset: i64,
+    length: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
+            return -1;
+        };
+        let dbname = cstr_arg(dbname).unwrap_or("main");
+        let result = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Sqlite(connection)) => {
+                    connection.blob_read_at(dbname, table, column, rowid, offset, length)
+                }
+                _ => return -1,
+            }
+        };
+        match result {
+            Ok(bytes) => {
+                let length = bytes.len() as i64;
+                *lock_recover(blob_cell()) = bytes;
+                length
+            }
+            Err(_) => -1,
+        }
+    })
+}
+
+/// Writes one bounded slice of an existing fixed-size SQLite BLOB and returns the
+/// bytes written, or `-1` when the range would extend it or another error occurs.
+///
+/// # Safety
+/// String identifiers must be valid NUL-terminated strings for the call, and
+/// `data` must expose at least `len` readable bytes (it may be null when `len` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_blob_write_at(
+    conn_id: i64,
+    table: *const c_char,
+    column: *const c_char,
+    rowid: i64,
+    dbname: *const c_char,
+    offset: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        if len < 0 {
+            return -1;
+        }
+        let (Some(table), Some(column)) = (cstr_arg(table), cstr_arg(column)) else {
+            return -1;
+        };
+        let dbname = cstr_arg(dbname).unwrap_or("main");
+        let bytes = bytes_arg(data, len);
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Sqlite(connection)) => connection
+                .blob_write_at(dbname, table, column, rowid, offset, &bytes)
+                .unwrap_or(-1),
+            _ => -1,
+        }
+    })
+}
+
+/// Reads a PostgreSQL large object whole into the shared blob buffer for pre-v45
+/// ABI callers, returning its length in bytes, or -1 for a
 /// non-PostgreSQL connection, an unknown handle, a non-numeric OID, a server error
 /// (no such object), or a caught panic. The bytes are then copied out with
 /// `elephc_pdo_blob_data_ptr` (or drained with `elephc_pdo_blob_byte`).
@@ -1493,6 +1602,84 @@ pub unsafe extern "C" fn elephc_pdo_lob_get(conn_id: i64, oid: *const c_char) ->
                 len
             }
             None => -1,
+        }
+    })
+}
+
+/// Returns a PostgreSQL large object's current size without transferring its data.
+///
+/// # Safety
+/// `oid` must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_lob_size(conn_id: i64, oid: *const c_char) -> i64 {
+    ffi_guard(-1, || {
+        let Some(oid) = cstr_arg(oid) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(connection)) => connection.lob_size(oid).unwrap_or(-1),
+            _ => -1,
+        }
+    })
+}
+
+/// Reads one PostgreSQL large-object slice into the shared binary buffer and
+/// returns its length, or `-1` on invalid input/server failure.
+///
+/// # Safety
+/// `oid` must point to a NUL-terminated string valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_lob_read_at(
+    conn_id: i64,
+    oid: *const c_char,
+    offset: i64,
+    length: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let Some(oid) = cstr_arg(oid) else {
+            return -1;
+        };
+        let result = {
+            let mut guard = lock_recover(conns());
+            match guard.get_mut(&conn_id) {
+                Some(Conn::Postgres(connection)) => connection.lob_read_at(oid, offset, length),
+                _ => return -1,
+            }
+        };
+        match result {
+            Some(bytes) => {
+                let length = bytes.len() as i64;
+                *lock_recover(blob_cell()) = bytes;
+                length
+            }
+            None => -1,
+        }
+    })
+}
+
+/// Writes one PostgreSQL large-object slice at an explicit byte offset.
+///
+/// # Safety
+/// `oid` must be a valid NUL-terminated string and `data` must expose at least
+/// `len` readable bytes (it may be null when `len` is zero).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_lob_write_at(
+    conn_id: i64,
+    oid: *const c_char,
+    offset: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let Some(oid) = cstr_arg(oid) else {
+            return -1;
+        };
+        let bytes = bytes_arg(data, len);
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Postgres(connection)) => connection.lob_write_at(oid, offset, &bytes),
+            _ => -1,
         }
     })
 }
@@ -1870,12 +2057,18 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
             Some(Stmt::Sqlite(s)) => s.reset(),
-            Some(Stmt::Postgres(s)) => s.reset(),
+            Some(Stmt::Postgres(s)) => {
+                let mut connections = lock_recover(conns());
+                match connections.get_mut(&s.conn_id) {
+                    Some(Conn::Postgres(connection)) => s.reset(connection),
+                    _ => 0,
+                }
+            }
             Some(Stmt::Mysql(s)) => {
                 if let Some(Conn::Mysql(connection)) = lock_recover(conns()).get_mut(&s.conn_id) {
-                    connection.unbuffered_active = false;
+                    return s.reset(connection);
                 }
-                s.reset()
+                0
             }
             None => 0,
         }
@@ -2549,12 +2742,19 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
                 s.finalize();
                 1
             }
-            Some(Stmt::Postgres(_)) => 1,
-            Some(Stmt::Mysql(statement)) => {
+            Some(Stmt::Postgres(mut statement)) => {
+                if let Some(Conn::Postgres(connection)) =
+                    lock_recover(conns()).get_mut(&statement.conn_id)
+                {
+                    statement.reset(connection);
+                }
+                1
+            }
+            Some(Stmt::Mysql(mut statement)) => {
                 if let Some(Conn::Mysql(connection)) =
                     lock_recover(conns()).get_mut(&statement.conn_id)
                 {
-                    connection.unbuffered_active = false;
+                    statement.reset(connection);
                 }
                 1
             }
@@ -2750,8 +2950,8 @@ mod tests {
     //! - `ELEPHC_PG_TLS_DSN`  — codegen-only: a `sslmode=require` PostgreSQL DSN for
     //!   `pgsql_tls_round_trip`. Needs a TLS-serving server.
     //! - `ELEPHC_MY_TLS_DSN` / `ELEPHC_MY_TLS_CA` — codegen-only: DSN + CA-bundle path
-    //!   for `mysql_tls_round_trip`. Needs a TLS-serving server AND a staticlib rebuilt
-    //!   with the opt-in `mysql-tls` feature.
+    //!   for `mysql_tls_round_trip`. Needs a TLS-serving server; the default build
+    //!   already includes the ring-backed `mysql-tls` feature.
     //!
     //! Because of the fallback, exporting just `ELEPHC_PG_DSN` + `ELEPHC_MY_DSN` now
     //! drives BOTH suites:
@@ -2814,11 +3014,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v40 exposes
-    /// binary-safe BLOB/large-object writeback.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v46 exposes
+    /// bounded SQLite incremental-BLOB I/O.
     #[test]
-    fn version_is_v44() {
-        assert_eq!(elephc_pdo_version(), 44);
+    fn version_is_v46() {
+        assert_eq!(elephc_pdo_version(), 46);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.
@@ -3129,6 +3329,70 @@ mod tests {
         assert_eq!(
             unsafe { read_bytes(elephc_pdo_blob_data_ptr(), replaced) },
             replacement,
+        );
+
+        // v46 performs the same operation in bounded slices: size is scalar-only,
+        // reads copy only the requested range, and writes patch only that range.
+        assert_eq!(
+            unsafe {
+                elephc_pdo_blob_size(
+                    conn,
+                    table.as_ptr(),
+                    column.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                )
+            },
+            3,
+        );
+        let slice_len = unsafe {
+            elephc_pdo_blob_read_at(
+                conn,
+                table.as_ptr(),
+                column.as_ptr(),
+                1,
+                std::ptr::null(),
+                1,
+                1,
+            )
+        };
+        assert_eq!(slice_len, 1);
+        assert_eq!(unsafe { read_bytes(elephc_pdo_blob_data_ptr(), slice_len) }, b"\0");
+        let patch = b"X";
+        assert_eq!(
+            unsafe {
+                elephc_pdo_blob_write_at(
+                    conn,
+                    table.as_ptr(),
+                    column.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    1,
+                    patch.as_ptr() as *const c_char,
+                    patch.len() as i64,
+                )
+            },
+            1,
+        );
+        let patched = unsafe {
+            elephc_pdo_blob_read(conn, table.as_ptr(), column.as_ptr(), 1, std::ptr::null())
+        };
+        assert_eq!(unsafe { read_bytes(elephc_pdo_blob_data_ptr(), patched) }, b"ZXQ");
+        assert_eq!(
+            unsafe {
+                elephc_pdo_blob_write_at(
+                    conn,
+                    table.as_ptr(),
+                    column.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    3,
+                    patch.as_ptr() as *const c_char,
+                    1,
+                )
+            },
+            -1,
+            "bounded writes must not extend SQLite's fixed-size BLOB",
         );
 
         // The zero-length BLOB: a successful read of 0 bytes, and a NULL data pointer.
@@ -4201,13 +4465,14 @@ mod tests {
         );
     }
 
-    /// F-PG-03 must not rescue a DSN that carries nothing usable: the emptiness
-    /// check runs on the caller's OWN keys, BEFORE the default timeout is folded in,
-    /// so a bare `pgsql:` is still the error it always was rather than a connection
-    /// string made non-empty by elephc's own key.
+    /// Libpq resolves a bare `pgsql:` against the operating-system username rather
+    /// than rejecting it before connection. The native resolver mirrors that and
+    /// still applies php-src's default connect timeout.
     #[test]
-    fn pg_dsn_empty_body_still_errors_despite_the_default_timeout() {
-        assert!(pg::parse_dsn("pgsql:").is_err());
+    fn pg_dsn_empty_body_uses_libpq_os_user_default() {
+        let connection = pg::parse_dsn("pgsql:").expect("OS user supplies libpq default");
+        assert!(connection.contains("user='"));
+        assert!(connection.contains("connect_timeout='30'"));
     }
 
     /// Full PostgreSQL round-trip against a live server. Ignored by default; run

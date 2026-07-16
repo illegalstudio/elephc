@@ -705,9 +705,8 @@ $db->exec("DROP TABLE pg_meta");
 /// needs no dollar-quoting. The callback asserts inside itself (echoing "got" on a
 /// substring match, tolerant of libpq's severity prefix / trailing whitespace)
 /// rather than accumulating into a `use (&$var)` by-reference capture: a by-ref
-/// capture stored on the statement's callback property and invoked from another
-/// method (drainNotices) trips a separate, pre-existing closure limitation, which
-/// is orthogonal to whether the notice is delivered.
+/// capture stored on the connection's callback property is avoided here so this
+/// test isolates notice delivery from closure-reference behavior.
 #[test]
 #[ignore]
 fn test_pgsql_set_notice_callback_e2e() {
@@ -719,6 +718,23 @@ $db->exec("DROP TABLE IF EXISTS pg_notice_probe_zzz");
 "#,
     );
     assert_eq!(out, "got");
+}
+
+/// A NOTICE raised by a prepared statement is dispatched before `execute()`
+/// returns, rather than remaining queued until a later connection query.
+#[test]
+#[ignore]
+fn test_pgsql_prepared_execute_dispatches_notice_synchronously() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Pgsql((string) getenv("ELEPHC_PG_DSN"));
+$db->setNoticeCallback(function($msg) { echo str_contains($msg, "elephc prepared notice") ? "notice" : "other"; });
+$stmt = $db->prepare("DO $$ BEGIN RAISE NOTICE 'elephc prepared notice'; END $$");
+$stmt->execute();
+echo ":after";
+"#,
+    );
+    assert_eq!(out, "notice:after");
 }
 
 /// P2-a end-to-end: preparing a statement that mixes a positional `?` with a

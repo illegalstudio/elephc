@@ -20,22 +20,26 @@
 //!   PDO forbids mixing `?` and `:name` in one statement; `prepare()` rejects the
 //!   mix with `HY093` before ever asking the server to prepare it.
 //! - A statement is prepared server-side for column metadata, then executed
-//!   lazily on the first `step()`. The whole result set is materialized into typed
-//!   `Cell` values, so the column accessors read from owned data and per-value
-//!   NULL is reported through the SQLite-compatible type codes (1=int, 2=float,
-//!   3=text, 4=blob, 5=null).
+//!   lazily on the first `step()`. Buffered statements retain typed `Cell` rows;
+//!   unbuffered statements move the client into a demand worker and retain only
+//!   the current row, while preserving multiple result-set boundaries.
 //! - Bound values cross the wire as their native `mysql::Value` (ints, doubles,
 //!   text bytes); the server coerces text to the column type, so — unlike the
 //!   PostgreSQL driver — no per-parameter type inference is needed.
 
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, Write};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use mysql::consts::{CapabilityFlags, ColumnFlags, ColumnType};
 use mysql::prelude::Queryable;
-use mysql::{Column, Conn, LocalInfileHandler, OptsBuilder, Statement, Value};
+use mysql::{Column, Conn, LocalInfileHandler, OptsBuilder, QueryResult, Statement, Value};
 
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
@@ -105,6 +109,7 @@ struct MyDriverOptions {
     ignore_space: bool,
     multi_statements: bool,
     buffered_query: bool,
+    ssl_ca_path: Option<PathBuf>,
 }
 
 impl Default for MyDriverOptions {
@@ -117,6 +122,7 @@ impl Default for MyDriverOptions {
             ignore_space: false,
             multi_statements: true,
             buffered_query: true,
+            ssl_ca_path: None,
         }
     }
 }
@@ -238,7 +244,7 @@ fn native_type_name(t: ColumnType) -> &'static str {
 /// A live MySQL/MariaDB connection plus the last operation's bookkeeping that PDO
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
-    pub conn: Conn,
+    conn: MyClientSlot,
     /// Transport description returned by `PDO::ATTR_CONNECTION_STATUS`, captured
     /// from the resolved connection options in php-src's `mysql_get_host_info()`
     /// shape (`"host via TCP/IP"` or `"Localhost via UNIX socket"`).
@@ -274,9 +280,17 @@ pub struct MyConn {
     /// Best available live transaction state, updated after every successful
     /// bridge-owned command including raw `PDO::exec("BEGIN")` control SQL.
     pub in_transaction: bool,
+    /// Handshake version cached while an unbuffered worker temporarily owns `Conn`.
+    server_version: (u16, u16, u16),
+    /// Session quoting mode cached before the client moves into a worker.
+    no_backslash_escapes: bool,
+    /// Worker currently owning the client for a demand-driven result stream.
+    active_stream: Option<MyActiveStream>,
+    /// Monotonic identity used to reject stale statement stream handles.
+    next_stream_id: u64,
 }
 
-/// A live MySQL prepared statement and its lazily-materialized result.
+/// A live MySQL prepared statement and its buffered or demand-driven result.
 pub struct MyStmt {
     pub conn_id: i64,
     /// Original SQL used for transaction-state bookkeeping and diagnostics.
@@ -317,14 +331,14 @@ pub struct MyStmt {
     col_lengths: Vec<u32>,
     /// Native decimal precision markers parallel to `col_names`.
     col_precisions: Vec<u8>,
-    /// Materialized rows; each row is a vector of decoded column cells.
+    /// Buffered rows, or the single active row for an unbuffered stream.
     rows: Vec<Vec<Cell>>,
     /// Result sets after the active one, retained in wire order for
     /// `PDOStatement::nextRowset()`.
     remaining_rowsets: Vec<MyRowset>,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
-    /// Whether the query has been executed (results materialized) yet.
+    /// Whether the query has been executed yet.
     executed: bool,
     /// Whether the SQL text is a `CALL <procedure>(...)` invocation (P0-C). A
     /// stored procedure's real result shape (whether it `SELECT`s any rows at
@@ -337,6 +351,61 @@ pub struct MyStmt {
     is_call: bool,
     /// Snapshot of the connection's `ATTR_USE_BUFFERED_QUERY` mode.
     pub buffered: bool,
+    /// Connection-owned demand stream used when buffering is disabled.
+    stream_id: Option<u64>,
+}
+
+impl Drop for MyConn {
+    /// Stops any active row worker before the owning PDO connection is released.
+    fn drop(&mut self) {
+        self.finish_active_stream();
+    }
+}
+
+/// Keeps the MySQL client optional while an unbuffered worker owns it.
+struct MyClientSlot(Option<Conn>);
+
+impl Deref for MyClientSlot {
+    type Target = Conn;
+
+    /// Borrows the connected client outside a demand-driven result stream.
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("MySQL client is owned by an active unbuffered stream")
+    }
+}
+
+impl DerefMut for MyClientSlot {
+    /// Mutably borrows the connected client outside a demand-driven result stream.
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+            .as_mut()
+            .expect("MySQL client is owned by an active unbuffered stream")
+    }
+}
+
+/// Commands sent to the MySQL worker.
+enum MyStreamCommand {
+    Next,
+    Close,
+}
+
+/// Responses emitted by a MySQL row-stream worker.
+enum MyStreamResponse {
+    Rowset(MyRowset),
+    Row(Vec<Cell>),
+    RowsetEnd,
+    Finished(Conn, u16),
+    Failed(Conn, String, i64, String),
+}
+
+/// Connection-owned control plane for one active MySQL result stream.
+struct MyActiveStream {
+    id: u64,
+    commands: mpsc::Sender<MyStreamCommand>,
+    responses: mpsc::Receiver<MyStreamResponse>,
+    worker: Option<JoinHandle<()>>,
 }
 
 /// One fully materialized MySQL protocol result set.
@@ -545,9 +614,7 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             "ignore" => options.ignore_space = value == "1",
             "multi" => options.multi_statements = value != "0",
             "buffered" => options.buffered_query = value != "0",
-            "capath" if !value.is_empty() => {
-                return Err("Pdo\\Mysql::ATTR_SSL_CAPATH is not supported by the rustls MySQL client; use ATTR_SSL_CA with a PEM bundle".to_string())
-            }
+            "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
             "cipher" if !value.is_empty() => {
                 return Err("Pdo\\Mysql::ATTR_SSL_CIPHER cannot be honored by the rustls MySQL client".to_string())
             }
@@ -1154,10 +1221,8 @@ fn interpolate_emulated_sql(
 }
 
 /// Applies the prelude's packed `Pdo\Mysql::ATTR_SSL_*` config to `opts`, enabling
-/// rustls TLS for the connection. Only compiled with the opt-in `mysql-tls`
-/// feature (the `mysql` crate's rustls backend pulls aws-lc-rs, which the default
-/// build deliberately excludes). An empty config leaves `opts` untouched
-/// (plaintext).
+/// rustls TLS for the connection. The default build enables mysql 28's ring-backed
+/// `mysql-tls` feature. An empty config leaves `opts` untouched (plaintext).
 #[cfg(feature = "mysql-tls")]
 fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, String> {
     if ssl_config.is_empty() {
@@ -1167,7 +1232,131 @@ fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, St
     Ok(opts.ssl_opts(parse_ssl_config(ssl_config)))
 }
 
-/// The default (no `mysql-tls`) build has no MySQL TLS backend linked. Rather than
+/// Owns a temporary PEM bundle assembled from MySQL's CA file/directory options.
+///
+/// The mysql crate reads the path while `Conn::new` builds its rustls connector,
+/// so the bundle only needs to survive that call and is removed automatically
+/// afterwards, including on connection failure.
+struct TemporaryCaBundle {
+    path: PathBuf,
+}
+
+impl Drop for TemporaryCaBundle {
+    /// Removes the private bundle created for one connection attempt.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Combines `ATTR_SSL_CA` and every PEM certificate in `ATTR_SSL_CAPATH`.
+///
+/// libmysqlclient accepts a CA file and an OpenSSL hashed CA directory. Rustls
+/// accepts a multi-certificate PEM file instead, so concatenating the directory's
+/// certificates preserves the same trust-anchor semantics without weakening
+/// verification. Returns the rewritten SSL config plus an owner for the temporary
+/// bundle when a directory was requested.
+fn normalize_ssl_ca_sources(
+    ssl_config: &str,
+    ca_path: Option<&std::path::Path>,
+) -> Result<(String, Option<TemporaryCaBundle>), String> {
+    let Some(ca_path) = ca_path else {
+        return Ok((ssl_config.to_string(), None));
+    };
+    let canonical = ca_path.canonicalize().map_err(|error| {
+        format!(
+            "Pdo\\Mysql::ATTR_SSL_CAPATH '{}': {error}",
+            ca_path.display()
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(format!(
+            "Pdo\\Mysql::ATTR_SSL_CAPATH '{}' is not a directory",
+            canonical.display()
+        ));
+    }
+
+    let mut pem = Vec::new();
+    for pair in ssl_config.split(';').filter(|pair| !pair.is_empty()) {
+        if let Some(("ca", value)) = pair.split_once('=') {
+            let bytes = fs::read(value)
+                .map_err(|error| format!("Pdo\\Mysql::ATTR_SSL_CA '{value}': {error}"))?;
+            append_pem_certificates(&mut pem, &bytes);
+        }
+    }
+
+    let mut entries = fs::read_dir(&canonical)
+        .map_err(|error| format!("Pdo\\Mysql::ATTR_SSL_CAPATH '{}': {error}", canonical.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Pdo\\Mysql::ATTR_SSL_CAPATH '{}': {error}", canonical.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let metadata = entry.metadata().map_err(|error| {
+            format!(
+                "Pdo\\Mysql::ATTR_SSL_CAPATH '{}': {error}",
+                entry.path().display()
+            )
+        })?;
+        // OpenSSL-style CA directories commonly contain c_rehash symlinks; the
+        // selected directory is trusted configuration, so follow them to files.
+        if !metadata.is_file() {
+            continue;
+        }
+        let bytes = fs::read(entry.path()).map_err(|error| {
+            format!(
+                "Pdo\\Mysql::ATTR_SSL_CAPATH '{}': {error}",
+                entry.path().display()
+            )
+        })?;
+        append_pem_certificates(&mut pem, &bytes);
+    }
+    if pem.is_empty() {
+        return Err(format!(
+            "Pdo\\Mysql::ATTR_SSL_CAPATH '{}' contains no PEM certificates",
+            canonical.display()
+        ));
+    }
+
+    static NEXT_BUNDLE_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_BUNDLE_ID.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "elephc-pdo-mysql-ca-{}-{id}.pem",
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| format!("cannot create MySQL CA bundle '{}': {error}", path.display()))?;
+    file.write_all(&pem)
+        .map_err(|error| format!("cannot write MySQL CA bundle '{}': {error}", path.display()))?;
+
+    let rewritten = ssl_config
+        .split(';')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| !matches!(pair.split_once('='), Some(("ca", _))))
+        .fold(format!("ca={};", path.display()), |mut config, pair| {
+            config.push_str(pair);
+            config.push(';');
+            config
+        });
+    Ok((rewritten, Some(TemporaryCaBundle { path })))
+}
+
+/// Appends a PEM source when it contains at least one certificate block.
+fn append_pem_certificates(output: &mut Vec<u8>, source: &[u8]) {
+    if !source
+        .windows(b"-----BEGIN CERTIFICATE-----".len())
+        .any(|window| window == b"-----BEGIN CERTIFICATE-----")
+    {
+        return;
+    }
+    output.extend_from_slice(source);
+    if !source.ends_with(b"\n") {
+        output.push(b'\n');
+    }
+}
+
+/// A custom build without `mysql-tls` has no MySQL TLS backend linked. Rather than
 /// silently downgrade a program that asked for TLS to a plaintext connection, a
 /// non-empty SSL config fails loudly; an empty config (no TLS requested) connects
 /// normally.
@@ -1176,7 +1365,7 @@ fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, St
     if ssl_config.is_empty() {
         return Ok(opts);
     }
-    Err("mysql TLS (Pdo\\Mysql::ATTR_SSL_*) was requested but requires the opt-in \
+    Err("mysql TLS (Pdo\\Mysql::ATTR_SSL_*) was requested but requires the \
          `mysql-tls` feature, which was not compiled in (rebuild elephc-pdo with \
          --features mysql-tls)"
         .to_string())
@@ -1185,9 +1374,9 @@ fn apply_ssl_opts(opts: OptsBuilder, ssl_config: &str) -> Result<OptsBuilder, St
 /// Installs the ring `CryptoProvider` as the process default exactly once. The
 /// `mysql` crate builds its rustls `ClientConfig` with the provider-less
 /// `ClientConfig::builder()`, which panics when more than one provider is present
-/// unless a process default is installed — and enabling `mysql-tls` brings in
-/// aws-lc-rs alongside the ring provider that pg / elephc-tls already use. Pinning
-/// ring keeps the whole process on a single, musl-friendly provider.
+/// unless a process default is installed. mysql 28's `rustls-tls-ring` feature
+/// uses the same provider as pg / elephc-tls; installing it explicitly keeps the
+/// choice deterministic when the final binary links other rustls users.
 #[cfg(feature = "mysql-tls")]
 fn install_crypto_provider() {
     use std::sync::Once;
@@ -1260,8 +1449,8 @@ impl MyConn {
     ///
     /// `ssl_config` is the prelude's packed serialization of the
     /// `Pdo\Mysql::ATTR_SSL_*` constructor options (`ca=…;cert=…;key=…;verify=…`);
-    /// an empty string means no TLS. It is only honored when the opt-in
-    /// `mysql-tls` feature is compiled in (see [`apply_ssl_opts`]).
+    /// an empty string means no TLS. It is honored when the default `mysql-tls`
+    /// feature is compiled in (see [`apply_ssl_opts`]).
     ///
     /// `found_rows` is the `Pdo\Mysql::ATTR_FOUND_ROWS` constructor option
     /// (F-MY-06): it adds `CLIENT_FOUND_ROWS` to the capabilities negotiated in the
@@ -1279,7 +1468,9 @@ impl MyConn {
         let driver_options = parse_driver_options(driver_config)?;
         let (mut opts, charset) =
             build_opts(dsn, found_rows, driver_options.ignore_space)?;
-        opts = apply_ssl_opts(opts, ssl_config)?;
+        let (ssl_config, _ca_bundle) =
+            normalize_ssl_ca_sources(ssl_config, driver_options.ssl_ca_path.as_deref())?;
+        opts = apply_ssl_opts(opts, &ssl_config)?;
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
         }
@@ -1303,8 +1494,10 @@ impl MyConn {
             None => format!("{} via TCP/IP", resolved_opts.get_ip_or_hostname()),
         };
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
+        let server_version = conn.server_version();
+        let no_backslash_escapes = conn.no_backslash_escape();
         Ok(MyConn {
-            conn,
+            conn: MyClientSlot(Some(conn)),
             host_info,
             changes: 0,
             errmsg: String::new(),
@@ -1318,6 +1511,10 @@ impl MyConn {
             unbuffered_active: false,
             warning_count: 0,
             in_transaction: false,
+            server_version,
+            no_backslash_escapes,
+            active_stream: None,
+            next_stream_id: 0,
         })
     }
 
@@ -1343,6 +1540,225 @@ impl MyConn {
         self.errcode = 2014;
         self.errmsg = "Cannot execute queries while other unbuffered queries are active. Consider using PDOStatement::fetchAll(). Alternatively, if your code is only ever going to run against mysql, you may enable query buffering by setting the PDO::MYSQL_ATTR_USE_BUFFERED_QUERY attribute.".to_string();
         false
+    }
+
+    /// Restores a worker-owned client and refreshes connection properties that
+    /// may have changed while its statement ran.
+    fn restore_stream_client(&mut self, conn: Conn, warnings: u16) {
+        self.server_version = conn.server_version();
+        self.no_backslash_escapes = conn.no_backslash_escape();
+        self.warning_count = warnings;
+        self.conn.0 = Some(conn);
+    }
+
+    /// Stops the active worker and recovers its client for close/reset paths.
+    fn finish_active_stream(&mut self) {
+        let Some(mut active) = self.active_stream.take() else {
+            return;
+        };
+        let _ = active.commands.send(MyStreamCommand::Close);
+        while let Ok(response) = active.responses.recv() {
+            match response {
+                MyStreamResponse::Finished(conn, warnings) => {
+                    self.restore_stream_client(conn, warnings);
+                    break;
+                }
+                MyStreamResponse::Failed(conn, sqlstate, errcode, message) => {
+                    let warnings = conn.warnings();
+                    self.restore_stream_client(conn, warnings);
+                    self.sqlstate = sqlstate;
+                    self.errcode = errcode;
+                    self.errmsg = message;
+                    break;
+                }
+                MyStreamResponse::Rowset(_)
+                | MyStreamResponse::Row(_)
+                | MyStreamResponse::RowsetEnd => {}
+            }
+        }
+        if let Some(worker) = active.worker.take() {
+            let _ = worker.join();
+        }
+        self.unbuffered_active = false;
+    }
+
+    /// Finishes the active stream only when it belongs to `id`.
+    fn finish_stream(&mut self, id: u64) {
+        if self.active_stream.as_ref().map(|stream| stream.id) == Some(id) {
+            self.finish_active_stream();
+        }
+    }
+
+    /// Installs a newly spawned worker and waits for its first result-set metadata.
+    fn activate_stream(
+        &mut self,
+        commands: mpsc::Sender<MyStreamCommand>,
+        responses: mpsc::Receiver<MyStreamResponse>,
+        worker: JoinHandle<()>,
+    ) -> Result<(u64, MyRowset), i64> {
+        self.next_stream_id = self.next_stream_id.wrapping_add(1).max(1);
+        let id = self.next_stream_id;
+        let mut active = MyActiveStream {
+            id,
+            commands,
+            responses,
+            worker: Some(worker),
+        };
+        match active.responses.recv() {
+            Ok(MyStreamResponse::Rowset(rowset)) => {
+                self.active_stream = Some(active);
+                self.unbuffered_active = true;
+                Ok((id, rowset))
+            }
+            Ok(MyStreamResponse::Finished(conn, warnings)) => {
+                self.restore_stream_client(conn, warnings);
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+                let warnings = conn.warnings();
+                self.restore_stream_client(conn, warnings);
+                self.sqlstate = sqlstate;
+                self.errcode = errcode;
+                self.errmsg = message;
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => {
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.sqlstate = "HY000".to_string();
+                self.errcode = 1;
+                self.errmsg = "MySQL unbuffered query worker terminated unexpectedly".to_string();
+                Err(-1)
+            }
+        }
+    }
+
+    /// Starts an unbuffered prepared-statement worker.
+    fn start_native_stream(
+        &mut self,
+        statement: Statement,
+        values: Vec<Value>,
+    ) -> Result<(u64, MyRowset), i64> {
+        let Some(conn) = self.conn.0.take() else {
+            return Err(-1);
+        };
+        let fetch_table_names = self.fetch_table_names;
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_mysql_native_stream(
+                conn,
+                statement,
+                values,
+                fetch_table_names,
+                command_rx,
+                response_tx,
+            );
+        });
+        self.activate_stream(command_tx, response_rx, worker)
+    }
+
+    /// Starts an unbuffered text-protocol worker for emulated prepares.
+    fn start_text_stream(&mut self, sql: String) -> Result<(u64, MyRowset), i64> {
+        let Some(conn) = self.conn.0.take() else {
+            return Err(-1);
+        };
+        let fetch_table_names = self.fetch_table_names;
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_mysql_text_stream(
+                conn,
+                sql,
+                fetch_table_names,
+                command_rx,
+                response_tx,
+            );
+        });
+        self.activate_stream(command_tx, response_rx, worker)
+    }
+
+    /// Requests one row from the active result set.
+    fn next_stream_row(&mut self, id: u64) -> Result<Option<Vec<Cell>>, i64> {
+        let Some(active) = self.active_stream.as_mut() else {
+            return Ok(None);
+        };
+        if active.id != id {
+            return Ok(None);
+        }
+        if active.commands.send(MyStreamCommand::Next).is_err() {
+            return Err(-1);
+        }
+        match active.responses.recv() {
+            Ok(MyStreamResponse::Row(row)) => Ok(Some(row)),
+            Ok(MyStreamResponse::RowsetEnd) => Ok(None),
+            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+                let warnings = conn.warnings();
+                self.restore_stream_client(conn, warnings);
+                self.sqlstate = sqlstate;
+                self.errcode = errcode;
+                self.errmsg = message;
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.unbuffered_active = false;
+                Err(-1)
+            }
+            Ok(MyStreamResponse::Finished(conn, warnings)) => {
+                self.restore_stream_client(conn, warnings);
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.unbuffered_active = false;
+                Ok(None)
+            }
+            Ok(MyStreamResponse::Rowset(_)) | Err(_) => Err(-1),
+        }
+    }
+
+    /// Activates the next protocol result set, or recovers the connection at EOF.
+    fn next_stream_rowset(&mut self, id: u64) -> Result<Option<MyRowset>, i64> {
+        let Some(active) = self.active_stream.as_mut() else {
+            return Ok(None);
+        };
+        if active.id != id {
+            return Ok(None);
+        }
+        match active.responses.recv() {
+            Ok(MyStreamResponse::Rowset(rowset)) => Ok(Some(rowset)),
+            Ok(MyStreamResponse::Finished(conn, warnings)) => {
+                self.restore_stream_client(conn, warnings);
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.unbuffered_active = false;
+                Ok(None)
+            }
+            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+                let warnings = conn.warnings();
+                self.restore_stream_client(conn, warnings);
+                self.sqlstate = sqlstate;
+                self.errcode = errcode;
+                self.errmsg = message;
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.unbuffered_active = false;
+                Err(-1)
+            }
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => Err(-1),
+        }
     }
 
     /// Records the AUTO_INCREMENT id from the just-run statement when it is
@@ -1446,6 +1862,9 @@ impl MyConn {
     /// Enables or disables MySQL session autocommit. An unchanged value is a
     /// successful no-op; a server error leaves the stored state unchanged.
     pub fn set_autocommit(&mut self, enabled: bool) -> i64 {
+        if !self.ensure_not_busy() {
+            return 0;
+        }
         if self.autocommit == enabled {
             return 1;
         }
@@ -1493,7 +1912,7 @@ impl MyConn {
     /// Returns the MySQL/MariaDB server's reported version (`MAJOR.MINOR.PATCH`),
     /// parsed from the handshake by the `mysql` client.
     pub fn server_version(&self) -> String {
-        let (major, minor, patch) = self.conn.server_version();
+        let (major, minor, patch) = self.server_version;
         format!("{major}.{minor}.{patch}")
     }
 
@@ -1502,13 +1921,19 @@ impl MyConn {
     /// standalone binary, so reporting the linked client crate is the truthful
     /// equivalent of `mysql_get_client_info()`.
     pub fn client_version(&self) -> String {
-        "mysql 25.0.1".to_string()
+        "mysql 28.0.0".to_string()
     }
 
     /// Returns the connection transport description in the same shape as
     /// php-src's `mysql_get_host_info()` result.
     pub fn connection_status(&self) -> String {
         self.host_info.clone()
+    }
+
+    /// Pings an idle client; an active row worker already proves the connection
+    /// is live enough to remain a valid persistent handle.
+    pub fn is_alive(&mut self) -> bool {
+        self.active_stream.is_some() || self.conn.ping().is_ok()
     }
 
     /// Updates the live `PDO::ATTR_FETCH_TABLE_NAMES` setting.
@@ -1520,6 +1945,9 @@ impl MyConn {
     /// The Rust client does not expose the protocol command, but the same server
     /// counters are available without relying on fabricated constants.
     pub fn server_info(&mut self) -> String {
+        if !self.ensure_not_busy() {
+            return String::new();
+        }
         let rows: Vec<(String, String)> = match self.conn.query("SHOW STATUS") {
             Ok(rows) => rows,
             Err(_) => return String::new(),
@@ -1559,7 +1987,11 @@ impl MyConn {
     /// P1-f). The `mysql` crate already tracks this from the connection's session
     /// state (`Conn::no_backslash_escape`), so no extra query is needed here.
     pub fn no_backslash_escape(&self) -> bool {
-        self.conn.no_backslash_escape()
+        self.conn
+            .0
+            .as_ref()
+            .map(Conn::no_backslash_escape)
+            .unwrap_or(self.no_backslash_escapes)
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
@@ -1628,6 +2060,7 @@ impl MyConn {
                 executed: false,
                 is_call: sql_is_call_statement(sql),
                 buffered: self.buffered_query,
+                stream_id: None,
             });
         }
         match self.conn.prep(&translated) {
@@ -1697,6 +2130,7 @@ impl MyConn {
                     executed: false,
                     is_call: sql_is_call_statement(sql),
                     buffered: self.buffered_query,
+                    stream_id: None,
                 })
             }
             Err(e) => {
@@ -1811,6 +2245,129 @@ fn decode_row(values: Vec<Value>, kinds: &[ColKind]) -> Vec<Cell> {
         .collect()
 }
 
+/// Builds an empty rowset carrying the current MySQL protocol set's metadata.
+fn mysql_stream_rowset(
+    columns: &[Column],
+    affected: i64,
+    last_id: Option<u64>,
+    fetch_table_names: bool,
+) -> MyRowset {
+    MyRowset {
+        affected,
+        last_id,
+        col_names: columns
+            .iter()
+            .map(|column| column_display_name(column, fetch_table_names))
+            .collect(),
+        col_kinds: columns.iter().map(ColKind::from_column).collect(),
+        col_types: columns.iter().map(Column::column_type).collect(),
+        col_tables: columns
+            .iter()
+            .map(|column| column.table_str().into_owned())
+            .collect(),
+        col_flags: columns.iter().map(Column::flags).collect(),
+        col_lengths: columns.iter().map(Column::column_length).collect(),
+        col_precisions: columns.iter().map(Column::decimals).collect(),
+        rows: Vec::new(),
+    }
+}
+
+/// Drives an already-started MySQL query one row per `Next` command, preserving
+/// protocol result-set boundaries for `PDOStatement::nextRowset()`.
+fn drive_mysql_stream<T: mysql::prelude::Protocol>(
+    mut result: QueryResult<'_, '_, '_, T>,
+    fetch_table_names: bool,
+    commands: &mpsc::Receiver<MyStreamCommand>,
+    responses: &mpsc::Sender<MyStreamResponse>,
+) -> Result<(), mysql::Error> {
+    while let Some(mut set) = result.iter() {
+        let columns = set.columns();
+        let columns: &[Column] = columns.as_ref();
+        let kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
+        let rowset = mysql_stream_rowset(
+            columns,
+            set.affected_rows() as i64,
+            set.last_insert_id(),
+            fetch_table_names,
+        );
+        if responses.send(MyStreamResponse::Rowset(rowset)).is_err() {
+            return Ok(());
+        }
+        while let Ok(command) = commands.recv() {
+            match command {
+                MyStreamCommand::Next => match set.next() {
+                    Some(row) => {
+                        let decoded = decode_row(row?.unwrap(), &kinds);
+                        if responses.send(MyStreamResponse::Row(decoded)).is_err() {
+                            return Ok(());
+                        }
+                    }
+                    None => {
+                        let _ = responses.send(MyStreamResponse::RowsetEnd);
+                        break;
+                    }
+                },
+                MyStreamCommand::Close => return Ok(()),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runs a prepared MySQL query on an owned client and returns that client when
+/// demand-driven iteration finishes.
+fn run_mysql_native_stream(
+    mut conn: Conn,
+    statement: Statement,
+    values: Vec<Value>,
+    fetch_table_names: bool,
+    commands: mpsc::Receiver<MyStreamCommand>,
+    responses: mpsc::Sender<MyStreamResponse>,
+) {
+    let result = match conn.exec_iter(&statement, values) {
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Err(error) => Err(error),
+    };
+    finish_mysql_stream_worker(conn, result, &responses);
+}
+
+/// Runs an emulated/text-protocol MySQL query on an owned client.
+fn run_mysql_text_stream(
+    mut conn: Conn,
+    sql: String,
+    fetch_table_names: bool,
+    commands: mpsc::Receiver<MyStreamCommand>,
+    responses: mpsc::Sender<MyStreamResponse>,
+) {
+    let result = match conn.query_iter(sql) {
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Err(error) => Err(error),
+    };
+    finish_mysql_stream_worker(conn, result, &responses);
+}
+
+/// Sends a worker's recovered connection plus final warning/error state.
+fn finish_mysql_stream_worker(
+    conn: Conn,
+    result: Result<(), mysql::Error>,
+    responses: &mpsc::Sender<MyStreamResponse>,
+) {
+    match result {
+        Ok(()) => {
+            let warnings = conn.warnings();
+            let _ = responses.send(MyStreamResponse::Finished(conn, warnings));
+        }
+        Err(error) => {
+            let sqlstate = err_sqlstate(&error);
+            let errcode = err_code(&error);
+            let message = error.to_string();
+            let _ = responses.send(MyStreamResponse::Failed(
+                conn, sqlstate, errcode, message,
+            ));
+        }
+    }
+}
+
 impl MyStmt {
     /// Resolves a named placeholder to its 1-based slot (0 if unknown). The
     /// leading colon is optional.
@@ -1830,11 +2387,15 @@ impl MyStmt {
     }
 
     /// Resets the cursor and execution state, keeping the bound values.
-    pub fn reset(&mut self) -> i64 {
+    pub fn reset(&mut self, conn: &mut MyConn) -> i64 {
+        if let Some(stream_id) = self.stream_id {
+            conn.finish_stream(stream_id);
+        }
         self.cursor = -1;
         self.executed = false;
         self.rows.clear();
         self.remaining_rowsets.clear();
+        self.stream_id = None;
         1
     }
 
@@ -1857,14 +2418,35 @@ impl MyStmt {
         self.rows = rowset.rows;
         self.cursor = -1;
         self.executed = true;
-        conn.unbuffered_active = !self.buffered && !self.rows.is_empty();
+        conn.unbuffered_active = !self.buffered
+            && (self.stream_id.is_some() || !self.rows.is_empty());
     }
 
-    /// Advances to the next materialized MySQL result set. Returns `1` when a
-    /// rowset became active and `0` when the protocol exposed no further set.
+    /// Advances to the next MySQL result set, discarding unread streamed rows as
+    /// mysqlnd does. Returns `1` when a rowset became active and `0` at protocol EOF.
     pub fn next_rowset(&mut self, conn: &mut MyConn) -> i64 {
-        conn.unbuffered_active = false;
+        if let Some(stream_id) = self.stream_id {
+            if self.remaining_rowsets.is_empty() {
+                loop {
+                    match conn.next_stream_row(stream_id) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(code) => return code,
+                    }
+                }
+                match conn.next_stream_rowset(stream_id) {
+                    Ok(Some(rowset)) => self.remaining_rowsets.push(rowset),
+                    Ok(None) => self.stream_id = None,
+                    Err(code) => return code,
+                }
+            }
+            self.rows.clear();
+            self.cursor = -1;
+        }
         if self.remaining_rowsets.is_empty() {
+            if self.stream_id.is_none() {
+                conn.unbuffered_active = false;
+            }
             return 0;
         }
         let rowset = self.remaining_rowsets.remove(0);
@@ -1906,8 +2488,8 @@ impl MyStmt {
             .collect()
     }
 
-    /// Executes the query (once) and materializes the result set into decoded
-    /// cells. Records the affected row count and last insert id on the connection.
+    /// Executes the query once, either buffering decoded rows or starting the
+    /// demand worker. Records row count and last insert id on the connection.
     ///
     /// P0-C: row materialization is decided from the EXECUTED result's live
     /// column metadata (`res.columns()`), not from `self.col_kinds` captured at
@@ -1945,6 +2527,14 @@ impl MyStmt {
             .as_ref()
             .expect("native MySQL statement missing its prepared handle")
             .clone();
+        if !self.buffered {
+            let (stream_id, rowset) = conn.start_native_stream(statement, values)?;
+            self.stream_id = Some(stream_id);
+            self.remaining_rowsets.clear();
+            self.install_rowset(conn, rowset);
+            conn.note_transaction_sql(&self.query_string);
+            return Ok(());
+        }
         let outcome: Result<Vec<MyRowset>, mysql::Error> = (|| {
             let mut res = conn.conn.exec_iter(&statement, values)?;
             let mut rowsets = Vec::new();
@@ -2052,6 +2642,14 @@ impl MyStmt {
             }
         };
         self.sent_sql = sql.clone();
+        if !self.buffered {
+            let (stream_id, rowset) = conn.start_text_stream(sql)?;
+            self.stream_id = Some(stream_id);
+            self.remaining_rowsets.clear();
+            self.install_rowset(conn, rowset);
+            conn.note_transaction_sql(&self.query_string);
+            return Ok(());
+        }
         let outcome = (|| {
             let mut result = conn.conn.query_iter(sql)?;
             let mut rowsets = Vec::new();
@@ -2141,6 +2739,27 @@ impl MyStmt {
             if let Err(code) = self.execute(conn) {
                 return code;
             }
+        }
+        if let Some(stream_id) = self.stream_id {
+            return match conn.next_stream_row(stream_id) {
+                Ok(Some(row)) => {
+                    self.rows.clear();
+                    self.rows.push(row);
+                    self.cursor = 0;
+                    1
+                }
+                Ok(None) => {
+                    self.rows.clear();
+                    self.cursor = 0;
+                    match conn.next_stream_rowset(stream_id) {
+                        Ok(Some(rowset)) => self.remaining_rowsets.push(rowset),
+                        Ok(None) => self.stream_id = None,
+                        Err(code) => return code,
+                    }
+                    0
+                }
+                Err(code) => code,
+            };
         }
         self.cursor += 1;
         if (self.cursor as usize) < self.rows.len() {
@@ -2512,12 +3131,12 @@ mod tests {
         );
     }
 
-    /// Packed PDO driver options preserve all supported boolean selections and
-    /// reject security-sensitive options the native client cannot honor.
+    /// Packed PDO driver options preserve supported selections, including the
+    /// CA-directory path, and reject security options the client cannot honor.
     #[test]
-    fn driver_options_parse_supported_flags_and_reject_inert_security_options() {
+    fn driver_options_parse_supported_flags_and_security_paths() {
         let options = parse_driver_options(
-            "local=1;compress=1;ignore=1;multi=0;buffered=0;",
+            "local=1;compress=1;ignore=1;multi=0;buffered=0;capath=/tmp/mysql-ca;",
         )
         .expect("supported PDO MySQL options should parse");
         assert!(options.local_infile);
@@ -2525,9 +3144,55 @@ mod tests {
         assert!(options.ignore_space);
         assert!(!options.multi_statements);
         assert!(!options.buffered_query);
+        assert_eq!(options.ssl_ca_path, Some(PathBuf::from("/tmp/mysql-ca")));
         let error = parse_driver_options("serverkey=/tmp/key.pem;")
             .expect_err("an inert server public key must fail loudly");
         assert!(error.contains("ATTR_SERVER_PUBLIC_KEY"));
+    }
+
+    /// `ATTR_SSL_CAPATH` is translated from an OpenSSL-style CA directory into
+    /// the multi-certificate PEM file accepted by the mysql crate's rustls path.
+    #[test]
+    fn ssl_capath_builds_a_sorted_temporary_pem_bundle() {
+        static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-pdo-capath-test-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).expect("create CA directory fixture");
+        let direct = dir.join("direct.pem");
+        fs::write(&direct, b"-----BEGIN CERTIFICATE-----\nDIRECT\n-----END CERTIFICATE-----\n")
+            .expect("write direct CA fixture");
+        fs::write(
+            dir.join("02-second.pem"),
+            b"-----BEGIN CERTIFICATE-----\nSECOND\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write second directory CA fixture");
+        fs::write(
+            dir.join("01-first.crt"),
+            b"-----BEGIN CERTIFICATE-----\nFIRST\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write first directory CA fixture");
+        fs::write(dir.join("README"), b"not a certificate")
+            .expect("write ignored non-PEM fixture");
+
+        let (config, bundle) = normalize_ssl_ca_sources(
+            &format!("ca={};verify=1;", direct.display()),
+            Some(&dir),
+        )
+        .expect("normalize CA sources");
+        let bundle = bundle.expect("CAPATH must create a temporary bundle");
+        let contents = fs::read_to_string(&bundle.path).expect("read temporary CA bundle");
+        assert!(contents.contains("DIRECT"));
+        let first = contents.find("FIRST").expect("first CA present");
+        let second = contents.find("SECOND").expect("second CA present");
+        assert!(first < second, "directory certificates must be deterministic");
+        assert!(config.starts_with(&format!("ca={};", bundle.path.display())));
+        assert!(config.ends_with("verify=1;"));
+
+        drop(bundle);
+        fs::remove_dir_all(&dir).expect("remove CA directory fixture");
     }
 
     /// `ATTR_IGNORE_SPACE` reaches the MySQL handshake capability only when
@@ -2635,7 +3300,7 @@ mod tests {
         assert!(apply_ssl_opts(OptsBuilder::new(), "").is_ok());
     }
 
-    /// In the default build (no `mysql-tls`), a non-empty SSL config fails loudly
+    /// In a custom build without `mysql-tls`, a non-empty SSL config fails loudly
     /// so a program that asked for TLS is not silently downgraded to plaintext.
     #[cfg(not(feature = "mysql-tls"))]
     #[test]

@@ -17,16 +17,19 @@
 //!   resolve. A SQL text mixing `?` and `:name` is rejected at `prepare()` with
 //!   `HY093` (PDO forbids the combination).
 //! - A statement is prepared server-side for column metadata, then executed
-//!   lazily on the first `step()`. The whole result set is materialized into
-//!   typed `Cell` values, so the column accessors read from owned data and
-//!   per-value NULL is reported through the SQLite-compatible type codes
-//!   (1=int, 2=float, 3=text, 4=bytea/blob, 5=null).
+//!   lazily on the first `step()`. Buffered statements retain typed `Cell` rows;
+//!   native prefetch-off statements move the client into a demand worker and
+//!   retain only the current row.
 //! - Parameter values are encoded according to the prepared statement's inferred
 //!   parameter types, so an int bound where the column is `int4` is sent as a
 //!   4-byte int, a text where the column is `int` is parsed, etc.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fs;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
 
 use postgres::types::{to_sql_checked, IsNull, Kind, ToSql, Type};
 use postgres::{Client, Config, NoTls, Row, SimpleQueryMessage, Statement};
@@ -57,7 +60,7 @@ pub enum Bind {
 /// A live PostgreSQL connection plus the last operation's bookkeeping that PDO
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct PgConn {
-    pub client: Client,
+    client: PgClientSlot,
     pub changes: i64,
     pub errmsg: String,
     /// Native (driver-specific) error code for the connection's last operation, read
@@ -83,11 +86,15 @@ pub struct PgConn {
     /// Monotonic query generation used to invalidate an older unbuffered cursor
     /// when PostgreSQL starts another query on the same connection.
     query_generation: u64,
+    /// Demand-driven native row stream currently borrowing this connection.
+    active_stream: Option<PgActiveStream>,
+    /// Monotonic identity used to distinguish an invalidated older statement.
+    next_stream_id: u64,
     /// Transaction state updated from every successful bridge-owned command.
     pub in_transaction: bool,
 }
 
-/// A live PostgreSQL prepared statement and its lazily-materialized result.
+/// A live PostgreSQL prepared statement and its buffered or demand-driven result.
 pub struct PgStmt {
     pub conn_id: i64,
     /// Original SQL retained for statement-level diagnostics.
@@ -109,16 +116,70 @@ pub struct PgStmt {
     pub col_names: Vec<String>,
     /// Source table names resolved from each column's PostgreSQL table OID.
     col_tables: Vec<String>,
-    /// Materialized rows; each row is a vector of decoded column cells.
+    /// Buffered rows, or the single active row for a native unbuffered stream.
     pub rows: Vec<Vec<Cell>>,
     /// Current 0-based row index; `-1` before the first `step()`.
     pub cursor: isize,
-    /// Whether the query has been executed (results materialized) yet.
+    /// Whether the query has been executed yet.
     pub executed: bool,
     /// Whether this statement buffers its full result (`ATTR_PREFETCH != 0`).
     pub buffered: bool,
     /// Query generation assigned when an unbuffered execution starts.
     query_generation: u64,
+    /// Connection-owned demand stream used when `ATTR_PREFETCH` disables buffering.
+    stream_id: Option<u64>,
+}
+
+impl Drop for PgConn {
+    /// Stops any active row worker before the owning PDO connection is released.
+    fn drop(&mut self) {
+        self.finish_active_stream();
+    }
+}
+
+/// Keeps the synchronous client optional while a streaming worker temporarily owns it.
+struct PgClientSlot(Option<Client>);
+
+impl Deref for PgClientSlot {
+    type Target = Client;
+
+    /// Borrows the connected client; streaming callers recover it before other operations.
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("PostgreSQL client is owned by an active row stream")
+    }
+}
+
+impl DerefMut for PgClientSlot {
+    /// Mutably borrows the connected client outside an active row stream.
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+            .as_mut()
+            .expect("PostgreSQL client is owned by an active row stream")
+    }
+}
+
+/// Commands sent to the worker so it reads at most one wire row per PDO fetch.
+enum PgStreamCommand {
+    Next,
+    Close,
+}
+
+/// Results returned by a PostgreSQL row-stream worker.
+enum PgStreamResponse {
+    Started,
+    Row(Vec<Cell>),
+    Finished(Client),
+    Failed(Client, String, String),
+}
+
+/// Connection-owned control plane for one active unbuffered statement.
+struct PgActiveStream {
+    id: u64,
+    commands: mpsc::Sender<PgStreamCommand>,
+    responses: mpsc::Receiver<PgStreamResponse>,
+    worker: Option<JoinHandle<()>>,
 }
 
 /// Encodes a pending `Bind` according to the inferred PostgreSQL parameter type,
@@ -232,19 +293,11 @@ fn parse_datetime_utc(
 /// `Config`/rustls connector instead. Returns an error for a DSN without the
 /// `pgsql:` prefix.
 ///
-/// Every other key is forwarded only when it is one tokio-postgres's own
-/// `Config::from_str` parser recognizes — its accepted set is exactly: `user`,
-/// `password`, `dbname`, `options`, `application_name`, `sslmode`,
-/// `sslnegotiation`, `host`, `hostaddr`, `port`, `connect_timeout`,
-/// `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
-/// `keepalives_retries`, `target_session_attrs`, `channel_binding`,
-/// `load_balance_hosts` (`sslmode` is still stripped here, not forwarded — see
-/// above). Any libpq key outside that set (e.g. `sslcrl`, `sslpassword`,
-/// `sslsni`, `service`, `gssencmode`, `passfile`, `requiressl`,
-/// `sslcompression`, `client_encoding`, or a typo) would otherwise make
-/// `.parse::<Config>()` reject. `client_encoding` is consumed separately and
-/// applied after connect. Every other unsupported libpq key is rejected with an
-/// explicit bridge error rather than being silently ignored.
+/// [`resolve_dsn_options`] first expands libpq service/passfile/environment
+/// sources and compatibility aliases. This function then forwards only keys
+/// `postgres::Config` recognizes, while client encoding and rustls-specific TLS
+/// controls are consumed separately. GSS, CRL, replication/authentication modes,
+/// and typos remain explicit errors rather than silently ignored options.
 ///
 /// F-PG-03 / F-CORE-10: when neither the DSN body nor the caller's
 /// `PDO::ATTR_TIMEOUT` (which the prelude folds into the DSN as
@@ -257,7 +310,354 @@ fn parse_datetime_utc(
 /// of overwriting a DSN-supplied `connect_timeout=` with its own value is
 /// deliberately NOT imitated: a value the DSN spells out wins, and the default
 /// only fills the gap when nothing else did.
+#[cfg(test)]
 pub fn parse_dsn(dsn: &str) -> Result<String, String> {
+    let options = resolve_dsn_options(dsn)?;
+    parse_resolved_dsn(&options)
+}
+
+/// Resolves libpq-compatible service, environment, and password-file sources.
+///
+/// Precedence matches libpq: explicit PDO DSN values win over a selected service,
+/// service values win over `PG*` environment defaults, and a password file is
+/// consulted only when no password was supplied by a higher-priority source.
+fn resolve_dsn_options(dsn: &str) -> Result<BTreeMap<String, String>, String> {
+    let body = dsn
+        .strip_prefix("pgsql:")
+        .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
+    let mut explicit = parse_option_pairs(body, "PostgreSQL DSN")?;
+    for key in ["user", "password"] {
+        if let Some(value) = explicit.get_mut(key) {
+            *value = percent_decode_credential(value);
+        }
+    }
+
+    let service_name = explicit
+        .get("service")
+        .cloned()
+        .or_else(|| std::env::var("PGSERVICE").ok().filter(|value| !value.is_empty()));
+    let service_file = explicit
+        .get("servicefile")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("PGSERVICEFILE").map(PathBuf::from))
+        .or_else(default_service_file);
+
+    let mut options = if let Some(service_name) = service_name {
+        let path = service_file.ok_or_else(|| {
+            format!("PostgreSQL service '{service_name}' requested but no service file is available")
+        })?;
+        load_service(&path, &service_name)?
+    } else {
+        BTreeMap::new()
+    };
+
+    for (key, environment) in pg_environment_keys() {
+        if !options.contains_key(*key) {
+            if let Ok(value) = std::env::var(environment) {
+                if !value.is_empty() {
+                    options.insert((*key).to_string(), value);
+                }
+            }
+        }
+    }
+    if !options.contains_key("user") && !explicit.contains_key("user") {
+        if let Some(user) = std::env::var("USER")
+            .ok()
+            .or_else(|| std::env::var("LOGNAME").ok())
+            .filter(|value| !value.is_empty())
+        {
+            options.insert("user".to_string(), user);
+        }
+    }
+    options.extend(explicit);
+    options.remove("service");
+    options.remove("servicefile");
+
+    if !options.contains_key("application_name") {
+        if let Some(value) = options.remove("fallback_application_name") {
+            options.insert("application_name".to_string(), value);
+        }
+    } else {
+        options.remove("fallback_application_name");
+    }
+    if !options.contains_key("sslmode") {
+        if matches!(options.get("requiressl").map(String::as_str), Some("1")) {
+            options.insert("sslmode".to_string(), "require".to_string());
+        }
+    }
+    if let Some(value) = options.get("requiressl") {
+        if !matches!(value.as_str(), "0" | "1") {
+            return Err(format!("invalid PostgreSQL requiressl value '{value}': expected 0 or 1"));
+        }
+    }
+    options.remove("requiressl");
+    if let Some(value) = options.get("sslcompression") {
+        if !matches!(value.as_str(), "0" | "1") {
+            return Err(format!(
+                "invalid PostgreSQL sslcompression value '{value}': expected 0 or 1"
+            ));
+        }
+    }
+    options.remove("sslcompression");
+    apply_default_tls_files(&mut options);
+
+    if !options.contains_key("password") {
+        if let Some(path) = options
+            .get("passfile")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("PGPASSFILE").map(PathBuf::from))
+            .or_else(default_password_file)
+        {
+            if let Some(password) = password_from_file(&path, &options)? {
+                options.insert("password".to_string(), password);
+            }
+        }
+    }
+    options.remove("passfile");
+    Ok(options)
+}
+
+/// Applies libpq's conventional per-user certificate, key, root, and CRL paths
+/// when the corresponding option was not supplied explicitly.
+fn apply_default_tls_files(options: &mut BTreeMap<String, String>) {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let directory = home.join(".postgresql");
+    for (key, filename) in [
+        ("sslrootcert", "root.crt"),
+        ("sslcert", "postgresql.crt"),
+        ("sslkey", "postgresql.key"),
+        ("sslcrl", "root.crl"),
+    ] {
+        if options.contains_key(key) {
+            continue;
+        }
+        let path = directory.join(filename);
+        if path.is_file() {
+            options.insert(key.to_string(), path.display().to_string());
+        }
+    }
+}
+
+/// Parses semicolon-separated `key=value` options with last-value-wins semantics.
+fn parse_option_pairs(body: &str, source: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut options = BTreeMap::new();
+    for pair in body.split(';') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = pair.split_once('=') else {
+            return Err(format!("invalid {source} option '{pair}': expected key=value"));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(format!("invalid {source} option '{pair}': empty key"));
+        }
+        options.insert(key.to_ascii_lowercase(), value.trim().to_string());
+    }
+    Ok(options)
+}
+
+/// Returns the libpq environment variable corresponding to each connection key.
+fn pg_environment_keys() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("host", "PGHOST"),
+        ("hostaddr", "PGHOSTADDR"),
+        ("port", "PGPORT"),
+        ("dbname", "PGDATABASE"),
+        ("user", "PGUSER"),
+        ("password", "PGPASSWORD"),
+        ("application_name", "PGAPPNAME"),
+        ("connect_timeout", "PGCONNECT_TIMEOUT"),
+        ("client_encoding", "PGCLIENTENCODING"),
+        ("options", "PGOPTIONS"),
+        ("sslmode", "PGSSLMODE"),
+        ("requiressl", "PGREQUIRESSL"),
+        ("sslcompression", "PGSSLCOMPRESSION"),
+        ("sslrootcert", "PGSSLROOTCERT"),
+        ("sslcert", "PGSSLCERT"),
+        ("sslkey", "PGSSLKEY"),
+        ("sslcertmode", "PGSSLCERTMODE"),
+        ("sslpassword", "PGSSLPASSWORD"),
+        ("sslcrl", "PGSSLCRL"),
+        ("sslcrldir", "PGSSLCRLDIR"),
+        ("sslsni", "PGSSLSNI"),
+        ("ssl_min_protocol_version", "PGSSLMINPROTOCOLVERSION"),
+        ("ssl_max_protocol_version", "PGSSLMAXPROTOCOLVERSION"),
+        ("sslnegotiation", "PGSSLNEGOTIATION"),
+        ("gssencmode", "PGGSSENCMODE"),
+        ("require_auth", "PGREQUIREAUTH"),
+        ("passfile", "PGPASSFILE"),
+        ("target_session_attrs", "PGTARGETSESSIONATTRS"),
+        ("channel_binding", "PGCHANNELBINDING"),
+        ("load_balance_hosts", "PGLOADBALANCEHOSTS"),
+        ("tcp_user_timeout", "PGTCPUSER_TIMEOUT"),
+    ]
+}
+
+/// Returns libpq's per-user service-file location for supported Unix targets.
+fn default_service_file() -> Option<PathBuf> {
+    let user_file = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".pg_service.conf"))
+        .filter(|path| path.is_file());
+    user_file.or_else(|| {
+        std::env::var_os("PGSYSCONFDIR")
+            .map(PathBuf::from)
+            .map(|directory| directory.join("pg_service.conf"))
+            .filter(|path| path.is_file())
+    })
+}
+
+/// Loads one section from a libpq `pg_service.conf` file.
+fn load_service(path: &Path, service_name: &str) -> Result<BTreeMap<String, String>, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("PostgreSQL service file '{}': {error}", path.display()))?;
+    let mut selected = false;
+    let mut found = false;
+    let mut options = BTreeMap::new();
+    for (line_number, raw) in contents.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            selected = line[1..line.len() - 1].trim() == service_name;
+            found |= selected;
+            continue;
+        }
+        if !selected {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!(
+                "PostgreSQL service file '{}', line {}: expected key=value",
+                path.display(),
+                line_number + 1
+            ));
+        };
+        options.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+    if !found {
+        return Err(format!(
+            "PostgreSQL service '{service_name}' was not found in '{}'",
+            path.display()
+        ));
+    }
+    options.remove("service");
+    options.remove("servicefile");
+    Ok(options)
+}
+
+/// Returns libpq's per-user password-file location for supported Unix targets.
+fn default_password_file() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".pgpass"))
+        .filter(|path| path.is_file())
+}
+
+/// Finds the first matching `host:port:database:user:password` entry in `.pgpass`.
+fn password_from_file(
+    path: &Path,
+    options: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map_err(|error| format!("PostgreSQL passfile '{}': {error}", path.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "PostgreSQL passfile '{}' must not be accessible by group or others",
+                path.display()
+            ));
+        }
+    }
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("PostgreSQL passfile '{}': {error}", path.display()))?;
+    let raw_host = options
+        .get("host")
+        .or_else(|| options.get("hostaddr"))
+        .map(String::as_str)
+        .unwrap_or("localhost");
+    let host = if raw_host.starts_with('/') {
+        "localhost"
+    } else {
+        raw_host
+    };
+    let port = options.get("port").map(String::as_str).unwrap_or("5432");
+    let database = options
+        .get("dbname")
+        .or_else(|| options.get("user"))
+        .map(String::as_str)
+        .unwrap_or("");
+    let user = options.get("user").map(String::as_str).unwrap_or("");
+    if host.contains(',') || port.contains(',') {
+        return Err(
+            "PostgreSQL passfile with multiple hosts or ports cannot be represented by the native client"
+                .to_string(),
+        );
+    }
+    for line in contents.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = split_password_line(line)?;
+        if password_field_matches(&fields[0], host)
+            && password_field_matches(&fields[1], port)
+            && password_field_matches(&fields[2], database)
+            && password_field_matches(&fields[3], user)
+        {
+            return Ok(Some(fields[4].clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// Splits one `.pgpass` row while honoring backslash-escaped colons and slashes.
+fn split_password_line(line: &str) -> Result<Vec<String>, String> {
+    let mut fields = vec![String::new()];
+    let mut escaped = false;
+    for character in line.chars() {
+        if escaped {
+            if !matches!(character, ':' | '\\') {
+                fields.last_mut().unwrap().push('\\');
+            }
+            fields.last_mut().unwrap().push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == ':' && fields.len() < 5 {
+            fields.push(String::new());
+        } else {
+            fields.last_mut().unwrap().push(character);
+        }
+    }
+    if escaped {
+        fields.last_mut().unwrap().push('\\');
+    }
+    if fields.len() != 5 {
+        return Err("invalid PostgreSQL passfile entry: expected five colon-separated fields".to_string());
+    }
+    Ok(fields)
+}
+
+/// Applies `.pgpass` wildcard matching to one host, port, database, or user field.
+fn password_field_matches(pattern: &str, value: &str) -> bool {
+    pattern == "*" || pattern == value
+}
+
+/// Converts fully resolved options into the subset accepted by `postgres::Config`.
+fn parse_resolved_dsn(options: &BTreeMap<String, String>) -> Result<String, String> {
     // php-src's `pgsql_driver.c:1350` default connect timeout, in seconds.
     const DEFAULT_CONNECT_TIMEOUT_SECS: u32 = 30;
     const ACCEPTED_KEYS: &[&str] = &[
@@ -280,36 +680,44 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         "channel_binding",
         "load_balance_hosts",
     ];
-    let body = dsn
-        .strip_prefix("pgsql:")
-        .ok_or_else(|| "could not find driver (expected a pgsql: DSN)".to_string())?;
     let mut parts: Vec<String> = Vec::new();
     // F-PG-03: tracks whether the caller already bounded the connect (either
     // straight in the DSN or via `ATTR_TIMEOUT`, which the prelude folds into the
     // DSN under the very same key) — if so, that value wins over the 30 s default.
     let mut saw_connect_timeout = false;
-    for pair in body.split(';') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = pair.split_once('=') else {
-            return Err(format!("invalid PostgreSQL DSN option '{pair}': expected key=value"));
-        };
-        let key = key.trim();
-        let value = value.trim();
+    for (key, value) in options {
         // The TLS keys are consumed by `parse_tls`/`open`, not by the libpq
         // connection string: tokio-postgres's parser rejects `sslrootcert`/
         // `sslcert`/`sslkey` and the `verify-ca`/`verify-full` sslmode values, so
         // forwarding any of them would make `.parse::<Config>()` fail.
-        if matches!(key, "sslmode" | "sslrootcert" | "sslcert" | "sslkey") {
+        if matches!(
+            key.as_str(),
+            "sslmode"
+                | "sslrootcert"
+                | "sslcert"
+                | "sslkey"
+                | "sslcertmode"
+                | "sslcrl"
+                | "sslcrldir"
+                | "sslsni"
+                | "ssl_min_protocol_version"
+                | "ssl_max_protocol_version"
+        ) {
             continue;
         }
         if key == "client_encoding" {
             validate_client_encoding(value)?;
             continue;
         }
-        if !ACCEPTED_KEYS.contains(&key) {
+        if key == "gssencmode" {
+            if value == "disable" {
+                continue;
+            }
+            return Err(format!(
+                "unsupported PostgreSQL gssencmode '{value}': the native client has no GSSAPI transport"
+            ));
+        }
+        if !ACCEPTED_KEYS.contains(&key.as_str()) {
             return Err(format!(
                 "unsupported PostgreSQL DSN option '{key}': elephc's native client cannot honor its libpq semantics"
             ));
@@ -323,19 +731,14 @@ pub fn parse_dsn(dsn: &str) -> Result<String, String> {
         // Undo that encoding here — and only for these two keys, since every other
         // value is passed straight through byte-identical — before escaping it into
         // the libpq conninfo string below.
-        let value = if matches!(key, "user" | "password") {
-            percent_decode_credential(value)
-        } else {
-            value.to_string()
-        };
         // libpq connection strings quote values containing spaces/specials; a
         // simple single-quote wrap with backslash-escaping is sufficient here.
         let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
         parts.push(format!("{}='{}'", key, escaped));
     }
-    // The emptiness check reads the caller's OWN keys, before the default timeout
-    // is folded in: a DSN carrying nothing usable (`pgsql:`) must still be the
-    // error it always was, not a connection string made non-empty by our default.
+    // The resolver normally supplies libpq's OS-user default for a bare `pgsql:`.
+    // Keep this guard for environments with neither explicit/default user nor any
+    // other connection option; the timeout alone is not a usable identity.
     if parts.is_empty() {
         return Err("empty pgsql DSN".to_string());
     }
@@ -363,26 +766,21 @@ fn validate_client_encoding(value: &str) -> Result<(), String> {
 }
 
 /// Extracts the optional validated `client_encoding` DSN value.
+#[cfg(test)]
 fn client_encoding_from_dsn(dsn: &str) -> Result<Option<String>, String> {
-    let Some(body) = dsn.strip_prefix("pgsql:") else {
+    let options = resolve_dsn_options(dsn)?;
+    client_encoding_from_options(&options)
+}
+
+/// Extracts and validates `client_encoding` from already resolved options.
+fn client_encoding_from_options(
+    options: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    let Some(value) = options.get("client_encoding") else {
         return Ok(None);
     };
-    let mut encoding = None;
-    for pair in body.split(';') {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "client_encoding" {
-            let value = value.trim();
-            validate_client_encoding(value)?;
-            encoding = Some(value.to_string());
-        }
-    }
-    Ok(encoding)
+    validate_client_encoding(value)?;
+    Ok(Some(value.clone()))
 }
 
 /// Percent-decodes a `user=`/`password=` DSN value (F-CORE-02). The prelude
@@ -426,7 +824,6 @@ fn percent_decode_credential(raw: &str) -> String {
 /// fields are only read when the `tls` feature is compiled in; a
 /// `--no-default-features` build still parses them (so the DSN is accepted) but
 /// leaves them unused.
-#[derive(Default)]
 #[cfg_attr(not(feature = "tls"), allow(dead_code))]
 struct PgTls {
     /// Lowercased `sslmode` value; empty when the DSN omits it (libpq and
@@ -439,30 +836,132 @@ struct PgTls {
     client_cert: Option<String>,
     /// `sslkey`: the client private-key PEM for mutual TLS.
     client_key: Option<String>,
+    /// libpq's policy for presenting a client certificate (`allow|disable|require`).
+    client_cert_mode: String,
+    /// PEM certificate-revocation-list file.
+    crl_file: Option<String>,
+    /// Directory whose PEM CRLs are combined for rustls verification.
+    crl_directory: Option<String>,
+    /// Whether the TLS ClientHello carries the host name (libpq `sslsni`).
+    server_name_indication: bool,
+    /// Lowest TLS protocol version accepted by libpq-style configuration.
+    min_protocol_version: Option<String>,
+    /// Highest TLS protocol version accepted by libpq-style configuration.
+    max_protocol_version: Option<String>,
+}
+
+impl Default for PgTls {
+    /// Builds libpq-compatible TLS defaults (`sslmode=prefer`, SNI enabled).
+    fn default() -> Self {
+        Self {
+            mode: String::new(),
+            root_cert: None,
+            client_cert: None,
+            client_key: None,
+            client_cert_mode: "allow".to_string(),
+            crl_file: None,
+            crl_directory: None,
+            server_name_indication: true,
+            min_protocol_version: None,
+            max_protocol_version: None,
+        }
+    }
 }
 
 /// Extracts the TLS parameters from a `pgsql:` DSN (the keys [`parse_dsn`]
 /// deliberately drops). Unknown keys are ignored; a DSN without the `pgsql:`
 /// prefix yields the default (unset) parameters.
-fn parse_tls(dsn: &str) -> PgTls {
+#[cfg(test)]
+fn parse_tls(dsn: &str) -> Result<PgTls, String> {
+    let options = resolve_dsn_options(dsn)?;
+    parse_tls_options(&options)
+}
+
+/// Extracts and validates TLS settings from fully resolved connection options.
+fn parse_tls_options(options: &BTreeMap<String, String>) -> Result<PgTls, String> {
     let mut tls = PgTls::default();
-    let Some(body) = dsn.strip_prefix("pgsql:") else {
-        return tls;
-    };
-    for pair in body.split(';') {
-        let Some((key, value)) = pair.trim().split_once('=') else {
-            continue;
-        };
-        let value = value.trim().to_string();
-        match key.trim() {
-            "sslmode" => tls.mode = value.to_ascii_lowercase(),
-            "sslrootcert" => tls.root_cert = Some(value),
-            "sslcert" => tls.client_cert = Some(value),
-            "sslkey" => tls.client_key = Some(value),
-            _ => {}
-        }
+    if let Some(value) = options.get("sslmode") {
+        tls.mode = value.to_ascii_lowercase();
     }
-    tls
+    if !matches!(
+        tls.mode.as_str(),
+        "" | "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
+    ) {
+        return Err(format!("invalid PostgreSQL sslmode '{}'", tls.mode));
+    }
+    tls.root_cert = options.get("sslrootcert").cloned();
+    tls.client_cert = options.get("sslcert").cloned();
+    tls.client_key = options.get("sslkey").cloned();
+    tls.crl_file = options.get("sslcrl").cloned();
+    tls.crl_directory = options.get("sslcrldir").cloned();
+    if let Some(value) = options.get("sslcertmode") {
+        tls.client_cert_mode = value.to_ascii_lowercase();
+    }
+    if !matches!(tls.client_cert_mode.as_str(), "allow" | "disable" | "require") {
+        return Err(format!(
+            "invalid PostgreSQL sslcertmode '{}'",
+            tls.client_cert_mode
+        ));
+    }
+    if tls.client_cert_mode == "require"
+        && (tls.client_cert.is_none() || tls.client_key.is_none())
+    {
+        return Err("PostgreSQL sslcertmode=require needs both sslcert and sslkey".to_string());
+    }
+    if tls.client_cert_mode != "disable"
+        && (tls.client_cert.is_some() != tls.client_key.is_some())
+    {
+        return Err("PostgreSQL client TLS authentication needs both sslcert and sslkey".to_string());
+    }
+    if let Some(value) = options.get("sslsni") {
+        tls.server_name_indication = match value.as_str() {
+            "1" => true,
+            "0" => false,
+            _ => {
+                return Err(format!(
+                    "invalid PostgreSQL sslsni value '{value}': expected 0 or 1"
+                ))
+            }
+        };
+    }
+    tls.min_protocol_version = options.get("ssl_min_protocol_version").cloned();
+    tls.max_protocol_version = options.get("ssl_max_protocol_version").cloned();
+    validate_tls_protocol_range(&tls)?;
+    Ok(tls)
+}
+
+/// Validates libpq TLS protocol bounds against rustls's TLS 1.2/1.3 support.
+fn validate_tls_protocol_range(tls: &PgTls) -> Result<(), String> {
+    let min = tls
+        .min_protocol_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(tls_protocol_rank)
+        .transpose()?;
+    let max = tls
+        .max_protocol_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(tls_protocol_rank)
+        .transpose()?;
+    if matches!(min, Some(0 | 1)) || matches!(max, Some(0 | 1)) {
+        return Err("PostgreSQL TLS 1.0/1.1 cannot be honored by the rustls native client".to_string());
+    }
+    if matches!((min, max), (Some(min), Some(max)) if min > max) {
+        return Err("PostgreSQL ssl_min_protocol_version exceeds ssl_max_protocol_version".to_string());
+    }
+    Ok(())
+}
+
+/// Maps a libpq TLS protocol spelling to an ordered version rank.
+fn tls_protocol_rank(value: &str) -> Result<u8, String> {
+    match value.to_ascii_uppercase().as_str() {
+        "TLSV1" | "TLSV1.0" => Ok(0),
+        "TLSV1.1" => Ok(1),
+        "TLSV1.2" => Ok(2),
+        "TLSV1.3" => Ok(3),
+        _ => Err(format!("invalid PostgreSQL TLS protocol version '{value}'")),
+    }
 }
 
 /// Applies the DSN's `sslmode` to `config` and opens the connection, using rustls
@@ -526,15 +1025,41 @@ fn build_tls_connector(tls: &PgTls) -> Result<tokio_postgres_rustls::MakeRustlsC
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
 
-    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
+    let min_rank = tls
+        .min_protocol_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(tls_protocol_rank)
+        .transpose()?
+        .unwrap_or(2);
+    let max_rank = tls
+        .max_protocol_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(tls_protocol_rank)
+        .transpose()?
+        .unwrap_or(3);
+    let mut protocol_versions: Vec<&'static rustls::SupportedProtocolVersion> = Vec::new();
+    if min_rank <= 3 && max_rank >= 3 {
+        protocol_versions.push(&rustls::version::TLS13);
+    }
+    if min_rank <= 2 && max_rank >= 2 {
+        protocol_versions.push(&rustls::version::TLS12);
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier_roots = Arc::new(roots.clone());
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+    .with_protocol_versions(&protocol_versions)
     .map_err(|e| e.to_string())?
     .with_root_certificates(roots);
 
-    let config = match (&tls.client_cert, &tls.client_key) {
-        (Some(cert), Some(key)) => {
+    let mut config = match (
+        tls.client_cert_mode.as_str(),
+        &tls.client_cert,
+        &tls.client_key,
+    ) {
+        ("disable", _, _) => builder.with_no_client_auth(),
+        (_, Some(cert), Some(key)) => {
             let chain = load_certs(cert, "sslcert")?;
             let der = load_private_key(key)?;
             builder
@@ -543,7 +1068,63 @@ fn build_tls_connector(tls: &PgTls) -> Result<tokio_postgres_rustls::MakeRustlsC
         }
         _ => builder.with_no_client_auth(),
     };
+    config.enable_sni = tls.server_name_indication;
+    let crls = load_crls(tls)?;
+    if !crls.is_empty() {
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            verifier_roots,
+            provider,
+        )
+        .with_crls(crls)
+        .build()
+        .map_err(|error| format!("PostgreSQL TLS CRL configuration: {error}"))?;
+        config
+            .dangerous()
+            .set_certificate_verifier(verifier);
+    }
     Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+/// Loads CRLs from `sslcrl` and every regular file/symlink in `sslcrldir`.
+#[cfg(feature = "tls")]
+fn load_crls(
+    tls: &PgTls,
+) -> Result<Vec<rustls::pki_types::CertificateRevocationListDer<'static>>, String> {
+    let requested = tls.crl_file.is_some() || tls.crl_directory.is_some();
+    let mut paths = Vec::new();
+    if let Some(path) = &tls.crl_file {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(directory) = &tls.crl_directory {
+        let mut entries = fs::read_dir(directory)
+            .map_err(|error| format!("sslcrldir {directory}: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("sslcrldir {directory}: {error}"))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let metadata = entry
+                .metadata()
+                .map_err(|error| format!("sslcrldir '{}': {error}", entry.path().display()))?;
+            if metadata.is_file() {
+                paths.push(entry.path());
+            }
+        }
+    }
+    let mut output = Vec::new();
+    for path in paths {
+        let pem = fs::read(&path)
+            .map_err(|error| format!("PostgreSQL CRL '{}': {error}", path.display()))?;
+        let mut reader = &pem[..];
+        for crl in rustls_pemfile::crls(&mut reader) {
+            output.push(
+                crl.map_err(|error| format!("PostgreSQL CRL '{}': {error}", path.display()))?,
+            );
+        }
+    }
+    if requested && output.is_empty() {
+        return Err("PostgreSQL TLS CRL configuration contains no PEM CRLs".to_string());
+    }
+    Ok(output)
 }
 
 /// Reads a PEM file into a chain of DER certificates. `label` names the DSN key
@@ -955,6 +1536,56 @@ fn pg_sqlstate(e: &postgres::Error) -> String {
         .unwrap_or_else(|| "HY000".to_string())
 }
 
+/// Owns a PostgreSQL client while iterating a native query one requested row at
+/// a time, returning the same client when the stream ends or is closed.
+fn run_pg_stream_worker(
+    mut client: Client,
+    statement: Statement,
+    params: Vec<Param>,
+    commands: mpsc::Receiver<PgStreamCommand>,
+    responses: mpsc::Sender<PgStreamResponse>,
+) {
+    use postgres::fallible_iterator::FallibleIterator;
+
+    let result: Result<(), postgres::Error> = (|| {
+        let refs: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|param| param as &(dyn ToSql + Sync))
+            .collect();
+        let mut rows = client.query_raw(&statement, refs)?;
+        if responses.send(PgStreamResponse::Started).is_err() {
+            return Ok(());
+        }
+        while let Ok(command) = commands.recv() {
+            match command {
+                PgStreamCommand::Next => match rows.next()? {
+                    Some(row) => {
+                        if responses
+                            .send(PgStreamResponse::Row(decode_row(&row)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                PgStreamCommand::Close => break,
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            let _ = responses.send(PgStreamResponse::Finished(client));
+        }
+        Err(error) => {
+            let sqlstate = pg_sqlstate(&error);
+            let message = error.to_string();
+            let _ = responses.send(PgStreamResponse::Failed(client, sqlstate, message));
+        }
+    }
+}
+
 /// The "native" (driver-specific) error code this driver reports as PDO's
 /// `errorInfo()[1]` for every PostgreSQL failure — a deliberate, documented
 /// divergence from php-src rather than an oversight (D-07).
@@ -990,9 +1621,10 @@ impl PgConn {
     /// installed that buffers every server NOTICE into `notices` for
     /// `Pdo\Pgsql::setNoticeCallback()`.
     pub fn open(dsn: &str) -> Result<PgConn, String> {
-        let conn_str = parse_dsn(dsn)?;
-        let client_encoding = client_encoding_from_dsn(dsn)?;
-        let tls = parse_tls(dsn);
+        let options = resolve_dsn_options(dsn)?;
+        let conn_str = parse_resolved_dsn(&options)?;
+        let client_encoding = client_encoding_from_options(&options)?;
+        let tls = parse_tls_options(&options)?;
         let mut config: Config = conn_str.parse().map_err(|e: postgres::Error| e.to_string())?;
         let notices: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let sink = Arc::clone(&notices);
@@ -1013,7 +1645,7 @@ impl PgConn {
                 .map_err(|error| error.to_string())?;
         }
         Ok(PgConn {
-            client,
+            client: PgClientSlot(Some(client)),
             changes: 0,
             errmsg: String::new(),
             errcode: 0,
@@ -1021,6 +1653,8 @@ impl PgConn {
             notices,
             prefetch: true,
             query_generation: 0,
+            active_stream: None,
+            next_stream_id: 0,
             in_transaction: false,
         })
     }
@@ -1034,8 +1668,143 @@ impl PgConn {
     /// Starts a new query generation and returns the generation an unbuffered
     /// statement must retain to remain readable.
     fn begin_query(&mut self) -> u64 {
+        self.finish_active_stream();
         self.query_generation = self.query_generation.wrapping_add(1).max(1);
         self.query_generation
+    }
+
+    /// Stops and drains ownership from the active worker before another command.
+    fn finish_active_stream(&mut self) {
+        let Some(mut active) = self.active_stream.take() else {
+            return;
+        };
+        let _ = active.commands.send(PgStreamCommand::Close);
+        while let Ok(response) = active.responses.recv() {
+            match response {
+                PgStreamResponse::Finished(client) => {
+                    self.client.0 = Some(client);
+                    break;
+                }
+                PgStreamResponse::Failed(client, sqlstate, message) => {
+                    self.client.0 = Some(client);
+                    self.sqlstate = sqlstate;
+                    self.errmsg = message;
+                    self.errcode = PG_NATIVE_ERRCODE;
+                    break;
+                }
+                PgStreamResponse::Started | PgStreamResponse::Row(_) => {}
+            }
+        }
+        if let Some(worker) = active.worker.take() {
+            let _ = worker.join();
+        }
+    }
+
+    /// Finishes the active worker only when it belongs to `id`.
+    fn finish_stream(&mut self, id: u64) {
+        if self.active_stream.as_ref().map(|stream| stream.id) == Some(id) {
+            self.finish_active_stream();
+        }
+    }
+
+    /// Starts a demand-driven native query worker and returns its stream identity.
+    fn start_stream(&mut self, statement: Statement, params: Vec<Param>) -> Result<u64, i64> {
+        self.finish_active_stream();
+        let Some(client) = self.client.0.take() else {
+            self.errcode = PG_NATIVE_ERRCODE;
+            self.sqlstate = "HY000".to_string();
+            self.errmsg = "PostgreSQL connection is busy with an unbuffered query".to_string();
+            return Err(-1);
+        };
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_pg_stream_worker(client, statement, params, command_rx, response_tx);
+        });
+        self.next_stream_id = self.next_stream_id.wrapping_add(1).max(1);
+        let id = self.next_stream_id;
+        let mut active = PgActiveStream {
+            id,
+            commands: command_tx,
+            responses: response_rx,
+            worker: Some(worker),
+        };
+        match active.responses.recv() {
+            Ok(PgStreamResponse::Started) => {
+                self.active_stream = Some(active);
+                Ok(id)
+            }
+            Ok(PgStreamResponse::Failed(client, sqlstate, message)) => {
+                self.client.0 = Some(client);
+                self.sqlstate = sqlstate;
+                self.errmsg = message;
+                self.errcode = PG_NATIVE_ERRCODE;
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(PgStreamResponse::Finished(client)) => {
+                self.client.0 = Some(client);
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(PgStreamResponse::Row(_)) | Err(_) => {
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                self.errcode = PG_NATIVE_ERRCODE;
+                self.sqlstate = "HY000".to_string();
+                self.errmsg = "PostgreSQL unbuffered query worker terminated unexpectedly".to_string();
+                Err(-1)
+            }
+        }
+    }
+
+    /// Requests one row from the active stream, recovering the client at EOF.
+    fn next_stream_row(&mut self, id: u64) -> Result<Option<Vec<Cell>>, i64> {
+        let Some(active) = self.active_stream.as_mut() else {
+            return Ok(None);
+        };
+        if active.id != id {
+            return Ok(None);
+        }
+        if active.commands.send(PgStreamCommand::Next).is_err() {
+            self.sqlstate = "HY000".to_string();
+            self.errmsg = "PostgreSQL row stream is unavailable".to_string();
+            self.errcode = PG_NATIVE_ERRCODE;
+            return Err(-1);
+        }
+        match active.responses.recv() {
+            Ok(PgStreamResponse::Row(row)) => Ok(Some(row)),
+            Ok(PgStreamResponse::Finished(client)) => {
+                self.client.0 = Some(client);
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Ok(None)
+            }
+            Ok(PgStreamResponse::Failed(client, sqlstate, message)) => {
+                self.client.0 = Some(client);
+                self.sqlstate = sqlstate;
+                self.errmsg = message;
+                self.errcode = PG_NATIVE_ERRCODE;
+                let mut active = self.active_stream.take().expect("active stream disappeared");
+                if let Some(worker) = active.worker.take() {
+                    let _ = worker.join();
+                }
+                Err(-1)
+            }
+            Ok(PgStreamResponse::Started) | Err(_) => {
+                self.sqlstate = "HY000".to_string();
+                self.errmsg = "PostgreSQL row stream returned an invalid response".to_string();
+                self.errcode = PG_NATIVE_ERRCODE;
+                Err(-1)
+            }
+        }
     }
 
     /// Removes and returns the oldest buffered server NOTICE message text, or an empty
@@ -1053,6 +1822,7 @@ impl PgConn {
     /// Applies PHP 8.6's persistent-disconnect cleanup. PostgreSQL requires
     /// `DISCARD ALL` outside a transaction, so a standalone rollback is sent first.
     pub fn discard_all(&mut self) {
+        self.begin_query();
         let _ = self.client.batch_execute("ROLLBACK");
         if let Err(error) = self.client.batch_execute("DISCARD ALL") {
             self.fail(error);
@@ -1158,6 +1928,7 @@ impl PgConn {
     /// Returns the last inserted id: `currval('name')` when a sequence name is
     /// given, else `lastval()` for the session. Returns `0` on error.
     pub fn last_insert_id(&mut self, name: Option<&str>) -> i64 {
+        self.begin_query();
         let sql = match name {
             Some(n) if !n.is_empty() => {
                 format!("SELECT currval('{}')", n.replace('\'', "''"))
@@ -1184,6 +1955,7 @@ impl PgConn {
     /// prelude reads `elephc_pdo_sqlstate`/`elephc_pdo_errmsg` right after this
     /// call to decide between surfacing that error and a generic `IM001`.
     pub fn last_insert_id_text(&mut self, name: Option<&str>) -> String {
+        self.begin_query();
         let sql = match name {
             Some(n) if !n.is_empty() => {
                 format!("SELECT currval('{}')::text", n.replace('\'', "''"))
@@ -1202,6 +1974,7 @@ impl PgConn {
     /// Returns the PostgreSQL server's reported version string (`SHOW
     /// server_version`), or an empty string if the query fails.
     pub fn server_version(&mut self) -> String {
+        self.begin_query();
         match self.client.query_one("SHOW server_version", &[]) {
             Ok(row) => row.try_get::<_, String>(0).unwrap_or_default(),
             Err(_) => String::new(),
@@ -1218,16 +1991,27 @@ impl PgConn {
     /// `PQstatus()` strings. A connected synchronous client is never exposed in
     /// one of libpq's asynchronous handshake states.
     pub fn connection_status(&self) -> String {
-        if self.client.is_closed() {
+        if self.is_closed() {
             "Bad connection.".to_string()
         } else {
             "Connection OK; waiting to send.".to_string()
         }
     }
 
+    /// Reports whether the underlying client is closed; an active stream owns a
+    /// live client temporarily and therefore still counts as connected.
+    pub fn is_closed(&self) -> bool {
+        self.client
+            .0
+            .as_ref()
+            .map(Client::is_closed)
+            .unwrap_or(false)
+    }
+
     /// Builds php-src's PostgreSQL server-information string from live backend
     /// and session parameters.
     pub fn server_info(&mut self) -> String {
+        self.begin_query();
         let row = match self.client.query_one(
             "SELECT pg_backend_pid(), current_setting('client_encoding'), current_setting('is_superuser'), current_setting('session_authorization'), current_setting('DateStyle')",
             &[],
@@ -1249,6 +2033,7 @@ impl PgConn {
     /// (`SELECT pg_backend_pid()`), or 0 if the query fails. Backs
     /// `Pdo\Pgsql::getPid()`.
     pub fn backend_pid(&mut self) -> i64 {
+        self.begin_query();
         match self.client.query_one("SELECT pg_backend_pid()", &[]) {
             Ok(row) => row.try_get::<_, i32>(0).map(i64::from).unwrap_or(0),
             Err(_) => 0,
@@ -1259,6 +2044,7 @@ impl PgConn {
     /// (`SELECT lo_create(0)`), or an empty string on error. Backs
     /// `Pdo\Pgsql::lobCreate()`.
     pub fn lob_create(&mut self) -> String {
+        self.begin_query();
         match self.client.query_one("SELECT lo_create(0)", &[]) {
             Ok(row) => row
                 .try_get::<_, u32>(0)
@@ -1272,6 +2058,7 @@ impl PgConn {
     /// 1 on success and 0 on a non-numeric OID or a server error. Backs
     /// `Pdo\Pgsql::lobUnlink()`.
     pub fn lob_unlink(&mut self, oid: &str) -> i64 {
+        self.begin_query();
         let Ok(oid_num) = oid.parse::<u32>() else {
             return 0;
         };
@@ -1288,9 +2075,10 @@ impl PgConn {
     /// Reads a large object whole (`SELECT lo_get(<oid>)`), returning its raw bytes,
     /// or `None` on a non-numeric OID or a server error (e.g. no such object). Unlike
     /// the descriptor-based `lo_open`/`lo_read`/`lo_close` API, `lo_get` runs
-    /// standalone (no explicit transaction). Backs the initial snapshot used by
-    /// `Pdo\Pgsql::lobOpen()`'s seekable stream wrapper.
+    /// standalone (no explicit transaction). Retained for the pre-v45 bridge ABI;
+    /// `Pdo\Pgsql::lobOpen()` now uses bounded reads.
     pub fn lob_get(&mut self, oid: &str) -> Option<Vec<u8>> {
+        self.begin_query();
         let oid_num = oid.parse::<u32>().ok()?;
         // oid_num is a validated integer, so inlining it is injection-safe.
         match self
@@ -1312,11 +2100,10 @@ impl PgConn {
         }
     }
 
-    /// Writes the complete locally materialized large-object value back at offset
-    /// zero with PostgreSQL's `lo_put`. The PDO prelude only exposes this operation
-    /// from a writable `lobOpen()` stream while its owning PDO transaction is live.
-    /// `lo_put` preserves PostgreSQL's native ability to extend a large object.
+    /// Writes a complete large-object value at offset zero for pre-v45 ABI callers.
+    /// The current stream wrapper uses [`Self::lob_write_at`] for bounded patches.
     pub fn lob_put(&mut self, oid: &str, data: &[u8]) -> i64 {
+        self.begin_query();
         let Ok(oid_num) = oid.parse::<u32>() else {
             return 0;
         };
@@ -1336,11 +2123,83 @@ impl PgConn {
         }
     }
 
+    /// Returns the current byte length of a PostgreSQL large object without
+    /// transferring its contents to the client, or `None` for an invalid/missing OID.
+    pub fn lob_size(&mut self, oid: &str) -> Option<i64> {
+        self.begin_query();
+        let oid_num = oid.parse::<u32>().ok()?;
+        let sql = "SELECT COALESCE(MAX(l.pageno::bigint * 2048 + octet_length(l.data)), 0)::bigint FROM pg_catalog.pg_largeobject_metadata m LEFT JOIN pg_catalog.pg_largeobject l ON l.loid = m.oid WHERE m.oid = $1 GROUP BY m.oid";
+        match self.client.query_opt(sql, &[&oid_num]) {
+            Ok(Some(row)) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                row.try_get::<_, i64>(0).ok()
+            }
+            Ok(None) => None,
+            Err(error) => {
+                self.fail(error);
+                None
+            }
+        }
+    }
+
+    /// Reads at most `length` bytes from a PostgreSQL large object at `offset`.
+    /// The server returns only the requested slice, avoiding a whole-object snapshot.
+    pub fn lob_read_at(&mut self, oid: &str, offset: i64, length: i64) -> Option<Vec<u8>> {
+        self.begin_query();
+        let oid_num = oid.parse::<u32>().ok()?;
+        let length = i32::try_from(length).ok()?;
+        if offset < 0 || length < 0 {
+            return None;
+        }
+        match self
+            .client
+            .query_one("SELECT lo_get($1, $2, $3)", &[&oid_num, &offset, &length])
+        {
+            Ok(row) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                row.try_get::<_, Vec<u8>>(0).ok()
+            }
+            Err(error) => {
+                self.fail(error);
+                None
+            }
+        }
+    }
+
+    /// Writes one byte slice to a PostgreSQL large object at `offset`, preserving
+    /// the server's native sparse-extension and zero-fill behavior.
+    pub fn lob_write_at(&mut self, oid: &str, offset: i64, data: &[u8]) -> i64 {
+        self.begin_query();
+        let Ok(oid_num) = oid.parse::<u32>() else {
+            return -1;
+        };
+        if offset < 0 {
+            return -1;
+        }
+        match self
+            .client
+            .query_one("SELECT lo_put($1, $2, $3)", &[&oid_num, &offset, &data])
+        {
+            Ok(_) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                data.len() as i64
+            }
+            Err(error) => {
+                self.fail(error);
+                -1
+            }
+        }
+    }
+
     /// Streams `data` into the server for a `COPY … FROM STDIN` statement (built by
     /// the prelude), returning the number of rows copied or -1 on error. Backs
     /// `Pdo\Pgsql::copyFromArray()` / `copyFromFile()`.
     pub fn copy_in(&mut self, copy_sql: &str, data: &[u8]) -> i64 {
         use std::io::Write;
+        self.begin_query();
         // Run the whole COPY in a closure so the writer's borrow of `self.client`
         // ends before the connection bookkeeping fields (or `fail`) are written.
         let result: Result<u64, postgres::Error> = (|| {
@@ -1372,6 +2231,7 @@ impl PgConn {
     /// stub's `array|false` contract for `copyToArray()`.
     pub fn copy_out(&mut self, copy_sql: &str) -> String {
         use std::io::Read;
+        self.begin_query();
         // Run the COPY in a closure so the reader's borrow of `self.client` ends
         // before the connection bookkeeping fields (or `fail`) are written.
         let result: Result<Vec<u8>, postgres::Error> = (|| {
@@ -1403,6 +2263,7 @@ impl PgConn {
     pub fn get_notify(&mut self, timeout_ms: i64) -> String {
         use postgres::fallible_iterator::FallibleIterator;
         use std::time::Duration;
+        self.begin_query();
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let mut notifications = self.client.notifications();
         let next = if timeout.is_zero() {
@@ -1423,6 +2284,7 @@ impl PgConn {
     /// combining the two styles in one statement, and the server has no notion
     /// of "named" placeholders to catch this itself.
     pub fn prepare(&mut self, sql: &str, emulated: bool) -> Result<PgStmt, String> {
+        self.begin_query();
         let (translated, named_map, mixed, markers) = translate_placeholders_with_markers(sql);
         if mixed {
             return Err(self.fail_local(
@@ -1455,6 +2317,7 @@ impl PgConn {
                 executed: false,
                 buffered: self.prefetch,
                 query_generation: 0,
+                stream_id: None,
             });
         }
         match self.client.prepare(&translated) {
@@ -1502,6 +2365,7 @@ impl PgConn {
                     executed: false,
                     buffered: self.prefetch,
                     query_generation: 0,
+                    stream_id: None,
                 })
             }
             Err(e) => {
@@ -1561,10 +2425,14 @@ impl PgStmt {
     }
 
     /// Resets the cursor and execution state, keeping the bound values.
-    pub fn reset(&mut self) -> i64 {
+    pub fn reset(&mut self, conn: &mut PgConn) -> i64 {
+        if let Some(stream_id) = self.stream_id {
+            conn.finish_stream(stream_id);
+        }
         self.cursor = -1;
         self.executed = false;
         self.rows.clear();
+        self.stream_id = None;
         1
     }
 
@@ -1577,8 +2445,8 @@ impl PgStmt {
         1
     }
 
-    /// Executes the query (once) and materializes the result set into decoded
-    /// cells. Sets `conn.changes` for non-result statements.
+    /// Executes the query once, buffering rows or starting a native demand stream.
+    /// Sets `conn.changes` for non-result statements.
     fn execute(&mut self, conn: &mut PgConn) -> Result<(), i64> {
         self.query_generation = conn.begin_query();
         if self.emulated_sql.is_some() {
@@ -1598,6 +2466,18 @@ impl PgStmt {
                 ty,
             })
             .collect();
+        if !self.buffered && !statement.columns().is_empty() {
+            let stream_id = conn.start_stream(statement.clone(), params)?;
+            self.rows.clear();
+            self.cursor = -1;
+            self.stream_id = Some(stream_id);
+            conn.changes = 0;
+            conn.errcode = 0;
+            conn.sqlstate = "00000".to_string();
+            self.executed = true;
+            conn.note_transaction_sql(&self.query_string);
+            return Ok(());
+        }
         let refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
 
@@ -1722,6 +2602,23 @@ impl PgStmt {
             if let Err(code) = self.execute(conn) {
                 return code;
             }
+        }
+        if let Some(stream_id) = self.stream_id {
+            return match conn.next_stream_row(stream_id) {
+                Ok(Some(row)) => {
+                    self.rows.clear();
+                    self.rows.push(row);
+                    self.cursor = 0;
+                    1
+                }
+                Ok(None) => {
+                    self.rows.clear();
+                    self.cursor = 0;
+                    self.stream_id = None;
+                    0
+                }
+                Err(code) => code,
+            };
         }
         self.cursor += 1;
         if (self.cursor as usize) < self.rows.len() {
@@ -2267,9 +3164,9 @@ mod tests {
             client_encoding_from_dsn(dsn).expect("encoding parses"),
             Some("UTF8".to_string())
         );
-        let error = parse_dsn("pgsql:host=db.example.com;sslcrl=/x")
-            .expect_err("unsupported CRL semantics must fail");
-        assert!(error.contains("unsupported PostgreSQL DSN option 'sslcrl'"));
+        let error = parse_dsn("pgsql:host=db.example.com;replication=database")
+            .expect_err("unsupported replication semantics must fail");
+        assert!(error.contains("unsupported PostgreSQL DSN option 'replication'"));
     }
 
     /// Malformed options and unsafe client-encoding values fail during DSN parsing.
@@ -2308,21 +3205,121 @@ mod tests {
     #[test]
     fn parse_tls_captures_mode_and_paths() {
         let tls = parse_tls(
-            "pgsql:host=h;sslmode=VERIFY-FULL;sslrootcert=/ca.pem;sslcert=/c.pem;sslkey=/k.pem",
-        );
+            "pgsql:host=h;sslmode=VERIFY-FULL;sslrootcert=/ca.pem;sslcert=/c.pem;sslkey=/k.pem;sslcrl=/root.crl;sslcrldir=/crls",
+        )
+        .expect("TLS options parse");
         assert_eq!(tls.mode, "verify-full");
         assert_eq!(tls.root_cert.as_deref(), Some("/ca.pem"));
         assert_eq!(tls.client_cert.as_deref(), Some("/c.pem"));
         assert_eq!(tls.client_key.as_deref(), Some("/k.pem"));
+        assert_eq!(tls.crl_file.as_deref(), Some("/root.crl"));
+        assert_eq!(tls.crl_directory.as_deref(), Some("/crls"));
+        assert!(tls.server_name_indication);
     }
 
     /// A DSN without TLS keys yields the unset defaults (libpq/tokio-postgres both
     /// default to `prefer`, represented here by an empty mode).
     #[test]
     fn parse_tls_defaults_when_absent() {
-        let tls = parse_tls("pgsql:host=h;dbname=d");
+        let tls = parse_tls("pgsql:host=h;dbname=d").expect("TLS defaults parse");
         assert!(tls.mode.is_empty());
         assert!(tls.root_cert.is_none());
+        assert!(tls.server_name_indication);
+    }
+
+    /// A named libpq service contributes defaults while explicit DSN values win,
+    /// including legacy `fallback_application_name` normalization.
+    #[test]
+    fn parse_dsn_resolves_service_file_with_explicit_precedence() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-pdo-pg-service-test-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).expect("create service fixture directory");
+        let service_file = dir.join("pg_service.conf");
+        fs::write(
+            &service_file,
+            "[other]\nhost=ignored\n[app]\nhost=service-host\nport=5433\ndbname=service-db\nfallback_application_name=elephc\n",
+        )
+        .expect("write service fixture");
+
+        let dsn = format!(
+            "pgsql:service=app;servicefile={};host=explicit-host;user=alice",
+            service_file.display()
+        );
+        let conn_str = parse_dsn(&dsn).expect("service DSN resolves");
+        assert!(conn_str.contains("host='explicit-host'"));
+        assert!(conn_str.contains("port='5433'"));
+        assert!(conn_str.contains("dbname='service-db'"));
+        assert!(conn_str.contains("application_name='elephc'"));
+        assert!(!conn_str.contains("service="));
+
+        fs::remove_dir_all(dir).expect("remove service fixture directory");
+    }
+
+    /// A secure `.pgpass` supplies the first wildcard-matching password and
+    /// correctly unescapes colons and backslashes in its password field.
+    #[test]
+    fn parse_dsn_resolves_password_file() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-pdo-pg-passfile-test-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).expect("create passfile fixture directory");
+        let passfile = dir.join(".pgpass");
+        fs::write(
+            &passfile,
+            "wrong:5432:app:alice:nope\nlocalhost:5432:app:alice:s3cr\\:et\\\\tail\n",
+        )
+        .expect("write passfile fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&passfile, fs::Permissions::from_mode(0o600))
+                .expect("secure passfile permissions");
+        }
+
+        let dsn = format!(
+            "pgsql:host=localhost;port=5432;dbname=app;user=alice;passfile={}",
+            passfile.display()
+        );
+        let conn_str = parse_dsn(&dsn).expect("passfile DSN resolves");
+        assert!(conn_str.contains("password='s3cr:et\\\\tail'"));
+        assert!(!conn_str.contains("passfile"));
+
+        fs::remove_dir_all(dir).expect("remove passfile fixture directory");
+    }
+
+    /// Legacy libpq TLS aliases and modern protocol/SNI controls are translated
+    /// into the rustls configuration without leaking into `postgres::Config`.
+    #[test]
+    fn parse_tls_honors_legacy_alias_sni_and_protocol_bounds() {
+        let tls = parse_tls(
+            "pgsql:host=h;requiressl=1;sslcompression=0;sslcertmode=disable;sslsni=0;ssl_min_protocol_version=TLSv1.2;ssl_max_protocol_version=TLSv1.3",
+        )
+        .expect("extended TLS options parse");
+        assert_eq!(tls.mode, "require");
+        assert!(!tls.server_name_indication);
+        assert_eq!(tls.client_cert_mode, "disable");
+        assert_eq!(tls.min_protocol_version.as_deref(), Some("TLSv1.2"));
+        assert_eq!(tls.max_protocol_version.as_deref(), Some("TLSv1.3"));
+        assert!(parse_dsn(
+            "pgsql:host=h;ssl_min_protocol_version=TLSv1.3;ssl_max_protocol_version=TLSv1.2"
+        )
+        .is_ok());
+        assert!(parse_tls(
+            "pgsql:host=h;ssl_min_protocol_version=TLSv1.3;ssl_max_protocol_version=TLSv1.2"
+        )
+        .is_err());
+        assert!(parse_tls("pgsql:host=h;sslcertmode=require").is_err());
     }
 
     /// Building the rustls connector with the bundled webpki roots exercises the
@@ -2351,6 +3348,21 @@ mod tests {
         match build_tls_connector(&tls) {
             Ok(_) => panic!("expected an error for a missing sslrootcert file"),
             Err(err) => assert!(err.contains("sslrootcert"), "unexpected error: {err}"),
+        }
+    }
+
+    /// An explicitly configured missing CRL path fails during connector creation.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn build_tls_connector_missing_crl_errors() {
+        let tls = PgTls {
+            mode: "verify-full".to_string(),
+            crl_file: Some("/nonexistent/elephc-does-not-exist.crl".to_string()),
+            ..PgTls::default()
+        };
+        match build_tls_connector(&tls) {
+            Ok(_) => panic!("expected an error for a missing sslcrl file"),
+            Err(error) => assert!(error.contains("CRL"), "unexpected error: {error}"),
         }
     }
 }

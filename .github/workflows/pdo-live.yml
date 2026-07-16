@@ -167,6 +167,9 @@ jobs:
             mysql -uroot -proot -e "ALTER INSTANCE RELOAD TLS;"
           docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
           echo "ELEPHC_MY_TLS_CA=$RUNNER_TEMP/mysql-ca.pem" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/mysql-ca-dir"
+          cp "$RUNNER_TEMP/mysql-ca.pem" "$RUNNER_TEMP/mysql-ca-dir/ca.pem"
+          echo "ELEPHC_MY_TLS_CAPATH=$RUNNER_TEMP/mysql-ca-dir" >> "$GITHUB_ENV"
 
           docker exec ${{ job.services.postgres.id }} sh -ec '
             openssl req -new -x509 -nodes -days 1 \
@@ -213,8 +216,8 @@ jobs:
         # The codegen runner links compiled PHP programs against libelephc_pdo.a and
         # will shell out to `cargo build -p elephc-pdo` itself if the archive is
         # missing; building it up front keeps that out of the (bounded-parallelism)
-        # test run. MySQL TLS is opt-in at the crate level, so this gate builds the
-        # feature-enabled archive used by both plaintext and encrypted programs.
+        # test run. MySQL TLS now ships through mysql 28's ring backend; spelling
+        # the feature here keeps the live job's intended TLS dependency explicit.
         run: cargo build -p elephc-pdo --features mysql-tls
 
       - name: Live bridge tests (in-crate, elephc-pdo)
@@ -235,5 +238,5 @@ jobs:
         # Every #[ignore] test under tests/codegen/pdo_mysql.rs, same parallelism
         # bound.
         # MySQL's generated CA is exported through ELEPHC_MY_TLS_CA and the bridge
-        # archive was built with mysql-tls, so this includes mysql_tls_round_trip.
+        # archive includes mysql-tls, so this covers both MySQL TLS round-trips.
         run: cargo test --test codegen_tests -- --ignored mysql --test-threads=4

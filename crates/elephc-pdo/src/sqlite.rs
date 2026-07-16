@@ -563,6 +563,153 @@ impl SqliteConn {
         }
     }
 
+    /// Returns the current byte size of an existing SQLite BLOB without copying
+    /// its contents. The incremental handle is opened read-only and closed before
+    /// returning, so callers retain no native resource between stream operations.
+    pub fn blob_size(
+        &self,
+        dbname: &str,
+        table: &str,
+        column: &str,
+        rowid: i64,
+    ) -> Result<i64, String> {
+        let c_db = CString::new(dbname).map_err(|_| "invalid database name".to_string())?;
+        let c_table = CString::new(table).map_err(|_| "invalid table name".to_string())?;
+        let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
+        unsafe {
+            let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
+            let rc = ffi::sqlite3_blob_open(
+                self.db,
+                c_db.as_ptr(),
+                c_table.as_ptr(),
+                c_col.as_ptr(),
+                rowid,
+                0,
+                &mut blob,
+            );
+            if rc != ffi::SQLITE_OK || blob.is_null() {
+                return Err(read_errmsg(self.db));
+            }
+            let size = ffi::sqlite3_blob_bytes(blob).max(0) as i64;
+            ffi::sqlite3_blob_close(blob);
+            Ok(size)
+        }
+    }
+
+    /// Reads at most `length` bytes from an existing SQLite BLOB at `offset`.
+    /// Reads are clipped at the cell's fixed end and never allocate more than the
+    /// requested slice; negative offsets or lengths are rejected.
+    pub fn blob_read_at(
+        &self,
+        dbname: &str,
+        table: &str,
+        column: &str,
+        rowid: i64,
+        offset: i64,
+        length: i64,
+    ) -> Result<Vec<u8>, String> {
+        if offset < 0 || length < 0 || offset > c_int::MAX as i64 {
+            return Err("invalid BLOB read range".to_string());
+        }
+        let c_db = CString::new(dbname).map_err(|_| "invalid database name".to_string())?;
+        let c_table = CString::new(table).map_err(|_| "invalid table name".to_string())?;
+        let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
+        unsafe {
+            let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
+            let rc = ffi::sqlite3_blob_open(
+                self.db,
+                c_db.as_ptr(),
+                c_table.as_ptr(),
+                c_col.as_ptr(),
+                rowid,
+                0,
+                &mut blob,
+            );
+            if rc != ffi::SQLITE_OK || blob.is_null() {
+                return Err(read_errmsg(self.db));
+            }
+            let size = ffi::sqlite3_blob_bytes(blob).max(0) as i64;
+            let available = size.saturating_sub(offset);
+            let read_len = length.min(available).min(c_int::MAX as i64) as usize;
+            let mut buf = vec![0u8; read_len];
+            let read_rc = if read_len == 0 {
+                ffi::SQLITE_OK
+            } else {
+                ffi::sqlite3_blob_read(
+                    blob,
+                    buf.as_mut_ptr() as *mut c_void,
+                    read_len as c_int,
+                    offset as c_int,
+                )
+            };
+            let err = (read_rc != ffi::SQLITE_OK).then(|| read_errmsg(self.db));
+            ffi::sqlite3_blob_close(blob);
+            match err {
+                Some(msg) => Err(msg),
+                None => Ok(buf),
+            }
+        }
+    }
+
+    /// Writes `data` into an existing fixed-size SQLite BLOB at `offset` and
+    /// returns the number of bytes written. SQLite cannot extend an incremental
+    /// BLOB, so any range crossing the current end is rejected before mutation.
+    pub fn blob_write_at(
+        &self,
+        dbname: &str,
+        table: &str,
+        column: &str,
+        rowid: i64,
+        offset: i64,
+        data: &[u8],
+    ) -> Result<i64, String> {
+        if offset < 0 || offset > c_int::MAX as i64 || data.len() > c_int::MAX as usize {
+            return Err("invalid BLOB write range".to_string());
+        }
+        let c_db = CString::new(dbname).map_err(|_| "invalid database name".to_string())?;
+        let c_table = CString::new(table).map_err(|_| "invalid table name".to_string())?;
+        let c_col = CString::new(column).map_err(|_| "invalid column name".to_string())?;
+        unsafe {
+            let mut blob: *mut ffi::sqlite3_blob = ptr::null_mut();
+            let rc = ffi::sqlite3_blob_open(
+                self.db,
+                c_db.as_ptr(),
+                c_table.as_ptr(),
+                c_col.as_ptr(),
+                rowid,
+                1,
+                &mut blob,
+            );
+            if rc != ffi::SQLITE_OK || blob.is_null() {
+                return Err(read_errmsg(self.db));
+            }
+            let size = ffi::sqlite3_blob_bytes(blob).max(0) as i64;
+            let end = offset
+                .checked_add(data.len() as i64)
+                .ok_or_else(|| "invalid BLOB write range".to_string())?;
+            if end > size {
+                ffi::sqlite3_blob_close(blob);
+                return Err("It is not possible to increase the size of a BLOB".to_string());
+            }
+            let write_rc = if data.is_empty() {
+                ffi::SQLITE_OK
+            } else {
+                ffi::sqlite3_blob_write(
+                    blob,
+                    data.as_ptr() as *const c_void,
+                    data.len() as c_int,
+                    offset as c_int,
+                )
+            };
+            let err = (write_rc != ffi::SQLITE_OK).then(|| read_errmsg(self.db));
+            ffi::sqlite3_blob_close(blob);
+            match err {
+                Some(msg) => Err(msg),
+                None => Ok(data.len() as i64),
+            }
+        }
+    }
+
     /// Registers a custom collation `name` backed by a compiled-PHP comparator
     /// (`Pdo\Sqlite::createCollation`). `descriptor` is the callable's 64-byte
     /// descriptor pointer and `adapter` the address of the codegen collation

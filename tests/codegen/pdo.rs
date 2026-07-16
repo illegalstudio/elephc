@@ -2548,11 +2548,10 @@ try {
     assert_eq!(out, "caught");
 }
 
-/// Pdo\Sqlite::openBlob reads a BLOB cell whole into a rewound php://memory stream
-/// (the read-whole resource shape). The fixture stores a 3-byte BLOB with an embedded
-/// NUL (`x'610062'` = "a\0b") directly through SQL so the read path is exercised
-/// independently of parameter binding, then asserts the streamed bytes match
-/// (NUL-preserving) and that opening a missing row returns false.
+/// Pdo\Sqlite::openBlob reads a BLOB cell through bounded incremental slices. The
+/// fixture stores a 3-byte BLOB with an embedded NUL (`x'610062'` = "a\0b") directly
+/// through SQL so the read path is exercised independently of parameter binding,
+/// then asserts the streamed bytes match and opening a missing row returns false.
 #[test]
 fn test_pdo_sqlite_open_blob() {
     let out = compile_and_run(
@@ -5420,11 +5419,9 @@ echo "[" . $row["txt"] . "]:" . strlen($row["txt"])
     assert_eq!(out, "[]:0:[]:0");
 }
 
-/// F-QUAL-01, `blobStream()` half: `Pdo\Sqlite::openBlob()` (and `Pdo\Pgsql::lobOpen()`)
-/// drained the whole BLOB through `elephc_pdo_blob_byte()` + `chr()` — one FFI call per
-/// byte, on exactly the value class where that is most expensive. The new ABI v24
-/// `elephc_pdo_blob_data_ptr()` copies the buffer in one `ptr_read_string`. Same two
-/// risks as `columnValue()`, pinned at BLOB scale: a ~3 KB body with an embedded NUL
+/// F-QUAL-01, `blobStream()` half: bounded BLOB reads still copy each returned slice
+/// through `elephc_pdo_blob_data_ptr()` in one `ptr_read_string`, never one FFI call
+/// per byte. Two risks are pinned at BLOB scale: a ~3 KB body with an embedded NUL
 /// must arrive byte-identical, and a ZERO-LENGTH blob (whose buffer the bridge reports
 /// as a NULL pointer) must yield an empty stream rather than aborting on
 /// `__rt_ptr_check_nonnull`. The zero-length read is a SUCCESS (0 bytes), which is a

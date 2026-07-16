@@ -52,8 +52,8 @@ extern "elephc_pdo" {
     // sqlite:/pgsql: DSNs. Backs the minimal wiring for
     // Pdo\Mysql::ATTR_INIT_COMMAND (P1-9). $my_ssl_config (v19) is the packed
     // Pdo\Mysql::ATTR_SSL_* options ("ca=...;cert=...;key=...;verify=0|1", "" = no
-    // TLS), applied to the mysql: rustls backend (requires the opt-in `mysql-tls`
-    // build feature); ignored for sqlite:/pgsql: DSNs — PostgreSQL carries its own
+    // TLS), applied to the mysql: ring-backed rustls backend (enabled by default;
+    // custom minimal builds may omit `mysql-tls`); ignored for sqlite:/pgsql: DSNs — PostgreSQL carries its own
     // sslmode/sslrootcert in the DSN and needs no extra parameter.
     // v25 adds the last two parameters:
     // - $my_found_rows (F-MY-06): 1 when Pdo\Mysql::ATTR_FOUND_ROWS was set truthy in
@@ -157,8 +157,8 @@ extern "elephc_pdo" {
     // v11: PostgreSQL LISTEN/NOTIFY poll — returns `channel\tpid\tpayload`, empty if
     // none within the timeout.
     function elephc_pdo_get_notify(int $conn, int $timeout_ms): string;
-    // v12: initial whole-BLOB / whole-large-object snapshots. blob_read (SQLite)
-    // and lob_get (PostgreSQL) load the value into a shared buffer and return its
+    // v12: whole-BLOB / legacy whole-large-object snapshots. blob_read (SQLite)
+    // and lob_get (PostgreSQL compatibility) load the value into a shared buffer and return its
     // byte length (-1 on error); blob_byte reads one byte out of that
     // buffer. Since v24 the buffer is copied out in a single ptr_read_string through
     // blob_data_ptr (below) rather than drained a byte at a time, so blob_byte is now
@@ -166,11 +166,23 @@ extern "elephc_pdo" {
     function elephc_pdo_blob_read(int $conn, string $table, string $column, int $rowid, string $dbname): int;
     function elephc_pdo_lob_get(int $conn, string $oid): int;
     function elephc_pdo_blob_byte(int $offset): int;
-    // v40: binary-safe writeback for the internal seekable BLOB/LOB wrappers.
-    // SQLite requires the complete fixed-size cell snapshot; PostgreSQL lo_put may
-    // extend the large object. Both return 1 on success and preserve embedded NULs.
+    // v40: legacy whole-value binary-safe writeback for the internal seekable
+    // BLOB/LOB wrappers. Both remain for ABI compatibility now that v45/v46
+    // supply bounded PostgreSQL/SQLite operations.
     function elephc_pdo_blob_write(int $conn, string $table, string $column, int $rowid, string $dbname, string $data, int $len): int;
     function elephc_pdo_lob_put(int $conn, string $oid, string $data, int $len): int;
+    // v45: bounded PostgreSQL large-object I/O. `lob_size` transfers only a
+    // scalar; `lob_read_at` fills the shared blob buffer with one requested
+    // slice; `lob_write_at` patches one slice at its server-side offset.
+    function elephc_pdo_lob_size(int $conn, string $oid): int;
+    function elephc_pdo_lob_read_at(int $conn, string $oid, int $offset, int $len): int;
+    function elephc_pdo_lob_write_at(int $conn, string $oid, int $offset, string $data, int $len): int;
+    // v46: bounded SQLite incremental-BLOB I/O. `blob_size` transfers only a
+    // scalar; `blob_read_at` fills the shared blob buffer with one requested
+    // slice; `blob_write_at` patches one fixed-size slice at its native offset.
+    function elephc_pdo_blob_size(int $conn, string $table, string $column, int $rowid, string $dbname): int;
+    function elephc_pdo_blob_read_at(int $conn, string $table, string $column, int $rowid, string $dbname, int $offset, int $len): int;
+    function elephc_pdo_blob_write_at(int $conn, string $table, string $column, int $rowid, string $dbname, int $offset, string $data, int $len): int;
     // v13: custom SQLite collation registration (Pdo\Sqlite::createCollation). The
     // callable is decomposed at the PHP layer into its descriptor pointer and the
     // shared codegen collation adapter address, so this extern takes two plain `ptr`
@@ -733,8 +745,8 @@ class PDOException extends RuntimeException {
 }
 
 // Compiler-owned wrapper behind Pdo\Sqlite::openBlob(). The native bridge keeps
-// the database handle and performs binary-safe fixed-size writes; this PHP object
-// owns the independently seekable cursor that the stream runtime dispatches to.
+// the database handle and performs bounded binary-safe fixed-size operations; this
+// PHP object owns only the independently seekable cursor and current cell size.
 final class __ElephcPDOSqliteBlobStream {
     private static bool $registered = false;
     private static int $pendingConn = 0;
@@ -742,7 +754,7 @@ final class __ElephcPDOSqliteBlobStream {
     private static string $pendingColumn = "";
     private static int $pendingRowid = 0;
     private static string $pendingDbname = "main";
-    private static string $pendingData = "";
+    private static int $pendingSize = 0;
     private static bool $pendingWritable = false;
 
     private int $conn = 0;
@@ -750,18 +762,14 @@ final class __ElephcPDOSqliteBlobStream {
     private string $column = "";
     private int $rowid = 0;
     private string $dbname = "main";
-    private string $data = "";
+    private int $size = 0;
     private int $position = 0;
     private bool $writable = false;
 
     public static function create(int $conn, string $table, string $column, int $rowid, string $dbname, int $flags): mixed {
-        $_length = elephc_pdo_blob_read($conn, $table, $column, $rowid, $dbname);
-        if ($_length < 0) {
+        $_size = elephc_pdo_blob_size($conn, $table, $column, $rowid, $dbname);
+        if ($_size < 0) {
             return false;
-        }
-        $_data = "";
-        if ($_length > 0) {
-            $_data = ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
         }
         if (!self::$registered) {
             self::$registered = stream_wrapper_register("elephcpdosqliteblob", self::class);
@@ -774,7 +782,7 @@ final class __ElephcPDOSqliteBlobStream {
         self::$pendingColumn = $column;
         self::$pendingRowid = $rowid;
         self::$pendingDbname = $dbname;
-        self::$pendingData = $_data;
+        self::$pendingSize = $_size;
         self::$pendingWritable = (($flags & 2) !== 0 && ($flags & 1) === 0);
         return fopen("elephcpdosqliteblob://open", self::$pendingWritable ? "r+" : "r");
     }
@@ -788,18 +796,22 @@ final class __ElephcPDOSqliteBlobStream {
         $this->column = self::$pendingColumn;
         $this->rowid = self::$pendingRowid;
         $this->dbname = self::$pendingDbname;
-        $this->data = self::$pendingData;
+        $this->size = self::$pendingSize;
         $this->writable = self::$pendingWritable;
         $this->position = 0;
         return true;
     }
 
     public function stream_read(int $count): string {
-        if ($count <= 0 || $this->position >= strlen($this->data)) {
+        if ($count <= 0 || $this->position >= $this->size) {
             return "";
         }
-        $_chunk = substr($this->data, $this->position, $count);
-        $this->position = $this->position + strlen($_chunk);
+        $_length = elephc_pdo_blob_read_at($this->conn, $this->table, $this->column, $this->rowid, $this->dbname, $this->position, $count);
+        if ($_length <= 0) {
+            return "";
+        }
+        $_chunk = ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
+        $this->position = $this->position + $_length;
         return $_chunk;
     }
 
@@ -808,19 +820,15 @@ final class __ElephcPDOSqliteBlobStream {
             return -1;
         }
         $_count = strlen($chunk);
-        $_size = strlen($this->data);
-        if ($this->position + $_count > $_size) {
+        if ($this->position + $_count > $this->size) {
             return -1;
         }
-        $_next = substr($this->data, 0, $this->position)
-            . $chunk
-            . substr($this->data, $this->position + $_count);
-        if (elephc_pdo_blob_write($this->conn, $this->table, $this->column, $this->rowid, $this->dbname, $_next, strlen($_next)) !== 1) {
+        $_written = elephc_pdo_blob_write_at($this->conn, $this->table, $this->column, $this->rowid, $this->dbname, $this->position, $chunk, $_count);
+        if ($_written !== $_count) {
             return -1;
         }
-        $this->data = $_next;
-        $this->position = $this->position + $_count;
-        return $_count;
+        $this->position = $this->position + $_written;
+        return $_written;
     }
 
     public function stream_tell(): int {
@@ -828,11 +836,11 @@ final class __ElephcPDOSqliteBlobStream {
     }
 
     public function stream_eof(): bool {
-        return $this->position >= strlen($this->data);
+        return $this->position >= $this->size;
     }
 
     public function stream_seek(int $offset, int $whence): bool {
-        $_size = strlen($this->data);
+        $_size = $this->size;
         if ($whence === 0) {
             $_target = $offset;
         } elseif ($whence === 1) {
@@ -855,7 +863,7 @@ final class __ElephcPDOSqliteBlobStream {
     }
 
     public function stream_stat(): array {
-        return ["size" => strlen($this->data)];
+        return ["size" => $this->size];
     }
 
     public function stream_flush(): bool {
@@ -865,20 +873,21 @@ final class __ElephcPDOSqliteBlobStream {
     public function stream_close(): void {}
 }
 
-// Compiler-owned wrapper behind Pdo\Pgsql::lobOpen(). PostgreSQL permits seeking
-// beyond EOF and extending a large object, so this cursor zero-fills gaps before
-// synchronously writing the complete local value back with lo_put.
+// Compiler-owned wrapper behind Pdo\Pgsql::lobOpen(). It keeps only the cursor and
+// size locally: reads fetch bounded `lo_get` slices and writes patch bounded `lo_put`
+// slices, so memory usage follows the caller's chunk size rather than the whole LOB.
+// PostgreSQL itself preserves sparse seek/extension and zero-fill semantics.
 final class __ElephcPDOPgsqlLobStream {
     private static bool $registered = false;
     private static int $pendingConn = 0;
     private static string $pendingOid = "";
-    private static string $pendingData = "";
+    private static int $pendingSize = 0;
     private static bool $pendingWritable = false;
     private static ?PDO $pendingOwner = null;
 
     private int $conn = 0;
     private string $oid = "";
-    private string $data = "";
+    private int $size = 0;
     private int $position = 0;
     private bool $writable = false;
     private ?PDO $owner = null;
@@ -887,13 +896,9 @@ final class __ElephcPDOPgsqlLobStream {
         if (!$owner->inTransaction()) {
             return false;
         }
-        $_length = elephc_pdo_lob_get($conn, $oid);
-        if ($_length < 0) {
+        $_size = elephc_pdo_lob_size($conn, $oid);
+        if ($_size < 0) {
             return false;
-        }
-        $_data = "";
-        if ($_length > 0) {
-            $_data = ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
         }
         if (!self::$registered) {
             self::$registered = stream_wrapper_register("elephcpdopgsqllob", self::class);
@@ -903,7 +908,7 @@ final class __ElephcPDOPgsqlLobStream {
         }
         self::$pendingConn = $conn;
         self::$pendingOid = $oid;
-        self::$pendingData = $_data;
+        self::$pendingSize = $_size;
         self::$pendingWritable = (strpos($mode, "+") !== false || strpos($mode, "w") !== false);
         self::$pendingOwner = $owner;
         return fopen("elephcpdopgsqllob://open", self::$pendingWritable ? "r+" : "r");
@@ -915,7 +920,7 @@ final class __ElephcPDOPgsqlLobStream {
         $_unusedOptions = $options;
         $this->conn = self::$pendingConn;
         $this->oid = self::$pendingOid;
-        $this->data = self::$pendingData;
+        $this->size = self::$pendingSize;
         $this->writable = self::$pendingWritable;
         $this->owner = self::$pendingOwner;
         $this->position = 0;
@@ -926,10 +931,21 @@ final class __ElephcPDOPgsqlLobStream {
         if ($this->owner === null || !$this->owner->inTransaction()) {
             return "";
         }
-        if ($count <= 0 || $this->position >= strlen($this->data)) {
+        if ($count <= 0 || $this->position >= $this->size) {
             return "";
         }
-        $_chunk = substr($this->data, $this->position, $count);
+        $_requested = $count;
+        if ($this->position + $_requested > $this->size) {
+            $_requested = $this->size - $this->position;
+        }
+        $_length = elephc_pdo_lob_read_at($this->conn, $this->oid, $this->position, $_requested);
+        if ($_length < 0) {
+            return "";
+        }
+        $_chunk = "";
+        if ($_length > 0) {
+            $_chunk = ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
+        }
         $this->position = $this->position + strlen($_chunk);
         return $_chunk;
     }
@@ -938,21 +954,16 @@ final class __ElephcPDOPgsqlLobStream {
         if (!$this->writable || $this->owner === null || !$this->owner->inTransaction()) {
             return -1;
         }
-        $_size = strlen($this->data);
-        if ($this->position > $_size) {
-            $this->data = $this->data . str_repeat(chr(0), $this->position - $_size);
-            $_size = $this->position;
-        }
         $_count = strlen($chunk);
-        $_tailAt = $this->position + $_count;
-        $_tail = ($_tailAt < $_size) ? substr($this->data, $_tailAt) : "";
-        $_next = substr($this->data, 0, $this->position) . $chunk . $_tail;
-        if (elephc_pdo_lob_put($this->conn, $this->oid, $_next, strlen($_next)) !== 1) {
+        $_written = elephc_pdo_lob_write_at($this->conn, $this->oid, $this->position, $chunk, $_count);
+        if ($_written < 0) {
             return -1;
         }
-        $this->data = $_next;
-        $this->position = $_tailAt;
-        return $_count;
+        $this->position = $this->position + $_written;
+        if ($this->position > $this->size) {
+            $this->size = $this->position;
+        }
+        return $_written;
     }
 
     public function stream_tell(): int {
@@ -960,7 +971,7 @@ final class __ElephcPDOPgsqlLobStream {
     }
 
     public function stream_eof(): bool {
-        return $this->position >= strlen($this->data);
+        return $this->position >= $this->size;
     }
 
     public function stream_seek(int $offset, int $whence): bool {
@@ -972,7 +983,7 @@ final class __ElephcPDOPgsqlLobStream {
         } elseif ($whence === 1) {
             $_target = $this->position + $offset;
         } elseif ($whence === 2) {
-            $_target = strlen($this->data) + $offset;
+            $_target = $this->size + $offset;
         } else {
             return false;
         }
@@ -984,7 +995,7 @@ final class __ElephcPDOPgsqlLobStream {
     }
 
     public function stream_stat(): array {
-        return ["size" => strlen($this->data)];
+        return ["size" => $this->size];
     }
 
     public function stream_flush(): bool {
@@ -1325,9 +1336,10 @@ class PDO {
         // bridge applies to the mysql: rustls TLS backend. These numeric values do
         // not collide with any sqlite:/pgsql: driver-specific constant, and the
         // bridge only consults $_mySslConfig for a mysql: DSN, so they stay inert
-        // for the other drivers. ATTR_SSL_CAPATH (1010)/ATTR_SSL_CIPHER (1011) have
-        // no rustls SslOpts equivalent and are forwarded to the driver-option parser,
-        // which fails the connection explicitly. $_mySslVerify stays -1 ("unset") until an
+        // for the other drivers. ATTR_SSL_CAPATH (1010) is adapted to a temporary
+        // multi-PEM CA bundle; ATTR_SSL_CIPHER (1011) is forwarded to the driver-option
+        // parser and fails explicitly because rustls exposes no PDO cipher-string mapping.
+        // $_mySslVerify stays -1 ("unset") until an
         // explicit ATTR_SSL_VERIFY_SERVER_CERT is seen.
         $_mySslCa = "";
         $_mySslCert = "";
@@ -1969,6 +1981,11 @@ class PDO {
         }
         return true;
     }
+
+    // Virtual compiler-internal hook. Pdo\Pgsql overrides it with the real drain;
+    // PDOStatement calls through its PDO-typed owner and runtime dispatch reaches
+    // that override only for PostgreSQL connections.
+    protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
         if ($attribute == 0 && elephc_pdo_driver_name($this->conn) === "mysql") {
@@ -3532,6 +3549,9 @@ class PDOStatement implements IteratorAggregate {
         // now.
         if (elephc_pdo_column_count($this->stmt) == 0) {
             $_step = elephc_pdo_step($this->stmt);
+            if ($this->owner !== null && elephc_pdo_driver_name($this->conn) === "pgsql") {
+                $this->owner->__elephcDrainPgsqlNotices();
+            }
             if ($_step < 0) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
                 $this->rowCount = elephc_pdo_changes($this->conn);
@@ -3552,6 +3572,9 @@ class PDOStatement implements IteratorAggregate {
             // is where such errors actually surface.
             $this->pendingStep = elephc_pdo_step($this->stmt);
             $this->hasPendingStep = true;
+            if ($this->owner !== null && elephc_pdo_driver_name($this->conn) === "pgsql") {
+                $this->owner->__elephcDrainPgsqlNotices();
+            }
             if ($this->pendingStep < 0) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
                 $this->rowCount = elephc_pdo_changes($this->conn);
@@ -5163,12 +5186,8 @@ namespace Pdo {
         const TRANSACTION_INERROR = 3;
         const TRANSACTION_UNKNOWN = 4;
 
-        // Holds the compiled-PHP NOTICE callback (a no-op closure until one is
-        // registered). Untyped and seeded with a closure so the checker infers it as a
-        // callable that dynamic dispatch can invoke: a `?callable` property reads back
-        // as a `Callable|Void` union (or a typed-array element as Mixed) that elephc's
-        // checker will not narrow to a callable at the call site. Also the GC root that
-        // keeps the closure reachable for the connection's lifetime.
+        // Connection-owned callback root. A concrete closure (rather than a
+        // nullable callable property) keeps compiled callable dispatch precise.
         private $noticeCallback;
 
         public function __construct(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null) {
@@ -5177,23 +5196,17 @@ namespace Pdo {
             // \PDO::checkDriverSubclassDsn().
             $_pgsqlDsn = self::resolveDsnUri($dsn, get_class($this) . "::__construct");
             $this->checkDriverSubclassDsn($_pgsqlDsn, "Pdo\\Pgsql", "pgsql");
-            // Forward to \PDO to open the connection, then seed a no-op callback so
-            // drainNotices() always has a callable to hand each notice to (a notice
-            // arriving before setNoticeCallback() is drained and discarded).
+            // Forward to \PDO to open the connection. The base connection object owns
+            // a virtual drain hook so prepared statements can dispatch here too.
             parent::__construct($_pgsqlDsn, $username, $password, $options);
             $this->noticeCallback = function($_message) {};
         }
 
         public function setNoticeCallback(?callable $callback): void {
             // Registers a callback invoked with the text of each PostgreSQL server
-            // NOTICE. Passing null unregisters delivery by restoring the no-op callback,
-            // matching PHP's nullable signature while keeping drainNotices() branch-free.
-            // Delivery is poll-based rather than
-            // fired mid-protocol — the bridge buffers notices as they arrive (via the
-            // connection's notice_callback) and this class drains + dispatches them
-            // right after each exec()/query() on this connection (a NOTICE raised by a
-            // prepared-statement execute() is delivered on the next exec()/query()). The
-            // callback receives one string argument (the message); its return is ignored.
+            // NOTICE. Passing null unregisters delivery by restoring the no-op callback.
+            // The Pdo\Pgsql object owns the callback; the base class only declares
+            // the virtual hook used by PDOStatement's PDO-typed owner reference.
             if ($callback === null) {
                 $this->noticeCallback = function($_message) {};
                 return;
@@ -5201,10 +5214,7 @@ namespace Pdo {
             $this->noticeCallback = $callback;
         }
 
-        private function drainNotices(): void {
-            // Hand every buffered NOTICE to the registered callback (a no-op until one
-            // is set). A real server NOTICE always carries non-empty text, so an empty
-            // return is the "no more pending" sentinel (as with the getNotify() drain).
+        protected function __elephcDrainPgsqlNotices(): void {
             $_cb = $this->noticeCallback;
             while (true) {
                 $_msg = \elephc_pdo_get_notice($this->connectionId());
@@ -5219,7 +5229,7 @@ namespace Pdo {
             // Runs the statement through the base driver, then drains + dispatches any
             // server NOTICE it raised (e.g. a DO block / function using RAISE NOTICE).
             $_result = parent::exec($statement);
-            $this->drainNotices();
+            $this->__elephcDrainPgsqlNotices();
             return $_result;
         }
 
@@ -5230,7 +5240,7 @@ namespace Pdo {
             // Signature mirrors the widened base PDO::query() (P0-6) so overriding
             // stays arity-compatible; the extra args are simply forwarded.
             $_result = parent::query($query, $fetchMode, ...$fetchModeArgs);
-            $this->drainNotices();
+            $this->__elephcDrainPgsqlNotices();
             return $_result;
         }
 

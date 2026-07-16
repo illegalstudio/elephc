@@ -1045,10 +1045,18 @@ impl Checker {
 
     /// Allows PDOStatement::fetch() to refresh the private state of its internal PDORow view.
     fn can_access_pdo_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
-        class_name == "PDORow"
+        let lazy_row_refresh = class_name == "PDORow"
             && method_key == "__elephcrefresh"
             && self.current_class.as_deref() == Some("PDOStatement")
-            && self.current_method.as_deref() == Some("fetch")
+            && self.current_method.as_deref() == Some("fetch");
+        let pgsql_notice_drain = matches!(class_name, "PDO" | "Pdo\\Pgsql")
+            && method_key == "__elephcdrainpgsqlnotices"
+            && matches!(
+                (self.current_class.as_deref(), self.current_method.as_deref()),
+                (Some("PDOStatement"), Some("execute"))
+                    | (Some("Pdo\\Pgsql"), Some("exec" | "query"))
+            );
+        lazy_row_refresh || pgsql_notice_drain
     }
 
     /// Allows PDO prelude methods to create a PDOException with private driver metadata.

@@ -114,6 +114,61 @@ echo ($db->getAttribute(\Pdo\Mysql::ATTR_USE_BUFFERED_QUERY) ? "buffered" : "unb
     assert_eq!(out, "unbuffered:1:busy:;:blocked");
 }
 
+/// Unbuffered MySQL execution returns after the first wire row instead of waiting
+/// for a deliberately delayed second row, proving rows are not materialized first.
+#[test]
+#[ignore]
+fn test_mysql_unbuffered_fetch_is_demand_driven() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Mysql((string) getenv("ELEPHC_MY_DSN"), null, null, [
+    \Pdo\Mysql::ATTR_USE_BUFFERED_QUERY => false,
+    \PDO::ATTR_EMULATE_PREPARES => false,
+]);
+$db->exec("DROP TABLE IF EXISTS elephc_stream_probe");
+$db->exec("CREATE TABLE elephc_stream_probe (id INT PRIMARY KEY)");
+$db->exec("INSERT INTO elephc_stream_probe VALUES (1), (2)");
+$stmt = $db->prepare("SELECT IF(id = 1, REPEAT('x', 1048576), CONCAT(SLEEP(3), 'done')) AS payload FROM elephc_stream_probe");
+$start = microtime(true);
+$stmt->execute();
+$executeElapsed = microtime(true) - $start;
+$first = $stmt->fetchColumn();
+$second = $stmt->fetchColumn();
+$totalElapsed = microtime(true) - $start;
+$stmt->closeCursor();
+$db->exec("DROP TABLE elephc_stream_probe");
+echo ($executeElapsed < 2.0 ? "early" : "late") . ":" . strlen($first) . ":" . $second . ":" . ($totalElapsed >= 2.5 ? "waited" : "too-fast");
+"#,
+    );
+    assert_eq!(out, "early:1048576:0done:waited");
+}
+
+/// Unbuffered stored-procedure result sets remain separated and `nextRowset()`
+/// discards unread rows before advancing, including MySQL's trailing OK set.
+#[test]
+#[ignore]
+fn test_mysql_unbuffered_next_rowset_is_demand_driven() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new \Pdo\Mysql((string) getenv("ELEPHC_MY_DSN"), null, null, [
+    \Pdo\Mysql::ATTR_USE_BUFFERED_QUERY => false,
+]);
+$db->exec("DROP PROCEDURE IF EXISTS elephc_stream_sets");
+$db->exec("CREATE PROCEDURE elephc_stream_sets() BEGIN SELECT 1 AS n UNION ALL SELECT 99; SELECT 2 AS n; END");
+$stmt = $db->query("CALL elephc_stream_sets()");
+$first = $stmt->fetchColumn();
+$stmt->nextRowset();
+$second = $stmt->fetchColumn();
+while ($stmt->nextRowset()) {}
+$ready = $db->query("SELECT 3")->fetchColumn();
+$stmt->closeCursor();
+$db->exec("DROP PROCEDURE elephc_stream_sets");
+echo $first . ":" . $second . ":" . $ready;
+"#,
+    );
+    assert_eq!(out, "1:2:3");
+}
+
 /// With LOCAL_INFILE explicitly enabled, the native client uploads the exact
 /// requested file and enforces ATTR_LOCAL_INFILE_DIRECTORY's canonical path
 /// boundary. Requires a server configured with `local_infile=ON`.
@@ -484,15 +539,14 @@ fn test_mysql_get_warning_count() {
 
 /// Live TLS round-trip. Opens a MySQL/MariaDB connection with `Pdo\Mysql::ATTR_SSL_CA`
 /// set to the server CA bundle (path in `ELEPHC_MY_TLS_CA`) and confirms a query
-/// returns over the encrypted connection. UNLIKE pg, MySQL TLS is opt-in: the linked
-/// staticlib must be rebuilt with the `mysql-tls` feature first (it pulls aws-lc-rs),
-/// otherwise the bridge fails loud with a "requires the opt-in `mysql-tls` feature"
-/// error. `#[ignore]` — needs a TLS-serving MySQL. Example:
+/// returns over the encrypted connection. mysql 28's ring-backed TLS ships in the
+/// default bridge build; a custom build without `mysql-tls` fails loudly.
+/// `#[ignore]` — needs a TLS-serving MySQL. Example:
 ///   docker run -d --name mytls -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=testdb \
 ///       -e MYSQL_USER=test -e MYSQL_PASSWORD=test -p 33062:3306 mysql:8 \
 ///       --require-secure-transport=ON
 ///   docker cp mytls:/var/lib/mysql/ca.pem ./ca.pem   # server-generated CA
-///   cargo build -p elephc-pdo --features mysql-tls    # TLS staticlib (aws-lc-rs)
+///   cargo build -p elephc-pdo                         # TLS staticlib (ring)
 ///   ELEPHC_MY_TLS_DSN='mysql:host=127.0.0.1;port=33062;dbname=testdb;user=test;password=test' \
 ///       ELEPHC_MY_TLS_CA="$PWD/ca.pem" \
 ///       cargo test --test codegen_tests -- --ignored mysql_tls_round_trip
@@ -511,6 +565,25 @@ echo $db->query("SELECT 'tls-ok'")->fetchColumn();
 "#,
     );
     assert_eq!(out, "tls-ok");
+}
+
+/// `ATTR_SSL_CAPATH` trusts the PEM certificates in a directory after the bridge
+/// adapts them into rustls's multi-certificate bundle representation.
+#[test]
+#[ignore]
+fn mysql_tls_capath_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO(
+    (string) getenv("ELEPHC_MY_TLS_DSN"),
+    null,
+    null,
+    [Pdo\Mysql::ATTR_SSL_CAPATH => (string) getenv("ELEPHC_MY_TLS_CAPATH")]
+);
+echo $db->query("SELECT 'capath-ok'")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "capath-ok");
 }
 
 /// P0-B: `PDO::exec()` must return the real affected-row count for INSERT,
