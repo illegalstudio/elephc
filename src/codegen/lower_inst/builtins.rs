@@ -1028,7 +1028,23 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             ctx.load_value_to_result(value)?;
             let result_reg = abi::int_result_reg(ctx.emitter);
+            let null_label = ctx.next_label("count_null_container");
+            let done_label = ctx.next_label("count_done");
+            let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+            crate::codegen::sentinels::emit_branch_if_null_container(
+                ctx.emitter,
+                result_reg,
+                scratch_reg,
+                &null_label,
+            );
             abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            super::exceptions::emit_type_error(
+                ctx,
+                "count(): Argument #1 ($value) must be of type Countable|array, null given",
+            );
+            ctx.emitter.label(&done_label);
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {

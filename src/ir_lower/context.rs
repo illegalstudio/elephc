@@ -1728,7 +1728,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let op = self.builder.value_defining_op(value);
         (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
             || (php_type.is_refcounted() && php_type != PhpType::Str))
-            && matches!(op, Some(Op::ArrayGet | Op::HashGet))
+            && matches!(op, Some(Op::ArrayGet | Op::HashGet | Op::HashGetSilent))
     }
 
     /// Returns whether an index-read receiver is itself an owned intermediate
@@ -1755,6 +1755,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::ArrayGet
                     | Op::ArrayGetSilent
                     | Op::HashGet
+                    | Op::HashGetSilent
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
             )

@@ -1797,6 +1797,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_lazy_empty(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_desugared_dynamic_method_call(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_call_user_func(ctx, canonical, args, expr) {
         return value;
     }
@@ -2708,6 +2711,17 @@ fn lower_lazy_empty(
         || args.iter().any(is_spread_arg)
     {
         return None;
+    }
+    if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
+        let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
+        return Some(emit_builtin_call_value(
+            ctx,
+            name,
+            vec![value.value],
+            PhpType::Bool,
+            expr.span,
+            None,
+        ));
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
 
@@ -8635,7 +8649,13 @@ fn lower_array_access_from_value(
                 }
             }
         }
-        IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
+        IrType::Heap(IrHeapKind::Hash) => {
+            if warn_on_missing {
+                Op::HashGet
+            } else {
+                Op::HashGetSilent
+            }
+        }
         IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
         IrType::Str => {
             index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
@@ -8737,7 +8757,7 @@ fn array_access_result_type(
             }
             _ => fallback_expr_type(expr),
         },
-        Op::HashGet => match ctx.builder.value_php_type(array).codegen_repr() {
+        Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::AssocArray { value, .. } => {
                 array_access_element_result_type(normalize_value_php_type(*value))
             }
@@ -9640,6 +9660,155 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     ctx.emit_value(Op::ExprCall, operands, None, result_type, Op::ExprCall.default_effects(), Some(expr.span))
 }
 
+/// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
+/// desugaring for ordinary dynamic method syntax without changing explicit calls.
+fn lower_desugared_dynamic_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "call_user_func" {
+        return None;
+    }
+    let callback = args.first()?;
+    if callback.span != expr.span {
+        return None;
+    }
+    let ExprKind::ArrayLiteral(items) = &callback.kind else {
+        return None;
+    };
+    let [object, method] = items.as_slice() else {
+        return None;
+    };
+    Some(lower_dynamic_method_expr_call(
+        ctx,
+        object,
+        method,
+        &args[1..],
+        expr,
+    ))
+}
+
+/// Lowers `$object->{$method}(...)` as a dynamic method call, preserving PHP's
+/// receiver/name evaluation before the null check and lazy argument evaluation.
+fn lower_dynamic_method_expr_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object);
+    let method = lower_expr(ctx, method);
+    let method_type = ctx.builder.value_php_type(method.value);
+    let method_name = ctx.declare_hidden_temp(method_type.clone());
+    ctx.store_local(&method_name, method, method_type, Some(expr.span));
+    let method_expr = Expr::new(ExprKind::Variable(method_name), expr.span);
+    let object_type = ctx.builder.value_php_type(object.value).codegen_repr();
+    if !matches!(object_type, PhpType::Object(_))
+        && !value_is_nullable(ctx, object.value)
+        && !value_may_carry_container_miss(ctx, object.value)
+    {
+        return lower_dynamic_method_call_with_receiver(ctx, object, &method_expr, args, expr);
+    }
+    lower_nullable_dynamic_method_expr_call(ctx, object, &method_expr, args, expr)
+}
+
+/// Splits a dynamic method call so a null receiver throws before lowering any
+/// call argument, while the already evaluated runtime method name is preserved.
+fn lower_nullable_dynamic_method_expr_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = fallback_expr_type(expr);
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let fatal_block = ctx
+        .builder
+        .create_named_block("dynamic_method.null.fatal", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("dynamic_method.non_null.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dynamic_method.nullable.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: fatal_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fatal_block);
+    terminate_dynamic_method_call_on_null(ctx, method, expr);
+
+    ctx.builder.position_at_end(call_block);
+    let call = lower_dynamic_method_call_with_receiver(ctx, object, method, args, expr);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Throws a catchable PHP `Error` with the runtime dynamic method name.
+fn terminate_dynamic_method_call_on_null(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &Expr,
+    expr: &Expr,
+) {
+    let prefix = Expr::new(
+        ExprKind::StringLiteral("Call to a member function ".to_string()),
+        expr.span,
+    );
+    let prefix_and_method = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(prefix),
+            op: BinOp::Concat,
+            right: Box::new(method.clone()),
+        },
+        expr.span,
+    );
+    let suffix = Expr::new(ExprKind::StringLiteral("() on null".to_string()), expr.span);
+    let message = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(prefix_and_method),
+            op: BinOp::Concat,
+            right: Box::new(suffix),
+        },
+        expr.span,
+    );
+    let message = lower_expr(ctx, &message);
+    let message = ctx.emit_value(
+        Op::StrPersist,
+        vec![message.value],
+        None,
+        PhpType::Str,
+        Op::StrPersist.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::ThrowErrorValue,
+        vec![message.value],
+        None,
+        Op::ThrowErrorValue.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::Unreachable);
+}
+
 /// Lowers direct calls to literal callable arrays through descriptor metadata.
 fn lower_literal_callable_array_expr_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10530,6 +10699,7 @@ fn property_get_result_type(
         }
         return fallback_expr_type(expr);
     };
+    let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
         return if nullable {
@@ -10571,6 +10741,25 @@ fn property_get_result_type(
         nullable_result_type(property_ty)
     } else {
         property_ty
+    }
+}
+
+/// Returns whether a container read can carry PHP null in a statically non-null pointer type.
+fn value_may_carry_container_miss(
+    ctx: &LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+) -> bool {
+    let Some(inst) = ctx.builder.value_defining_instruction(value) else {
+        return false;
+    };
+    match inst.op {
+        Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent => true,
+        Op::Acquire => inst
+            .operands
+            .first()
+            .copied()
+            .is_some_and(|source| value_may_carry_container_miss(ctx, source)),
+        _ => false,
     }
 }
 
@@ -10716,6 +10905,7 @@ fn dynamic_property_get_result_type(
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         return fallback_expr_type(expr);
     };
+    let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
         return if nullable {
@@ -10869,7 +11059,10 @@ fn lower_method_call(
             return value;
         }
     }
-    if op == Op::MethodCall && value_is_nullable(ctx, object.value) {
+    if op == Op::MethodCall
+        && (value_is_nullable(ctx, object.value)
+            || value_may_carry_container_miss(ctx, object.value))
+    {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
@@ -13431,9 +13624,16 @@ fn is_reflection_class_construction_receiver(
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Fatal error: Call to a member function {}() on null\n", method);
+    let message = format!("Call to a member function {}() on null", method);
     let message = ctx.intern_string(&message);
-    ctx.builder.terminate(Terminator::Fatal { message });
+    ctx.emit_void(
+        Op::ThrowError,
+        Vec::new(),
+        Some(Immediate::Data(message)),
+        Op::ThrowError.default_effects(),
+        None,
+    );
+    ctx.builder.terminate(Terminator::Unreachable);
 }
 
 /// Lowers a nullsafe method call with lazy argument evaluation for nullable receivers.
@@ -13585,7 +13785,7 @@ pub(super) fn lower_dynamic_method_call_with_receiver(
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
         ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
-        expr.span,
+        Span::dummy(),
     );
     let mut call_args = Vec::with_capacity(args.len() + 1);
     call_args.push(callback);

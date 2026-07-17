@@ -1135,3 +1135,136 @@ echo is_null($x) ? 'null' : 'notnull';
     assert_eq!(out.stdout, "null");
     assert!(out.stderr.contains("Warning: Undefined array key 7"));
 }
+
+/// Regression for issue #526: header-reading predicates handle a null-container
+/// miss without dereferencing it; direct reads warn while `empty()` stays silent.
+#[test]
+fn test_array_miss_truthiness_bool_cast_and_empty_are_null_safe() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [[1]];
+echo $a[7] ? "bad" : "false";
+echo ":" . ((bool) $a[7] ? "bad" : "false");
+echo ":" . (empty($a[7]) ? "empty" : "bad");
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "false:false:empty");
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 2);
+}
+
+/// Regression for issue #526: `count()` and array spread turn a missed nested
+/// array into catchable PHP errors instead of reading its null sentinel header.
+#[test]
+fn test_array_miss_count_and_spread_throw_catchable_errors() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [[1]];
+try { count($a[7]); } catch (TypeError $e) { echo $e->getMessage() . "\n"; }
+try { $copy = [...$a[7]]; } catch (Error $e) { echo $e->getMessage() . "\n"; }
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "count(): Argument #1 ($value) must be of type Countable|array, null given\n\
+Only arrays and Traversables can be unpacked, null given\n"
+    );
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 2);
+}
+
+/// Regression for issue #526: property and method consumers recognize the raw
+/// object null sentinel produced by a missed object-array read.
+#[test]
+fn test_array_miss_object_property_warns_and_method_throws() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class MissBox {
+    public int $value = 1;
+    public function take(int $value): int { return $value; }
+}
+class MagicMissBox {
+    public function __get(string $name): mixed { echo "bad"; return $name; }
+}
+function should_not_run(): int { echo "bad"; return 9; }
+$objects = [new MissBox()];
+var_dump($objects[7]->value);
+$std = new stdClass();
+$std->value = 1;
+$stdObjects = [$std];
+var_dump($stdObjects[7]->value);
+$magicObjects = [new MagicMissBox()];
+var_dump($magicObjects[7]->value);
+$property = "value";
+var_dump($objects[7]->{$property});
+try { $objects[7]->take(should_not_run()); }
+catch (Error $e) { echo $e->getMessage(); }
+$method = "take";
+try { $objects[7]->{$method}(should_not_run()); }
+catch (Error $e) { echo ":" . $e->getMessage(); }
+$miss = $objects[7];
+try { $miss->{$method}(should_not_run()); }
+catch (Error $e) { echo ":" . $e->getMessage(); }
+echo ":" . $objects[0]->{$method}(3);
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "NULL\nNULL\nNULL\nNULL\nCall to a member function take() on null:\
+Call to a member function take() on null:\
+Call to a member function take() on null:3"
+    );
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 7);
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Attempt to read property \"value\" on null")
+            .count(),
+        4
+    );
+}
+
+/// Regression for issue #526: direct associative misses emit both PHP warnings,
+/// while the same chained lookup under null coalescing remains silent.
+#[test]
+fn test_array_miss_assoc_chained_warns_directly_and_is_silent_under_coalesce() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$map = ["present" => ["leaf" => 1]];
+var_dump($map["missing"]["leaf"]);
+echo $map["missing"]["leaf"] ?? 42;
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\n42");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined array key \"missing\"")
+            .count(),
+        1
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Trying to access array offset on null")
+            .count(),
+        1
+    );
+}
+
+/// Regression for issue #554: a missing string-valued chained read retains its
+/// null marker through ownership stabilization, while real empty strings do not.
+#[test]
+fn test_array_miss_string_coalesces_but_real_empty_strings_do_not() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$nested = [["present"]];
+$empty = [""];
+echo "[" . ($nested[7][0] ?? "fallback") . "]";
+echo "[" . ($empty[0] ?? "bad") . "]";
+echo "[" . (str_repeat("x", 0) ?? "bad") . "]";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[fallback][][]");
+    assert_eq!(out.stderr, "");
+}

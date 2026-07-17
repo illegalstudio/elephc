@@ -2117,7 +2117,14 @@ fn acquire_borrowed_return_value(
     }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
-        Some(Op::ArrayGet | Op::HashGet | Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+        Some(
+            Op::ArrayGet
+                | Op::HashGet
+                | Op::HashGetSilent
+                | Op::PropGet
+                | Op::DynamicPropGet
+                | Op::NullsafePropGet
+        )
     ) {
         return value;
     }
