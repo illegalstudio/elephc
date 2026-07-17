@@ -412,6 +412,6 @@ fn emit_x86_64_fail(emitter: &mut Emitter, label: &str, msg_label: &str, msg_len
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 writes the diagnostic bytes
     emitter.instruction("syscall");                                             // emit the invalid php_uname mode diagnostic
     emitter.instruction("mov edi, 1");                                          // use a failing process exit status for invalid php_uname modes
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 exits the process
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 exits the process group
     emitter.instruction("syscall");                                             // terminate after the fatal php_uname diagnostic
 }

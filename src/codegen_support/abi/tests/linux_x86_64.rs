@@ -304,7 +304,7 @@ fn test_emit_store_and_load_result_to_symbol_for_string_linux_x86_64() {
 /// emit_store_process_args_to_globals stores argc (rdi) and argv (rsi) to
 /// global symbols; emit_enable_heap_debug_flag sets the heap debug flag;
 /// emit_copy_frame_pointer copies rbp to a destination register; and
-/// emit_exit emits the exit syscall (syscall with eax=60, edi=exit_code).
+/// emit_exit emits the process-wide exit syscall (syscall with eax=231, edi=exit_code).
 #[test]
 fn test_process_entry_helpers_linux_x86_64() {
     let mut emitter = test_emitter_x86();
@@ -322,7 +322,7 @@ fn test_process_entry_helpers_linux_x86_64() {
     assert!(out.contains("    mov QWORD PTR [rip + _heap_debug_enabled], r10\n"));
     assert!(out.contains("    mov r10, rbp\n"));
     assert!(out.contains("    mov edi, 7\n"));
-    assert!(out.contains("    mov eax, 60\n"));
+    assert!(out.contains("    mov eax, 231\n"));
     assert!(out.contains("    syscall\n"));
 }
 

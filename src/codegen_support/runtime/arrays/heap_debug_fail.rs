@@ -27,7 +27,7 @@ pub fn emit_heap_debug_fail(emitter: &mut Emitter) {
         emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
         emitter.instruction("syscall");                                         // print the heap-debug failure message to stderr
         emitter.instruction("mov edi, 1");                                      // exit code 1 marks the heap-debug process failure
-        emitter.instruction("mov eax, 60");                                     // Linux x86_64 syscall 60 = exit
+        emitter.instruction("mov eax, 231");                                    // Linux x86_64 syscall 231 = exit_group
         emitter.instruction("syscall");                                         // terminate immediately after reporting the heap-debug failure
         return;
     }

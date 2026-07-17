@@ -56,6 +56,6 @@ fn emit_iterable_unsupported_kind_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the iterable runtime fatal message before terminating
     emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE as the process exit status for consistency with the AArch64 path
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process immediately after the iterable runtime fatal diagnostic
 }

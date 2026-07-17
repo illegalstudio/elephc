@@ -493,6 +493,6 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
     emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
 }

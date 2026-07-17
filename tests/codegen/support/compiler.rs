@@ -196,8 +196,8 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
 pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
     let needle = match (target().platform, target().arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
-        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 60\n    syscall",
+        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
+        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target()

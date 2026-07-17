@@ -821,7 +821,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         }
         (Platform::Linux, Arch::X86_64) => {
             ctx.emitter.instruction("mov rdi, rax");                            // move the computed exit code into the SysV first-argument register
-            ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
+            ctx.emitter.instruction("mov eax, 231");                            // Linux x86_64 syscall 231 = exit_group
             ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI
         }
         (Platform::MacOS, Arch::X86_64) => {

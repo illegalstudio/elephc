@@ -166,7 +166,7 @@ fn emit_intdiv_zero_fatal(ctx: &mut FunctionContext<'_>, zero_label: &str) {
             ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
             ctx.emitter.instruction("syscall");                                 // write the fatal division-by-zero diagnostic
             ctx.emitter.instruction("mov edi, 1");                              // select process exit code 1 after the fatal diagnostic
-            ctx.emitter.instruction("mov eax, 60");                             // select Linux exit syscall
+            ctx.emitter.instruction("mov eax, 231");                            // select Linux exit_group syscall
             ctx.emitter.instruction("syscall");                                 // terminate after reporting division by zero
         }
     }

@@ -57,7 +57,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
 /// checks for null handler to branch to the uncaught path, calls
 /// `__rt_exception_cleanup_frames` for frame unwinding, then invokes `longjmp` to transfer
 /// control to the saved catch resume point. The uncaught path writes 32 bytes to stderr via
-/// syscall 1 (write) and terminates via syscall 60 (exit).
+/// syscall 1 (write) and terminates via syscall 231 (`exit_group`).
 fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: throw_current ---");
@@ -84,6 +84,6 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall"); // write the fatal uncaught-exception message to stderr
     emitter.instruction("mov edi, 1"); // exit status 1 indicates abnormal termination
-    emitter.instruction("mov eax, 60"); // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall"); // terminate the process after reporting the uncaught exception
 }
