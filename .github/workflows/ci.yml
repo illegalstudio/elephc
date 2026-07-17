@@ -70,6 +70,9 @@ jobs:
       - name: Build optional PDO_ODBC profile
         run: cargo build -p elephc-pdo --features odbc
 
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -155,6 +158,9 @@ jobs:
       - name: Build optional PDO_ODBC profile
         run: cargo build -p elephc-pdo --features odbc
 
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -239,6 +245,9 @@ jobs:
 
       - name: Build optional PDO_ODBC profile
         run: cargo build -p elephc-pdo --features odbc
+
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
 
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci

@@ -80,6 +80,8 @@ pdo-dblib = ["elephc-pdo/dblib"]
 pdo-firebird = ["elephc-pdo/firebird"]
 # Keeps codegen fixtures and the PDO archive on the system ODBC-manager profile.
 pdo-odbc = ["elephc-pdo/odbc"]
+# Keeps codegen fixtures and the PDO archive on the Informix CLI/ODBC profile.
+pdo-informix = ["elephc-pdo/informix"]
 # Keeps codegen fixtures and the PDO archive on the Oracle Instant Client profile.
 pdo-oci = ["elephc-pdo/oci"]
 

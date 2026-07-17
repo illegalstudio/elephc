@@ -15,6 +15,8 @@ pub(crate) enum DriverKind {
     Dblib,
     #[cfg(feature = "firebird")]
     Firebird,
+    #[cfg(feature = "informix")]
+    Informix,
     #[cfg(feature = "odbc")]
     Odbc,
     #[cfg(feature = "oci")]
@@ -30,6 +32,8 @@ pub(crate) const AVAILABLE: &[DriverKind] = &[
     DriverKind::Dblib,
     #[cfg(feature = "firebird")]
     DriverKind::Firebird,
+    #[cfg(feature = "informix")]
+    DriverKind::Informix,
     #[cfg(feature = "odbc")]
     DriverKind::Odbc,
     #[cfg(feature = "oci")]
@@ -47,6 +51,8 @@ impl DriverKind {
             Self::Dblib => "dblib",
             #[cfg(feature = "firebird")]
             Self::Firebird => "firebird",
+            #[cfg(feature = "informix")]
+            Self::Informix => "informix",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc",
             #[cfg(feature = "oci")]
@@ -64,6 +70,8 @@ impl DriverKind {
             Self::Dblib => "dblib:",
             #[cfg(feature = "firebird")]
             Self::Firebird => "firebird:",
+            #[cfg(feature = "informix")]
+            Self::Informix => "informix:",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc:",
             #[cfg(feature = "oci")]
@@ -96,6 +104,8 @@ mod tests {
         expected.push("dblib");
         #[cfg(feature = "firebird")]
         expected.push("firebird");
+        #[cfg(feature = "informix")]
+        expected.push("informix");
         #[cfg(feature = "odbc")]
         expected.push("odbc");
         #[cfg(feature = "oci")]
@@ -114,6 +124,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("dblib:host=localhost"), Some(DriverKind::Dblib));
         #[cfg(feature = "firebird")]
         assert_eq!(DriverKind::from_dsn("firebird:dbname=test.fdb"), Some(DriverKind::Firebird));
+        #[cfg(feature = "informix")]
+        assert_eq!(DriverKind::from_dsn("informix:inventory"), Some(DriverKind::Informix));
         #[cfg(feature = "odbc")]
         assert_eq!(DriverKind::from_dsn("odbc:example"), Some(DriverKind::Odbc));
         #[cfg(feature = "oci")]

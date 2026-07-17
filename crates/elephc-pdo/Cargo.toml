@@ -98,5 +98,8 @@ dblib = []
 firebird = ["dep:rsfbclient"]
 # Matches php-src's PDO_ODBC backend through the system ODBC driver manager.
 odbc = ["dep:odbc-sys"]
+# Matches the current PECL PDO_INFORMIX driver through the Informix ODBC/CLI
+# driver. A live connection requires IBM/HCL Client SDK on the host.
+informix = ["dep:odbc-sys"]
 # Matches the current PECL PDO_OCI driver through Oracle Instant Client/ODPI-C.
 oci = ["dep:oracle"]

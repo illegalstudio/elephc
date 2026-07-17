@@ -32,6 +32,11 @@ fn pdo_odbc_enabled() -> bool {
     cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
 }
 
+/// Reports whether the optional Informix CLI/ODBC PDO profile is selected.
+fn pdo_informix_enabled() -> bool {
+    cfg!(feature = "pdo-informix") || std::env::var_os("ELEPHC_PDO_INFORMIX").is_some()
+}
+
 /// Reports whether the optional Oracle Instant Client PDO profile is selected.
 fn pdo_oci_enabled() -> bool {
     cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
@@ -200,6 +205,7 @@ impl BridgeStaticlib {
                 || pdo_dblib_enabled()
                 || pdo_firebird_enabled()
                 || pdo_odbc_enabled()
+                || pdo_informix_enabled()
                 || pdo_oci_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
@@ -276,6 +282,9 @@ impl BridgeStaticlib {
             }
             if pdo_odbc_enabled() {
                 features.push("odbc");
+            }
+            if pdo_informix_enabled() {
+                features.push("informix");
             }
             if pdo_oci_enabled() {
                 features.push("oci");
@@ -367,8 +376,8 @@ pub(crate) fn link(
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
     let needs_dblib =
         extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled();
-    let needs_odbc =
-        extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_odbc_enabled();
+    let needs_odbc = extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && (pdo_odbc_enabled() || pdo_informix_enabled());
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -594,8 +603,10 @@ pub(crate) fn link(
             ld_cmd.arg("-lsybdb");
         }
     }
-    // PDO_ODBC delegates to the platform ODBC driver manager, like php-src.
-    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_odbc_enabled() {
+    // PDO_ODBC and PDO_INFORMIX delegate to the platform ODBC driver manager.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && (pdo_odbc_enabled() || pdo_informix_enabled())
+    {
         if target.platform == Platform::MacOS {
             for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
                 if Path::new(path).exists() {

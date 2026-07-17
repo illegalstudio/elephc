@@ -1,23 +1,24 @@
 //! Purpose:
-//! System ODBC driver-manager backend matching php-src's `pdo_odbc` behavior.
+//! System CLI backend matching php-src's PDO_ODBC and PECL PDO_INFORMIX behavior.
 //!
 //! Called from:
-//! - The PDO bridge root when built with the optional `odbc` feature.
+//! - The PDO bridge root when built with the optional `odbc` or `informix` feature.
 //!
 //! Key details:
-//! - Uses the ODBC 3 C ABI through `odbc-sys`, like PHP delegates to unixODBC/iODBC.
-//! - Materializes result rows as text/null because PDO_ODBC exposes every fetched scalar as string.
+//! - Uses the ODBC 3 CLI ABI through `odbc-sys`, like both PHP extensions delegate to a driver manager.
+//! - Materializes scalar result rows as text/null and preserves Informix LOB stream metadata.
 //! - Keeps statement handles alive across `SQLMoreResults`, cursor-name, and scroll operations.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::{Mutex, OnceLock};
 
 use odbc_sys::{
-    AttrOdbcVersion, CDataType, CompletionType, ConnectionAttribute, DriverConnectOption,
+    AttrOdbcVersion, CDataType, CompletionType, ConnectionAttribute, Desc, DriverConnectOption,
     EnvironmentAttribute, FreeStmtOption, HDbc, HEnv, HStmt, Handle, HandleType,
     InfoType, NULL_DATA, Nullability, ParamType, SqlDataType, SqlReturn, SQLAllocHandle,
-    SQLBindParameter, SQLCloseCursor, SQLConnect, SQLDescribeCol, SQLDescribeParam, SQLDisconnect, SQLDriverConnect,
+    SQLBindParameter, SQLCloseCursor, SQLColAttribute, SQLConnect, SQLDescribeCol, SQLDescribeParam, SQLDisconnect, SQLDriverConnect,
     SQLEndTran, SQLExecDirect, SQLExecute, SQLFetch, SQLFreeHandle, SQLFreeStmt,
     SQLGetData, SQLGetDiagRec, SQLGetInfo, SQLMoreResults, SQLNumParams, SQLNumResultCols,
     SQLPrepare, SQLRowCount, SQLSetConnectAttr, SQLSetEnvAttr, SQLSetStmtAttr, StatementAttribute,
@@ -28,8 +29,18 @@ const SQL_AUTOCOMMIT_ON: isize = 1;
 const SQL_CUR_USE_IF_NEEDED: i64 = 0;
 const SQL_CUR_USE_ODBC: i64 = 1;
 const SQL_CUR_USE_DRIVER: i64 = 2;
+const SQL_INFX_ATTR_ODBC_TYPES_ONLY: i32 = 2257;
+const SQL_INFX_ATTR_LO_AUTOMATIC: i32 = 2262;
 
 unsafe extern "system" {
+    /// Applies a driver-specific numeric connection attribute not modeled by `odbc-sys`.
+    #[link_name = "SQLSetConnectAttr"]
+    fn SQLSetConnectAttrRaw(
+        connection_handle: HDbc,
+        attribute: i32,
+        value: *mut c_void,
+        string_length: i32,
+    ) -> SqlReturn;
     /// Assigns an ANSI cursor name to a prepared ODBC statement.
     fn SQLSetCursorName(
         statement_handle: HStmt,
@@ -43,6 +54,27 @@ unsafe extern "system" {
         buffer_length: i16,
         name_length: *mut i16,
     ) -> SqlReturn;
+}
+
+/// Selects the PDO extension semantics layered over the shared CLI ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CliFlavor {
+    #[cfg(feature = "odbc")]
+    Odbc,
+    #[cfg(feature = "informix")]
+    Informix,
+}
+
+impl CliFlavor {
+    /// Returns the exact PDO DSN prefix owned by this extension.
+    fn dsn_prefix(self) -> &'static str {
+        match self {
+            #[cfg(feature = "odbc")]
+            Self::Odbc => "odbc:",
+            #[cfg(feature = "informix")]
+            Self::Informix => "informix:",
+        }
+    }
 }
 
 /// PDO-visible ODBC diagnostic record.
@@ -62,6 +94,27 @@ impl Default for ErrorState {
             message: String::new(),
         }
     }
+}
+
+/// Holds the diagnostic produced before a CLI connection handle enters the bridge table.
+fn open_error_cell() -> &'static Mutex<ErrorState> {
+    static ERROR: OnceLock<Mutex<ErrorState>> = OnceLock::new();
+    ERROR.get_or_init(|| Mutex::new(ErrorState::default()))
+}
+
+/// Records one constructor failure for PDO's connection-level `errorInfo` fields.
+fn remember_open_error(error: &ErrorState) {
+    *open_error_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = error.clone();
+}
+
+/// Returns the SQLSTATE and native code captured by the latest failed CLI open.
+pub(crate) fn open_diagnostic() -> (String, i64) {
+    let error = open_error_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (error.sqlstate.clone(), error.native_code)
 }
 
 /// Reports whether an ODBC return code completed successfully.
@@ -162,9 +215,9 @@ fn split_connection_fields(body: &str) -> Vec<&str> {
 }
 
 /// Separates PDO_ODBC's DSN from bridge-only constructor fields.
-fn parse_open_options(dsn: &str) -> Result<OpenOptions, String> {
+fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, String> {
     let body = dsn
-        .strip_prefix("odbc:")
+        .strip_prefix(flavor.dsn_prefix())
         .ok_or_else(|| "could not find driver".to_string())?;
     let mut source_parts = Vec::new();
     let mut username = String::new();
@@ -215,6 +268,8 @@ pub struct OdbcConn {
     pub in_transaction: bool,
     auto_commit: bool,
     assume_utf8: bool,
+    flavor: CliFlavor,
+    last_insert_id: i64,
 }
 
 // The bridge serializes access through its global connection-table mutex.
@@ -239,9 +294,26 @@ impl Drop for OdbcConn {
 }
 
 impl OdbcConn {
-    /// Opens either a named ODBC data source or a direct connection string.
-    pub fn open(dsn: &str) -> Result<Self, String> {
-        let options = parse_open_options(dsn)?;
+    /// Opens a PDO_ODBC named data source or direct connection string.
+    #[cfg(feature = "odbc")]
+    pub fn open_odbc(dsn: &str) -> Result<Self, String> {
+        Self::open(dsn, CliFlavor::Odbc)
+    }
+
+    /// Opens a PDO_INFORMIX named data source or direct CLI connection string.
+    #[cfg(feature = "informix")]
+    pub fn open_informix(dsn: &str) -> Result<Self, String> {
+        Self::open(dsn, CliFlavor::Informix)
+    }
+
+    /// Opens either CLI flavor while retaining its distinct PDO identity.
+    fn open(dsn: &str, flavor: CliFlavor) -> Result<Self, String> {
+        remember_open_error(&ErrorState {
+            sqlstate: "HY000".to_string(),
+            native_code: 0,
+            message: "CLI connection initialization failed".to_string(),
+        });
+        let options = parse_open_options(dsn, flavor)?;
         let mut env = Handle::null();
         let mut dbc = Handle::null();
         let allocated_env = unsafe { SQLAllocHandle(HandleType::Env, Handle::null(), &mut env) };
@@ -276,6 +348,7 @@ impl OdbcConn {
         };
         if !succeeded(set_autocommit) {
             let error = diagnostic(HandleType::Dbc, dbc, "SQLSetConnectAttr AUTOCOMMIT");
+            remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
                 let _ = SQLFreeHandle(HandleType::Env, env);
@@ -292,6 +365,7 @@ impl OdbcConn {
         };
         if !succeeded(cursor_result) && options.cursor_library != SQL_CUR_USE_IF_NEEDED {
             let error = diagnostic(HandleType::Dbc, dbc, "SQLSetConnectAttr SQL_ODBC_CURSORS");
+            remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
                 let _ = SQLFreeHandle(HandleType::Env, env);
@@ -344,11 +418,38 @@ impl OdbcConn {
                 dbc,
                 if direct { "SQLDriverConnect" } else { "SQLConnect" },
             );
+            remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
                 let _ = SQLFreeHandle(HandleType::Env, env);
             }
             return Err(error.message);
+        }
+        #[cfg(feature = "informix")]
+        if flavor == CliFlavor::Informix {
+            for (attribute, context) in [
+                (SQL_INFX_ATTR_LO_AUTOMATIC, "SQL_INFX_ATTR_LO_AUTOMATIC"),
+                (SQL_INFX_ATTR_ODBC_TYPES_ONLY, "SQL_INFX_ATTR_ODBC_TYPES_ONLY"),
+            ] {
+                let result = unsafe {
+                    SQLSetConnectAttrRaw(
+                        dbc_handle,
+                        attribute,
+                        1isize as *mut c_void,
+                        odbc_sys::IS_INTEGER,
+                    )
+                };
+                if !succeeded(result) {
+                    let error = diagnostic(HandleType::Dbc, dbc, context);
+                    remember_open_error(&error);
+                    unsafe {
+                        let _ = SQLDisconnect(dbc_handle);
+                        let _ = SQLFreeHandle(HandleType::Dbc, dbc);
+                        let _ = SQLFreeHandle(HandleType::Env, env);
+                    }
+                    return Err(error.message);
+                }
+            }
         }
         Ok(Self {
             env: env.as_henv(),
@@ -358,7 +459,19 @@ impl OdbcConn {
             in_transaction: false,
             auto_commit: options.auto_commit,
             assume_utf8: options.assume_utf8,
+            flavor,
+            last_insert_id: 0,
         })
+    }
+
+    /// Returns the PDO registry identity selected when the CLI connection opened.
+    pub(crate) fn driver_kind(&self) -> crate::driver::DriverKind {
+        match self.flavor {
+            #[cfg(feature = "odbc")]
+            CliFlavor::Odbc => crate::driver::DriverKind::Odbc,
+            #[cfg(feature = "informix")]
+            CliFlavor::Informix => crate::driver::DriverKind::Informix,
+        }
     }
 
     /// Reports whether the driver manager considers the connection alive.
@@ -413,7 +526,66 @@ impl OdbcConn {
         }
         self.error = ErrorState::default();
         unsafe { let _ = SQLFreeHandle(HandleType::Stmt, statement); };
+        if self.is_informix() && sql.trim_start().to_ascii_lowercase().starts_with("insert") {
+            self.refresh_informix_last_insert_id();
+        }
         self.changes
+    }
+
+    /// Reports whether this shared CLI handle belongs to PDO_INFORMIX.
+    fn is_informix(&self) -> bool {
+        #[cfg(feature = "informix")]
+        if self.flavor == CliFlavor::Informix {
+            return true;
+        }
+        false
+    }
+
+    /// Reads Informix's most recent SERIAL value without changing PDO error state.
+    fn refresh_informix_last_insert_id(&mut self) {
+        let mut raw = Handle::null();
+        if !succeeded(unsafe { SQLAllocHandle(HandleType::Stmt, self.dbc.as_handle(), &mut raw) }) {
+            self.last_insert_id = 0;
+            return;
+        }
+        let statement = raw.as_hstmt();
+        let sql = b"SELECT DBINFO('sqlca.sqlerrd1') FROM systables WHERE tabid = 1";
+        let executed = unsafe { SQLExecDirect(statement, sql.as_ptr(), sql.len() as i32) };
+        let fetched = succeeded(executed) && succeeded(unsafe { SQLFetch(statement) });
+        let mut buffer = [0u8; 64];
+        let mut indicator = 0isize;
+        let read = fetched
+            && succeeded(unsafe {
+                SQLGetData(
+                    statement,
+                    1,
+                    CDataType::Char,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as isize,
+                    &mut indicator,
+                )
+            });
+        self.last_insert_id = if read && indicator != NULL_DATA {
+            let length = usize::try_from(indicator)
+                .unwrap_or(0)
+                .min(buffer.len().saturating_sub(1));
+            String::from_utf8_lossy(&buffer[..length])
+                .trim()
+                .parse()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
+    }
+
+    /// Returns the most recent Informix SERIAL value as PDO text.
+    pub fn last_insert_id(&self) -> String {
+        if self.is_informix() {
+            self.last_insert_id.to_string()
+        } else {
+            String::new()
+        }
     }
 
     /// Starts a manual transaction by disabling native autocommit when needed.
@@ -521,9 +693,14 @@ impl OdbcConn {
         self.info(InfoType::DbmsVer)
     }
 
-    /// Returns php-src's unixODBC client identifier.
+    /// Returns the extension version string reported by the selected PDO driver.
     pub fn client_version(&self) -> String {
-        "ODBC-unixODBC".to_string()
+        match self.flavor {
+            #[cfg(feature = "odbc")]
+            CliFlavor::Odbc => "ODBC-unixODBC".to_string(),
+            #[cfg(feature = "informix")]
+            CliFlavor::Informix => "1.3.7".to_string(),
+        }
     }
 
     /// Returns the connected DBMS name exposed by `PDO::ATTR_SERVER_INFO`.
@@ -557,21 +734,109 @@ enum OdbcBind {
     Binary(Vec<u8>),
 }
 
+/// Registration metadata for one CLI input/output parameter.
+#[derive(Clone, Copy)]
+struct OutputSpec {
+    max_length: i64,
+    input_output: bool,
+}
+
+/// Bounds an output buffer to PDO's declared maximum and returns its input length.
+fn prepare_output_buffer(payload: &mut Vec<u8>, output: OutputSpec, precision: usize) -> usize {
+    let input_length = payload.len();
+    let capacity = if output.max_length > 0 {
+        usize::try_from(output.max_length).unwrap_or(usize::MAX)
+    } else {
+        precision.max(1)
+    };
+    payload.truncate(capacity);
+    let input_length = input_length.min(capacity);
+    payload.resize(capacity, 0);
+    input_length
+}
+
+/// Reads one text descriptor attribute without making unsupported metadata fatal.
+fn column_text_attribute(statement: HStmt, column: u16, attribute: Desc) -> Option<String> {
+    let mut buffer = [0u8; 256];
+    let mut length = 0i16;
+    let mut numeric = 0isize;
+    let result = unsafe {
+        SQLColAttribute(
+            statement,
+            column,
+            attribute,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as i16,
+            &mut length,
+            &mut numeric,
+        )
+    };
+    if !succeeded(result) {
+        return None;
+    }
+    let length = usize::try_from(length).unwrap_or(0).min(buffer.len());
+    Some(String::from_utf8_lossy(&buffer[..length]).into_owned())
+}
+
+/// Reads one numeric descriptor attribute without making unsupported metadata fatal.
+fn column_numeric_attribute(statement: HStmt, column: u16, attribute: Desc) -> Option<isize> {
+    let mut length = 0i16;
+    let mut numeric = 0isize;
+    let result = unsafe {
+        SQLColAttribute(
+            statement,
+            column,
+            attribute,
+            ptr::null_mut(),
+            0,
+            &mut length,
+            &mut numeric,
+        )
+    };
+    succeeded(result).then_some(numeric)
+}
+
+/// Identifies the two Informix UDT names that PECL maps to `PDO::PARAM_LOB` metadata.
+fn informix_metadata_is_lob(native_type: &str) -> bool {
+    let native_type = native_type.to_ascii_uppercase();
+    native_type == "BLOB"
+        || native_type == "CLOB"
+        || native_type.ends_with("_UDT_BLOB")
+        || native_type.ends_with("_UDT_CLOB")
+}
+
+/// Completed CLI output value copied before its native execution buffer expires.
+#[derive(Clone)]
+pub(crate) struct OdbcOutputValue {
+    pub(crate) data: Option<Vec<u8>>,
+    pub(crate) lob: bool,
+}
+
 /// One materialized ODBC result column.
 struct OdbcColumn {
     name: String,
     wide: bool,
+    lob: bool,
+    metadata_lob: bool,
+    scale: i64,
+    table: String,
+    native_type: String,
+    flags: i64,
 }
 
 /// Prepared ODBC statement retaining its native handle across result sets.
 pub struct OdbcStmt {
     pub conn_id: i64,
+    #[cfg(feature = "odbc")]
+    flavor: CliFlavor,
     stmt: HStmt,
     named_map: HashMap<String, i64>,
     order: Vec<i64>,
     binds: Vec<OdbcBind>,
     bound: Vec<bool>,
     indicators: Vec<odbc_sys::Len>,
+    output_specs: Vec<Option<OutputSpec>>,
+    output_values: Vec<Option<OdbcOutputValue>>,
     columns: Vec<OdbcColumn>,
     rows: Vec<Vec<Option<Vec<u8>>>>,
     cursor: isize,
@@ -580,6 +845,7 @@ pub struct OdbcStmt {
     assume_utf8: bool,
     pub sent_sql: String,
     error: ErrorState,
+    is_insert: bool,
 }
 
 unsafe impl Send for OdbcStmt {}
@@ -643,12 +909,16 @@ impl OdbcStmt {
         }
         Ok(Self {
             conn_id,
+            #[cfg(feature = "odbc")]
+            flavor: connection.flavor,
             stmt,
             named_map,
             order,
             binds: vec![OdbcBind::Null; slots],
             bound: vec![false; slots],
             indicators: vec![NULL_DATA; slots],
+            output_specs: vec![None; slots],
+            output_values: vec![None; slots],
             columns: Vec::new(),
             rows: Vec::new(),
             cursor: -1,
@@ -657,6 +927,10 @@ impl OdbcStmt {
             assume_utf8: connection.assume_utf8,
             sent_sql: String::new(),
             error: ErrorState::default(),
+            is_insert: translated
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("insert"),
         })
     }
 
@@ -703,6 +977,45 @@ impl OdbcStmt {
         self.bind(index, OdbcBind::Null)
     }
 
+    /// Registers an input/output buffer for a scalar CLI parameter.
+    pub fn bind_output(&mut self, index: i64, pdo_type: i64, max_length: i64) -> i64 {
+        let Some(slot) = usize::try_from(index).ok().and_then(|index| index.checked_sub(1)) else {
+            return 0;
+        };
+        if slot >= self.output_specs.len() {
+            return 0;
+        }
+        let base_type = pdo_type & 0xFFFF;
+        // PDO_INFORMIX explicitly forces LOB parameters back to input-only.
+        if base_type == 3 {
+            #[cfg(feature = "odbc")]
+            if self.flavor == CliFlavor::Odbc {
+                self.error = ErrorState {
+                    sqlstate: "HY000".to_string(),
+                    native_code: 0,
+                    message: "Can't bind a lob for output".to_string(),
+                };
+                return -1;
+            }
+            self.output_specs[slot] = None;
+            return 1;
+        }
+        self.output_specs[slot] = Some(OutputSpec {
+            max_length,
+            input_output: (pdo_type & 0x8000_0000) != 0,
+        });
+        1
+    }
+
+    /// Returns a completed scalar output parameter, if the slot was output-bound.
+    pub fn output_value(&self, index: i64) -> Option<&OdbcOutputValue> {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|slot| self.output_values.get(slot))
+            .and_then(Option::as_ref)
+    }
+
     /// Resets execution/cursor state while preserving binds.
     pub fn reset(&mut self) {
         unsafe { let _ = SQLCloseCursor(self.stmt); };
@@ -711,6 +1024,7 @@ impl OdbcStmt {
         self.cursor = -1;
         self.executed = false;
         self.row_count = 0;
+        self.output_values.fill(None);
     }
 
     /// Clears execution state and all bound values.
@@ -718,6 +1032,7 @@ impl OdbcStmt {
         self.reset();
         self.binds.fill(OdbcBind::Null);
         self.bound.fill(false);
+        self.output_specs.fill(None);
     }
 
     /// Reports whether the statement still needs execution.
@@ -777,7 +1092,7 @@ impl OdbcStmt {
                         | SqlDataType::EXT_W_VARCHAR
                         | SqlDataType::EXT_W_LONG_VARCHAR
                 );
-            let (payload, c_type, indicator) = match &self.binds[slot] {
+            let (mut payload, c_type, indicator) = match &self.binds[slot] {
                 OdbcBind::Null => (Vec::new(), CDataType::Char, NULL_DATA),
                 OdbcBind::Int(value) => {
                     let text = value.to_string();
@@ -801,24 +1116,45 @@ impl OdbcStmt {
                 OdbcBind::Text(value) => (value.clone(), CDataType::Char, 0),
                 OdbcBind::Binary(value) => (value.clone(), CDataType::Binary, 0),
             };
-            let indicator = if indicator == NULL_DATA { NULL_DATA } else { payload.len() as isize };
+            let mut input_length = payload.len();
+            if let Some(output) = self.output_specs[slot] {
+                input_length = prepare_output_buffer(&mut payload, output, column_size);
+            }
+            let indicator = if indicator == NULL_DATA {
+                NULL_DATA
+            } else {
+                input_length as isize
+            };
             payloads.push(payload);
-            descriptors.push((c_type, sql_type, column_size, scale, indicator));
+            descriptors.push((c_type, sql_type, column_size, scale, indicator, wide));
         }
         self.indicators.clear();
         self.indicators.extend(descriptors.iter().map(|descriptor| descriptor.4));
-        for (occurrence, (c_type, sql_type, column_size, scale, _)) in descriptors.iter().copied().enumerate() {
+        for (occurrence, (c_type, sql_type, column_size, scale, _, _)) in
+            descriptors.iter().copied().enumerate()
+        {
             let payload = &mut payloads[occurrence];
-            let pointer = if self.indicators[occurrence] == NULL_DATA {
+            let slot = usize::try_from(self.order[occurrence])
+                .ok()
+                .and_then(|slot| slot.checked_sub(1))
+                .unwrap_or(0);
+            let pointer = if self.indicators[occurrence] == NULL_DATA
+                && self.output_specs[slot].is_none()
+            {
                 ptr::null_mut()
             } else {
                 payload.as_mut_ptr().cast()
+            };
+            let parameter_type = match self.output_specs[slot] {
+                Some(output) if output.input_output => ParamType::InputOutput,
+                Some(_) => ParamType::Output,
+                None => ParamType::Input,
             };
             let result = unsafe {
                 SQLBindParameter(
                     self.stmt,
                     occurrence as u16 + 1,
-                    ParamType::Input,
+                    parameter_type,
                     c_type,
                     sql_type,
                     column_size,
@@ -840,11 +1176,57 @@ impl OdbcStmt {
             connection.error = self.error.clone();
             return Err(self.error.message.clone());
         }
+        let execution_info = if result == SqlReturn::SUCCESS_WITH_INFO
+            && !connection.is_informix()
+        {
+            Some(diagnostic(
+                HandleType::Stmt,
+                self.stmt.as_handle(),
+                "SQLExecute",
+            ))
+        } else {
+            None
+        };
+        self.output_values.fill(None);
+        for (occurrence, slot) in self.order.iter().copied().enumerate() {
+            let Some(slot) = usize::try_from(slot).ok().and_then(|slot| slot.checked_sub(1)) else {
+                continue;
+            };
+            if self.output_specs[slot].is_none() {
+                continue;
+            }
+            let indicator = self.indicators[occurrence];
+            let data = if indicator == NULL_DATA {
+                None
+            } else {
+                let length = usize::try_from(indicator)
+                    .unwrap_or(0)
+                    .min(payloads[occurrence].len());
+                let bytes = &payloads[occurrence][..length];
+                if descriptors[occurrence].5 {
+                    let units = bytes
+                        .chunks_exact(2)
+                        .map(|bytes| u16::from_ne_bytes([bytes[0], bytes[1]]));
+                    Some(String::from_utf16_lossy(&units.collect::<Vec<_>>()).into_bytes())
+                } else {
+                    Some(bytes.to_vec())
+                }
+            };
+            self.output_values[slot] = Some(OdbcOutputValue { data, lob: false });
+        }
         self.sent_sql.clear();
         self.materialize_current_result(connection)?;
+        if self.is_insert && connection.is_informix() {
+            connection.refresh_informix_last_insert_id();
+        }
         self.executed = true;
-        self.error = ErrorState::default();
-        connection.error = ErrorState::default();
+        if let Some(warning) = execution_info {
+            self.error = warning.clone();
+            connection.error = warning;
+        } else {
+            self.error = ErrorState::default();
+            connection.error = ErrorState::default();
+        }
         Ok(())
     }
 
@@ -884,6 +1266,37 @@ impl OdbcStmt {
                 connection.error = self.error.clone();
                 return Err(self.error.message.clone());
             }
+            let informix = connection.is_informix();
+            let native_type = if informix {
+                column_text_attribute(self.stmt, index as u16, Desc::TypeName).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let lob = informix
+                && (matches!(
+                    data_type,
+                    SqlDataType::EXT_LONG_VARCHAR
+                        | SqlDataType::EXT_BINARY
+                        | SqlDataType::EXT_VAR_BINARY
+                        | SqlDataType::EXT_LONG_VAR_BINARY
+                ) || data_type.0 == 17);
+            let metadata_lob = informix && informix_metadata_is_lob(&native_type);
+            let mut flags = 0;
+            if nullable == Nullability::NO_NULLS {
+                flags |= 1;
+            }
+            if informix
+                && column_numeric_attribute(self.stmt, index as u16, Desc::Unsigned)
+                    .is_some_and(|value| value != 0)
+            {
+                flags |= 2;
+            }
+            if informix
+                && column_numeric_attribute(self.stmt, index as u16, Desc::AutoUniqueValue)
+                    .is_some_and(|value| value != 0)
+            {
+                flags |= 4;
+            }
             self.columns.push(OdbcColumn {
                 name: String::from_utf8_lossy(&name[..usize::try_from(name_len).unwrap_or(0).min(name.len())]).into_owned(),
                 wide: self.assume_utf8
@@ -893,6 +1306,17 @@ impl OdbcStmt {
                             | SqlDataType::EXT_W_VARCHAR
                             | SqlDataType::EXT_W_LONG_VARCHAR
                     ),
+                lob,
+                metadata_lob,
+                scale: i64::from(scale),
+                table: if informix {
+                    column_text_attribute(self.stmt, index as u16, Desc::BaseTableName)
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                native_type,
+                flags,
             });
         }
         loop {
@@ -1061,9 +1485,69 @@ impl OdbcStmt {
         usize::try_from(index).ok().and_then(|index| self.columns.get(index)).map(|column| column.name.clone()).unwrap_or_default()
     }
 
-    /// Returns PDO's common text/null storage-class tag.
+    /// Returns PDO's common text/null storage-class tag, including Informix LOB streams.
     pub fn column_type(&self, index: i64) -> i64 {
-        if self.cell(index).is_some_and(Option::is_some) { 3 } else { 5 }
+        if self.cell(index).is_none_or(Option::is_none) {
+            return 5;
+        }
+        if usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .is_some_and(|column| column.lob)
+        {
+            4
+        } else {
+            3
+        }
+    }
+
+    /// Returns the driver-native result-column type name exposed by PDO_INFORMIX.
+    pub fn column_native_type(&self, index: i64) -> String {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.native_type.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns the source table name exposed by PDO_INFORMIX when available.
+    pub fn column_table_name(&self, index: i64) -> String {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.table.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns the SQL scale captured by `SQLDescribeCol` for PDO_INFORMIX metadata.
+    pub fn column_scale(&self, index: i64) -> i64 {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.scale)
+            .unwrap_or_default()
+    }
+
+    /// Returns Informix not-null, unsigned, and auto-increment descriptor bits.
+    pub fn column_flags(&self, index: i64) -> i64 {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.flags)
+            .unwrap_or_default()
+    }
+
+    /// Returns PDO_INFORMIX's metadata parameter type for the described column.
+    pub fn column_pdo_type(&self, index: i64) -> i64 {
+        if usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .is_some_and(|column| column.metadata_lob)
+        {
+            3
+        } else {
+            2
+        }
     }
 
     /// Returns one current value parsed as integer.
@@ -1109,8 +1593,9 @@ mod tests {
 
     /// Parses a named DSN and bridge-only PDO constructor options.
     #[test]
+    #[cfg(feature = "odbc")]
     fn parses_named_dsn_options() {
-        let options = parse_open_options("odbc:inventory;user=user%3Bname;password=p%25w;elephc_odbc_cursor_library=2;elephc_odbc_assume_utf8=1").unwrap();
+        let options = parse_open_options("odbc:inventory;user=user%3Bname;password=p%25w;elephc_odbc_cursor_library=2;elephc_odbc_assume_utf8=1", CliFlavor::Odbc).unwrap();
         assert_eq!(options.source, "inventory");
         assert_eq!(options.username, "user;name");
         assert_eq!(options.password, "p%w");
@@ -1120,10 +1605,25 @@ mod tests {
 
     /// Removes bridge-only options without modifying an ODBC connection string.
     #[test]
+    #[cfg(feature = "odbc")]
     fn preserves_direct_connection_string() {
-        let options = parse_open_options("odbc:Driver={SQLite3};Database=/tmp/test.db;user=me").unwrap();
+        let options = parse_open_options("odbc:Driver={SQLite3};Database=/tmp/test.db;user=me", CliFlavor::Odbc).unwrap();
         assert_eq!(options.source, "Driver={SQLite3};Database=/tmp/test.db");
         assert_eq!(options.username, "me");
+    }
+
+    /// Parses PDO_INFORMIX named DSNs and folded constructor credentials.
+    #[test]
+    #[cfg(feature = "informix")]
+    fn parses_informix_named_dsn_options() {
+        let options = parse_open_options(
+            "informix:inventory;user=elephc;password=secret",
+            CliFlavor::Informix,
+        )
+        .unwrap();
+        assert_eq!(options.source, "inventory");
+        assert_eq!(options.username, "elephc");
+        assert_eq!(options.password, "secret");
     }
 
     /// Applies ODBC brace quoting to semicolons and closing braces.
@@ -1142,13 +1642,38 @@ mod tests {
         );
     }
 
+    /// Bounds oversized input/output values to the caller's declared max length.
+    #[test]
+    fn output_buffer_respects_declared_max_length() {
+        let mut payload = vec![b'A'; 64];
+        let input_length = prepare_output_buffer(
+            &mut payload,
+            OutputSpec {
+                max_length: 4,
+                input_output: true,
+            },
+            4000,
+        );
+        assert_eq!(input_length, 4);
+        assert_eq!(payload, b"AAAA");
+    }
+
+    /// Recognizes both short and header-style Informix UDT names as metadata LOBs.
+    #[test]
+    fn recognizes_informix_metadata_lob_names() {
+        assert!(informix_metadata_is_lob("BLOB"));
+        assert!(informix_metadata_is_lob("sql_infx_udt_clob"));
+        assert!(!informix_metadata_is_lob("LONG VARCHAR"));
+    }
+
     /// Executes binds, typed text fetches, transactions, and multiple results against a live DSN.
     #[test]
     #[ignore]
+    #[cfg(feature = "odbc")]
     fn live_odbc_round_trip() {
         let dsn = std::env::var("ELEPHC_ODBC_DSN")
             .expect("ELEPHC_ODBC_DSN is required for the ignored ODBC live test");
-        let mut connection = OdbcConn::open(&dsn).expect("open live ODBC connection");
+        let mut connection = OdbcConn::open_odbc(&dsn).expect("open live ODBC connection");
         assert!(connection.exec("CREATE TEMP TABLE elephc_odbc_bridge_test (id INTEGER, name VARCHAR(40))") >= 0);
 
         let mut insert = OdbcStmt::new(

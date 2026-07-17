@@ -494,7 +494,7 @@ impl OciStmt {
             u32::try_from(max_length).unwrap_or(u32::MAX)
         };
         *target = Some(OciOutputSpec {
-            lob: pdo_type == 3,
+            lob: (pdo_type & 0xFFFF) == 3,
             max_length,
         });
         true
