@@ -1,12 +1,12 @@
 //! Purpose:
-//! System CLI backend matching php-src's PDO_ODBC plus PECL PDO_INFORMIX/PDO_IBM.
+//! System CLI backend matching PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_SQLSRV.
 //!
 //! Called from:
-//! - The PDO bridge root with the optional `odbc`, `informix`, or `ibm` feature.
+//! - The PDO bridge root with the optional `odbc`, `informix`, `ibm`, or `sqlsrv` feature.
 //!
 //! Key details:
 //! - Uses the ODBC 3 CLI ABI through `odbc-sys`, as the official drivers delegate to a driver manager.
-//! - Materializes scalar result rows as text/null and preserves Informix/IBM LOB metadata.
+//! - Materializes scalar result rows as text/null and preserves driver-specific LOB/type metadata.
 //! - Keeps statement handles alive across `SQLMoreResults`, cursor-name, and scroll operations.
 
 use std::collections::HashMap;
@@ -16,19 +16,58 @@ use std::sync::{Mutex, OnceLock};
 
 use odbc_sys::{
     AttrOdbcVersion, CDataType, CompletionType, ConnectionAttribute, Desc, DriverConnectOption,
-    EnvironmentAttribute, FreeStmtOption, HDbc, HEnv, HStmt, Handle, HandleType,
+    EnvironmentAttribute, FetchOrientation, FreeStmtOption, HDbc, HEnv, HStmt, Handle, HandleType,
     InfoType, NULL_DATA, Nullability, ParamType, SqlDataType, SqlReturn, SQLAllocHandle,
     SQLBindParameter, SQLCloseCursor, SQLColAttribute, SQLConnect, SQLDescribeCol, SQLDescribeParam, SQLDisconnect, SQLDriverConnect,
     SQLEndTran, SQLExecDirect, SQLExecute, SQLFetch, SQLFreeHandle, SQLFreeStmt,
     SQLGetData, SQLGetDiagRec, SQLGetInfo, SQLMoreResults, SQLNumParams, SQLNumResultCols,
-    SQLPrepare, SQLRowCount, SQLSetConnectAttr, SQLSetEnvAttr, SQLSetStmtAttr, StatementAttribute,
+    SQLPrepare, SQLPrepareW, SQLRowCount, SQLSetConnectAttr, SQLSetEnvAttr, SQLSetStmtAttr,
+    SQLDrivers, SQLDriverConnectW, SQLExecDirectW, StatementAttribute,
 };
+#[cfg(feature = "sqlsrv")]
+use odbc_sys::{HDesc, SQLColAttributeW, SQLDescribeColW, SQLGetStmtAttr};
 
 const SQL_AUTOCOMMIT_OFF: isize = 0;
 const SQL_AUTOCOMMIT_ON: isize = 1;
 const SQL_CUR_USE_IF_NEEDED: i64 = 0;
 const SQL_CUR_USE_ODBC: i64 = 1;
 const SQL_CUR_USE_DRIVER: i64 = 2;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_ENCODING: i64 = 1000;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_QUERY_TIMEOUT: i64 = 1001;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_DIRECT_QUERY: i64 = 1002;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_CURSOR_SCROLL_TYPE: i64 = 1003;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE: i64 = 1004;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_FETCHES_NUMERIC_TYPE: i64 = 1005;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_FETCHES_DATETIME_TYPE: i64 = 1006;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_FORMAT_DECIMALS: i64 = 1007;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_DECIMAL_PLACES: i64 = 1008;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ATTR_DATA_CLASSIFICATION: i64 = 1009;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ENCODING_DEFAULT: i64 = 1;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ENCODING_BINARY: i64 = 2;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ENCODING_SYSTEM: i64 = 3;
+#[cfg(feature = "sqlsrv")]
+const SQLSRV_ENCODING_UTF8: i64 = 65001;
+#[cfg(feature = "sqlsrv")]
+const SQL_COPT_SS_ACCESS_TOKEN: i32 = 1256;
+#[cfg(feature = "sqlsrv")]
+const SQL_COPT_SS_DATACLASSIFICATION_VERSION: i32 = 1400;
+#[cfg(feature = "sqlsrv")]
+const SQL_CA_SS_DATA_CLASSIFICATION: i16 = 1237;
+#[cfg(feature = "sqlsrv")]
+const SQL_CA_SS_DATA_CLASSIFICATION_VERSION: i16 = 1238;
 #[cfg(feature = "informix")]
 const SQL_INFX_ATTR_ODBC_TYPES_ONLY: i32 = 2257;
 #[cfg(feature = "informix")]
@@ -52,6 +91,7 @@ const SQL_IBM_ATTR_GET_GENERATED_VALUE: i32 = 2583;
 
 unsafe extern "system" {
     /// Applies a driver-specific numeric connection attribute not modeled by `odbc-sys`.
+    #[cfg(any(feature = "informix", feature = "ibm", feature = "sqlsrv"))]
     #[link_name = "SQLSetConnectAttr"]
     fn SQLSetConnectAttrRaw(
         connection_handle: HDbc,
@@ -75,6 +115,17 @@ unsafe extern "system" {
     fn SQLGetStmtAttrRaw(
         statement_handle: HStmt,
         attribute: i32,
+        value: *mut c_void,
+        buffer_length: i32,
+        string_length: *mut i32,
+    ) -> SqlReturn;
+    /// Reads a Microsoft implementation-row-descriptor field outside `odbc-sys`'s enum.
+    #[cfg(feature = "sqlsrv")]
+    #[link_name = "SQLGetDescFieldW"]
+    fn SQLGetDescFieldWRaw(
+        descriptor_handle: HDesc,
+        record_number: i16,
+        field_identifier: i16,
         value: *mut c_void,
         buffer_length: i32,
         string_length: *mut i32,
@@ -103,6 +154,8 @@ enum CliFlavor {
     Informix,
     #[cfg(feature = "ibm")]
     Ibm,
+    #[cfg(feature = "sqlsrv")]
+    Sqlsrv,
 }
 
 /// Maps PDO_IBM's public sequential constants to IBM CLI's native attribute IDs.
@@ -130,7 +183,18 @@ impl CliFlavor {
             Self::Informix => "informix:",
             #[cfg(feature = "ibm")]
             Self::Ibm => "ibm:",
+            #[cfg(feature = "sqlsrv")]
+            Self::Sqlsrv => "sqlsrv:",
         }
+    }
+
+    /// Reports whether this flavor implements Microsoft's PDO_SQLSRV extension.
+    fn is_sqlsrv(self) -> bool {
+        #[cfg(feature = "sqlsrv")]
+        if self == Self::Sqlsrv {
+            return true;
+        }
+        false
     }
 }
 
@@ -232,16 +296,232 @@ fn quote_connection_value(value: &str) -> String {
     }
 }
 
+/// Computes the stable token fingerprint PDO_SQLSRV adds to the pooling key.
+#[cfg(feature = "sqlsrv")]
+fn sqlsrv_token_fingerprint(token: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in token {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Builds Microsoft's aligned `ACCESSTOKEN` header plus zero-padded token bytes.
+#[cfg(feature = "sqlsrv")]
+fn sqlsrv_access_token_buffer(token: &[u8]) -> Vec<u32> {
+    let payload_len = token.len().saturating_mul(2);
+    let byte_len = 4usize.saturating_add(payload_len);
+    let mut buffer = vec![0u32; byte_len.saturating_add(3) / 4];
+    buffer[0] = u32::try_from(payload_len).unwrap_or(u32::MAX);
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), buffer.len() * 4)
+    };
+    for (index, byte) in token.iter().enumerate() {
+        bytes[4 + index * 2] = *byte;
+    }
+    buffer
+}
+
+/// Reads unixODBC/iODBC's process-level `[ODBC] Pooling` switch.
+#[cfg(feature = "sqlsrv")]
+fn sqlsrv_driver_manager_pooling_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let file_name = std::env::var_os("ODBCINSTINI")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("odbcinst.ini"));
+        let mut candidates = Vec::new();
+        if file_name.is_absolute() {
+            candidates.push(file_name.clone());
+        }
+        if let Some(directory) = std::env::var_os("ODBCSYSINI") {
+            candidates.push(std::path::PathBuf::from(directory).join(&file_name));
+        }
+        candidates.extend([
+            std::path::PathBuf::from("/etc").join(&file_name),
+            std::path::PathBuf::from("/usr/local/etc").join(&file_name),
+            std::path::PathBuf::from("/opt/homebrew/etc").join(&file_name),
+        ]);
+        for candidate in candidates {
+            let Ok(contents) = std::fs::read_to_string(candidate) else {
+                continue;
+            };
+            if let Some(enabled) = sqlsrv_pooling_from_ini(&contents) {
+                return enabled;
+            }
+        }
+        false
+    })
+}
+
+/// Extracts `[ODBC] Pooling` from one driver-manager INI document.
+#[cfg(feature = "sqlsrv")]
+fn sqlsrv_pooling_from_ini(contents: &str) -> Option<bool> {
+    let mut in_odbc = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_odbc = line[1..line.len() - 1].eq_ignore_ascii_case("odbc");
+            continue;
+        }
+        if !in_odbc || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("pooling") {
+            return Some(matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "yes" | "on" | "true"
+            ));
+        }
+    }
+    None
+}
+
+/// Returns the process-lifetime pooled SQLSRV ODBC environment.
+#[cfg(feature = "sqlsrv")]
+fn sqlsrv_pooled_environment() -> Result<Handle, String> {
+    static ENVIRONMENT: OnceLock<Result<usize, String>> = OnceLock::new();
+    match ENVIRONMENT.get_or_init(|| {
+        let mut env = Handle::null();
+        if !succeeded(unsafe { SQLAllocHandle(HandleType::Env, Handle::null(), &mut env) }) {
+            return Err("SQLAllocHandle: pooled ENV failed".to_string());
+        }
+        let version = unsafe {
+            SQLSetEnvAttr(
+                env.as_henv(),
+                EnvironmentAttribute::OdbcVersion,
+                AttrOdbcVersion::Odbc3.into(),
+                0,
+            )
+        };
+        let pooling = unsafe {
+            SQLSetEnvAttr(
+                env.as_henv(),
+                EnvironmentAttribute::ConnectionPooling,
+                2isize as *mut c_void,
+                odbc_sys::IS_UINTEGER,
+            )
+        };
+        if !succeeded(version) || !succeeded(pooling) {
+            unsafe { let _ = SQLFreeHandle(HandleType::Env, env); };
+            return Err("SQLSetEnvAttr: pooled ODBC3 environment failed".to_string());
+        }
+        Ok(env.0 as usize)
+    }) {
+        Ok(pointer) => Ok(Handle(*pointer as *mut c_void)),
+        Err(message) => Err(message.clone()),
+    }
+}
+
+/// Frees a connection-private ODBC environment while retaining shared pooled ones.
+fn free_environment_if_owned(env: Handle, owned: bool) {
+    if owned {
+        unsafe { let _ = SQLFreeHandle(HandleType::Env, env); };
+    }
+}
+
+/// Allocates one connection-private ODBC 3 environment.
+fn private_odbc_environment() -> Result<Handle, String> {
+    let mut env = Handle::null();
+    if !succeeded(unsafe { SQLAllocHandle(HandleType::Env, Handle::null(), &mut env) }) {
+        return Err("SQLAllocHandle: ENV failed".to_string());
+    }
+    let version = unsafe {
+        SQLSetEnvAttr(
+            env.as_henv(),
+            EnvironmentAttribute::OdbcVersion,
+            AttrOdbcVersion::Odbc3.into(),
+            0,
+        )
+    };
+    if !succeeded(version) {
+        free_environment_if_owned(env, true);
+        return Err("SQLSetEnvAttr: ODBC3 failed".to_string());
+    }
+    Ok(env)
+}
+
+/// Selects SQLSRV's externally configured pooled environment or a private one.
+#[cfg(feature = "sqlsrv")]
+fn connection_environment(flavor: CliFlavor) -> Result<(Handle, bool), String> {
+    if flavor.is_sqlsrv() && sqlsrv_driver_manager_pooling_enabled() {
+        return sqlsrv_pooled_environment().map(|env| (env, false));
+    }
+    private_odbc_environment().map(|env| (env, true))
+}
+
+/// Selects a private environment when PDO_SQLSRV is not in this bridge build.
+#[cfg(not(feature = "sqlsrv"))]
+fn connection_environment(_flavor: CliFlavor) -> Result<(Handle, bool), String> {
+    private_odbc_environment().map(|env| (env, true))
+}
+
 /// Parsed ODBC DSN and bridge-only constructor options.
 struct OpenOptions {
     source: String,
     username: String,
     password: String,
+    #[cfg(feature = "sqlsrv")]
+    username_supplied: bool,
+    #[cfg(feature = "sqlsrv")]
+    password_supplied: bool,
     cursor_library: i64,
     assume_utf8: bool,
     auto_commit: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_access_token: Option<Vec<u8>>,
     #[cfg(feature = "ibm")]
     ibm_attributes: Vec<(i32, String)>,
+}
+
+/// Enumerates installed ODBC drivers and selects Microsoft's newest SQL Server driver.
+fn sql_server_driver(env: HEnv) -> Option<String> {
+    let mut direction = FetchOrientation::First;
+    let mut candidates = Vec::new();
+    loop {
+        let mut description = [0u8; 256];
+        let mut description_len = 0i16;
+        let mut attributes = [0u8; 1024];
+        let mut attributes_len = 0i16;
+        let result = unsafe {
+            SQLDrivers(
+                env,
+                direction,
+                description.as_mut_ptr(),
+                description.len() as i16,
+                &mut description_len,
+                attributes.as_mut_ptr(),
+                attributes.len() as i16,
+                &mut attributes_len,
+            )
+        };
+        if result == SqlReturn::NO_DATA {
+            break;
+        }
+        if !succeeded(result) {
+            return None;
+        }
+        let length = usize::try_from(description_len).unwrap_or(0).min(description.len());
+        let name = String::from_utf8_lossy(&description[..length]).into_owned();
+        if name.to_ascii_lowercase().contains("sql server") {
+            candidates.push(name);
+        }
+        direction = FetchOrientation::Next;
+    }
+    candidates.into_iter().max_by_key(|name| {
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("odbc driver 18") {
+            18
+        } else if lower.contains("odbc driver 17") {
+            17
+        } else {
+            0
+        }
+    })
 }
 
 /// Splits an ODBC connection string without treating semicolons inside braced values as separators.
@@ -281,19 +561,47 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
     let mut source_parts = Vec::new();
     let mut username = String::new();
     let mut password = String::new();
+    #[cfg(feature = "sqlsrv")]
+    let mut username_supplied = false;
+    #[cfg(feature = "sqlsrv")]
+    let mut password_supplied = false;
     let mut cursor_library = SQL_CUR_USE_IF_NEEDED;
     let mut assume_utf8 = false;
     let mut auto_commit = true;
     #[cfg(feature = "ibm")]
     let mut ibm_attributes = Vec::new();
+    #[cfg(feature = "sqlsrv")]
+    let mut sqlsrv_access_token = None;
     for part in split_connection_fields(body) {
         let lower = part.to_ascii_lowercase();
         if let Some(value) = lower.strip_prefix("user=") {
             let offset = part.len() - value.len();
             username = decode_credential(&part[offset..]);
+            #[cfg(feature = "sqlsrv")]
+            {
+                username_supplied = true;
+            }
         } else if let Some(value) = lower.strip_prefix("password=") {
             let offset = part.len() - value.len();
             password = decode_credential(&part[offset..]);
+            #[cfg(feature = "sqlsrv")]
+            {
+                password_supplied = true;
+            }
+        } else if flavor.is_sqlsrv() && lower.starts_with("accesstoken=") {
+            #[cfg(feature = "sqlsrv")]
+            {
+                let value = &part["accesstoken=".len()..];
+                let value = value
+                    .strip_prefix('{')
+                    .and_then(|value| value.strip_suffix('}'))
+                    .unwrap_or(value)
+                    .replace("}}", "}");
+                if value.is_empty() {
+                    return Err("Access token must not be empty".to_string());
+                }
+                sqlsrv_access_token = Some(value.into_bytes());
+            }
         } else if let Some(value) = lower.strip_prefix("elephc_odbc_cursor_library=") {
             cursor_library = value.parse().unwrap_or(SQL_CUR_USE_IF_NEEDED);
         } else if let Some(value) = lower.strip_prefix("elephc_odbc_assume_utf8=") {
@@ -313,6 +621,9 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
         } else if lower.starts_with("connect_timeout=") {
             // PDO_ODBC does not implement PDO::ATTR_TIMEOUT; the common prelude
             // folds it for network drivers, so discard it before DriverConnect.
+        } else if flavor.is_sqlsrv() && lower.starts_with("connectionpooling=") {
+            // On Unix-like targets current PDO_SQLSRV ignores this DSN option and
+            // lets the ODBC manager's ODBCINST.INI Pooling setting select pooling.
         } else if !part.is_empty() {
             source_parts.push(part);
         }
@@ -324,9 +635,15 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
         source: source_parts.join(";"),
         username,
         password,
+        #[cfg(feature = "sqlsrv")]
+        username_supplied,
+        #[cfg(feature = "sqlsrv")]
+        password_supplied,
         cursor_library,
         assume_utf8,
         auto_commit,
+        #[cfg(feature = "sqlsrv")]
+        sqlsrv_access_token,
         #[cfg(feature = "ibm")]
         ibm_attributes,
     })
@@ -335,6 +652,7 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
 /// Live ODBC environment/connection pair and PDO state.
 pub struct OdbcConn {
     env: HEnv,
+    owns_env: bool,
     dbc: HDbc,
     error: ErrorState,
     pub changes: i64,
@@ -343,6 +661,28 @@ pub struct OdbcConn {
     assume_utf8: bool,
     flavor: CliFlavor,
     last_insert_id: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_encoding: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_query_timeout: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_direct_query: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_client_buffer_kb: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_fetch_numeric: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_fetch_datetime: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_format_decimals: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_decimal_places: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_default_str_param: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_emulate_prepares: bool,
+    #[cfg(feature = "sqlsrv")]
+    _sqlsrv_access_token: Option<Vec<u32>>,
 }
 
 // The bridge serializes access through its global connection-table mutex.
@@ -359,7 +699,7 @@ impl Drop for OdbcConn {
                 let _ = SQLDisconnect(self.dbc);
                 let _ = SQLFreeHandle(HandleType::Dbc, self.dbc.as_handle());
             }
-            if !self.env.0.is_null() {
+            if self.owns_env && !self.env.0.is_null() {
                 let _ = SQLFreeHandle(HandleType::Env, self.env.as_handle());
             }
         }
@@ -385,6 +725,12 @@ impl OdbcConn {
         Self::open(dsn, CliFlavor::Ibm)
     }
 
+    /// Opens a PDO_SQLSRV DSN through Microsoft ODBC Driver 18 or 17.
+    #[cfg(feature = "sqlsrv")]
+    pub fn open_sqlsrv(dsn: &str) -> Result<Self, String> {
+        Self::open(dsn, CliFlavor::Sqlsrv)
+    }
+
     /// Opens either CLI flavor while retaining its distinct PDO identity.
     fn open(dsn: &str, flavor: CliFlavor) -> Result<Self, String> {
         remember_open_error(&ErrorState {
@@ -392,31 +738,100 @@ impl OdbcConn {
             native_code: 0,
             message: "CLI connection initialization failed".to_string(),
         });
-        let options = parse_open_options(dsn, flavor)?;
-        let mut env = Handle::null();
-        let mut dbc = Handle::null();
-        let allocated_env = unsafe { SQLAllocHandle(HandleType::Env, Handle::null(), &mut env) };
-        if !succeeded(allocated_env) {
-            return Err("SQLAllocHandle: ENV failed".to_string());
-        }
-        let set_version = unsafe {
-            SQLSetEnvAttr(
-                env.as_henv(),
-                EnvironmentAttribute::OdbcVersion,
-                AttrOdbcVersion::Odbc3.into(),
-                0,
-            )
+        let mut options = parse_open_options(dsn, flavor)?;
+        #[cfg(feature = "sqlsrv")]
+        let sqlsrv_token = if flavor.is_sqlsrv() {
+            options.sqlsrv_access_token.take()
+        } else {
+            None
         };
-        if !succeeded(set_version) {
-            unsafe { let _ = SQLFreeHandle(HandleType::Env, env); };
-            return Err("SQLSetEnvAttr: ODBC3 failed".to_string());
+        #[cfg(feature = "sqlsrv")]
+        if let Some(token) = sqlsrv_token.as_deref() {
+            let conflicting_source_option = split_connection_fields(&options.source)
+                .iter()
+                .filter_map(|field| field.split_once('=').map(|(key, _)| key.trim()))
+                .any(|key| {
+                    key.eq_ignore_ascii_case("uid")
+                        || key.eq_ignore_ascii_case("pwd")
+                        || key.eq_ignore_ascii_case("authentication")
+                });
+            if options.username_supplied
+                || options.password_supplied
+                || conflicting_source_option
+            {
+                return Err(
+                    "AccessToken cannot be combined with username, password, or Authentication"
+                        .to_string(),
+                );
+            }
+            let fingerprint = sqlsrv_token_fingerprint(token);
+            if !options.source.is_empty() && !options.source.ends_with(';') {
+                options.source.push(';');
+            }
+            options
+                .source
+                .push_str(&format!("APP={{MSPHPSQL AT-{fingerprint:016x}}}"));
+        }
+        #[cfg(feature = "sqlsrv")]
+        let mut sqlsrv_access_token = sqlsrv_token
+            .as_deref()
+            .map(sqlsrv_access_token_buffer);
+        let (env, owns_env) = connection_environment(flavor)?;
+        let mut dbc = Handle::null();
+        if flavor.is_sqlsrv()
+            && !split_connection_fields(&options.source).iter().any(|field| {
+                field
+                    .split_once('=')
+                    .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("driver"))
+            })
+        {
+            let Some(driver) = sql_server_driver(env.as_henv()) else {
+                free_environment_if_owned(env, owns_env);
+                return Err("Microsoft ODBC Driver 18 or 17 for SQL Server is not installed".to_string());
+            };
+            options.source = format!("Driver={{{driver}}};{}", options.source);
         }
         let allocated_dbc = unsafe { SQLAllocHandle(HandleType::Dbc, env, &mut dbc) };
         if !succeeded(allocated_dbc) {
-            unsafe { let _ = SQLFreeHandle(HandleType::Env, env); };
+            free_environment_if_owned(env, owns_env);
             return Err("SQLAllocHandle: DBC failed".to_string());
         }
         let dbc_handle = dbc.as_hdbc();
+        #[cfg(feature = "sqlsrv")]
+        if let Some(token) = sqlsrv_access_token.as_mut() {
+            let result = unsafe {
+                SQLSetConnectAttrRaw(
+                    dbc_handle,
+                    SQL_COPT_SS_ACCESS_TOKEN,
+                    token.as_mut_ptr().cast(),
+                    odbc_sys::IS_POINTER,
+                )
+            };
+            if !succeeded(result) {
+                let error = diagnostic(
+                    HandleType::Dbc,
+                    dbc,
+                    "SQLSetConnectAttr SQL_COPT_SS_ACCESS_TOKEN",
+                );
+                remember_open_error(&error);
+                unsafe {
+                    let _ = SQLFreeHandle(HandleType::Dbc, dbc);
+                }
+                free_environment_if_owned(env, owns_env);
+                return Err(error.message);
+            }
+        }
+        #[cfg(feature = "sqlsrv")]
+        if flavor.is_sqlsrv() {
+            let _ = unsafe {
+                SQLSetConnectAttrRaw(
+                    dbc_handle,
+                    SQL_COPT_SS_DATACLASSIFICATION_VERSION,
+                    2isize as *mut c_void,
+                    odbc_sys::IS_POINTER,
+                )
+            };
+        }
         let set_autocommit = unsafe {
             SQLSetConnectAttr(
                 dbc_handle,
@@ -430,8 +845,8 @@ impl OdbcConn {
             remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
-                let _ = SQLFreeHandle(HandleType::Env, env);
             }
+            free_environment_if_owned(env, owns_env);
             return Err(error.message);
         }
         #[cfg(feature = "ibm")]
@@ -465,8 +880,8 @@ impl OdbcConn {
                     remember_open_error(&error);
                     unsafe {
                         let _ = SQLFreeHandle(HandleType::Dbc, dbc);
-                        let _ = SQLFreeHandle(HandleType::Env, env);
                     }
+                    free_environment_if_owned(env, owns_env);
                     return Err(error.message);
                 }
             }
@@ -484,8 +899,8 @@ impl OdbcConn {
             remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
-                let _ = SQLFreeHandle(HandleType::Env, env);
             }
+            free_environment_if_owned(env, owns_env);
             return Err(error.message);
         }
 
@@ -501,19 +916,37 @@ impl OdbcConn {
                 source.push_str(";PWD=");
                 source.push_str(&quote_connection_value(&options.password));
             }
-            let mut completed = [0u8; 1024];
-            let mut completed_len = 0i16;
-            unsafe {
-                SQLDriverConnect(
-                    dbc_handle,
-                    ptr::null_mut(),
-                    source.as_ptr(),
-                    source.len() as i16,
-                    completed.as_mut_ptr(),
-                    completed.len() as i16,
-                    &mut completed_len,
-                    DriverConnectOption::NoPrompt,
-                )
+            if flavor.is_sqlsrv() {
+                let source = source.encode_utf16().collect::<Vec<_>>();
+                let mut completed = [0u16; 1024];
+                let mut completed_len = 0i16;
+                unsafe {
+                    SQLDriverConnectW(
+                        dbc_handle,
+                        ptr::null_mut(),
+                        source.as_ptr(),
+                        source.len() as i16,
+                        completed.as_mut_ptr(),
+                        completed.len() as i16,
+                        &mut completed_len,
+                        DriverConnectOption::NoPrompt,
+                    )
+                }
+            } else {
+                let mut completed = [0u8; 1024];
+                let mut completed_len = 0i16;
+                unsafe {
+                    SQLDriverConnect(
+                        dbc_handle,
+                        ptr::null_mut(),
+                        source.as_ptr(),
+                        source.len() as i16,
+                        completed.as_mut_ptr(),
+                        completed.len() as i16,
+                        &mut completed_len,
+                        DriverConnectOption::NoPrompt,
+                    )
+                }
             }
         } else {
             unsafe {
@@ -537,8 +970,8 @@ impl OdbcConn {
             remember_open_error(&error);
             unsafe {
                 let _ = SQLFreeHandle(HandleType::Dbc, dbc);
-                let _ = SQLFreeHandle(HandleType::Env, env);
             }
+            free_environment_if_owned(env, owns_env);
             return Err(error.message);
         }
         #[cfg(feature = "informix")]
@@ -561,22 +994,45 @@ impl OdbcConn {
                     unsafe {
                         let _ = SQLDisconnect(dbc_handle);
                         let _ = SQLFreeHandle(HandleType::Dbc, dbc);
-                        let _ = SQLFreeHandle(HandleType::Env, env);
                     }
+                    free_environment_if_owned(env, owns_env);
                     return Err(error.message);
                 }
             }
         }
         Ok(Self {
             env: env.as_henv(),
+            owns_env,
             dbc: dbc_handle,
             error: ErrorState::default(),
             changes: 0,
             in_transaction: false,
             auto_commit: options.auto_commit,
-            assume_utf8: options.assume_utf8,
+            assume_utf8: options.assume_utf8 || flavor.is_sqlsrv(),
             flavor,
             last_insert_id: 0,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_encoding: SQLSRV_ENCODING_UTF8,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_query_timeout: 0,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_direct_query: false,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_client_buffer_kb: 10_240,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_fetch_numeric: false,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_fetch_datetime: false,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_format_decimals: false,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_decimal_places: -1,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_default_str_param: 0x2000_0000,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_emulate_prepares: false,
+            #[cfg(feature = "sqlsrv")]
+            _sqlsrv_access_token: sqlsrv_access_token,
         })
     }
 
@@ -589,6 +1045,8 @@ impl OdbcConn {
             CliFlavor::Informix => crate::driver::DriverKind::Informix,
             #[cfg(feature = "ibm")]
             CliFlavor::Ibm => crate::driver::DriverKind::Ibm,
+            #[cfg(feature = "sqlsrv")]
+            CliFlavor::Sqlsrv => crate::driver::DriverKind::Sqlsrv,
         }
     }
 
@@ -629,7 +1087,12 @@ impl OdbcConn {
             return -1;
         }
         let statement_handle = statement.as_hstmt();
-        let result = unsafe { SQLExecDirect(statement_handle, sql.as_ptr(), sql.len() as i32) };
+        let result = if self.is_sqlsrv() {
+            let sql = sql.encode_utf16().collect::<Vec<_>>();
+            unsafe { SQLExecDirectW(statement_handle, sql.as_ptr(), sql.len() as i32) }
+        } else {
+            unsafe { SQLExecDirect(statement_handle, sql.as_ptr(), sql.len() as i32) }
+        };
         if result == SqlReturn::NO_DATA {
             self.changes = 0;
         } else if !succeeded(result) {
@@ -678,6 +1141,11 @@ impl OdbcConn {
             return true;
         }
         false
+    }
+
+    /// Reports whether this shared CLI handle belongs to PDO_SQLSRV.
+    fn is_sqlsrv(&self) -> bool {
+        self.flavor.is_sqlsrv()
     }
 
     /// Reads Informix's most recent SERIAL value without changing PDO error state.
@@ -747,8 +1215,8 @@ impl OdbcConn {
         let _ = statement;
     }
 
-    /// Returns the current Db2 identity or most recent Informix SERIAL as PDO text.
-    pub fn last_insert_id(&mut self) -> String {
+    /// Returns the driver-specific current identity or named SQL Server sequence value.
+    pub fn last_insert_id(&mut self, name: Option<&str>) -> String {
         if self.is_informix() {
             return self.last_insert_id.to_string();
         }
@@ -761,6 +1229,16 @@ impl OdbcConn {
             }
             return self.last_insert_id.to_string();
         }
+        if self.is_sqlsrv() {
+            let sql = name.filter(|name| !name.is_empty()).map_or_else(
+                || "SELECT @@IDENTITY;".to_string(),
+                |name| {
+                    let name = name.replace('\'', "''");
+                    format!("SELECT current_value FROM sys.sequences WHERE name=N'{name}'")
+                },
+            );
+            return self.query_scalar_text(&sql).unwrap_or_default();
+        }
         String::new()
     }
 
@@ -772,7 +1250,12 @@ impl OdbcConn {
             return None;
         }
         let statement = raw.as_hstmt();
-        let executed = unsafe { SQLExecDirect(statement, sql.as_ptr(), sql.len() as i32) };
+        let executed = if self.is_sqlsrv() {
+            let sql = sql.encode_utf16().collect::<Vec<_>>();
+            unsafe { SQLExecDirectW(statement, sql.as_ptr(), sql.len() as i32) }
+        } else {
+            unsafe { SQLExecDirect(statement, sql.as_ptr(), sql.len() as i32) }
+        };
         if !succeeded(executed) || !succeeded(unsafe { SQLFetch(statement) }) {
             self.error = diagnostic(HandleType::Stmt, raw, "SQLExecDirect");
             unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
@@ -852,6 +1335,10 @@ impl OdbcConn {
 
     /// Updates PDO_ODBC's writable connection attributes.
     pub fn set_attribute(&mut self, attribute: i64, value: i64) -> bool {
+        #[cfg(feature = "sqlsrv")]
+        if self.is_sqlsrv() {
+            return self.set_sqlsrv_attribute(attribute, value);
+        }
         match attribute {
             0 if !self.in_transaction => {
                 let enabled = value != 0;
@@ -872,9 +1359,91 @@ impl OdbcConn {
 
     /// Reads PDO_ODBC's boolean connection attributes.
     pub fn attribute(&self, attribute: i64) -> Option<i64> {
+        #[cfg(feature = "sqlsrv")]
+        if self.is_sqlsrv() {
+            return self.sqlsrv_attribute(attribute);
+        }
         match attribute {
             0 => Some(self.auto_commit as i64),
             1001 => Some(self.assume_utf8 as i64),
+            _ => None,
+        }
+    }
+
+    /// Applies one PDO_SQLSRV connection attribute with upstream validation.
+    #[cfg(feature = "sqlsrv")]
+    fn set_sqlsrv_attribute(&mut self, attribute: i64, value: i64) -> bool {
+        let accepted = match attribute {
+            SQLSRV_ATTR_ENCODING => match value {
+                SQLSRV_ENCODING_DEFAULT => {
+                    self.sqlsrv_encoding = SQLSRV_ENCODING_UTF8;
+                    true
+                }
+                SQLSRV_ENCODING_SYSTEM | SQLSRV_ENCODING_UTF8 => {
+                    self.sqlsrv_encoding = value;
+                    true
+                }
+                _ => false,
+            },
+            SQLSRV_ATTR_QUERY_TIMEOUT if value >= 0 => {
+                self.sqlsrv_query_timeout = value;
+                true
+            }
+            SQLSRV_ATTR_DIRECT_QUERY => {
+                self.sqlsrv_direct_query = value != 0;
+                true
+            }
+            SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE if value > 0 => {
+                self.sqlsrv_client_buffer_kb = value;
+                true
+            }
+            SQLSRV_ATTR_FETCHES_NUMERIC_TYPE => {
+                self.sqlsrv_fetch_numeric = value != 0;
+                true
+            }
+            SQLSRV_ATTR_FETCHES_DATETIME_TYPE => {
+                self.sqlsrv_fetch_datetime = value != 0;
+                true
+            }
+            SQLSRV_ATTR_FORMAT_DECIMALS => {
+                self.sqlsrv_format_decimals = value != 0;
+                true
+            }
+            SQLSRV_ATTR_DECIMAL_PLACES => {
+                self.sqlsrv_decimal_places = if (0..=4).contains(&value) { value } else { -1 };
+                true
+            }
+            17 => true,
+            20 => {
+                self.sqlsrv_emulate_prepares = value != 0;
+                true
+            }
+            21 if matches!(value, 0x2000_0000 | 0x4000_0000) => {
+                self.sqlsrv_default_str_param = value;
+                true
+            }
+            _ => false,
+        };
+        if accepted {
+            self.error = ErrorState::default();
+        }
+        accepted
+    }
+
+    /// Reads one PDO_SQLSRV connection attribute supported by the upstream hook.
+    #[cfg(feature = "sqlsrv")]
+    fn sqlsrv_attribute(&self, attribute: i64) -> Option<i64> {
+        match attribute {
+            SQLSRV_ATTR_ENCODING => Some(self.sqlsrv_encoding),
+            SQLSRV_ATTR_QUERY_TIMEOUT => Some(self.sqlsrv_query_timeout),
+            SQLSRV_ATTR_DIRECT_QUERY => Some(self.sqlsrv_direct_query as i64),
+            SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE => Some(self.sqlsrv_client_buffer_kb),
+            SQLSRV_ATTR_FETCHES_NUMERIC_TYPE => Some(self.sqlsrv_fetch_numeric as i64),
+            SQLSRV_ATTR_FETCHES_DATETIME_TYPE => Some(self.sqlsrv_fetch_datetime as i64),
+            SQLSRV_ATTR_FORMAT_DECIMALS => Some(self.sqlsrv_format_decimals as i64),
+            SQLSRV_ATTR_DECIMAL_PLACES => Some(self.sqlsrv_decimal_places),
+            20 => Some(self.sqlsrv_emulate_prepares as i64),
+            21 => Some(self.sqlsrv_default_str_param),
             _ => None,
         }
     }
@@ -1013,12 +1582,31 @@ impl OdbcConn {
             CliFlavor::Informix => "1.3.7".to_string(),
             #[cfg(feature = "ibm")]
             CliFlavor::Ibm => "1.7.0".to_string(),
+            #[cfg(feature = "sqlsrv")]
+            CliFlavor::Sqlsrv => "5.13.1".to_string(),
         }
     }
 
     /// Returns the connected DBMS name exposed by `PDO::ATTR_SERVER_INFO`.
     pub fn server_info(&mut self) -> String {
         self.info(InfoType::DbmsName)
+    }
+
+    /// Returns one PDO_SQLSRV client/server information array field.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_info(&mut self, field: i64) -> String {
+        if !self.is_sqlsrv() {
+            return String::new();
+        }
+        match field {
+            0 => self.query_scalar_text("SELECT DB_NAME()").unwrap_or_default(),
+            1 => self.info(InfoType::DbmsVer),
+            2 => self.info(InfoType::ServerName),
+            3 => self.info(InfoType::DriverName),
+            4 => self.info(InfoType::DriverOdbcVer),
+            5 => self.info(InfoType::DriverVer),
+            _ => String::new(),
+        }
     }
 
     /// Returns the current connection SQLSTATE.
@@ -1052,6 +1640,7 @@ enum OdbcBind {
 struct OutputSpec {
     max_length: i64,
     input_output: bool,
+    lob: bool,
 }
 
 /// Bounds an output buffer to PDO's declared maximum and returns its input length.
@@ -1066,6 +1655,239 @@ fn prepare_output_buffer(payload: &mut Vec<u8>, output: OutputSpec, precision: u
     let input_length = input_length.min(capacity);
     payload.resize(capacity, 0);
     input_length
+}
+
+/// Renders a SQLSRV emulated-prepare statement using T-SQL literals.
+#[cfg(feature = "sqlsrv")]
+fn interpolate_sqlsrv(
+    sql: &str,
+    order: &[i64],
+    binds: &[OdbcBind],
+    national_strings: bool,
+) -> Result<String, String> {
+    let mut output = String::with_capacity(sql.len() + binds.len() * 8);
+    let mut marker = 0usize;
+    let mut chars = sql.chars().peekable();
+    let mut quote = None;
+    while let Some(ch) = chars.next() {
+        if let Some(active) = quote {
+            output.push(ch);
+            if ch == active {
+                if chars.peek() == Some(&active) {
+                    output.push(chars.next().unwrap_or(active));
+                } else {
+                    quote = None;
+                }
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"' | '[') {
+            quote = Some(if ch == '[' { ']' } else { ch });
+            output.push(ch);
+            continue;
+        }
+        if ch != '?' {
+            output.push(ch);
+            continue;
+        }
+        let slot = order
+            .get(marker)
+            .copied()
+            .and_then(|slot| usize::try_from(slot).ok())
+            .and_then(|slot| slot.checked_sub(1))
+            .ok_or_else(|| "Invalid parameter number".to_string())?;
+        render_sqlsrv_bind(
+            &mut output,
+            binds.get(slot).ok_or_else(|| "Invalid parameter number".to_string())?,
+            national_strings,
+        );
+        marker += 1;
+    }
+    if marker != order.len() {
+        return Err("Invalid parameter number".to_string());
+    }
+    Ok(output)
+}
+
+/// Appends one ODBC bind as the literal syntax used by PDO_SQLSRV emulation.
+#[cfg(feature = "sqlsrv")]
+fn render_sqlsrv_bind(output: &mut String, value: &OdbcBind, national_strings: bool) {
+    match value {
+        OdbcBind::Null => output.push_str("NULL"),
+        OdbcBind::Int(value) => output.push_str(&value.to_string()),
+        OdbcBind::Double(value) if value.is_finite() => output.push_str(&value.to_string()),
+        OdbcBind::Double(_) => output.push_str("NULL"),
+        OdbcBind::Text(bytes) => {
+            if national_strings {
+                output.push('N');
+            }
+            output.push('\'');
+            for ch in String::from_utf8_lossy(bytes).chars() {
+                if ch == '\'' {
+                    output.push('\'');
+                }
+                output.push(ch);
+            }
+            output.push('\'');
+        }
+        OdbcBind::Binary(bytes) => {
+            output.push_str("0x");
+            for byte in bytes {
+                use std::fmt::Write;
+                let _ = write!(output, "{byte:02X}");
+            }
+        }
+    }
+}
+
+/// Applies PDO_SQLSRV's decimal leading-zero and money scale formatting.
+#[cfg(feature = "sqlsrv")]
+fn format_sqlsrv_decimal(
+    value: Option<Vec<u8>>,
+    native_type: &str,
+    format_decimals: bool,
+    decimal_places: i64,
+) -> Option<Vec<u8>> {
+    let decimal_type = native_type.to_ascii_lowercase();
+    let money = matches!(decimal_type.as_str(), "money" | "smallmoney");
+    let decimal = money || matches!(decimal_type.as_str(), "decimal" | "numeric");
+    if (!format_decimals || !decimal) && (decimal_places < 0 || !money) {
+        return value;
+    }
+    let bytes = value?;
+    let mut text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => return Some(error.into_bytes()),
+    };
+    if format_decimals {
+        if text.starts_with('.') {
+            text.insert(0, '0');
+        } else if text.starts_with("-.") {
+            text.insert(1, '0');
+        }
+    }
+    if decimal_places >= 0
+        && money
+    {
+        if let Ok(number) = text.parse::<f64>() {
+            text = format!("{number:.precision$}", precision = decimal_places as usize);
+        }
+    }
+    Some(text.into_bytes())
+}
+
+/// Reads one native-endian `u16` from Microsoft's classification blob.
+#[cfg(feature = "sqlsrv")]
+fn classification_u16(blob: &[u8], offset: &mut usize) -> Result<u16, String> {
+    let end = offset.saturating_add(2);
+    let bytes: [u8; 2] = blob
+        .get(*offset..end)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| "Truncated SQL Server data-classification metadata".to_string())?;
+    *offset = end;
+    Ok(u16::from_ne_bytes(bytes))
+}
+
+/// Reads one native-endian `i32` from Microsoft's classification blob.
+#[cfg(feature = "sqlsrv")]
+fn classification_i32(blob: &[u8], offset: &mut usize) -> Result<i32, String> {
+    let end = offset.saturating_add(4);
+    let bytes: [u8; 4] = blob
+        .get(*offset..end)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| "Truncated SQL Server data-classification metadata".to_string())?;
+    *offset = end;
+    Ok(i32::from_ne_bytes(bytes))
+}
+
+/// Reads one length-prefixed UTF-16 name or identifier from the classification blob.
+#[cfg(feature = "sqlsrv")]
+fn classification_utf16(blob: &[u8], offset: &mut usize) -> Result<String, String> {
+    let units = usize::from(
+        *blob
+            .get(*offset)
+            .ok_or_else(|| "Truncated SQL Server data-classification metadata".to_string())?,
+    );
+    *offset = offset.saturating_add(1);
+    let byte_len = units.saturating_mul(2);
+    let end = offset.saturating_add(byte_len);
+    let bytes = blob
+        .get(*offset..end)
+        .ok_or_else(|| "Truncated SQL Server data-classification metadata".to_string())?;
+    let utf16 = bytes
+        .chunks_exact(2)
+        .map(|unit| u16::from_ne_bytes([unit[0], unit[1]]))
+        .collect::<Vec<_>>();
+    *offset = end;
+    Ok(String::from_utf16_lossy(&utf16))
+}
+
+/// Parses the ODBC Driver 17.2+ sensitivity-label blob into PDO-facing columns.
+#[cfg(feature = "sqlsrv")]
+fn parse_sqlsrv_classification_blob(
+    blob: &[u8],
+    rank_available: bool,
+) -> Result<SqlsrvClassification, String> {
+    let mut offset = 0usize;
+    let label_count = usize::from(classification_u16(blob, &mut offset)?);
+    let mut labels = Vec::with_capacity(label_count);
+    for _ in 0..label_count {
+        labels.push((
+            classification_utf16(blob, &mut offset)?,
+            classification_utf16(blob, &mut offset)?,
+        ));
+    }
+    let info_count = usize::from(classification_u16(blob, &mut offset)?);
+    let mut information_types = Vec::with_capacity(info_count);
+    for _ in 0..info_count {
+        information_types.push((
+            classification_utf16(blob, &mut offset)?,
+            classification_utf16(blob, &mut offset)?,
+        ));
+    }
+    let query_rank = if rank_available {
+        Some(classification_i32(blob, &mut offset)?)
+    } else {
+        None
+    };
+    let column_count = usize::from(classification_u16(blob, &mut offset)?);
+    let mut columns = Vec::with_capacity(column_count);
+    for _ in 0..column_count {
+        let pair_count = usize::from(classification_u16(blob, &mut offset)?);
+        let mut pairs = Vec::with_capacity(pair_count);
+        for _ in 0..pair_count {
+            let label_index = usize::from(classification_u16(blob, &mut offset)?);
+            let information_index = usize::from(classification_u16(blob, &mut offset)?);
+            let rank = if rank_available {
+                Some(classification_i32(blob, &mut offset)?)
+            } else {
+                None
+            };
+            let (label_name, label_id) = labels
+                .get(label_index)
+                .cloned()
+                .ok_or_else(|| "Invalid SQL Server sensitivity-label index".to_string())?;
+            let (information_name, information_id) = information_types
+                .get(information_index)
+                .cloned()
+                .ok_or_else(|| "Invalid SQL Server information-type index".to_string())?;
+            pairs.push(SqlsrvClassificationPair {
+                label_name,
+                label_id,
+                information_name,
+                information_id,
+                rank,
+            });
+        }
+        columns.push(pairs);
+    }
+    if offset != blob.len() {
+        return Err("Unexpected trailing SQL Server data-classification metadata".to_string());
+    }
+    Ok(SqlsrvClassification {
+        query_rank,
+        columns,
+    })
 }
 
 /// Reads one text descriptor attribute without making unsupported metadata fatal.
@@ -1089,6 +1911,34 @@ fn column_text_attribute(statement: HStmt, column: u16, attribute: Desc) -> Opti
     }
     let length = usize::try_from(length).unwrap_or(0).min(buffer.len());
     Some(String::from_utf8_lossy(&buffer[..length]).into_owned())
+}
+
+/// Reads one UTF-16 descriptor attribute for PDO_SQLSRV Unicode metadata.
+#[cfg(feature = "sqlsrv")]
+fn column_text_attribute_w(statement: HStmt, column: u16, attribute: Desc) -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let mut length = 0i16;
+    let mut numeric = 0isize;
+    let result = unsafe {
+        SQLColAttributeW(
+            statement,
+            column,
+            attribute,
+            buffer.as_mut_ptr().cast(),
+            (buffer.len() * std::mem::size_of::<u16>()) as i16,
+            &mut length,
+            &mut numeric,
+        )
+    };
+    if !succeeded(result) {
+        return None;
+    }
+    let units = usize::try_from(length)
+        .unwrap_or(0)
+        .checked_div(std::mem::size_of::<u16>())
+        .unwrap_or(0)
+        .min(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..units]))
 }
 
 /// Reads one numeric descriptor attribute without making unsupported metadata fatal.
@@ -1144,12 +1994,30 @@ struct OdbcColumn {
     table: String,
     native_type: String,
     flags: i64,
+    #[cfg(feature = "sqlsrv")]
+    data_type: i16,
+}
+
+/// One label/information-type pair returned for a classified result column.
+#[cfg(feature = "sqlsrv")]
+struct SqlsrvClassificationPair {
+    label_name: String,
+    label_id: String,
+    information_name: String,
+    information_id: String,
+    rank: Option<i32>,
+}
+
+/// Parsed SQLSRV sensitivity metadata shared by `getColumnMeta()` calls.
+#[cfg(feature = "sqlsrv")]
+struct SqlsrvClassification {
+    query_rank: Option<i32>,
+    columns: Vec<Vec<SqlsrvClassificationPair>>,
 }
 
 /// Prepared ODBC statement retaining its native handle across result sets.
 pub struct OdbcStmt {
     pub conn_id: i64,
-    #[cfg(feature = "odbc")]
     flavor: CliFlavor,
     stmt: HStmt,
     named_map: HashMap<String, i64>,
@@ -1168,6 +2036,34 @@ pub struct OdbcStmt {
     pub sent_sql: String,
     error: ErrorState,
     is_insert: bool,
+    #[cfg(feature = "sqlsrv")]
+    translated_sql: String,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_direct_query: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_emulated: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_encoding: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_query_timeout: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_cursor_type: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_client_buffer_kb: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_fetch_numeric: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_fetch_datetime: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_format_decimals: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_decimal_places: i64,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_data_classification: bool,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_classification: Option<SqlsrvClassification>,
+    #[cfg(feature = "sqlsrv")]
+    sqlsrv_classification_error: Option<ErrorState>,
 }
 
 unsafe impl Send for OdbcStmt {}
@@ -1188,7 +2084,7 @@ impl OdbcStmt {
         connection: &mut OdbcConn,
         conn_id: i64,
         sql: &str,
-        scrollable: bool,
+        mode: i64,
     ) -> Result<Self, String> {
         let (translated, named_map, order, mixed) = crate::my::translate_placeholders(sql, false);
         if mixed {
@@ -1200,7 +2096,7 @@ impl OdbcStmt {
             return Err(connection.error.message.clone());
         }
         let stmt = raw.as_hstmt();
-        if scrollable {
+        if (mode & 2) != 0 {
             let configured = unsafe {
                 SQLSetStmtAttr(
                     stmt,
@@ -1216,22 +2112,36 @@ impl OdbcStmt {
                 return Err(error.message);
             }
         }
-        let prepared = unsafe { SQLPrepare(stmt, translated.as_ptr(), translated.len() as i32) };
-        if !succeeded(prepared) {
-            let error = diagnostic(HandleType::Stmt, raw, "SQLPrepare");
-            unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
-            connection.error = error.clone();
-            return Err(error.message);
+        #[cfg(feature = "sqlsrv")]
+        let direct_sqlsrv = connection.is_sqlsrv()
+            && (connection.sqlsrv_direct_query || (mode & 4) != 0);
+        #[cfg(not(feature = "sqlsrv"))]
+        let direct_sqlsrv = false;
+        if !direct_sqlsrv {
+            let prepared = if connection.is_sqlsrv() {
+                let wide = translated.encode_utf16().collect::<Vec<_>>();
+                unsafe { SQLPrepareW(stmt, wide.as_ptr(), wide.len() as i32) }
+            } else {
+                unsafe { SQLPrepare(stmt, translated.as_ptr(), translated.len() as i32) }
+            };
+            if !succeeded(prepared) {
+                let error = diagnostic(HandleType::Stmt, raw, "SQLPrepare");
+                unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
+                connection.error = error.clone();
+                return Err(error.message);
+            }
         }
         let slots = order.iter().copied().max().unwrap_or(0).max(0) as usize;
         let mut native_params = 0i16;
-        if succeeded(unsafe { SQLNumParams(stmt, &mut native_params) }) && native_params as usize != order.len() {
+        if !direct_sqlsrv
+            && succeeded(unsafe { SQLNumParams(stmt, &mut native_params) })
+            && native_params as usize != order.len()
+        {
             unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
             return Err("Invalid parameter number: number of bound variables does not match number of tokens".to_string());
         }
         Ok(Self {
             conn_id,
-            #[cfg(feature = "odbc")]
             flavor: connection.flavor,
             stmt,
             named_map,
@@ -1253,6 +2163,34 @@ impl OdbcStmt {
                 .trim_start()
                 .to_ascii_lowercase()
                 .starts_with("insert"),
+            #[cfg(feature = "sqlsrv")]
+            translated_sql: translated,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_direct_query: direct_sqlsrv,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_emulated: connection.sqlsrv_emulate_prepares || (mode & 1) != 0,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_encoding: SQLSRV_ENCODING_DEFAULT,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_query_timeout: connection.sqlsrv_query_timeout,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_cursor_type: if (mode & 2) != 0 { 3 } else { 0 },
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_client_buffer_kb: connection.sqlsrv_client_buffer_kb,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_fetch_numeric: connection.sqlsrv_fetch_numeric,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_fetch_datetime: connection.sqlsrv_fetch_datetime,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_format_decimals: connection.sqlsrv_format_decimals,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_decimal_places: connection.sqlsrv_decimal_places,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_data_classification: false,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_classification: None,
+            #[cfg(feature = "sqlsrv")]
+            sqlsrv_classification_error: None,
         })
     }
 
@@ -1309,7 +2247,7 @@ impl OdbcStmt {
         }
         let base_type = pdo_type & 0xFFFF;
         // PDO_INFORMIX explicitly forces LOB parameters back to input-only.
-        if base_type == 3 {
+        if base_type == 3 && !self.flavor.is_sqlsrv() {
             #[cfg(feature = "odbc")]
             if self.flavor == CliFlavor::Odbc {
                 self.error = ErrorState {
@@ -1325,6 +2263,7 @@ impl OdbcStmt {
         self.output_specs[slot] = Some(OutputSpec {
             max_length,
             input_output: (pdo_type & 0x8000_0000) != 0,
+            lob: base_type == 3,
         });
         1
     }
@@ -1376,6 +2315,26 @@ impl OdbcStmt {
             let _ = SQLCloseCursor(self.stmt);
             let _ = SQLFreeStmt(self.stmt, FreeStmtOption::ResetParams);
         }
+        #[cfg(feature = "sqlsrv")]
+        if self.flavor.is_sqlsrv() && self.sqlsrv_emulated {
+            return self.execute_sqlsrv_emulated(connection);
+        }
+        #[cfg(feature = "sqlsrv")]
+        if self.flavor.is_sqlsrv() && self.sqlsrv_query_timeout > 0 {
+            let timeout = self.sqlsrv_query_timeout as isize as *mut c_void;
+            let configured = unsafe {
+                SQLSetStmtAttr(self.stmt, StatementAttribute::QueryTimeout, timeout, 0)
+            };
+            if !succeeded(configured) {
+                self.error = diagnostic(
+                    HandleType::Stmt,
+                    self.stmt.as_handle(),
+                    "SQLSetStmtAttr: SQL_ATTR_QUERY_TIMEOUT",
+                );
+                connection.error = self.error.clone();
+                return Err(self.error.message.clone());
+            }
+        }
         let mut payloads = Vec::with_capacity(self.order.len());
         let mut descriptors = Vec::with_capacity(self.order.len());
         for (occurrence, slot) in self.order.iter().enumerate() {
@@ -1407,13 +2366,23 @@ impl OdbcStmt {
                 };
                 scale = 5;
             }
-            let wide = self.assume_utf8
-                && matches!(
-                    sql_type,
-                    SqlDataType::EXT_W_CHAR
-                        | SqlDataType::EXT_W_VARCHAR
-                        | SqlDataType::EXT_W_LONG_VARCHAR
-                );
+            let wide = if self.flavor.is_sqlsrv() {
+                #[cfg(feature = "sqlsrv")]
+                {
+                    self.sqlsrv_encoding != SQLSRV_ENCODING_BINARY
+                        && self.sqlsrv_encoding != SQLSRV_ENCODING_SYSTEM
+                }
+                #[cfg(not(feature = "sqlsrv"))]
+                false
+            } else {
+                self.assume_utf8
+                    && matches!(
+                        sql_type,
+                        SqlDataType::EXT_W_CHAR
+                            | SqlDataType::EXT_W_VARCHAR
+                            | SqlDataType::EXT_W_LONG_VARCHAR
+                    )
+            };
             let (mut payload, c_type, indicator) = match &self.binds[slot] {
                 OdbcBind::Null => (Vec::new(), CDataType::Char, NULL_DATA),
                 OdbcBind::Int(value) => {
@@ -1433,7 +2402,7 @@ impl OdbcStmt {
                                 .collect::<Vec<_>>()
                         },
                     );
-                    (payload, CDataType::Binary, 0)
+                    (payload, CDataType::WChar, 0)
                 }
                 OdbcBind::Text(value) => (value.clone(), CDataType::Char, 0),
                 OdbcBind::Binary(value) => (value.clone(), CDataType::Binary, 0),
@@ -1492,6 +2461,14 @@ impl OdbcStmt {
                 return Err(self.error.message.clone());
             }
         }
+        #[cfg(feature = "sqlsrv")]
+        let result = if self.flavor.is_sqlsrv() && self.sqlsrv_direct_query {
+            let sql = self.translated_sql.encode_utf16().collect::<Vec<_>>();
+            unsafe { SQLExecDirectW(self.stmt, sql.as_ptr(), sql.len() as i32) }
+        } else {
+            unsafe { SQLExecute(self.stmt) }
+        };
+        #[cfg(not(feature = "sqlsrv"))]
         let result = unsafe { SQLExecute(self.stmt) };
         if result != SqlReturn::NO_DATA && !succeeded(result) {
             self.error = diagnostic(HandleType::Stmt, self.stmt.as_handle(), "SQLExecute");
@@ -1534,7 +2511,7 @@ impl OdbcStmt {
             };
             self.output_values[slot] = Some(OdbcOutputValue {
                 data,
-                lob: false,
+                lob: self.output_specs[slot].is_some_and(|output| output.lob),
                 numeric: matches!(descriptors[occurrence].1.0, -7 | 4 | 5 | 16),
             });
         }
@@ -1557,11 +2534,71 @@ impl OdbcStmt {
         Ok(())
     }
 
+    /// Executes SQLSRV's client-side emulated-prepare path through `SQLExecDirectW`.
+    #[cfg(feature = "sqlsrv")]
+    fn execute_sqlsrv_emulated(&mut self, connection: &mut OdbcConn) -> Result<(), String> {
+        if self.output_specs.iter().any(Option::is_some) {
+            self.error = ErrorState {
+                sqlstate: "IMSSP".to_string(),
+                native_code: -82,
+                message: "Output parameters are not supported with emulated prepares".to_string(),
+            };
+            connection.error = self.error.clone();
+            return Err(self.error.message.clone());
+        }
+        let national = connection.sqlsrv_default_str_param == 0x4000_0000
+            || connection.sqlsrv_encoding == SQLSRV_ENCODING_UTF8;
+        self.sent_sql = interpolate_sqlsrv(
+            &self.translated_sql,
+            &self.order,
+            &self.binds,
+            national,
+        )?;
+        if self.sqlsrv_query_timeout > 0 {
+            let configured = unsafe {
+                SQLSetStmtAttr(
+                    self.stmt,
+                    StatementAttribute::QueryTimeout,
+                    self.sqlsrv_query_timeout as isize as *mut c_void,
+                    0,
+                )
+            };
+            if !succeeded(configured) {
+                self.error = diagnostic(
+                    HandleType::Stmt,
+                    self.stmt.as_handle(),
+                    "SQLSetStmtAttr: SQL_ATTR_QUERY_TIMEOUT",
+                );
+                connection.error = self.error.clone();
+                return Err(self.error.message.clone());
+            }
+        }
+        let sql = self.sent_sql.encode_utf16().collect::<Vec<_>>();
+        let result = unsafe { SQLExecDirectW(self.stmt, sql.as_ptr(), sql.len() as i32) };
+        if result != SqlReturn::NO_DATA && !succeeded(result) {
+            self.error = diagnostic(HandleType::Stmt, self.stmt.as_handle(), "SQLExecDirectW");
+            connection.error = self.error.clone();
+            return Err(self.error.message.clone());
+        }
+        self.output_values.fill(None);
+        self.materialize_current_result(connection)?;
+        self.executed = true;
+        self.error = ErrorState::default();
+        connection.error = ErrorState::default();
+        Ok(())
+    }
+
     /// Describes and materializes the active native result set.
     fn materialize_current_result(&mut self, connection: &mut OdbcConn) -> Result<(), String> {
         self.columns.clear();
         self.rows.clear();
         self.cursor = -1;
+        #[cfg(feature = "sqlsrv")]
+        {
+            self.sqlsrv_classification = None;
+            self.sqlsrv_classification_error = None;
+        }
+        let sqlsrv = connection.is_sqlsrv();
         let mut count = 0i16;
         if !succeeded(unsafe { SQLNumResultCols(self.stmt, &mut count) }) {
             self.error = diagnostic(HandleType::Stmt, self.stmt.as_handle(), "SQLNumResultCols");
@@ -1570,11 +2607,44 @@ impl OdbcStmt {
         }
         for index in 1..=count {
             let mut name = [0u8; 256];
+            #[cfg(feature = "sqlsrv")]
+            let mut wide_name = [0u16; 256];
             let mut name_len = 0i16;
             let mut data_type = SqlDataType::UNKNOWN_TYPE;
             let mut size = 0usize;
             let mut scale = 0i16;
             let mut nullable = Nullability::UNKNOWN;
+            #[cfg(feature = "sqlsrv")]
+            let result = if sqlsrv {
+                unsafe {
+                    SQLDescribeColW(
+                        self.stmt,
+                        index as u16,
+                        wide_name.as_mut_ptr(),
+                        wide_name.len() as i16,
+                        &mut name_len,
+                        &mut data_type,
+                        &mut size,
+                        &mut scale,
+                        &mut nullable,
+                    )
+                }
+            } else {
+                unsafe {
+                    SQLDescribeCol(
+                        self.stmt,
+                        index as u16,
+                        name.as_mut_ptr(),
+                        name.len() as i16,
+                        &mut name_len,
+                        &mut data_type,
+                        &mut size,
+                        &mut scale,
+                        &mut nullable,
+                    )
+                }
+            };
+            #[cfg(not(feature = "sqlsrv"))]
             let result = unsafe {
                 SQLDescribeCol(
                     self.stmt,
@@ -1595,7 +2665,15 @@ impl OdbcStmt {
             }
             let informix = connection.is_informix();
             let ibm = connection.is_ibm();
-            let native_type = if informix || ibm {
+            let native_type = if sqlsrv {
+                #[cfg(feature = "sqlsrv")]
+                {
+                    column_text_attribute_w(self.stmt, index as u16, Desc::TypeName)
+                        .unwrap_or_default()
+                }
+                #[cfg(not(feature = "sqlsrv"))]
+                String::new()
+            } else if informix || ibm {
                 column_text_attribute(self.stmt, index as u16, Desc::TypeName).unwrap_or_default()
             } else {
                 String::new()
@@ -1636,30 +2714,82 @@ impl OdbcStmt {
             {
                 flags |= 4;
             }
+            #[cfg(feature = "sqlsrv")]
+            let column_name = if sqlsrv {
+                String::from_utf16_lossy(
+                    &wide_name[..usize::try_from(name_len)
+                        .unwrap_or(0)
+                        .min(wide_name.len())],
+                )
+            } else {
+                String::from_utf8_lossy(
+                    &name[..usize::try_from(name_len).unwrap_or(0).min(name.len())],
+                )
+                .into_owned()
+            };
+            #[cfg(not(feature = "sqlsrv"))]
+            let column_name = String::from_utf8_lossy(
+                &name[..usize::try_from(name_len).unwrap_or(0).min(name.len())],
+            )
+            .into_owned();
             self.columns.push(OdbcColumn {
-                name: String::from_utf8_lossy(&name[..usize::try_from(name_len).unwrap_or(0).min(name.len())]).into_owned(),
-                wide: self.assume_utf8
-                    && matches!(
-                        data_type,
-                        SqlDataType::EXT_W_CHAR
-                            | SqlDataType::EXT_W_VARCHAR
-                            | SqlDataType::EXT_W_LONG_VARCHAR
-                    ),
+                name: column_name,
+                wide: if sqlsrv {
+                    #[cfg(feature = "sqlsrv")]
+                    {
+                        self.sqlsrv_encoding != SQLSRV_ENCODING_BINARY
+                            && self.sqlsrv_encoding != SQLSRV_ENCODING_SYSTEM
+                            && !matches!(
+                                data_type,
+                                SqlDataType::EXT_BINARY
+                                    | SqlDataType::EXT_VAR_BINARY
+                                    | SqlDataType::EXT_LONG_VAR_BINARY
+                            )
+                    }
+                    #[cfg(not(feature = "sqlsrv"))]
+                    false
+                } else {
+                    self.assume_utf8
+                        && matches!(
+                            data_type,
+                            SqlDataType::EXT_W_CHAR
+                                | SqlDataType::EXT_W_VARCHAR
+                                | SqlDataType::EXT_W_LONG_VARCHAR
+                        )
+                },
                 lob,
                 metadata_pdo_lob,
                 len: i64::try_from(size).unwrap_or(i64::MAX),
                 precision: i64::from(scale),
                 scale: i64::from(scale),
-                table: if informix || ibm {
-                    column_text_attribute(self.stmt, index as u16, Desc::BaseTableName)
-                        .unwrap_or_default()
+                table: if informix || ibm || sqlsrv {
+                    if sqlsrv {
+                        #[cfg(feature = "sqlsrv")]
+                        {
+                            column_text_attribute_w(
+                                self.stmt,
+                                index as u16,
+                                Desc::BaseTableName,
+                            )
+                            .unwrap_or_default()
+                        }
+                        #[cfg(not(feature = "sqlsrv"))]
+                        String::new()
+                    } else {
+                        column_text_attribute(self.stmt, index as u16, Desc::BaseTableName)
+                            .unwrap_or_default()
+                    }
                 } else {
                     String::new()
                 },
                 native_type,
                 flags,
+                #[cfg(feature = "sqlsrv")]
+                data_type: data_type.0,
             });
         }
+        #[cfg(feature = "sqlsrv")]
+        let mut buffered_bytes = 0usize;
         loop {
             let fetched = unsafe { SQLFetch(self.stmt) };
             if fetched == SqlReturn::NO_DATA {
@@ -1673,7 +2803,37 @@ impl OdbcStmt {
             let mut row = Vec::with_capacity(count as usize);
             for index in 1..=count {
                 let wide = self.columns[index as usize - 1].wide;
-                row.push(self.read_column(index as u16, wide)?);
+                let value = self.read_column(index as u16, wide)?;
+                #[cfg(feature = "sqlsrv")]
+                let value = if sqlsrv {
+                    let mut value = value;
+                    value = format_sqlsrv_decimal(
+                        value,
+                        &self.columns[index as usize - 1].native_type,
+                        self.sqlsrv_format_decimals,
+                        self.sqlsrv_decimal_places,
+                    );
+                    if self.sqlsrv_cursor_type == 42 {
+                        buffered_bytes = buffered_bytes
+                            .saturating_add(value.as_ref().map_or(0, Vec::len));
+                        let limit = usize::try_from(self.sqlsrv_client_buffer_kb)
+                            .unwrap_or(usize::MAX)
+                            .saturating_mul(1024);
+                        if buffered_bytes > limit {
+                            self.error = ErrorState {
+                                sqlstate: "IMSSP".to_string(),
+                                native_code: -59,
+                                message: "Memory limit for buffered query exceeded".to_string(),
+                            };
+                            connection.error = self.error.clone();
+                            return Err(self.error.message.clone());
+                        }
+                    }
+                    value
+                } else {
+                    value
+                };
+                row.push(value);
             }
             self.rows.push(row);
         }
@@ -1697,7 +2857,7 @@ impl OdbcStmt {
                 SQLGetData(
                     self.stmt,
                     column,
-                    if wide { CDataType::Binary } else { CDataType::Char },
+                    if wide { CDataType::WChar } else { CDataType::Char },
                     chunk.as_mut_ptr().cast(),
                     chunk.len() as isize,
                     &mut indicator,
@@ -1713,7 +2873,7 @@ impl OdbcStmt {
                 self.error = diagnostic(HandleType::Stmt, self.stmt.as_handle(), "SQLGetData");
                 return Err(self.error.message.clone());
             }
-            let capacity = if wide { chunk.len() } else { chunk.len() - 1 };
+            let capacity = if wide { chunk.len() - 2 } else { chunk.len() - 1 };
             let payload = if result == SqlReturn::SUCCESS_WITH_INFO || indicator == odbc_sys::NO_TOTAL {
                 capacity
             } else {
@@ -1816,6 +2976,306 @@ impl OdbcStmt {
         false
     }
 
+    /// Applies a PDO_SQLSRV statement attribute after PDO has created the handle.
+    #[cfg(feature = "sqlsrv")]
+    pub fn set_sqlsrv_attribute(&mut self, attribute: i64, value: i64) -> bool {
+        if !self.flavor.is_sqlsrv() {
+            return false;
+        }
+        let accepted = match attribute {
+            SQLSRV_ATTR_ENCODING
+                if matches!(
+                    value,
+                    SQLSRV_ENCODING_DEFAULT
+                        | SQLSRV_ENCODING_BINARY
+                        | SQLSRV_ENCODING_SYSTEM
+                        | SQLSRV_ENCODING_UTF8
+                ) =>
+            {
+                self.sqlsrv_encoding = value;
+                true
+            }
+            SQLSRV_ATTR_QUERY_TIMEOUT if value >= 0 => {
+                self.sqlsrv_query_timeout = value;
+                true
+            }
+            SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE if value > 0 => {
+                self.sqlsrv_client_buffer_kb = value;
+                true
+            }
+            SQLSRV_ATTR_FETCHES_NUMERIC_TYPE => {
+                self.sqlsrv_fetch_numeric = value != 0;
+                true
+            }
+            SQLSRV_ATTR_FETCHES_DATETIME_TYPE => {
+                self.sqlsrv_fetch_datetime = value != 0;
+                true
+            }
+            SQLSRV_ATTR_FORMAT_DECIMALS => {
+                self.sqlsrv_format_decimals = value != 0;
+                true
+            }
+            SQLSRV_ATTR_DECIMAL_PLACES => {
+                self.sqlsrv_decimal_places = if (0..=4).contains(&value) { value } else { -1 };
+                true
+            }
+            SQLSRV_ATTR_DATA_CLASSIFICATION => {
+                self.sqlsrv_data_classification = value != 0;
+                self.sqlsrv_classification = None;
+                self.sqlsrv_classification_error = None;
+                true
+            }
+            _ => false,
+        };
+        if accepted {
+            self.error = ErrorState::default();
+        }
+        accepted
+    }
+
+    /// Reads a PDO_SQLSRV statement attribute from its live statement state.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_attribute(&self, attribute: i64) -> Option<i64> {
+        if !self.flavor.is_sqlsrv() {
+            return None;
+        }
+        match attribute {
+            SQLSRV_ATTR_ENCODING => Some(self.sqlsrv_encoding),
+            SQLSRV_ATTR_QUERY_TIMEOUT => Some(self.sqlsrv_query_timeout),
+            SQLSRV_ATTR_DIRECT_QUERY => Some(self.sqlsrv_direct_query as i64),
+            SQLSRV_ATTR_CURSOR_SCROLL_TYPE => Some(self.sqlsrv_cursor_type),
+            SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE => Some(self.sqlsrv_client_buffer_kb),
+            SQLSRV_ATTR_FETCHES_NUMERIC_TYPE => Some(self.sqlsrv_fetch_numeric as i64),
+            SQLSRV_ATTR_FETCHES_DATETIME_TYPE => Some(self.sqlsrv_fetch_datetime as i64),
+            SQLSRV_ATTR_FORMAT_DECIMALS => Some(self.sqlsrv_format_decimals as i64),
+            SQLSRV_ATTR_DECIMAL_PLACES => Some(self.sqlsrv_decimal_places),
+            SQLSRV_ATTR_DATA_CLASSIFICATION => Some(self.sqlsrv_data_classification as i64),
+            10 => Some((self.sqlsrv_cursor_type != 0) as i64),
+            _ => None,
+        }
+    }
+
+    /// Applies SQLSRV prepare-only options before the statement is first executed.
+    #[cfg(feature = "sqlsrv")]
+    pub fn configure_sqlsrv_prepare_option(&mut self, attribute: i64, value: i64) -> bool {
+        if !self.flavor.is_sqlsrv() {
+            return false;
+        }
+        match attribute {
+            SQLSRV_ATTR_DIRECT_QUERY => {
+                self.sqlsrv_direct_query = value != 0;
+                true
+            }
+            SQLSRV_ATTR_CURSOR_SCROLL_TYPE if matches!(value, 1 | 2 | 3 | 42) => {
+                self.sqlsrv_cursor_type = value;
+                if value == 42 {
+                    return true;
+                }
+                let result = unsafe {
+                    SQLSetStmtAttr(
+                        self.stmt,
+                        StatementAttribute::CursorType,
+                        value as isize as *mut c_void,
+                        0,
+                    )
+                };
+                succeeded(result)
+            }
+            _ => self.set_sqlsrv_attribute(attribute, value),
+        }
+    }
+
+    /// Loads and parses Microsoft ODBC sensitivity metadata on first inspection.
+    #[cfg(feature = "sqlsrv")]
+    fn ensure_sqlsrv_classification(&mut self) -> bool {
+        if !self.flavor.is_sqlsrv() || !self.sqlsrv_data_classification {
+            return false;
+        }
+        if self.sqlsrv_classification.is_some() {
+            return true;
+        }
+        if let Some(error) = self.sqlsrv_classification_error.clone() {
+            self.error = error;
+            return false;
+        }
+        if !self.executed {
+            let error = ErrorState {
+                sqlstate: "IMSSP".to_string(),
+                native_code: -100,
+                message: "Data classification metadata is unavailable before execution"
+                    .to_string(),
+            };
+            self.error = error.clone();
+            self.sqlsrv_classification_error = Some(error);
+            return false;
+        }
+        let mut descriptor = HDesc::null();
+        let descriptor_result = unsafe {
+            SQLGetStmtAttr(
+                self.stmt,
+                StatementAttribute::ImpRowDesc,
+                (&mut descriptor as *mut HDesc).cast(),
+                odbc_sys::IS_POINTER,
+                ptr::null_mut(),
+            )
+        };
+        if !succeeded(descriptor_result) {
+            let error = diagnostic(
+                HandleType::Stmt,
+                self.stmt.as_handle(),
+                "SQLGetStmtAttr SQL_ATTR_IMP_ROW_DESC",
+            );
+            self.error = error.clone();
+            self.sqlsrv_classification_error = Some(error);
+            return false;
+        }
+        let mut required = 0i32;
+        let length_result = unsafe {
+            SQLGetDescFieldWRaw(
+                descriptor,
+                0,
+                SQL_CA_SS_DATA_CLASSIFICATION,
+                ptr::null_mut(),
+                0,
+                &mut required,
+            )
+        };
+        if length_result != SqlReturn::SUCCESS || required <= 0 {
+            let error = diagnostic(
+                HandleType::Desc,
+                descriptor.as_handle(),
+                "SQLGetDescFieldW SQL_CA_SS_DATA_CLASSIFICATION",
+            );
+            self.error = error.clone();
+            self.sqlsrv_classification_error = Some(error);
+            return false;
+        }
+        let mut blob = vec![0u8; usize::try_from(required).unwrap_or(0)];
+        let mut returned = 0i32;
+        let data_result = unsafe {
+            SQLGetDescFieldWRaw(
+                descriptor,
+                0,
+                SQL_CA_SS_DATA_CLASSIFICATION,
+                blob.as_mut_ptr().cast(),
+                required,
+                &mut returned,
+            )
+        };
+        if data_result != SqlReturn::SUCCESS {
+            let error = diagnostic(
+                HandleType::Desc,
+                descriptor.as_handle(),
+                "SQLGetDescFieldW SQL_CA_SS_DATA_CLASSIFICATION",
+            );
+            self.error = error.clone();
+            self.sqlsrv_classification_error = Some(error);
+            return false;
+        }
+        blob.truncate(usize::try_from(returned).unwrap_or(blob.len()).min(blob.len()));
+        let mut version = 0u32;
+        let mut version_length = 0i32;
+        let version_result = unsafe {
+            SQLGetDescFieldWRaw(
+                descriptor,
+                0,
+                SQL_CA_SS_DATA_CLASSIFICATION_VERSION,
+                (&mut version as *mut u32).cast(),
+                odbc_sys::IS_INTEGER,
+                &mut version_length,
+            )
+        };
+        match parse_sqlsrv_classification_blob(
+            &blob,
+            version_result == SqlReturn::SUCCESS && version >= 2,
+        ) {
+            Ok(classification) => {
+                self.sqlsrv_classification = Some(classification);
+                self.sqlsrv_classification_error = None;
+                self.error = ErrorState::default();
+                true
+            }
+            Err(message) => {
+                let error = ErrorState {
+                    sqlstate: "IMSSP".to_string(),
+                    native_code: -101,
+                    message,
+                };
+                self.error = error.clone();
+                self.sqlsrv_classification_error = Some(error);
+                false
+            }
+        }
+    }
+
+    /// Returns the number of sensitivity pairs for one result column, or `-1` on error.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_classification_pair_count(&mut self, column: i64) -> i64 {
+        if !self.ensure_sqlsrv_classification() {
+            return -1;
+        }
+        usize::try_from(column)
+            .ok()
+            .and_then(|column| self.sqlsrv_classification.as_ref()?.columns.get(column))
+            .map(|pairs| pairs.len() as i64)
+            .unwrap_or(-1)
+    }
+
+    /// Returns one label/information-type string selected by PDO's metadata builder.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_classification_text(
+        &mut self,
+        column: i64,
+        pair: i64,
+        field: i64,
+    ) -> String {
+        if !self.ensure_sqlsrv_classification() {
+            return String::new();
+        }
+        let Some(pair) = usize::try_from(column)
+            .ok()
+            .and_then(|column| self.sqlsrv_classification.as_ref()?.columns.get(column))
+            .and_then(|pairs| usize::try_from(pair).ok().and_then(|pair| pairs.get(pair)))
+        else {
+            return String::new();
+        };
+        match field {
+            0 => pair.label_name.clone(),
+            1 => pair.label_id.clone(),
+            2 => pair.information_name.clone(),
+            3 => pair.information_id.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// Returns one column sensitivity rank, or `-1` when the server omitted ranks.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_classification_pair_rank(&mut self, column: i64, pair: i64) -> i64 {
+        if !self.ensure_sqlsrv_classification() {
+            return -1;
+        }
+        usize::try_from(column)
+            .ok()
+            .and_then(|column| self.sqlsrv_classification.as_ref()?.columns.get(column))
+            .and_then(|pairs| usize::try_from(pair).ok().and_then(|pair| pairs.get(pair)))
+            .and_then(|pair| pair.rank)
+            .map(i64::from)
+            .unwrap_or(-1)
+    }
+
+    /// Returns the result-set sensitivity rank, or `-1` when the server omitted it.
+    #[cfg(feature = "sqlsrv")]
+    pub fn sqlsrv_classification_query_rank(&mut self) -> i64 {
+        if !self.ensure_sqlsrv_classification() {
+            return -1;
+        }
+        self.sqlsrv_classification
+            .as_ref()
+            .and_then(|classification| classification.query_rank)
+            .map(i64::from)
+            .unwrap_or(-1)
+    }
+
     /// Returns the active result column count.
     pub fn column_count(&self) -> i64 {
         self.columns.len() as i64
@@ -1830,6 +3290,20 @@ impl OdbcStmt {
     pub fn column_type(&self, index: i64) -> i64 {
         if self.cell(index).is_none_or(Option::is_none) {
             return 5;
+        }
+        #[cfg(feature = "sqlsrv")]
+        if self.flavor.is_sqlsrv() && self.sqlsrv_fetch_numeric {
+            let data_type = usize::try_from(index)
+                .ok()
+                .and_then(|index| self.columns.get(index))
+                .map(|column| column.data_type)
+                .unwrap_or_default();
+            if matches!(data_type, -7 | -6 | 4 | 5) {
+                return 1;
+            }
+            if matches!(data_type, 6 | 7 | 8) {
+                return 2;
+            }
         }
         if usize::try_from(index)
             .ok()
@@ -1909,6 +3383,17 @@ impl OdbcStmt {
         }
     }
 
+    /// Reports whether SQLSRV should materialize this temporal column as `DateTime`.
+    #[cfg(feature = "sqlsrv")]
+    pub fn column_is_datetime(&self, index: i64) -> bool {
+        self.flavor.is_sqlsrv()
+            && self.sqlsrv_fetch_datetime
+            && usize::try_from(index)
+                .ok()
+                .and_then(|index| self.columns.get(index))
+                .is_some_and(|column| matches!(column.data_type, 91 | 92 | 93 | -154 | -155))
+    }
+
     /// Returns one current value parsed as integer.
     pub fn column_int(&self, index: i64) -> i64 {
         String::from_utf8_lossy(&self.column_data(index)).parse().unwrap_or(0)
@@ -1949,6 +3434,16 @@ impl OdbcStmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Appends one driver-format length-prefixed UTF-16 classification field.
+    #[cfg(feature = "sqlsrv")]
+    fn push_classification_text(blob: &mut Vec<u8>, value: &str) {
+        let utf16 = value.encode_utf16().collect::<Vec<_>>();
+        blob.push(utf16.len() as u8);
+        for unit in utf16 {
+            blob.extend_from_slice(&unit.to_ne_bytes());
+        }
+    }
 
     /// Parses a named DSN and bridge-only PDO constructor options.
     #[test]
@@ -2036,6 +3531,7 @@ mod tests {
             OutputSpec {
                 max_length: 4,
                 input_output: true,
+                lob: false,
             },
             4000,
         );
@@ -2063,6 +3559,109 @@ mod tests {
         assert!(!ibm_metadata_is_lob(12));
     }
 
+    /// Parses SQLSRV's direct DSN while separating folded PDO credentials.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn parses_sqlsrv_dsn_options() {
+        let options = parse_open_options(
+            "sqlsrv:Server=localhost,1433;Database=app;Encrypt=yes;user=sa;password=p%25w",
+            CliFlavor::Sqlsrv,
+        )
+        .unwrap();
+        assert_eq!(
+            options.source,
+            "Server=localhost,1433;Database=app;Encrypt=yes"
+        );
+        assert_eq!(options.username, "sa");
+        assert_eq!(options.password, "p%w");
+    }
+
+    /// Extracts SQLSRV's access token instead of leaking it into the connection string.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn parses_sqlsrv_access_token() {
+        let options = parse_open_options(
+            "sqlsrv:Server=tcp:example.database.windows.net;AccessToken=abc.def;ConnectionPooling=yes",
+            CliFlavor::Sqlsrv,
+        )
+        .unwrap();
+        assert_eq!(options.source, "Server=tcp:example.database.windows.net");
+        assert_eq!(options.sqlsrv_access_token.as_deref(), Some(b"abc.def".as_slice()));
+        assert!(!options.username_supplied);
+        assert!(!options.password_supplied);
+    }
+
+    /// Reads SQLSRV pooling only from the driver manager's `[ODBC]` section.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn parses_sqlsrv_driver_manager_pooling() {
+        assert_eq!(
+            sqlsrv_pooling_from_ini("[Other]\nPooling=No\n[ODBC]\nPooling = Yes\n"),
+            Some(true)
+        );
+        assert_eq!(sqlsrv_pooling_from_ini("[ODBC]\nPooling=off\n"), Some(false));
+        assert_eq!(sqlsrv_pooling_from_ini("[ODBC]\nTrace=No\n"), None);
+    }
+
+    /// Encodes Microsoft's access-token structure with a byte count and UCS-2 padding.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn builds_sqlsrv_access_token_buffer() {
+        let buffer = sqlsrv_access_token_buffer(b"abc");
+        let bytes = unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), buffer.len() * 4)
+        };
+        assert_eq!(u32::from_ne_bytes(bytes[..4].try_into().unwrap()), 6);
+        assert_eq!(&bytes[4..10], &[b'a', 0, b'b', 0, b'c', 0]);
+        assert_eq!(sqlsrv_token_fingerprint(b"abc"), 0xe71f_a219_0541_574b);
+    }
+
+    /// Parses labels, information types, column ranks, and query rank from ODBC metadata.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn parses_sqlsrv_classification_metadata() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_ne_bytes());
+        push_classification_text(&mut blob, "Secret");
+        push_classification_text(&mut blob, "L1");
+        blob.extend_from_slice(&1u16.to_ne_bytes());
+        push_classification_text(&mut blob, "PII");
+        push_classification_text(&mut blob, "I1");
+        blob.extend_from_slice(&2i32.to_ne_bytes());
+        blob.extend_from_slice(&1u16.to_ne_bytes());
+        blob.extend_from_slice(&1u16.to_ne_bytes());
+        blob.extend_from_slice(&0u16.to_ne_bytes());
+        blob.extend_from_slice(&0u16.to_ne_bytes());
+        blob.extend_from_slice(&1i32.to_ne_bytes());
+
+        let parsed = parse_sqlsrv_classification_blob(&blob, true).unwrap();
+        assert_eq!(parsed.query_rank, Some(2));
+        assert_eq!(parsed.columns.len(), 1);
+        assert_eq!(parsed.columns[0].len(), 1);
+        assert_eq!(parsed.columns[0][0].label_name, "Secret");
+        assert_eq!(parsed.columns[0][0].label_id, "L1");
+        assert_eq!(parsed.columns[0][0].information_name, "PII");
+        assert_eq!(parsed.columns[0][0].information_id, "I1");
+        assert_eq!(parsed.columns[0][0].rank, Some(1));
+    }
+
+    /// Quotes SQLSRV emulated values without replacing markers inside literals.
+    #[test]
+    #[cfg(feature = "sqlsrv")]
+    fn interpolates_sqlsrv_emulated_statement() {
+        let rendered = interpolate_sqlsrv(
+            "SELECT '?' AS marker, ? AS text, ? AS payload",
+            &[1, 2],
+            &[OdbcBind::Text(b"O'Brien".to_vec()), OdbcBind::Binary(vec![0, 255])],
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            rendered,
+            "SELECT '?' AS marker, N'O''Brien' AS text, 0x00FF AS payload"
+        );
+    }
+
     /// Executes binds, typed text fetches, transactions, and multiple results against a live DSN.
     #[test]
     #[ignore]
@@ -2077,7 +3676,7 @@ mod tests {
             &mut connection,
             1,
             "INSERT INTO elephc_odbc_bridge_test (id, name) VALUES (:id, :name)",
-            false,
+            0,
         )
         .expect("prepare ODBC insert");
         assert!(insert.bind_int(insert.parameter_index("id"), 7));
@@ -2089,7 +3688,7 @@ mod tests {
             &mut connection,
             1,
             "SELECT id, name FROM elephc_odbc_bridge_test ORDER BY id",
-            false,
+            0,
         )
         .expect("prepare ODBC select");
         select.execute(&mut connection).expect("execute ODBC select");
@@ -2108,14 +3707,14 @@ mod tests {
             &mut connection,
             1,
             "SELECT COUNT(*) FROM elephc_odbc_bridge_test",
-            false,
+            0,
         )
         .expect("prepare ODBC count");
         count.execute(&mut connection).expect("execute ODBC count");
         assert_eq!(count.step(), 1);
         assert_eq!(count.column_data(0), b"1");
 
-        let mut rowsets = OdbcStmt::new(&mut connection, 1, "SELECT 1; SELECT 2", false)
+        let mut rowsets = OdbcStmt::new(&mut connection, 1, "SELECT 1; SELECT 2", 0)
             .expect("prepare ODBC rowsets");
         rowsets.execute(&mut connection).expect("execute first ODBC rowset");
         assert_eq!(rowsets.step(), 1);
@@ -2123,5 +3722,47 @@ mod tests {
         assert!(rowsets.next_rowset(&mut connection));
         assert_eq!(rowsets.step(), 1);
         assert_eq!(rowsets.column_data(0), b"2");
+    }
+
+    /// Exercises SQLPrepareW, Unicode binds/fetches, numeric typing, and identity lookup live.
+    #[test]
+    #[ignore]
+    #[cfg(feature = "sqlsrv")]
+    fn live_sqlsrv_round_trip() {
+        let dsn = std::env::var("ELEPHC_SQLSRV_DSN")
+            .expect("ELEPHC_SQLSRV_DSN is required for the ignored SQLSRV live test");
+        let mut connection = OdbcConn::open_sqlsrv(&dsn).expect("open live SQLSRV connection");
+        assert!(connection.exec(
+            "CREATE TABLE #elephc_sqlsrv_bridge (id INT IDENTITY(1,1), label NVARCHAR(40))"
+        ) >= 0);
+
+        let mut insert = OdbcStmt::new(
+            &mut connection,
+            1,
+            "INSERT INTO #elephc_sqlsrv_bridge(label) VALUES (:label)",
+            0,
+        )
+        .expect("prepare SQLSRV insert");
+        assert!(insert.bind_text(
+            insert.parameter_index("label"),
+            "Éléphant".as_bytes().to_vec(),
+        ));
+        insert.execute(&mut connection).expect("execute SQLSRV insert");
+        assert_eq!(connection.last_insert_id(None), "1");
+
+        let mut select = OdbcStmt::new(
+            &mut connection,
+            1,
+            "SELECT id, label AS [libellé] FROM #elephc_sqlsrv_bridge",
+            0,
+        )
+        .expect("prepare SQLSRV select");
+        assert!(select.set_sqlsrv_attribute(SQLSRV_ATTR_FETCHES_NUMERIC_TYPE, 1));
+        select.execute(&mut connection).expect("execute SQLSRV select");
+        assert_eq!(select.column_name(1), "libellé");
+        assert_eq!(select.step(), 1);
+        assert_eq!(select.column_type(0), 1);
+        assert_eq!(select.column_data(0), b"1");
+        assert_eq!(select.column_data(1), "Éléphant".as_bytes());
     }
 }

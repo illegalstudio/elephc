@@ -84,6 +84,8 @@ pdo-odbc = ["elephc-pdo/odbc"]
 pdo-informix = ["elephc-pdo/informix"]
 # Keeps codegen fixtures and the PDO archive on the IBM Db2 CLI profile.
 pdo-ibm = ["elephc-pdo/ibm"]
+# Keeps codegen fixtures and the PDO archive on Microsoft PDO_SQLSRV 5.13.
+pdo-sqlsrv = ["elephc-pdo/sqlsrv"]
 # Keeps codegen fixtures and the PDO archive on the Oracle Instant Client profile.
 pdo-oci = ["elephc-pdo/oci"]
 

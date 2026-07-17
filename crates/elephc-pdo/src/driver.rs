@@ -21,6 +21,8 @@ pub(crate) enum DriverKind {
     Ibm,
     #[cfg(feature = "odbc")]
     Odbc,
+    #[cfg(feature = "sqlsrv")]
+    Sqlsrv,
     #[cfg(feature = "oci")]
     Oci,
     Mysql,
@@ -40,6 +42,8 @@ pub(crate) const AVAILABLE: &[DriverKind] = &[
     DriverKind::Ibm,
     #[cfg(feature = "odbc")]
     DriverKind::Odbc,
+    #[cfg(feature = "sqlsrv")]
+    DriverKind::Sqlsrv,
     #[cfg(feature = "oci")]
     DriverKind::Oci,
     DriverKind::Mysql,
@@ -61,6 +65,8 @@ impl DriverKind {
             Self::Ibm => "ibm",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc",
+            #[cfg(feature = "sqlsrv")]
+            Self::Sqlsrv => "sqlsrv",
             #[cfg(feature = "oci")]
             Self::Oci => "oci",
             Self::Mysql => "mysql",
@@ -82,6 +88,8 @@ impl DriverKind {
             Self::Ibm => "ibm:",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc:",
+            #[cfg(feature = "sqlsrv")]
+            Self::Sqlsrv => "sqlsrv:",
             #[cfg(feature = "oci")]
             Self::Oci => "oci:",
             Self::Mysql => "mysql:",
@@ -118,6 +126,8 @@ mod tests {
         expected.push("ibm");
         #[cfg(feature = "odbc")]
         expected.push("odbc");
+        #[cfg(feature = "sqlsrv")]
+        expected.push("sqlsrv");
         #[cfg(feature = "oci")]
         expected.push("oci");
         expected.extend(["mysql", "pgsql", "sqlite"]);
@@ -140,6 +150,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("ibm:SAMPLE"), Some(DriverKind::Ibm));
         #[cfg(feature = "odbc")]
         assert_eq!(DriverKind::from_dsn("odbc:example"), Some(DriverKind::Odbc));
+        #[cfg(feature = "sqlsrv")]
+        assert_eq!(DriverKind::from_dsn("sqlsrv:Server=localhost"), Some(DriverKind::Sqlsrv));
         #[cfg(feature = "oci")]
         assert_eq!(DriverKind::from_dsn("oci:dbname=example"), Some(DriverKind::Oci));
         assert_eq!(DriverKind::from_dsn("SQLite::memory:"), None);

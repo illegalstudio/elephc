@@ -42,6 +42,11 @@ fn pdo_ibm_enabled() -> bool {
     cfg!(feature = "pdo-ibm") || std::env::var_os("ELEPHC_PDO_IBM").is_some()
 }
 
+/// Reports whether the optional Microsoft PDO_SQLSRV ODBC profile is selected.
+fn pdo_sqlsrv_enabled() -> bool {
+    cfg!(feature = "pdo-sqlsrv") || std::env::var_os("ELEPHC_PDO_SQLSRV").is_some()
+}
+
 /// Reports whether the optional Oracle Instant Client PDO profile is selected.
 fn pdo_oci_enabled() -> bool {
     cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
@@ -212,6 +217,7 @@ impl BridgeStaticlib {
                 || pdo_odbc_enabled()
                 || pdo_informix_enabled()
                 || pdo_ibm_enabled()
+                || pdo_sqlsrv_enabled()
                 || pdo_oci_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
@@ -294,6 +300,9 @@ impl BridgeStaticlib {
             }
             if pdo_ibm_enabled() {
                 features.push("ibm");
+            }
+            if pdo_sqlsrv_enabled() {
+                features.push("sqlsrv");
             }
             if pdo_oci_enabled() {
                 features.push("oci");
@@ -386,7 +395,7 @@ pub(crate) fn link(
     let needs_dblib =
         extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled();
     let needs_odbc = extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
-        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled());
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled() || pdo_sqlsrv_enabled());
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -612,9 +621,9 @@ pub(crate) fn link(
             ld_cmd.arg("-lsybdb");
         }
     }
-    // PDO_ODBC, PDO_INFORMIX, and PDO_IBM delegate to the platform ODBC driver manager.
+    // PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_SQLSRV delegate to the ODBC driver manager.
     if extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
-        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled())
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled() || pdo_sqlsrv_enabled())
     {
         if target.platform == Platform::MacOS {
             for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {

@@ -185,6 +185,16 @@ extern "elephc_pdo" {
     function elephc_pdo_ibm_attribute_int(int $conn, int $attribute): int;
     function elephc_pdo_ibm_column_scale(int $stmt, int $column): int;
     function elephc_pdo_ibm_column_pdo_type(int $stmt, int $column): int;
+    // v57: Microsoft PDO_SQLSRV 5.13.1 attributes and information arrays.
+    function elephc_pdo_sqlsrv_stmt_set_attribute(int $stmt, int $attribute, int $value): int;
+    function elephc_pdo_sqlsrv_stmt_configure(int $stmt, int $attribute, int $value): int;
+    function elephc_pdo_sqlsrv_stmt_attribute(int $stmt, int $attribute): int;
+    function elephc_pdo_sqlsrv_column_is_datetime(int $stmt, int $column): int;
+    function elephc_pdo_sqlsrv_info(int $conn, int $field): string;
+    function elephc_pdo_sqlsrv_classification_pair_count(int $stmt, int $column): int;
+    function elephc_pdo_sqlsrv_classification_text(int $stmt, int $column, int $pair, int $field): string;
+    function elephc_pdo_sqlsrv_classification_pair_rank(int $stmt, int $column, int $pair): int;
+    function elephc_pdo_sqlsrv_classification_query_rank(int $stmt): int;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -1200,6 +1210,32 @@ class PDO {
     const SQL_ATTR_TRUSTED_CONTEXT_USERID = 2562;
     const SQL_ATTR_TRUSTED_CONTEXT_PASSWORD = 2563;
     // -- elephc optional PDO_IBM aliases end --
+    // -- elephc optional PDO_SQLSRV constants begin --
+    const SQLSRV_ATTR_ENCODING = 1000;
+    const SQLSRV_ATTR_QUERY_TIMEOUT = 1001;
+    const SQLSRV_ATTR_DIRECT_QUERY = 1002;
+    const SQLSRV_ATTR_CURSOR_SCROLL_TYPE = 1003;
+    const SQLSRV_ATTR_CLIENT_BUFFER_MAX_KB_SIZE = 1004;
+    const SQLSRV_ATTR_FETCHES_NUMERIC_TYPE = 1005;
+    const SQLSRV_ATTR_FETCHES_DATETIME_TYPE = 1006;
+    const SQLSRV_ATTR_FORMAT_DECIMALS = 1007;
+    const SQLSRV_ATTR_DECIMAL_PLACES = 1008;
+    const SQLSRV_ATTR_DATA_CLASSIFICATION = 1009;
+    const SQLSRV_PARAM_OUT_DEFAULT_SIZE = -1;
+    const SQLSRV_ENCODING_DEFAULT = 1;
+    const SQLSRV_ENCODING_BINARY = 2;
+    const SQLSRV_ENCODING_SYSTEM = 3;
+    const SQLSRV_ENCODING_UTF8 = 65001;
+    const SQLSRV_CURSOR_STATIC = 3;
+    const SQLSRV_CURSOR_DYNAMIC = 2;
+    const SQLSRV_CURSOR_KEYSET = 1;
+    const SQLSRV_CURSOR_BUFFERED = 42;
+    const SQLSRV_TXN_READ_UNCOMMITTED = "READ_UNCOMMITTED";
+    const SQLSRV_TXN_READ_COMMITTED = "READ_COMMITTED";
+    const SQLSRV_TXN_REPEATABLE_READ = "REPEATABLE_READ";
+    const SQLSRV_TXN_SERIALIZABLE = "SERIALIZABLE";
+    const SQLSRV_TXN_SNAPSHOT = "SNAPSHOT";
+    // -- elephc optional PDO_SQLSRV constants end --
     // -- elephc optional PDO_OCI aliases begin --
     const OCI_ATTR_ACTION = 1000;
     const OCI_ATTR_CLIENT_INFO = 1001;
@@ -1429,6 +1465,12 @@ class PDO {
             $_dsnClass = "PDO";
         }
         // -- elephc optional PDO_OCI subclass guard end --
+        // -- elephc optional PDO_SQLSRV subclass guard begin --
+        elseif (str_starts_with($dsn, "sqlsrv:")) {
+            $_dsnDriver = "sqlsrv";
+            $_dsnClass = "PDO";
+        }
+        // -- elephc optional PDO_SQLSRV subclass guard end --
         if ($_dsnDriver === "") {
             return;
         }
@@ -1560,7 +1602,7 @@ class PDO {
                     $this->defaultFetchMode = $_ctorFetchMode;
                 } elseif ($_iattr == 17) {
                     $this->stringifyFetches = $this->attrBoolValue($_val);
-                } elseif ($_iattr == 21 && (str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:"))) {
+                } elseif ($_iattr == 21 && (str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "sqlsrv:"))) {
                     $_defaultStringType = $this->attrIntValue($_val);
                     $this->defaultStrParam = ($_defaultStringType == 0x40000000) ? 0x40000000 : 0x20000000;
                 } elseif ($_iattr == 20) {
@@ -1645,6 +1687,18 @@ class PDO {
         if ($_statementClassConfigured && $this->persistent) {
             throw new PDOException("SQLSTATE[HY000]: General error: PDO::ATTR_STATEMENT_CLASS cannot be used with persistent PDO instances");
         }
+        if (str_starts_with($_dsn, "sqlsrv:") && $this->persistent) {
+            throw PDOException::__elephcFromErrorInfo(
+                "SQLSTATE[IMSSP]: An unsupported attribute was designated on the PDO object.",
+                ["IMSSP", -38, "An unsupported attribute was designated on the PDO object."]
+            );
+        }
+        if (str_starts_with($_dsn, "sqlsrv:") && isset($this->attributes[0])) {
+            throw PDOException::__elephcFromErrorInfo(
+                "SQLSTATE[IMSSP]: An unsupported attribute was designated on the PDO object.",
+                ["IMSSP", -38, "An unsupported attribute was designated on the PDO object."]
+            );
+        }
         // SQLite ignores credentials. For PostgreSQL and MySQL, the user/password may be
         // passed as the PDO constructor arguments (PHP-style); fold them into the DSN's
         // `key=value` list, where the bridge parses them.
@@ -1680,7 +1734,7 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:") || str_starts_with($_dsn, "informix:") || str_starts_with($_dsn, "ibm:") || str_starts_with($_dsn, "oci:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:") || str_starts_with($_dsn, "informix:") || str_starts_with($_dsn, "ibm:") || str_starts_with($_dsn, "oci:") || str_starts_with($_dsn, "sqlsrv:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
             $_dsnIsFirebird = str_starts_with($_dsn, "firebird:");
@@ -1688,6 +1742,7 @@ class PDO {
             $_dsnIsInformix = str_starts_with($_dsn, "informix:");
             $_dsnIsIbm = str_starts_with($_dsn, "ibm:");
             $_dsnIsOci = str_starts_with($_dsn, "oci:");
+            $_dsnIsSqlsrv = str_starts_with($_dsn, "sqlsrv:");
             if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || !str_contains($_dsn, "user="))) {
                 $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
                 $_dsn = $_dsn . ";user=" . $_encUser;
@@ -1857,6 +1912,35 @@ class PDO {
             foreach ([1000, 1001, 1002] as $_firebirdTextAttribute) {
                 if (isset($this->attributes[$_firebirdTextAttribute])) {
                     elephc_pdo_firebird_set_attribute_text($this->conn, $_firebirdTextAttribute, (string) $this->attributes[$_firebirdTextAttribute]);
+                }
+            }
+        } elseif (str_starts_with($_dsn, "sqlsrv:")) {
+            foreach ([10, 1003, 1009] as $_sqlsrvStatementOnlyAttribute) {
+                if (isset($this->attributes[$_sqlsrvStatementOnlyAttribute])) {
+                    throw PDOException::__elephcFromErrorInfo(
+                        "SQLSTATE[IMSSP]: The given attribute is only supported on the PDOStatement object.",
+                        ["IMSSP", -39, "The given attribute is only supported on the PDOStatement object."]
+                    );
+                }
+            }
+            foreach ([17, 20, 21, 1000, 1001, 1002, 1004, 1005, 1006, 1007, 1008] as $_sqlsrvAttribute) {
+                if (!isset($this->attributes[$_sqlsrvAttribute])) {
+                    continue;
+                }
+                $_sqlsrvRaw = $this->attributes[$_sqlsrvAttribute];
+                $_sqlsrvValue = ($_sqlsrvAttribute == 17
+                    || $_sqlsrvAttribute == 20
+                    || $_sqlsrvAttribute == 1002
+                    || $_sqlsrvAttribute == 1005
+                    || $_sqlsrvAttribute == 1006
+                    || $_sqlsrvAttribute == 1007)
+                    ? ($this->attrBoolValue($_sqlsrvRaw) ? 1 : 0)
+                    : $this->attrIntValue($_sqlsrvRaw);
+                if (elephc_pdo_odbc_set_attribute($this->conn, $_sqlsrvAttribute, $_sqlsrvValue) !== 1) {
+                    throw PDOException::__elephcFromErrorInfo(
+                        "SQLSTATE[IMSSP]: An invalid attribute was designated on the PDO object.",
+                        ["IMSSP", 0, "An invalid attribute was designated on the PDO object."]
+                    );
                 }
             }
         } elseif (str_starts_with($_dsn, "oci:")) {
@@ -2182,9 +2266,12 @@ class PDO {
             $this->defaultFetchMode = $_attrFetchMode;
         } elseif ($attribute == 17) {
             $this->stringifyFetches = $this->attrBoolValue($value);
-        } elseif ($attribute == 21 && ($_driver === "mysql" || $_driver === "dblib")) {
+        } elseif ($attribute == 21 && ($_driver === "mysql" || $_driver === "dblib" || $_driver === "sqlsrv")) {
             $_defaultStringType = $this->attrIntValue($value);
             $this->defaultStrParam = ($_defaultStringType == 0x40000000) ? 0x40000000 : 0x20000000;
+            if ($_driver === "sqlsrv") {
+                return elephc_pdo_odbc_set_attribute($this->conn, 21, $this->defaultStrParam) === 1;
+            }
         } elseif ($attribute == 14 && $_driver === "mysql") {
             return elephc_pdo_set_fetch_table_names($this->conn, $this->attrBoolValue($value) ? 1 : 0) === 1;
         } elseif ($attribute == 1000 && $_driver === "mysql") {
@@ -2198,6 +2285,10 @@ class PDO {
                 // php-src exposes emulation as read-only true: DB-Library has no
                 // native prepare API and its set_attribute hook rejects this key.
                 return false;
+            }
+            if ($_driver === "sqlsrv") {
+                $this->emulatePrepares = $this->attrBoolValue($value);
+                return elephc_pdo_odbc_set_attribute($this->conn, 20, $this->emulatePrepares ? 1 : 0) === 1;
             }
             if ($_driver !== "mysql" && $_driver !== "pgsql") {
                 return false;
@@ -2261,6 +2352,24 @@ class PDO {
                 return false;
             }
             return true;
+        } elseif ($_driver === "sqlsrv" && ($attribute == 1000 || $attribute == 1001 || $attribute == 1002 || $attribute == 1004 || $attribute == 1005 || $attribute == 1006 || $attribute == 1007 || $attribute == 1008)) {
+            $_sqlsrvValue = ($attribute == 1002 || $attribute == 1005 || $attribute == 1006 || $attribute == 1007)
+                ? ($this->attrBoolValue($value) ? 1 : 0)
+                : $this->attrIntValue($value);
+            if (elephc_pdo_odbc_set_attribute($this->conn, $attribute, $_sqlsrvValue) !== 1) {
+                $this->failCode("IMSSP", "An invalid attribute was designated on the PDO object.");
+                return false;
+            }
+            return true;
+        } elseif ($_driver === "sqlsrv" && ($attribute == 10 || $attribute == 1003 || $attribute == 1009)) {
+            $this->failCode("IMSSP", "The given attribute is only supported on the PDOStatement object.");
+            return false;
+        } elseif ($_driver === "sqlsrv" && ($attribute == 0 || $attribute == 1 || $attribute == 2 || $attribute == 9 || $attribute == 12)) {
+            $this->failCode("IMSSP", "An unsupported attribute was designated on the PDO object.");
+            return false;
+        } elseif ($_driver === "sqlsrv" && ($attribute == 4 || $attribute == 5 || $attribute == 6 || $attribute == 7 || $attribute == 16)) {
+            $this->failCode("IMSSP", "A read-only attribute was designated on the PDO object.");
+            return false;
         } else {
             // F-CORE-04 (CORRECTED — the finalization spec was WRONG about this, and an
             // earlier pass implemented the spec's version): an UNKNOWN attribute number
@@ -2301,6 +2410,39 @@ class PDO {
     protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
+        if (elephc_pdo_driver_name($this->conn) === "sqlsrv") {
+            if ($attribute == 5) {
+                return [
+                    "DriverName" => elephc_pdo_sqlsrv_info($this->conn, 3),
+                    "DriverODBCVer" => elephc_pdo_sqlsrv_info($this->conn, 4),
+                    "DriverVer" => elephc_pdo_sqlsrv_info($this->conn, 5),
+                    "ExtensionVer" => "5.13.1",
+                ];
+            }
+            if ($attribute == 6) {
+                return [
+                    "CurrentDatabase" => elephc_pdo_sqlsrv_info($this->conn, 0),
+                    "SQLServerVersion" => elephc_pdo_sqlsrv_info($this->conn, 1),
+                    "SQLServerName" => elephc_pdo_sqlsrv_info($this->conn, 2),
+                ];
+            }
+            if ($attribute == 1000 || $attribute == 1001 || $attribute == 1002 || $attribute == 1004 || $attribute == 1005 || $attribute == 1006 || $attribute == 1007 || $attribute == 1008) {
+                $_sqlsrvValue = elephc_pdo_odbc_attribute($this->conn, $attribute);
+                if ($_sqlsrvValue >= 0) {
+                    return ($attribute == 1002 || $attribute == 1005 || $attribute == 1006 || $attribute == 1007)
+                        ? ($_sqlsrvValue === 1)
+                        : $_sqlsrvValue;
+                }
+            }
+            if ($attribute == 1003 || $attribute == 1009 || $attribute == 10) {
+                $this->failCode("IMSSP", "The given attribute is only supported on the PDOStatement object.");
+                return false;
+            }
+            if ($attribute == 7) {
+                $this->failCode("IMSSP", "An invalid attribute was designated on the PDO object.");
+                return false;
+            }
+        }
         if (($attribute == 1281 || $attribute == 1282 || $attribute == 1283 || $attribute == 1284 || $attribute == 2562) && elephc_pdo_driver_name($this->conn) === "ibm") {
             $_ibmText = elephc_pdo_ibm_attribute_text($this->conn, $attribute);
             if (elephc_pdo_sqlstate($this->conn) !== "00000") {
@@ -2378,13 +2520,13 @@ class PDO {
         if ($attribute == 17) {
             return $this->stringifyFetches;
         }
-        if ($attribute == 21 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "dblib")) {
+        if ($attribute == 21 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "dblib" || elephc_pdo_driver_name($this->conn) === "sqlsrv")) {
             return $this->defaultStrParam;
         }
         if ($attribute == 20 && elephc_pdo_driver_name($this->conn) === "dblib") {
             return true;
         }
-        if ($attribute == 20 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "pgsql")) {
+        if ($attribute == 20 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "pgsql" || elephc_pdo_driver_name($this->conn) === "sqlsrv")) {
             return $this->emulatePrepares;
         }
         if ($attribute == 1000 && elephc_pdo_driver_name($this->conn) === "pgsql") {
@@ -2494,7 +2636,7 @@ class PDO {
             if ($_driver === "sqlite" && $_cursorMode !== 0) {
                 return false;
             }
-            if (($_driver === "pgsql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci") && $_cursorMode === 1) {
+            if (($_driver === "pgsql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci" || $_driver === "sqlsrv") && $_cursorMode === 1) {
                 $_scrollable = true;
             }
         }
@@ -2513,8 +2655,23 @@ class PDO {
             $_emulated = $this->attrBoolValue($options[1004]);
         }
         $_simple = (($_driver === "mysql" && $_emulated) || ($_driver === "pgsql" && ($_emulated || $_disable || $_scrollable))) ? 1 : 0;
+        if ($_driver === "sqlsrv" && $_emulated) {
+            $_simple = $_simple | 1;
+        }
         if (($_driver === "odbc" || $_driver === "informix" || $_driver === "ibm") && $_scrollable) {
             $_simple = 2;
+        }
+        if ($_driver === "sqlsrv" && $_scrollable) {
+            $_simple = $_simple | 2;
+        }
+        if ($_driver === "sqlsrv") {
+            $_directQuery = elephc_pdo_odbc_attribute($this->conn, 1002) === 1;
+            if (array_key_exists(1002, $options)) {
+                $_directQuery = $this->attrBoolValue($options[1002]);
+            }
+            if ($_directQuery) {
+                $_simple = $_simple | 4;
+            }
         }
         $this->hasOperation = true;
         $_handle = elephc_pdo_prepare($this->conn, $query, $_simple);
@@ -2522,6 +2679,25 @@ class PDO {
             $this->throwAuthorizerError($_operation);
             $this->fail(elephc_pdo_errmsg($this->conn));
             return false;
+        }
+        if ($_driver === "sqlsrv") {
+            foreach ([1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009] as $_sqlsrvOption) {
+                if (!isset($options[$_sqlsrvOption])) {
+                    continue;
+                }
+                $_sqlsrvRaw = $options[$_sqlsrvOption];
+                $_sqlsrvOptionValue = ($_sqlsrvOption == 1002
+                    || $_sqlsrvOption == 1005
+                    || $_sqlsrvOption == 1006
+                    || $_sqlsrvOption == 1007
+                    || $_sqlsrvOption == 1009)
+                    ? ($this->attrBoolValue($_sqlsrvRaw) ? 1 : 0)
+                    : $this->attrIntValue($_sqlsrvRaw);
+                if (elephc_pdo_sqlsrv_stmt_configure($_handle, $_sqlsrvOption, $_sqlsrvOptionValue) !== 1) {
+                    $this->failCode("IMSSP", "An invalid statement option was designated.");
+                    return false;
+                }
+            }
         }
         if ($_prefetchOverride != -2) {
             elephc_pdo_stmt_set_prefetch($_handle, $_prefetchOverride);
@@ -2552,7 +2728,7 @@ class PDO {
         // PDOStatement::getAttribute(ATTR_EMULATE_PREPARES) answers from the
         // owning connection's stored value (or false when never set) instead of
         // raising IM001 like every other unsupported statement attribute.
-        $_stmt->setEmulatePrepares($_simple === 1);
+        $_stmt->setEmulatePrepares(($_simple & 1) === 1);
         // P2-e: snapshot ATTR_CASE / ATTR_ORACLE_NULLS the same way (see the
         // property comments on $attrCase/$oracleNulls above).
         $_stmt->setAttrCase($this->attrCase);
@@ -2770,6 +2946,13 @@ class PDO {
             $_driverStatus = 0;
         }
         // -- elephc optional PDO_OCI connect dispatch end --
+        // -- elephc optional PDO_SQLSRV connect dispatch begin --
+        elseif (str_starts_with($_dsn, "sqlsrv:")) {
+            $_driver = "sqlsrv";
+            $_driverClass = "PDO";
+            $_driverStatus = 0;
+        }
+        // -- elephc optional PDO_SQLSRV connect dispatch end --
         if ($_driver === "") {
             if ($calledStatus === 0) {
                 throw new PDOException("could not find driver");
@@ -3068,6 +3251,20 @@ class PDO {
         if ($_driver === "dblib") {
             $_stringFlags = $type & 0x60000000;
             $_national = $_stringFlags == 0x40000000
+                || ($_stringFlags == 0 && $this->defaultStrParam == 0x40000000);
+            if ($_stringFlags == 0x20000000) {
+                $_national = false;
+            }
+            return ($_national ? "N" : "") . "'" . str_replace("'", "''", $string) . "'";
+        }
+        if ($_driver === "sqlsrv") {
+            $_encoding = elephc_pdo_odbc_attribute($this->conn, 1000);
+            if ($_encoding == 2 || $type == 3) {
+                return "0x" . strtoupper(bin2hex($string));
+            }
+            $_stringFlags = $type & 0x60000000;
+            $_national = $_encoding == 65001
+                || $_stringFlags == 0x40000000
                 || ($_stringFlags == 0 && $this->defaultStrParam == 0x40000000);
             if ($_stringFlags == 0x20000000) {
                 $_national = false;
@@ -4262,6 +4459,10 @@ class PDOStatement implements IteratorAggregate {
         if ($_oracleNulls == 1 && $_out === "") {
             return null;
         }
+        if (elephc_pdo_driver_name($this->conn) === "sqlsrv"
+            && elephc_pdo_sqlsrv_column_is_datetime($this->stmt, $index) === 1) {
+            return new DateTime($_out);
+        }
         if ($_type == 4 && (elephc_pdo_driver_name($this->conn) === "pgsql"
             || elephc_pdo_driver_name($this->conn) === "informix"
             || elephc_pdo_driver_name($this->conn) === "ibm"
@@ -5120,6 +5321,15 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function getAttribute(int $name): mixed {
+        if (elephc_pdo_driver_name($this->conn) === "sqlsrv"
+            && ($name == 10 || ($name >= 1000 && $name <= 1009))) {
+            $_sqlsrvValue = elephc_pdo_sqlsrv_stmt_attribute($this->stmt, $name);
+            if ($_sqlsrvValue >= 0) {
+                return ($name == 1002 || $name == 1005 || $name == 1006 || $name == 1007 || $name == 1009)
+                    ? ($_sqlsrvValue === 1)
+                    : $_sqlsrvValue;
+            }
+        }
         if ($name == 9 && (elephc_pdo_driver_name($this->conn) === "odbc" || elephc_pdo_driver_name($this->conn) === "informix" || elephc_pdo_driver_name($this->conn) === "ibm")) {
             $_cursorName = elephc_pdo_odbc_stmt_cursor_name($this->stmt);
             return $_cursorName === "" ? null : $_cursorName;
@@ -5169,6 +5379,22 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function setAttribute(int $attribute, mixed $value): bool {
+        if (elephc_pdo_driver_name($this->conn) === "sqlsrv") {
+            if ($attribute == 1002 || $attribute == 10 || $attribute == 1003) {
+                $this->failCode("IMSSP", "The attribute may only be set when preparing a statement.");
+                return false;
+            }
+            if ($attribute == 1000 || $attribute == 1001 || $attribute == 1004 || $attribute == 1005 || $attribute == 1006 || $attribute == 1007 || $attribute == 1008 || $attribute == 1009) {
+                $_sqlsrvValue = ($attribute == 1005 || $attribute == 1006 || $attribute == 1007 || $attribute == 1009)
+                    ? ($value ? 1 : 0)
+                    : (int) $value;
+                if (elephc_pdo_sqlsrv_stmt_set_attribute($this->stmt, $attribute, $_sqlsrvValue) !== 1) {
+                    $this->failCode("IMSSP", "An invalid statement attribute was designated.");
+                    return false;
+                }
+                return true;
+            }
+        }
         if ($attribute == 9 && (elephc_pdo_driver_name($this->conn) === "odbc" || elephc_pdo_driver_name($this->conn) === "informix" || elephc_pdo_driver_name($this->conn) === "ibm")) {
             return elephc_pdo_odbc_stmt_set_cursor_name($this->stmt, (string) $value) === 1;
         }
@@ -5221,7 +5447,7 @@ class PDOStatement implements IteratorAggregate {
         // requests that). Advancing resets the row cursor and refreshes
         // rowCount()/column metadata for the new set.
         $_rowsetDriver = elephc_pdo_driver_name($this->conn);
-        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib" || $_rowsetDriver === "odbc") {
+        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib" || $_rowsetDriver === "odbc" || $_rowsetDriver === "informix" || $_rowsetDriver === "ibm" || $_rowsetDriver === "sqlsrv") {
             if (elephc_pdo_next_rowset($this->stmt) !== 1) {
                 return false;
             }
@@ -5341,6 +5567,59 @@ class PDOStatement implements IteratorAggregate {
         }
         if ($_driver === "odbc") {
             return ["pdo_type" => 2];
+        }
+        if ($_driver === "sqlsrv") {
+            if (elephc_pdo_sqlsrv_stmt_attribute($this->stmt, 1009) === 1) {
+                $_sqlsrvPairCount = elephc_pdo_sqlsrv_classification_pair_count($this->stmt, $column);
+                if ($_sqlsrvPairCount < 0) {
+                    $this->fail(elephc_pdo_stmt_errmsg($this->stmt));
+                    return false;
+                }
+                $_sqlsrvDataClassification = [];
+                $_sqlsrvPairIndex = 0;
+                while ($_sqlsrvPairIndex < $_sqlsrvPairCount) {
+                    $_sqlsrvProperty = [
+                        "Label" => [
+                            "name" => elephc_pdo_sqlsrv_classification_text($this->stmt, $column, $_sqlsrvPairIndex, 0),
+                            "id" => elephc_pdo_sqlsrv_classification_text($this->stmt, $column, $_sqlsrvPairIndex, 1),
+                        ],
+                        "Information Type" => [
+                            "name" => elephc_pdo_sqlsrv_classification_text($this->stmt, $column, $_sqlsrvPairIndex, 2),
+                            "id" => elephc_pdo_sqlsrv_classification_text($this->stmt, $column, $_sqlsrvPairIndex, 3),
+                        ],
+                    ];
+                    $_sqlsrvPairRank = elephc_pdo_sqlsrv_classification_pair_rank($this->stmt, $column, $_sqlsrvPairIndex);
+                    if ($_sqlsrvPairRank >= 0) {
+                        $_sqlsrvProperty["rank"] = $_sqlsrvPairRank;
+                    }
+                    $_sqlsrvDataClassification[] = $_sqlsrvProperty;
+                    $_sqlsrvPairIndex = $_sqlsrvPairIndex + 1;
+                }
+                $_sqlsrvQueryRank = elephc_pdo_sqlsrv_classification_query_rank($this->stmt);
+                if ($_sqlsrvQueryRank >= 0) {
+                    $_sqlsrvDataClassification["rank"] = $_sqlsrvQueryRank;
+                }
+                return [
+                    "flags" => ["Data Classification" => $_sqlsrvDataClassification],
+                    "sqlsrv:decl_type" => elephc_pdo_column_native_type($this->stmt, $column),
+                    "native_type" => "string",
+                    "table" => elephc_pdo_column_table_name($this->stmt, $column),
+                    "pdo_type" => 2,
+                    "name" => $this->columnName($column),
+                    "len" => elephc_pdo_column_len($this->stmt, $column),
+                    "precision" => elephc_pdo_column_precision($this->stmt, $column),
+                ];
+            }
+            return [
+                "flags" => 0,
+                "sqlsrv:decl_type" => elephc_pdo_column_native_type($this->stmt, $column),
+                "native_type" => "string",
+                "table" => elephc_pdo_column_table_name($this->stmt, $column),
+                "pdo_type" => 2,
+                "name" => $this->columnName($column),
+                "len" => elephc_pdo_column_len($this->stmt, $column),
+                "precision" => elephc_pdo_column_precision($this->stmt, $column),
+            ];
         }
         if ($_driver === "informix") {
             $_informixFlags = [];
@@ -6596,6 +6875,39 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
+    let sqlsrv_requested = cfg!(feature = "pdo-sqlsrv")
+        || std::env::var_os("ELEPHC_PDO_SQLSRV").is_some();
+    let sqlsrv_enabled = sqlsrv_requested
+        && php_version >= PhpVersion::Php83
+        && php_version <= PhpVersion::Php85;
+    if !sqlsrv_enabled {
+        *source = source.replace(
+            "            $_drivers[] = elephc_pdo_available_driver_name($_index);",
+            "            $_availableDriver = elephc_pdo_available_driver_name($_index);\n            if ($_availableDriver !== \"sqlsrv\") {\n                $_drivers[] = $_availableDriver;\n            }",
+        );
+        *source = source.replace(
+            "function pdo_drivers(): array {\n    $_drivers = [];\n    $_count = elephc_pdo_available_driver_count();\n    for ($_index = 0; $_index < $_count; $_index++) {\n        $_drivers[] = elephc_pdo_available_driver_name($_index);\n    }",
+            "function pdo_drivers(): array {\n    $_drivers = [];\n    $_count = elephc_pdo_available_driver_count();\n    for ($_index = 0; $_index < $_count; $_index++) {\n        $_availableDriver = elephc_pdo_available_driver_name($_index);\n        if ($_availableDriver !== \"sqlsrv\") {\n            $_drivers[] = $_availableDriver;\n        }\n    }",
+        );
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_SQLSRV constants begin --",
+            "    // -- elephc optional PDO_SQLSRV constants end --",
+        );
+        remove_version_block(
+            source,
+            "        // -- elephc optional PDO_SQLSRV subclass guard begin --",
+            "        // -- elephc optional PDO_SQLSRV subclass guard end --",
+        );
+        if php_version >= PhpVersion::Php84 {
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_SQLSRV connect dispatch begin --",
+                "        // -- elephc optional PDO_SQLSRV connect dispatch end --",
+            );
+        }
+    }
+
     let oci_enabled = cfg!(feature = "pdo-oci")
         || std::env::var_os("ELEPHC_PDO_OCI").is_some();
     if !oci_enabled {
@@ -6650,6 +6962,16 @@ mod version_tests {
             assert!(source.contains("private array $statementClassConfig;"));
             assert!(source.contains("__elephc_pdo_statement_class_status"));
             assert!(source.contains("__elephc_invoke_pdo_statement_constructor"));
+        }
+    }
+
+    /// Keeps PDO_SQLSRV 5.13.1 out of PHP versions its published binaries do not support.
+    #[test]
+    fn sqlsrv_is_limited_to_supported_php_versions() {
+        for version in [PhpVersion::Php80, PhpVersion::Php81, PhpVersion::Php82, PhpVersion::Php86] {
+            let source = prelude_source_for_version(version);
+            assert!(!source.contains("const SQLSRV_ATTR_ENCODING = 1000;"));
+            assert!(source.contains("$_availableDriver !== \"sqlsrv\""));
         }
     }
 

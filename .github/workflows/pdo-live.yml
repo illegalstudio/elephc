@@ -120,6 +120,7 @@ jobs:
       ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
       ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
       ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
+      ELEPHC_SQLSRV_DSN: 'sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=Elephc_Pdo!2026_Test'
       ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
@@ -194,6 +195,14 @@ jobs:
               GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%';
               GRANT CREATE ROUTINE, ALTER ROUTINE, EXECUTE ON testdb.* TO 'test'@'%';
               FLUSH PRIVILEGES;"
+
+      - name: Install Microsoft ODBC Driver 18 for SQL Server
+        shell: bash
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/packages-microsoft-prod.deb" https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+          sudo dpkg -i "$RUNNER_TEMP/packages-microsoft-prod.deb"
+          sudo apt-get update
+          sudo env ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 
       - name: Configure TLS on both live-test servers
         # Generate short-lived CA-signed certificates for both servers. The
@@ -401,6 +410,25 @@ jobs:
         env:
           ELEPHC_PDO_IBM: '1'
         run: cargo test --features pdo-ibm --test codegen_tests pdo_ibm -- --test-threads=1
+
+      - name: Build the PDO_SQLSRV 5.13.1 profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
+      - name: PDO_SQLSRV bridge unit tests
+        run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests:: -- --skip live_odbc_round_trip --skip live_sqlsrv_round_trip'
+
+      - name: Live PDO_SQLSRV bridge test
+        run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests::live_sqlsrv_round_trip -- --ignored --test-threads=1'
+
+      - name: PDO_SQLSRV compiled surface tests
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: cargo test --features pdo-sqlsrv --test codegen_tests pdo_sqlsrv -- --test-threads=1
+
+      - name: Live PDO_SQLSRV tests
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: cargo test --features pdo-sqlsrv --test codegen_tests -- --ignored pdo_sqlsrv --test-threads=1
 
       - name: Build the Oracle Instant Client PDO_OCI bridge staticlib
         run: cargo build -p elephc-pdo --features oci

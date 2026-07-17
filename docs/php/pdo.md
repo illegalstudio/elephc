@@ -1,6 +1,6 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, PDO_IBM, PDO_SQLSRV, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
@@ -8,7 +8,7 @@ sidebar:
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, **MySQL / MariaDB**, optional **FreeTDS
 PDO_DBLIB**, optional **PDO_FIREBIRD**, optional **PDO_ODBC**, and optional
-**PDO_INFORMIX**, optional **PDO_IBM**, and optional **Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+**PDO_INFORMIX**, optional **PDO_IBM**, optional **Microsoft PDO_SQLSRV**, and optional **Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
 PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
 transactions. The DSN prefix selects the driver.
 
@@ -25,6 +25,8 @@ PDO_INFORMIX follows PECL 1.3.7 and delegates to the IBM/HCL Client SDK through
 the platform ODBC driver manager.
 PDO_IBM follows PECL 1.7.0 and uses the same CLI/ODBC ABI with an installed IBM
 Db2 or Informix client driver.
+PDO_SQLSRV follows Microsoft Drivers for PHP for SQL Server 5.13.1 and uses an
+installed Microsoft ODBC Driver 18 or 17.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -43,10 +45,10 @@ Patch versions and values outside this range are rejected.
 | --- | --- |
 | 8.0 | Core classes and legacy SQLite/PostgreSQL driver methods; no public `queryString`, namespaced driver classes, or `PDO::connect()`. |
 | 8.1 | Public `PDOStatement::$queryString` and `PDORow::$queryString`. |
-| 8.2–8.3 | Password parameters carry `#[SensitiveParameter]`; otherwise the 8.1 PDO surface. |
+| 8.2–8.3 | Password parameters carry `#[SensitiveParameter]`; otherwise the 8.1 PDO surface. PDO_SQLSRV 5.13.1 is available on 8.3, not 8.2. |
 | 8.4 | `PDO::connect()` and `Pdo\Sqlite`, `Pdo\Mysql`, `Pdo\Pgsql`, plus `Pdo\Dblib` / `Pdo\Firebird` / `Pdo\Odbc` when their profiles are enabled; historical high-bit fetch flags. |
-| 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, PostgreSQL transaction-constant deprecations, and deprecations for the legacy DBLIB/Firebird/ODBC constant aliases. |
-| 8.6 | The 8.5 public surface plus PostgreSQL persistent-session cleanup with `DISCARD ALL` when the final owner releases a pooled handle. |
+| 8.5 | Compact fetch flags, SQLite busy/explain/transaction attributes and `setAuthorizer()`, PostgreSQL transaction-constant deprecations, and deprecations for the legacy DBLIB/Firebird/ODBC constant aliases. PDO_SQLSRV remains on `PDO` and does not add `Pdo\Sqlsrv`. |
+| 8.6 | The 8.5 public surface plus PostgreSQL persistent-session cleanup with `DISCARD ALL` when the final owner releases a pooled handle. PDO_SQLSRV is omitted until Microsoft publishes an 8.6-compatible release. |
 
 The version switch currently governs PDO first; it does not claim that every unrelated
 PHP language or standard-library difference is version-gated.
@@ -82,12 +84,15 @@ $informix = new PDO("informix:Driver={IBM INFORMIX ODBC DRIVER};Server=ol_inform
 // Db2 through the optional PDO_IBM CLI/ODBC profile.
 $db2 = new PDO("ibm:DATABASE=SAMPLE;HOSTNAME=127.0.0.1;PORT=50000;PROTOCOL=TCPIP", "db2inst1", "secret");
 
+// SQL Server through Microsoft ODBC Driver 18/17 and PDO_SQLSRV 5.13.1.
+$sqlsrv = new PDO("sqlsrv:Server=127.0.0.1,1433;Database=app;Encrypt=yes", "sa", "secret");
+
 // Oracle through the optional PDO_OCI / Instant Client profile.
 $oracle = new PDO("oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8", "me", "secret");
 ```
 
 The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
-`dblib:`, `firebird:`, `odbc:`, `informix:`, `ibm:`, or `oci:`. A colonless value may
+`dblib:`, `firebird:`, `odbc:`, `informix:`, `ibm:`, `sqlsrv:`, or `oci:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -410,7 +415,7 @@ relationship matches PHP.
 | Attribute | Behavior |
 | --- | --- |
 | `ATTR_ERRMODE` | Silent / Warning / Exception (default). |
-| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, `"mysql"`, optional `"dblib"`, `"firebird"`, or `"odbc"`. |
+| `ATTR_DRIVER_NAME` | `"sqlite"`, `"pgsql"`, `"mysql"`, or an enabled optional driver name. |
 | `ATTR_PERSISTENT` | Pool selection (constructor only, in practice). |
 | `ATTR_TIMEOUT` | Seconds. SQLite: busy-timeout. pgsql/mysql: initial connect timeout. DBLIB: login and query timeout unless a DBLIB-specific timeout overrides it. |
 | `ATTR_DEFAULT_FETCH_MODE` | Mode used by a no-argument `fetch()`; inherited by statements at `prepare()` time. |
@@ -435,6 +440,7 @@ relationship matches PHP.
 | `Pdo\Firebird::WRITABLE_TRANSACTION` | Selects read/write (default) or read-only manual transactions. |
 | `Pdo\Odbc::ATTR_USE_CURSOR_LIBRARY` | Constructor-only ODBC driver-manager cursor selection. |
 | `Pdo\Odbc::ATTR_ASSUME_UTF8` | Live ODBC UTF-8 conversion flag. |
+| `PDO::SQLSRV_ATTR_*` | PDO_SQLSRV encoding, timeout, direct-query, cursor, buffering, numeric/datetime fetch, decimal formatting, and data-classification controls. |
 | `Pdo\Sqlite::ATTR_OPEN_FLAGS` | Raw `sqlite3_open_v2` flags at open time. A `file:` DSN body always gets `SQLITE_OPEN_URI` OR-ed in. |
 | `Pdo\Sqlite::ATTR_READONLY_STATEMENT` | Live `sqlite3_stmt_readonly()` read (statement-level). |
 | `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES` | Wired: with it on, `errorInfo()[1]` is the *extended* code (`2067` SQLITE_CONSTRAINT_UNIQUE, not the coarse `19`). Write-only, exactly as in php-src — `getAttribute()` follows IM001. |
@@ -750,6 +756,52 @@ because elephc's supported targets are macOS and Linux.
 - **Targets.** The bridge builds on all three supported targets through unixODBC.
   A live connection additionally needs a compatible IBM CLI/ODBC driver; IBM's
   proprietary client is not redistributed by elephc or public CI images.
+
+## PDO_SQLSRV notes
+
+PDO_SQLSRV is optional and requires Microsoft ODBC Driver 18 or 17 plus the
+platform ODBC driver manager:
+
+```bash
+cargo run --features pdo-sqlsrv -- app.php
+```
+
+The profile tracks Microsoft Drivers for PHP for SQL Server 5.13.1. That release
+supports PHP 8.3, 8.4, and 8.5; elephc omits the driver from other compatibility
+targets. Microsoft still declares all SQLSRV constants directly on `PDO` and does
+not declare a `Pdo\Sqlsrv` class, so elephc deliberately does the same.
+
+- **DSNs and authentication.** `sqlsrv:Server=…` options are passed through
+  `SQLDriverConnectW`; when `Driver` is absent the newest installed Microsoft ODBC
+  Driver 18/17 is selected. Constructor credentials become `UID`/`PWD`.
+  `AccessToken` uses the native `SQL_COPT_SS_ACCESS_TOKEN` structure and rejects
+  simultaneous username, password, or `Authentication`, matching Microsoft. On
+  Unix-like supported targets `ConnectionPooling` follows PDO_SQLSRV by deferring
+  to the driver manager's `ODBCINST.INI` setting.
+- **Statements.** Native prepares use UTF-16 ODBC calls. Direct-query mode skips
+  `SQLPrepare` and executes the marker-bearing SQL directly; emulated mode renders
+  T-SQL literals with `N'…'` or `0x…` binary syntax. Positional/named binds,
+  scalar input/output parameters, query timeouts, scroll/keyset/dynamic/static and
+  client-buffered cursors, and multiple rowsets use the Microsoft statement handle.
+- **Values and formatting.** UTF-8, system, binary, and default statement encodings
+  follow the extension's scope rules. Numeric fetch mode returns native integers/
+  floats where SQLSRV does; datetime fetch mode creates `DateTime`; decimal leading
+  zeros and money decimal places honor `SQLSRV_ATTR_FORMAT_DECIMALS` and
+  `SQLSRV_ATTR_DECIMAL_PLACES`.
+- **Identity, quoting, and information.** `lastInsertId()` uses `@@IDENTITY`, or
+  `sys.sequences` for a supplied sequence name. Text quoting doubles apostrophes
+  and uses the national prefix for UTF-8/default strings; binary/LOB quoting uses
+  uppercase hexadecimal. Client/server information arrays expose the same keys as
+  PDO_SQLSRV, including extension version `5.13.1`.
+- **Metadata and classification.** Column names, declared types, and table names use
+  Unicode descriptor calls. `getColumnMeta()` exposes `sqlsrv:decl_type`, the common
+  PDO fields, and, when requested, parses Microsoft ODBC sensitivity metadata into
+  the nested `Data Classification`, label, information-type, and rank arrays.
+- **External boundaries.** TLS, Kerberos/GSSAPI, Entra credentials, Always Encrypted
+  key stores, and server-side classification availability remain capabilities of the
+  installed Microsoft ODBC driver and external infrastructure, just as they are for
+  the PHP extension. The bridge forwards supported connection-string controls and
+  does not emulate credentials or a KDC.
 
 ## PDO_OCI notes
 
@@ -1135,7 +1187,7 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
-  profile; DBLIB, Firebird, ODBC, Informix, IBM, and OCI are available through
+  profile; DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, and OCI are available through
   their optional profiles.
   The central registry intentionally reports
   only drivers present in the selected archive rather than advertising inert names.
@@ -1161,6 +1213,9 @@ preserve source SQL evaluation order, and retain the rendered text for
   fetch-table-name attributes are implemented, including their PHP-version aliases.
 - PDO_IBM's client-info and trusted-context attributes are implemented through
   the installed IBM CLI driver, including the PHP 8.4 class and PHP 8.5 alias deprecations.
+- PDO_SQLSRV's full 1000–1009 attribute range is implemented at the connection,
+  prepare-only, or statement scope used upstream; Microsoft-only authentication and
+  classification descriptor fields cross the native ODBC ABI.
 - PDO_OCI's autocommit, prefetch, call-timeout, action, module, client-info, and
   client-identifier attributes are implemented through Oracle Instant Client.
 - `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected

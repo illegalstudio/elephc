@@ -39,6 +39,8 @@ mod pdo_odbc;
 mod pdo_informix;
 #[cfg(feature = "pdo-ibm")]
 mod pdo_ibm;
+#[cfg(feature = "pdo-sqlsrv")]
+mod pdo_sqlsrv;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
 mod pdo_mysql;

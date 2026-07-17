@@ -76,6 +76,9 @@ jobs:
       - name: Build optional PDO_IBM profile
         run: cargo build -p elephc-pdo --features ibm
 
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -167,6 +170,9 @@ jobs:
       - name: Build optional PDO_IBM profile
         run: cargo build -p elephc-pdo --features ibm
 
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -257,6 +263,9 @@ jobs:
 
       - name: Build optional PDO_IBM profile
         run: cargo build -p elephc-pdo --features ibm
+
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
 
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
