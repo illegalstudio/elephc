@@ -30,6 +30,7 @@ pub(crate) static DBLIB_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static FIREBIRD_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static ODBC_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static OCI_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static CUBRID_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
 pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 

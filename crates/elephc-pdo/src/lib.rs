@@ -32,9 +32,12 @@
 //!   dependency. The optional PDO_DBLIB profile links FreeTDS like php-src;
 //!   PDO_FIREBIRD uses the pure-Rust Firebird wire protocol on every target,
 //!   PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_SQLSRV link the system driver manager, while
-//!   PDO_OCI loads Oracle Instant Client dynamically through ODPI-C.
+//!   PDO_OCI loads Oracle Instant Client dynamically through ODPI-C, and PDO_CUBRID
+//!   loads the official CCI client dynamically.
 
 mod driver;
+#[cfg(feature = "cubrid")]
+mod cubrid;
 #[cfg(feature = "dblib")]
 mod dblib;
 #[cfg(feature = "firebird")]
@@ -63,6 +66,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// A live connection, tagged by its driver.
 enum Conn {
+    #[cfg(feature = "cubrid")]
+    Cubrid(cubrid::CubridConn),
     #[cfg(feature = "dblib")]
     Dblib(dblib::DblibConn),
     #[cfg(feature = "firebird")]
@@ -80,6 +85,8 @@ impl Conn {
     /// Returns the central registry identity for this live connection.
     fn driver_kind(&self) -> driver::DriverKind {
         match self {
+            #[cfg(feature = "cubrid")]
+            Self::Cubrid(_) => driver::DriverKind::Cubrid,
             #[cfg(feature = "dblib")]
             Self::Dblib(_) => driver::DriverKind::Dblib,
             #[cfg(feature = "firebird")]
@@ -97,6 +104,8 @@ impl Conn {
 
 /// A live prepared statement, tagged by its driver.
 enum Stmt {
+    #[cfg(feature = "cubrid")]
+    Cubrid(cubrid::CubridStmt),
     #[cfg(feature = "dblib")]
     Dblib(dblib::DblibStmt),
     #[cfg(feature = "firebird")]
@@ -240,7 +249,17 @@ fn open_native_code_cell() -> &'static AtomicI64 {
 /// Stores a failed-open message and any driver-specific constructor diagnostic.
 fn store_open_failure(dsn: &str, message: &str) {
     store_cstr(open_error_cell(), message);
-    let (sqlstate, native_code) = if dsn.starts_with("oci:") {
+    let (sqlstate, native_code) = if dsn.starts_with("cubrid:") {
+        #[cfg(feature = "cubrid")]
+        {
+            let (state, code) = cubrid::open_diagnostic();
+            (state.to_string(), code)
+        }
+        #[cfg(not(feature = "cubrid"))]
+        {
+            (String::new(), 0)
+        }
+    } else if dsn.starts_with("oci:") {
         #[cfg(feature = "oci")]
         {
             let (state, code) = oci::open_diagnostic(message);
@@ -292,6 +311,12 @@ fn decltype_cell() -> &'static Mutex<CString> {
 
 /// Static buffer for the most recent `elephc_pdo_column_native_type` result.
 fn native_type_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
+/// Static buffer holding PDO_CUBRID's current result-column default value.
+fn cubrid_column_default_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(CString::default()))
 }
@@ -492,6 +517,8 @@ fn open_conn_for_dsn(
     my_driver_config: &str,
 ) -> Result<Conn, String> {
     match driver::DriverKind::from_dsn(dsn) {
+        #[cfg(feature = "cubrid")]
+        Some(driver::DriverKind::Cubrid) => cubrid::CubridConn::open(dsn).map(Conn::Cubrid),
         #[cfg(feature = "dblib")]
         Some(driver::DriverKind::Dblib) => dblib::DblibConn::open(dsn).map(Conn::Dblib),
         #[cfg(feature = "firebird")]
@@ -564,6 +591,8 @@ fn open_nonpersistent_dsn(
 fn persistent_connection_is_live(conn_id: i64) -> bool {
     let mut guard = lock_recover(conns());
     match guard.get_mut(&conn_id) {
+        #[cfg(feature = "cubrid")]
+        Some(Conn::Cubrid(connection)) => connection.is_alive(),
         #[cfg(feature = "dblib")]
         Some(Conn::Dblib(connection)) => connection.is_alive(),
         #[cfg(feature = "firebird")]
@@ -583,6 +612,8 @@ fn persistent_connection_is_live(conn_id: i64) -> bool {
 /// it before a replacement handle is registered.
 fn evict_persistent_connection(conn_id: i64) {
     lock_recover(stmts()).retain(|_, statement| match statement {
+        #[cfg(feature = "cubrid")]
+        Stmt::Cubrid(statement) => statement.conn_id != conn_id,
         #[cfg(feature = "dblib")]
         Stmt::Dblib(statement) => statement.conn_id != conn_id,
         #[cfg(feature = "firebird")]
@@ -843,6 +874,8 @@ pub extern "C" fn elephc_pdo_available_driver_name(index: i64) -> *const c_char 
             return static_cstr(b"\0");
         };
         match kind {
+            #[cfg(feature = "cubrid")]
+            driver::DriverKind::Cubrid => static_cstr(b"cubrid\0"),
             #[cfg(feature = "dblib")]
             driver::DriverKind::Dblib => static_cstr(b"dblib\0"),
             #[cfg(feature = "firebird")]
@@ -1040,17 +1073,25 @@ fn release_connection(conn_id: i64, reset_pgsql_session: bool) {
             Some(Conn::Sqlite(c)) => Some(c.db),
             _ => None,
         };
-        // Finalize and drop the statements belonging to this connection so
-        // sqlite3_close does not fail with SQLITE_BUSY; PostgreSQL/MySQL statements
-        // live server-side and are dropped with the client.
+        // Finalize and drop every statement belonging to this connection before its
+        // client handle. SQLite otherwise reports SQLITE_BUSY, while native clients
+        // such as CCI may wait for an outstanding request during disconnect.
         let owned: Vec<i64> = lock_recover(stmts())
             .iter()
             .filter_map(|(k, s)| match s {
                 Stmt::Sqlite(st) if sqlite_db == Some(st.db) => Some(*k),
                 Stmt::Postgres(p) if p.conn_id == conn_id => Some(*k),
                 Stmt::Mysql(m) if m.conn_id == conn_id => Some(*k),
+                #[cfg(feature = "cubrid")]
+                Stmt::Cubrid(c) if c.conn_id == conn_id => Some(*k),
+                #[cfg(feature = "dblib")]
+                Stmt::Dblib(d) if d.conn_id == conn_id => Some(*k),
                 #[cfg(feature = "firebird")]
                 Stmt::Firebird(f) if f.conn_id == conn_id => Some(*k),
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
+                Stmt::Odbc(o) if o.conn_id == conn_id => Some(*k),
+                #[cfg(feature = "oci")]
+                Stmt::Oci(o) if o.conn_id == conn_id => Some(*k),
                 _ => None,
             })
             .collect();
@@ -1103,6 +1144,11 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
         }
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => match cstr_arg(sql) {
+                Some(sql) => c.exec(sql).unwrap_or(-1),
+                None => -1,
+            },
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => match cstr_arg(sql) {
                 Some(sql) => c.execute(sql).map_or(-1, |_| c.changes),
@@ -1147,6 +1193,8 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.last_insert_id().parse().unwrap_or(0),
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c
                 .execute("SELECT @@IDENTITY")
@@ -1194,6 +1242,8 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
         let text = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.last_insert_id(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c
                     .execute("SELECT @@IDENTITY")
@@ -1231,6 +1281,8 @@ pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.changes,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.changes,
             #[cfg(feature = "firebird")]
@@ -1254,6 +1306,8 @@ pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.begin() as i64,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("BEGIN TRANSACTION", true) as i64,
             #[cfg(feature = "firebird")]
@@ -1277,6 +1331,8 @@ pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.commit() as i64,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("COMMIT TRANSACTION", false) as i64,
             #[cfg(feature = "firebird")]
@@ -1300,6 +1356,8 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.rollback() as i64,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.transaction("ROLLBACK TRANSACTION", false) as i64,
             #[cfg(feature = "firebird")]
@@ -1331,6 +1389,8 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.in_transaction as i64,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.in_transaction as i64,
             #[cfg(feature = "firebird")]
@@ -1353,6 +1413,8 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_set_autocommit(conn_id: i64, enabled: i64) -> i64 {
     ffi_guard(0, || match lock_recover(conns()).get_mut(&conn_id) {
+        #[cfg(feature = "cubrid")]
+        Some(Conn::Cubrid(c)) => c.set_autocommit(enabled != 0) as i64,
         Some(Conn::Mysql(c)) => c.set_autocommit(enabled != 0),
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         Some(Conn::Odbc(c)) => c.set_attribute(0, enabled) as i64,
@@ -1367,6 +1429,8 @@ pub extern "C" fn elephc_pdo_set_autocommit(conn_id: i64, enabled: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_autocommit(conn_id: i64) -> i64 {
     ffi_guard(-1, || match lock_recover(conns()).get_mut(&conn_id) {
+        #[cfg(feature = "cubrid")]
+        Some(Conn::Cubrid(c)) => c.attribute(0).unwrap_or(-1),
         Some(Conn::Mysql(c)) => c.autocommit as i64,
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         Some(Conn::Odbc(c)) => c.attribute(0).unwrap_or(-1),
@@ -1459,6 +1523,8 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
     ffi_guard(-1, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(c)) => c.errcode(),
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(c)) => c.errcode(),
             #[cfg(feature = "firebird")]
@@ -1483,6 +1549,8 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
         let msg = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.errmsg().to_string(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.errmsg().to_string(),
                 #[cfg(feature = "firebird")]
@@ -1512,6 +1580,8 @@ pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
         let state = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.sqlstate().to_string(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.sqlstate().to_string(),
                 #[cfg(feature = "firebird")]
@@ -1539,6 +1609,8 @@ pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(conns());
         match guard.get(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(_)) => 1,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 1,
             #[cfg(feature = "firebird")]
@@ -1551,6 +1623,144 @@ pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
             Some(Conn::Postgres(_)) => 1,
             Some(Conn::Mysql(_)) => 1,
             None => 0,
+        }
+    })
+}
+
+/// Applies one writable PDO_CUBRID connection attribute through CCI.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_cubrid_set_attribute(
+    conn_id: i64,
+    attribute: i64,
+    value: i64,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "cubrid")]
+        if let Some(Conn::Cubrid(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+            return connection.set_attribute(attribute, value) as i64;
+        }
+        let _ = (conn_id, attribute, value);
+        0
+    })
+}
+
+/// Reads one PDO_CUBRID connection attribute, returning `-1` when unavailable.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_cubrid_attribute(conn_id: i64, attribute: i64) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "cubrid")]
+        if let Some(Conn::Cubrid(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+            return connection.attribute(attribute).unwrap_or(-1);
+        }
+        let _ = (conn_id, attribute);
+        -1
+    })
+}
+
+/// Escapes exact bytes with PDO_CUBRID's native CCI quoter into the shared blob cell.
+///
+/// # Safety
+/// `data` must expose at least `len` readable bytes and may only be null when `len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_cubrid_quote(
+    conn_id: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "cubrid")]
+        {
+            let input = bytes_arg(data, len);
+            let mut connections = lock_recover(conns());
+            let Some(Conn::Cubrid(connection)) = connections.get_mut(&conn_id) else {
+                return -1;
+            };
+            let output = match connection.quote(&input) {
+                Ok(output) => output,
+                Err(_) => return -1,
+            };
+            let length = output.len() as i64;
+            *lock_recover(blob_cell()) = output;
+            return length;
+        }
+        #[cfg(not(feature = "cubrid"))]
+        {
+            let _ = (conn_id, data, len);
+            -1
+        }
+    })
+}
+
+/// Stores one PDO_CUBRID named-type or collection bind for the next execution.
+///
+/// # Safety
+/// `data` must expose `len` readable bytes, and `type_name` must be a valid
+/// NUL-terminated string for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_cubrid_bind_typed(
+    stmt_id: i64,
+    index: i64,
+    data: *const c_char,
+    len: i64,
+    type_name: *const c_char,
+    is_set: i64,
+    pdo_type: i64,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "cubrid")]
+        if let Some(Stmt::Cubrid(statement)) = lock_recover(stmts()).get_mut(&stmt_id) {
+            return statement.bind_typed(
+                index,
+                bytes_arg(data, len),
+                &cstr_arg(type_name).unwrap_or_default(),
+                is_set != 0,
+                pdo_type,
+            ) as i64;
+        }
+        let _ = (stmt_id, index, data, len, type_name, is_set, pdo_type);
+        0
+    })
+}
+
+/// Creates an executed PDO_CUBRID schema-information statement and returns its handle.
+///
+/// # Safety
+/// Non-null `class_name` and `attribute_name` pointers must reference valid
+/// NUL-terminated strings for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_cubrid_schema(
+    conn_id: i64,
+    schema_type: i64,
+    class_name: *const c_char,
+    attribute_name: *const c_char,
+) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "cubrid")]
+        {
+            let class_name = cstr_arg(class_name).unwrap_or_default();
+            let attribute_name = cstr_arg(attribute_name).unwrap_or_default();
+            let mut connections = lock_recover(conns());
+            let Some(Conn::Cubrid(connection)) = connections.get_mut(&conn_id) else {
+                return -1;
+            };
+            let statement = match cubrid::CubridStmt::schema(
+                connection,
+                conn_id,
+                schema_type,
+                class_name,
+                attribute_name,
+            ) {
+                Ok(statement) => statement,
+                Err(_) => return -1,
+            };
+            let id = next_id();
+            lock_recover(stmts()).insert(id, Stmt::Cubrid(statement));
+            return id;
+        }
+        #[cfg(not(feature = "cubrid"))]
+        {
+            let _ = (conn_id, schema_type, class_name, attribute_name);
+            -1
         }
     })
 }
@@ -2197,6 +2407,8 @@ pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
         let version = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.server_version(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.tds_version().to_string(),
                 #[cfg(feature = "firebird")]
@@ -2225,6 +2437,8 @@ pub extern "C" fn elephc_pdo_client_version(conn_id: i64) -> *const c_char {
         let version = {
             let guard = lock_recover(conns());
             match guard.get(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.client_version(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => c.client_version(),
                 #[cfg(feature = "firebird")]
@@ -2253,6 +2467,8 @@ pub extern "C" fn elephc_pdo_server_info(conn_id: i64) -> *const c_char {
         let info = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => c.server_version(),
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(_)) => String::new(),
                 #[cfg(feature = "firebird")]
@@ -2280,6 +2496,10 @@ pub extern "C" fn elephc_pdo_connection_status(conn_id: i64) -> *const c_char {
         let status = {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(c)) => {
+                    if c.is_alive() { "Connection OK".to_string() } else { "Connection failed".to_string() }
+                }
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(c)) => {
                     if c.is_alive() { "Connection OK".to_string() } else { "Connection failed".to_string() }
@@ -2307,6 +2527,8 @@ pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(_)) => 0,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 0,
             #[cfg(feature = "firebird")]
@@ -2331,6 +2553,8 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Conn::Cubrid(_)) => 0,
             #[cfg(feature = "dblib")]
             Some(Conn::Dblib(_)) => 0,
             #[cfg(feature = "firebird")]
@@ -2870,6 +3094,13 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
         } else {
             let mut guard = lock_recover(conns());
             match guard.get_mut(&conn_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Conn::Cubrid(connection)) => match cstr_arg(sql) {
+                    Some(sql) => cubrid::CubridStmt::new(connection, conn_id, sql)
+                        .map(Stmt::Cubrid)
+                        .map_err(|_| ()),
+                    None => Err(()),
+                },
                 #[cfg(feature = "dblib")]
                 Some(Conn::Dblib(connection)) => match cstr_arg(sql) {
                     Some(sql) => match dblib::DblibStmt::new(conn_id, sql) {
@@ -2953,6 +3184,8 @@ pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *co
             return 0;
         };
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.parameter_index(name),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.parameter_index(name),
             #[cfg(feature = "firebird")]
@@ -2976,6 +3209,8 @@ pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.bind_int(idx, val) as i64,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_int(idx, val) as i64,
             #[cfg(feature = "firebird")]
@@ -2999,6 +3234,8 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.bind_double(idx, val) as i64,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_double(idx, val) as i64,
             #[cfg(feature = "firebird")]
@@ -3035,6 +3272,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len)) as i64
+                }
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 if val.is_null() {
@@ -3106,6 +3351,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_text_national(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                if val.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_text(idx, bytes_arg(val, len)) as i64
+                }
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 if val.is_null() {
@@ -3169,6 +3422,8 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.bind_null(idx) as i64,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_null(idx) as i64,
             #[cfg(feature = "firebird")]
@@ -3196,6 +3451,8 @@ pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 
         let truthy = (val != 0) as i64;
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.bind_int(idx, truthy) as i64,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.bind_int(idx, truthy) as i64,
             #[cfg(feature = "firebird")]
@@ -3235,6 +3492,14 @@ pub unsafe extern "C" fn elephc_pdo_bind_blob(
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                if ptr.is_null() {
+                    s.bind_null(idx) as i64
+                } else {
+                    s.bind_blob(idx, bytes_arg(ptr, len)) as i64
+                }
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 if ptr.is_null() {
@@ -3392,6 +3657,11 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                s.reset();
+                1
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 s.reset();
@@ -3438,6 +3708,11 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                s.clear_bindings();
+                1
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 s.clear_bindings();
@@ -3490,6 +3765,21 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
         }
         let mut sguard = lock_recover(stmts());
         match sguard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                if s.needs_execute() {
+                    let mut cguard = lock_recover(conns());
+                    match cguard.get_mut(&s.conn_id) {
+                        Some(Conn::Cubrid(connection)) => {
+                            if s.execute(connection).is_err() {
+                                return -1;
+                            }
+                        }
+                        _ => return -1,
+                    }
+                }
+                s.step()
+            }
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => {
                 if s.needs_execute() {
@@ -3587,6 +3877,21 @@ pub extern "C" fn elephc_pdo_step_oriented(
     ffi_guard(-1, || {
         let mut sguard = lock_recover(stmts());
         match sguard.get_mut(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => {
+                if s.needs_execute() {
+                    let mut cguard = lock_recover(conns());
+                    match cguard.get_mut(&s.conn_id) {
+                        Some(Conn::Cubrid(connection)) => {
+                            if s.execute(connection).is_err() {
+                                return -1;
+                            }
+                        }
+                        _ => return -1,
+                    }
+                }
+                s.step_oriented(orientation, offset)
+            }
             Some(Stmt::Postgres(s)) => {
                 let conn_id = s.conn_id;
                 let mut cguard = lock_recover(conns());
@@ -3748,6 +4053,20 @@ pub extern "C" fn elephc_pdo_next_rowset(stmt_id: i64) -> i64 {
         if matches!(sguard.get(&stmt_id), Some(Stmt::Firebird(_))) {
             return 0;
         }
+        #[cfg(feature = "cubrid")]
+        if let Some(Stmt::Cubrid(statement)) = sguard.get_mut(&stmt_id) {
+            let mut cguard = lock_recover(conns());
+            return match cguard.get_mut(&statement.conn_id) {
+                Some(Conn::Cubrid(connection)) => {
+                    let advanced = statement.next_rowset(connection);
+                    if advanced {
+                        connection.changes = statement.row_count();
+                    }
+                    advanced as i64
+                }
+                _ => 0,
+            };
+        }
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         if let Some(Stmt::Odbc(statement)) = sguard.get_mut(&stmt_id) {
             let conn_id = statement.conn_id;
@@ -3776,6 +4095,8 @@ pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_count(),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_count(),
             #[cfg(feature = "firebird")]
@@ -3800,6 +4121,8 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
         let name = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.column_name(i),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_name(i),
                 #[cfg(feature = "firebird")]
@@ -3826,6 +4149,8 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(5, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_type(i),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_type(i),
             #[cfg(feature = "firebird")]
@@ -3888,6 +4213,8 @@ pub extern "C" fn elephc_pdo_column_native_type(stmt_id: i64, i: i64) -> *const 
         let native = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.column_native_type(i),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_native_type(i),
                 #[cfg(feature = "firebird")]
@@ -3915,6 +4242,8 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
         let table = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.column_table_name(i),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(_)) => String::new(),
                 #[cfg(feature = "firebird")]
@@ -3937,10 +4266,49 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_flags(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || match lock_recover(stmts()).get(&stmt_id) {
+        #[cfg(feature = "cubrid")]
+        Some(Stmt::Cubrid(statement)) => statement.column_flags(i),
         #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
         Some(Stmt::Odbc(statement)) => statement.column_flags(i),
         Some(Stmt::Mysql(statement)) => statement.column_flags(i),
         _ => 0,
+    })
+}
+
+/// Returns PDO_CUBRID's native column scale, or zero for another driver.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_cubrid_column_scale(stmt_id: i64, column: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "cubrid")]
+        if let Some(Stmt::Cubrid(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_scale(column);
+        }
+        let _ = (stmt_id, column);
+        0
+    })
+}
+
+/// Returns PDO_CUBRID's native default-value metadata as a transient C string.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_cubrid_column_default(
+    stmt_id: i64,
+    column: i64,
+) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let value = {
+            #[cfg(feature = "cubrid")]
+            if let Some(Stmt::Cubrid(statement)) = lock_recover(stmts()).get(&stmt_id) {
+                statement.column_default(column)
+            } else {
+                String::new()
+            }
+            #[cfg(not(feature = "cubrid"))]
+            {
+                let _ = (stmt_id, column);
+                String::new()
+            }
+        };
+        store_cstr(cubrid_column_default_cell(), &value)
     })
 }
 
@@ -4008,6 +4376,8 @@ pub extern "C" fn elephc_pdo_column_type_oid(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_precision(i),
             Some(Stmt::Postgres(s)) => s.column_type_oid(i),
             _ => 0,
         }
@@ -4317,6 +4687,8 @@ pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_int(i),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_int(i),
             #[cfg(feature = "firebird")]
@@ -4340,6 +4712,8 @@ pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
     ffi_guard(0.0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_double(i),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_double(i),
             #[cfg(feature = "firebird")]
@@ -4366,6 +4740,8 @@ pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || {
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.column_data(i).len() as i64,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.column_data(i).len() as i64,
             #[cfg(feature = "firebird")]
@@ -4392,6 +4768,8 @@ pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_c
         let bytes = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.column_data(i),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_data(i),
                 #[cfg(feature = "firebird")]
@@ -4421,6 +4799,8 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
         let bytes = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.column_data(i),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.column_data(i),
                 #[cfg(feature = "firebird")]
@@ -4446,6 +4826,8 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
 pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
         match lock_recover(stmts()).remove(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(_)) => 1,
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(_)) => 1,
             #[cfg(feature = "firebird")]
@@ -4533,6 +4915,8 @@ pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
     ffi_guard(-1, || {
         let sguard = lock_recover(stmts());
         match sguard.get(&stmt_id) {
+            #[cfg(feature = "cubrid")]
+            Some(Stmt::Cubrid(s)) => s.errcode(),
             #[cfg(feature = "dblib")]
             Some(Stmt::Dblib(s)) => s.errcode(),
             #[cfg(feature = "firebird")]
@@ -4573,6 +4957,8 @@ pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
         let msg = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.errmsg().to_string(),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.errmsg().to_string(),
                 #[cfg(feature = "firebird")]
@@ -4657,6 +5043,8 @@ pub extern "C" fn elephc_pdo_stmt_sent_sql(stmt_id: i64) -> *const c_char {
         let sql = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(_)) => String::new(),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.sent_sql.clone(),
                 #[cfg(feature = "firebird")]
@@ -4687,6 +5075,8 @@ pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
         let state = {
             let sguard = lock_recover(stmts());
             match sguard.get(&stmt_id) {
+                #[cfg(feature = "cubrid")]
+                Some(Stmt::Cubrid(s)) => s.sqlstate().to_string(),
                 #[cfg(feature = "dblib")]
                 Some(Stmt::Dblib(s)) => s.sqlstate().to_string(),
                 #[cfg(feature = "firebird")]

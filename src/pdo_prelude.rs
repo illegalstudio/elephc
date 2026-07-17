@@ -195,6 +195,14 @@ extern "elephc_pdo" {
     function elephc_pdo_sqlsrv_classification_text(int $stmt, int $column, int $pair, int $field): string;
     function elephc_pdo_sqlsrv_classification_pair_rank(int $stmt, int $column, int $pair): int;
     function elephc_pdo_sqlsrv_classification_query_rank(int $stmt): int;
+    // v58: official PDO_CUBRID connection attributes, schema API, metadata, and quoter.
+    function elephc_pdo_cubrid_set_attribute(int $conn, int $attribute, int $value): int;
+    function elephc_pdo_cubrid_attribute(int $conn, int $attribute): int;
+    function elephc_pdo_cubrid_quote(int $conn, string $data, int $length): int;
+    function elephc_pdo_cubrid_bind_typed(int $stmt, int $index, string $data, int $length, string $typeName, int $isSet, int $pdoType): int;
+    function elephc_pdo_cubrid_schema(int $conn, int $schemaType, string $className, string $attributeName): int;
+    function elephc_pdo_cubrid_column_scale(int $stmt, int $column): int;
+    function elephc_pdo_cubrid_column_default(int $stmt, int $column): string;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -1243,6 +1251,34 @@ class PDO {
     const OCI_ATTR_MODULE = 1003;
     const OCI_ATTR_CALL_TIMEOUT = 1004;
     // -- elephc optional PDO_OCI aliases end --
+    // -- elephc optional PDO_CUBRID constants begin --
+    const CUBRID_ATTR_ISOLATION_LEVEL = 1000;
+    const CUBRID_ATTR_LOCK_TIMEOUT = 1001;
+    const CUBRID_ATTR_MAX_STRING_LENGTH = 1002;
+    const TRAN_REP_CLASS_COMMIT_INSTANCE = 4;
+    const TRAN_REP_CLASS_REP_INSTANCE = 5;
+    const TRAN_SERIALIZABLE = 6;
+    const CUBRID_SCH_TABLE = 1;
+    const CUBRID_SCH_VIEW = 2;
+    const CUBRID_SCH_QUERY_SPEC = 3;
+    const CUBRID_SCH_ATTRIBUTE = 4;
+    const CUBRID_SCH_TABLE_ATTRIBUTE = 5;
+    const CUBRID_SCH_METHOD = 6;
+    const CUBRID_SCH_TABLE_METHOD = 7;
+    const CUBRID_SCH_METHOD_FILE = 8;
+    const CUBRID_SCH_SUPER_TABLE = 9;
+    const CUBRID_SCH_SUB_TABLE = 10;
+    const CUBRID_SCH_CONSTRAINT = 11;
+    const CUBRID_SCH_TRIGGER = 12;
+    const CUBRID_SCH_TABLE_PRIVILEGE = 13;
+    const CUBRID_SCH_COL_PRIVILEGE = 14;
+    const CUBRID_SCH_DIRECT_SUPER_TABLE = 15;
+    const CUBRID_SCH_PRIMARY_KEY = 16;
+    const CUBRID_SCH_IMPORTED_KEYS = 17;
+    const CUBRID_SCH_EXPORTED_KEYS = 18;
+    const CUBRID_SCH_CROSS_REFERENCE = 19;
+    const CUBRID_SCH_ATTR_WITH_SYNONYM = 20;
+    // -- elephc optional PDO_CUBRID constants end --
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
@@ -1405,7 +1441,15 @@ class PDO {
             throw new PDOException("PDO::__construct(): Argument #1 (\$dsn) must be a valid data source name");
         }
         $_driver = substr($dsn, 0, (int) strpos($dsn, ":"));
-        if (!in_array($_driver, pdo_drivers(), true)) {
+        $_driverFound = false;
+        $_driverCount = elephc_pdo_available_driver_count();
+        for ($_driverIndex = 0; $_driverIndex < $_driverCount; $_driverIndex++) {
+            if (elephc_pdo_available_driver_name($_driverIndex) === $_driver) {
+                $_driverFound = true;
+                break;
+            }
+        }
+        if (!$_driverFound) {
             throw new PDOException("could not find driver");
         }
     }
@@ -1553,6 +1597,16 @@ class PDO {
         // ATTR_PERSISTENT selects the bridge's process-local DSN pool.
         if ($options !== null) {
             foreach ($options as $_attr => $_val) {
+                // PDO_CUBRID uniquely forwards string-keyed constructor options to
+                // CCI's URL query string. Preserve those keys before the common PDO
+                // numeric-attribute path casts the key to an integer.
+                if (str_starts_with($_dsn, "cubrid:") && is_string($_attr)) {
+                    if (!is_string($_val)) {
+                        throw new PDOException("Invalid CUBRID connection option");
+                    }
+                    $_dsn = $_dsn . ";" . ((string) $_attr) . "=" . ((string) $_val);
+                    continue;
+                }
                 $_iattr = (int) $_attr;
                 if ($_iattr == 0) {
                     // Only pdo_mysql exposes a live AUTOCOMMIT hook; retain the
@@ -1734,7 +1788,7 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:") || str_starts_with($_dsn, "informix:") || str_starts_with($_dsn, "ibm:") || str_starts_with($_dsn, "oci:") || str_starts_with($_dsn, "sqlsrv:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:") || str_starts_with($_dsn, "informix:") || str_starts_with($_dsn, "ibm:") || str_starts_with($_dsn, "oci:") || str_starts_with($_dsn, "sqlsrv:") || str_starts_with($_dsn, "cubrid:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
             $_dsnIsFirebird = str_starts_with($_dsn, "firebird:");
@@ -1743,11 +1797,12 @@ class PDO {
             $_dsnIsIbm = str_starts_with($_dsn, "ibm:");
             $_dsnIsOci = str_starts_with($_dsn, "oci:");
             $_dsnIsSqlsrv = str_starts_with($_dsn, "sqlsrv:");
-            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || !str_contains($_dsn, "user="))) {
+            $_dsnIsCubrid = str_starts_with($_dsn, "cubrid:");
+            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || $_dsnIsCubrid || !str_contains($_dsn, "user="))) {
                 $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
                 $_dsn = $_dsn . ";user=" . $_encUser;
             }
-            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || !str_contains($_dsn, "password="))) {
+            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || $_dsnIsCubrid || !str_contains($_dsn, "password="))) {
                 $_encPass = str_replace(";", "%3B", str_replace("%", "%25", $password));
                 $_dsn = $_dsn . ";password=" . $_encPass;
             }
@@ -1957,6 +2012,15 @@ class PDO {
                     elephc_pdo_oci_set_attribute_text($this->conn, $_ociTextAttribute, (string) $this->attributes[$_ociTextAttribute]);
                 }
             }
+        } elseif (str_starts_with($_dsn, "cubrid:")) {
+            if (isset($this->attributes[0])) {
+                elephc_pdo_set_autocommit($this->conn, $this->autoCommit ? 1 : 0);
+            }
+            foreach ([1000, 1001] as $_cubridAttribute) {
+                if (isset($this->attributes[$_cubridAttribute])) {
+                    elephc_pdo_cubrid_set_attribute($this->conn, $_cubridAttribute, $this->attrIntValue($this->attributes[$_cubridAttribute]));
+                }
+            }
         }
         // ATTR_TIMEOUT needs a live connection, so apply it after the open (the
         // pre-open loop only records it). PHP's value is in seconds; SQLite's
@@ -1964,7 +2028,9 @@ class PDO {
         // harmless no-op layered on top of the connect_timeout DSN key above,
         // which is what actually bounds the connect-time wait (P2-1).
         if (isset($this->attributes[2])) {
-            if (str_starts_with($_dsn, "dblib:")) {
+            if (str_starts_with($_dsn, "cubrid:")) {
+                elephc_pdo_cubrid_set_attribute($this->conn, 2, (int) $this->attributes[2]);
+            } elseif (str_starts_with($_dsn, "dblib:")) {
                 elephc_pdo_dblib_set_attribute($this->conn, 2, (int) $this->attributes[2]);
             } else {
                 elephc_pdo_set_busy_timeout($this->conn, ((int) $this->attributes[2]) * 1000);
@@ -2227,7 +2293,7 @@ class PDO {
 
     public function setAttribute(int $attribute, $value): bool {
         $_driver = elephc_pdo_driver_name($this->conn);
-        if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci")) {
+        if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci" || $_driver === "cubrid")) {
             $_autocommit = $this->attrBoolValue($value);
             if (elephc_pdo_set_autocommit($this->conn, $_autocommit ? 1 : 0) !== 1) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
@@ -2260,6 +2326,8 @@ class PDO {
             elephc_pdo_set_busy_timeout($this->conn, $this->attrIntValue($value) * 1000);
         } elseif ($attribute == 2 && $_driver === "dblib") {
             return elephc_pdo_dblib_set_attribute($this->conn, 2, $this->attrIntValue($value)) === 1;
+        } elseif ($attribute == 2 && $_driver === "cubrid") {
+            return elephc_pdo_cubrid_set_attribute($this->conn, 2, $this->attrIntValue($value)) === 1;
         } elseif ($attribute == 19) {
             $_attrFetchMode = $this->attrIntValue($value);
             $this->checkDefaultFetchMode($_attrFetchMode);
@@ -2327,6 +2395,8 @@ class PDO {
             $this->disablePrepares = $this->attrBoolValue($value);
         } elseif ($attribute == 1004 && $_driver === "mysql") {
             $this->emulatePrepares = $this->attrBoolValue($value);
+        } elseif (($attribute == 1000 || $attribute == 1001) && $_driver === "cubrid") {
+            return elephc_pdo_cubrid_set_attribute($this->conn, $attribute, $this->attrIntValue($value)) === 1;
         } elseif (($attribute == 1001 || $attribute == 1002 || $attribute == 1005 || $attribute == 1006) && $_driver === "dblib") {
             if ($attribute == 1001) {
                 return elephc_pdo_dblib_set_attribute($this->conn, $attribute, $this->attrIntValue($value)) === 1;
@@ -2490,6 +2560,12 @@ class PDO {
         if (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && elephc_pdo_driver_name($this->conn) === "firebird") {
             return elephc_pdo_firebird_attribute_text($this->conn, $attribute);
         }
+        if (($attribute == 0 || $attribute == 2 || $attribute == 1000 || $attribute == 1001 || $attribute == 1002) && elephc_pdo_driver_name($this->conn) === "cubrid") {
+            $_cubridValue = elephc_pdo_cubrid_attribute($this->conn, $attribute);
+            if ($_cubridValue >= -1 && ($attribute == 2 || $_cubridValue >= 0)) {
+                return $attribute == 0 ? ($_cubridValue === 1) : $_cubridValue;
+            }
+        }
         if ($attribute == 0 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "odbc" || elephc_pdo_driver_name($this->conn) === "informix" || elephc_pdo_driver_name($this->conn) === "ibm" || elephc_pdo_driver_name($this->conn) === "oci")) {
             return elephc_pdo_autocommit($this->conn) === 1;
         }
@@ -2570,7 +2646,7 @@ class PDO {
             }
             return $serverInfo;
         }
-        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib" && elephc_pdo_driver_name($this->conn) !== "odbc" && elephc_pdo_driver_name($this->conn) !== "informix" && elephc_pdo_driver_name($this->conn) !== "ibm" && elephc_pdo_driver_name($this->conn) !== "oci") {
+        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib" && elephc_pdo_driver_name($this->conn) !== "odbc" && elephc_pdo_driver_name($this->conn) !== "informix" && elephc_pdo_driver_name($this->conn) !== "ibm" && elephc_pdo_driver_name($this->conn) !== "oci" && elephc_pdo_driver_name($this->conn) !== "cubrid") {
             return elephc_pdo_connection_status($this->conn);
         }
         // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES is write-only. Its get hook returns
@@ -2636,7 +2712,7 @@ class PDO {
             if ($_driver === "sqlite" && $_cursorMode !== 0) {
                 return false;
             }
-            if (($_driver === "pgsql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci" || $_driver === "sqlsrv") && $_cursorMode === 1) {
+            if (($_driver === "pgsql" || $_driver === "odbc" || $_driver === "informix" || $_driver === "ibm" || $_driver === "oci" || $_driver === "sqlsrv" || $_driver === "cubrid") && $_cursorMode === 1) {
                 $_scrollable = true;
             }
         }
@@ -2802,6 +2878,26 @@ class PDO {
         }
         return false;
     }
+
+    // -- elephc optional PDO_CUBRID method begin --
+    // PDO_CUBRID's driver method. The native extension returns the schema rows
+    // directly as an array rather than exposing its temporary CCI request handle.
+    public function cubrid_schema(int $schemaType, ?string $className = null, ?string $attributeName = null): array|bool {
+        if (elephc_pdo_driver_name($this->conn) !== "cubrid") {
+            throw new Error("Call to undefined method PDO::cubrid_schema()");
+        }
+        $_handle = elephc_pdo_cubrid_schema($this->conn, $schemaType, $className ?? "", $attributeName ?? "");
+        if ($_handle < 0) {
+            $this->fail(elephc_pdo_errmsg($this->conn));
+            return false;
+        }
+        $_statement = __elephc_new_without_constructor("PDOStatement");
+        __elephc_initialize_pdo_statement($_statement, $_handle, $this->conn, $this->errMode, "__elephc_cubrid_schema__");
+        $_statement->setOwner($this);
+        $_statement->setDefaultFetchMode(2);
+        return $_statement->fetchAll(2);
+    }
+    // -- elephc optional PDO_CUBRID method end --
 
     public function beginTransaction(): bool {
         // PHP forbids nesting: starting a transaction while one is active is a
@@ -3271,6 +3367,14 @@ class PDO {
             }
             return ($_national ? "N" : "") . "'" . str_replace("'", "''", $string) . "'";
         }
+        if ($_driver === "cubrid") {
+            $_length = elephc_pdo_cubrid_quote($this->conn, $string, strlen($string));
+            if ($_length < 0) {
+                $this->fail("CUBRID failed to quote the string");
+                return false;
+            }
+            return ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
+        }
         // SQLite (and the default): standard SQL ''-doubling is correct, and
         // $type is ignored here too — matching php-src's own sqlite quoter,
         // which never consults the type argument either.
@@ -3458,6 +3562,7 @@ class PDOStatement implements IteratorAggregate {
     private array $boundNames;
     private array $boundValues;
     private array $boundTypes;
+    private array $boundDriverOptions;
     // F-STMT-12: the PDO::PARAM_* type php-src would REPORT for each bind, which is not
     // always the one elephc dispatches on ($boundTypes above). bindValue() records the
     // caller's raw $type in both. execute($params) is where they part: php-src's
@@ -3473,6 +3578,10 @@ class PDOStatement implements IteratorAggregate {
     // bindParam() reference getters, keyed by the append index in boundValues.
     private array $boundParamRefIndexes;
     private array $boundParamRefGetters;
+    // Stream-valued references must be consumed inside their closure. Returning a
+    // resource through the generic callable ABI creates a temporary Mixed owner whose
+    // cleanup can close the shared descriptor before the bind loop reads it.
+    private array $boundParamRefStreamReaders;
     private array $boundParamRefSetters;
     private array $boundParamMaxLengths;
     // bindColumn() keeps its destination alive through a by-reference closure capture.
@@ -3583,10 +3692,12 @@ class PDOStatement implements IteratorAggregate {
         $this->boundNames = [];
         $this->boundValues = [];
         $this->boundTypes = [];
+        $this->boundDriverOptions = [];
         $this->boundPhpTypes = [];
         $this->boundNormalizedIndexes = [];
         $this->boundParamRefIndexes = [];
         $this->boundParamRefGetters = [];
+        $this->boundParamRefStreamReaders = [];
         $this->boundParamRefSetters = [];
         $this->boundParamMaxLengths = [];
         $this->boundColumnKinds = [];
@@ -3599,7 +3710,7 @@ class PDOStatement implements IteratorAggregate {
         // Guards fetch*() against stepping a never-executed statement (which would
         // silently run the query with NULL binds). Set true by execute(), cleared
         // by closeCursor().
-        $this->executed = false;
+        $this->executed = $query === "__elephc_cubrid_schema__";
         $this->hasOperation = false;
         $this->lazyRow = null;
         $this->hasPendingStep = false;
@@ -3932,6 +4043,10 @@ class PDOStatement implements IteratorAggregate {
     }
 
     public function bindValue($parameter, $value, int $type = 2): bool {
+        return $this->bindValueWithDriverOption($parameter, $value, $type, null);
+    }
+
+    private function bindValueWithDriverOption($parameter, $value, int $type, mixed $driverOption): bool {
         // F-STMT-05: php-src's PHP_METHOD(PDOStatement, bindValue) validates the
         // parameter identifier BEFORE recording anything — a positional slot below 1
         // is a ValueError ("must be greater than or equal to 1"), and an empty named
@@ -3955,16 +4070,6 @@ class PDOStatement implements IteratorAggregate {
         if (is_int($parameter)) {
             $_slot = (int) $parameter;
             $_pname = "";
-        } elseif ($this->scrollable) {
-            // PostgreSQL's real scrollable-cursor execute path issues FETCH FORWARD 0:
-            // execute/materialize the result and leave the cursor before row one.
-            $_positioned = elephc_pdo_step_oriented($this->stmt, 4, 0);
-            $this->hasPendingStep = false;
-            if ($_positioned < 0) {
-                $this->fail(elephc_pdo_errmsg($this->conn));
-                $this->rowCount = elephc_pdo_changes($this->conn);
-                return false;
-            }
         } else {
             $_slot = (int) elephc_pdo_bind_parameter_index($this->stmt, (string) $parameter);
             $_pname = (string) $parameter;
@@ -3973,6 +4078,7 @@ class PDOStatement implements IteratorAggregate {
         $this->boundNames[] = $_pname;
         $this->boundValues[] = $value;
         $this->boundTypes[] = $type;
+        $this->boundDriverOptions[] = $driverOption;
         // F-STMT-12: php-src reports a bindValue()/bindParam() bind with the type the
         // caller passed, flags and all (param->param_type is stored verbatim) — so the
         // reported type and the dispatch type are the same value on this path.
@@ -3995,21 +4101,29 @@ class PDOStatement implements IteratorAggregate {
         // Capture a getter over the caller's durable reference cell. The ordinary
         // bindValue bookkeeping supplies slot/name/type metadata; execute() replaces
         // its stored snapshot with this getter's current value immediately before bind.
-        $_ok = $this->bindValue($parameter, $variable, $type);
+        $_ok = $this->bindValueWithDriverOption($parameter, $variable, $type, $driverOptions);
         $_boundIndex = count($this->boundValues) - 1;
         $_getter = function() use (&$variable): mixed {
             return $variable;
+        };
+        $_streamReader = function() use (&$variable): mixed {
+            if (!is_resource($variable)) {
+                return null;
+            }
+            $_contents = stream_get_contents($variable);
+            if ($_contents === false) {
+                return false;
+            }
+            return (string) $_contents;
         };
         $_setter = function(mixed $_value) use (&$variable): void {
             $variable = $_value;
         };
         $this->boundParamRefIndexes[] = $_boundIndex;
         $this->boundParamRefGetters[] = $_getter;
+        $this->boundParamRefStreamReaders[] = $_streamReader;
         $this->boundParamRefSetters[] = $_setter;
         $this->boundParamMaxLengths[] = $maxLength;
-        // Driver options remain driver-specific. PDO_OCI consumes the standard
-        // maxLength argument through the output-bind ABI above.
-        $_unusedDriverOptions = $driverOptions;
         return $_ok;
     }
 
@@ -4102,6 +4216,8 @@ class PDOStatement implements IteratorAggregate {
         $this->hasOperation = true;
         elephc_pdo_reset($this->stmt);
         elephc_pdo_clear_bindings($this->stmt);
+        $this->hasPendingStep = false;
+        $this->pendingStep = 0;
         // F-STMT-06 / F-PARSE-06: neither replay loop below used to check the
         // resolved slot index OR any elephc_pdo_bind_* return code, so a named
         // placeholder the prepared SQL never declares (bind_parameter_index()
@@ -4130,19 +4246,38 @@ class PDOStatement implements IteratorAggregate {
                 $_slot = (int) $this->boundParams[$_i];
                 $_value = $this->boundValues[$_i];
                 $_isRefBind = false;
+                $_refWasStream = false;
                 $_refMaxLength = 0;
                 $_refCount = count($this->boundParamRefIndexes);
                 for ($_ri = 0; $_ri < $_refCount; $_ri++) {
                     if ($this->boundParamRefIndexes[$_ri] == $_i) {
                         $_isRefBind = true;
                         $_refMaxLength = (int) $this->boundParamMaxLengths[$_ri];
-                        $_getter = $this->boundParamRefGetters[$_ri];
-                        if (is_callable($_getter)) {
-                            callable $_typedGetter = $_getter;
-                            $_value = call_user_func_array($_typedGetter, []);
+                        $_streamReader = $this->boundParamRefStreamReaders[$_ri];
+                        if (is_callable($_streamReader)) {
+                            callable $_typedStreamReader = $_streamReader;
+                            $_streamContents = call_user_func_array($_typedStreamReader, []);
+                            if ($_streamContents === false) {
+                                $_bindError = "__elephc_pdo_driver_error";
+                                break;
+                            }
+                            if ($_streamContents !== null) {
+                                $_value = (string) $_streamContents;
+                                $_refWasStream = true;
+                            }
+                        }
+                        if (!$_refWasStream) {
+                            $_getter = $this->boundParamRefGetters[$_ri];
+                            if (is_callable($_getter)) {
+                                callable $_typedGetter = $_getter;
+                                $_value = call_user_func_array($_typedGetter, []);
+                            }
                         }
                         break;
                     }
+                }
+                if ($_bindError !== "") {
+                    break;
                 }
                 // F-STMT-08: php-src ALWAYS reduces a bound type to its base type
                 // before dispatching on it — PDO_PARAM_TYPE(x) is
@@ -4156,6 +4291,7 @@ class PDOStatement implements IteratorAggregate {
                 // base-mode idiom the fetch-mode paths already use.
                 $_rawBindType = (int) $this->boundTypes[$_i];
                 $_btype = $_rawBindType & 0xFFFF;
+                $_driverOption = $this->boundDriverOptions[$_i];
                 if ($_slot < 1) {
                     // bindValue()/bindParam() now reject a positional slot below 1 up
                     // front, so a slot of 0 reaching here can only be a NAMED
@@ -4165,7 +4301,41 @@ class PDOStatement implements IteratorAggregate {
                     break;
                 }
                 $_brc = 0;
-                if ($_btype == 0 || is_null($_value)) {
+                $_driverName = elephc_pdo_driver_name($this->conn);
+                if ($_driverName === "cubrid" && is_array($_value)) {
+                    $_setFrame = (string) count($_value) . ":";
+                    foreach ($_value as $_setValue) {
+                        $_setString = (string) $_setValue;
+                        $_setFrame .= (string) strlen($_setString) . ":" . $_setString;
+                    }
+                    $_cubridType = $_driverOption === null ? "" : (string) $_driverOption;
+                    $_brc = elephc_pdo_cubrid_bind_typed($this->stmt, $_slot, $_setFrame, strlen($_setFrame), $_cubridType, 1, $_btype);
+                } elseif ($_driverName === "cubrid" && $_driverOption !== null) {
+                    $_cubridType = (string) $_driverOption;
+                    $_typedValue = "";
+                    if (strtoupper($_cubridType) === "BLOB" || strtoupper($_cubridType) === "CLOB") {
+                        if ($_refWasStream) {
+                            $_typedValue = (string) $_value;
+                        } elseif (is_resource($_value)) {
+                            $_streamValue = stream_get_contents($_value);
+                            if ($_streamValue === false) {
+                                $_bindError = "__elephc_pdo_driver_error";
+                                break;
+                            }
+                            $_typedValue = (string) $_streamValue;
+                        } else {
+                            $_fileValue = file_get_contents((string) $_value);
+                            if ($_fileValue === false) {
+                                $_bindError = "__elephc_pdo_driver_error";
+                                break;
+                            }
+                            $_typedValue = (string) $_fileValue;
+                        }
+                    } else {
+                        $_typedValue = (string) $_value;
+                    }
+                    $_brc = elephc_pdo_cubrid_bind_typed($this->stmt, $_slot, $_typedValue, strlen($_typedValue), $_cubridType, 0, $_btype);
+                } elseif ($_btype == 0 || is_null($_value)) {
                     $_brc = elephc_pdo_bind_null($this->stmt, $_slot);
                 } elseif ($_btype == 1) {
                     $_brc = elephc_pdo_bind_int($this->stmt, $_slot, (int) $_value);
@@ -4182,8 +4352,22 @@ class PDOStatement implements IteratorAggregate {
                 } elseif ($_btype == 3) {
                     // PDO::PARAM_LOB: route through bind_blob (raw bytes, embedded
                     // NUL preserved) rather than bind_text.
-                    if (is_resource($_value)) {
-                        $_s = (string) stream_get_contents($_value);
+                    if ($_refWasStream) {
+                        $_s = (string) $_value;
+                    } elseif ($_driverName === "cubrid" && !is_resource($_value)) {
+                        $_fileValue = file_get_contents((string) $_value);
+                        if ($_fileValue === false) {
+                            $_bindError = "__elephc_pdo_driver_error";
+                            break;
+                        }
+                        $_s = (string) $_fileValue;
+                    } elseif (is_resource($_value)) {
+                        $_streamValue = stream_get_contents($_value);
+                        if ($_streamValue === false) {
+                            $_bindError = "__elephc_pdo_driver_error";
+                            break;
+                        }
+                        $_s = (string) $_streamValue;
                     } else {
                         $_s = (string) $_value;
                     }
@@ -4244,10 +4428,12 @@ class PDOStatement implements IteratorAggregate {
             $this->boundNames = [];
             $this->boundValues = [];
             $this->boundTypes = [];
+            $this->boundDriverOptions = [];
             $this->boundPhpTypes = [];
             $this->boundNormalizedIndexes = [];
             $this->boundParamRefIndexes = [];
             $this->boundParamRefGetters = [];
+            $this->boundParamRefStreamReaders = [];
             $this->boundParamRefSetters = [];
             $this->boundParamMaxLengths = [];
             // Apply this call's parameter array (positional ? and named :name).
@@ -4296,6 +4482,7 @@ class PDOStatement implements IteratorAggregate {
                     }
                     $this->boundTypes[] = 2;
                 }
+                $this->boundDriverOptions[] = null;
                 $this->boundParams[] = $_pslot;
                 $this->boundNames[] = $_pname;
                 $this->boundValues[] = $_pv;
@@ -4331,10 +4518,10 @@ class PDOStatement implements IteratorAggregate {
             $this->failCode("HY093", $_bindDetail);
             return false;
         }
-        // DB-Library cannot describe a batch before it executes. Run it once here,
+        // DB-Library and CUBRID cannot describe a batch before it executes. Run it once here,
         // then inspect the materialized rowset shape; cache a first row exactly as
         // the ordinary SELECT prefetch path below does.
-        if (elephc_pdo_driver_name($this->conn) === "dblib") {
+        if (elephc_pdo_driver_name($this->conn) === "dblib" || elephc_pdo_driver_name($this->conn) === "cubrid") {
             $_step = elephc_pdo_step($this->stmt);
             if ($_step < 0) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
@@ -4466,7 +4653,8 @@ class PDOStatement implements IteratorAggregate {
         if ($_type == 4 && (elephc_pdo_driver_name($this->conn) === "pgsql"
             || elephc_pdo_driver_name($this->conn) === "informix"
             || elephc_pdo_driver_name($this->conn) === "ibm"
-            || elephc_pdo_driver_name($this->conn) === "oci")) {
+            || elephc_pdo_driver_name($this->conn) === "oci"
+            || elephc_pdo_driver_name($this->conn) === "cubrid")) {
             $_stream = fopen("php://memory", "r+");
             fwrite($_stream, $_out);
             rewind($_stream);
@@ -4599,6 +4787,20 @@ class PDOStatement implements IteratorAggregate {
     // exactly once instead of being silently skipped past.
     private function stepCursor(int $orientation = 0, int $offset = 0): int {
         if ($this->scrollable) {
+            // execute() has already materialized and selected the first row. A normal
+            // FETCH_ORI_NEXT must consume that pending row instead of advancing to row 2.
+            // Explicit orientations still reposition through the driver, but they must
+            // discard the pending marker so a later fetch cannot replay stale state.
+            if ($this->hasPendingStep) {
+                $this->hasPendingStep = false;
+                if ($orientation == 0) {
+                    $_rc = $this->pendingStep;
+                    if ($_rc > 0) {
+                        $this->updateBoundColumns();
+                    }
+                    return $_rc;
+                }
+            }
             $_rc = elephc_pdo_step_oriented($this->stmt, $orientation, $offset);
             if ($_rc > 0) {
                 $this->updateBoundColumns();
@@ -5447,7 +5649,7 @@ class PDOStatement implements IteratorAggregate {
         // requests that). Advancing resets the row cursor and refreshes
         // rowCount()/column metadata for the new set.
         $_rowsetDriver = elephc_pdo_driver_name($this->conn);
-        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib" || $_rowsetDriver === "odbc" || $_rowsetDriver === "informix" || $_rowsetDriver === "ibm" || $_rowsetDriver === "sqlsrv") {
+        if ($_rowsetDriver === "mysql" || $_rowsetDriver === "dblib" || $_rowsetDriver === "odbc" || $_rowsetDriver === "informix" || $_rowsetDriver === "ibm" || $_rowsetDriver === "sqlsrv" || $_rowsetDriver === "cubrid") {
             if (elephc_pdo_next_rowset($this->stmt) !== 1) {
                 return false;
             }
@@ -5562,6 +5764,26 @@ class PDOStatement implements IteratorAggregate {
             return $_pgMeta;
         }
         $_driver = elephc_pdo_driver_name($this->conn);
+        if ($_driver === "cubrid") {
+            $_cubridFlags = elephc_pdo_column_flags($this->stmt, $column);
+            $_cubridUnique = ($_cubridFlags & 4) !== 0;
+            return [
+                "type" => elephc_pdo_column_native_type($this->stmt, $column),
+                "name" => $this->columnName($column),
+                "table" => elephc_pdo_column_table_name($this->stmt, $column),
+                "def" => elephc_pdo_cubrid_column_default($this->stmt, $column),
+                "precision" => elephc_pdo_column_precision($this->stmt, $column),
+                "scale" => elephc_pdo_cubrid_column_scale($this->stmt, $column),
+                "not_null" => (($_cubridFlags & 1) !== 0) ? 1 : 0,
+                "auto_increment" => (($_cubridFlags & 2) !== 0) ? 1 : 0,
+                "unique_key" => $_cubridUnique ? 1 : 0,
+                "multiple_key" => $_cubridUnique ? 0 : 1,
+                "primary_key" => (($_cubridFlags & 8) !== 0) ? 1 : 0,
+                "foreign_key" => (($_cubridFlags & 16) !== 0) ? 1 : 0,
+                "reverse_index" => (($_cubridFlags & 32) !== 0) ? 1 : 0,
+                "reverse_unique" => (($_cubridFlags & 64) !== 0) ? 1 : 0,
+            ];
+        }
         if ($_driver === "firebird") {
             return ["pdo_type" => elephc_pdo_firebird_column_pdo_type($this->stmt, $column)];
         }
@@ -6683,6 +6905,21 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
 
 /// Applies build-profile and PHP-version gates for optional system-client drivers.
 fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
+    let cubrid_enabled = cfg!(feature = "pdo-cubrid")
+        || std::env::var_os("ELEPHC_PDO_CUBRID").is_some();
+    if !cubrid_enabled {
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_CUBRID constants begin --",
+            "    // -- elephc optional PDO_CUBRID constants end --",
+        );
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_CUBRID method begin --",
+            "    // -- elephc optional PDO_CUBRID method end --",
+        );
+    }
+
     let dblib_enabled = cfg!(feature = "pdo-dblib")
         || std::env::var_os("ELEPHC_PDO_DBLIB").is_some();
     if !dblib_enabled {
@@ -7141,6 +7378,22 @@ mod version_tests {
         ));
         let tokens = crate::lexer::tokenize(php85.as_ref()).expect("tokenize PHP 8.5 IBM prelude");
         crate::parser::parse(&tokens).expect("parse PHP 8.5 IBM prelude");
+    }
+
+    /// PDO_CUBRID keeps its historical PDO-only API on every supported PHP target.
+    #[cfg(feature = "pdo-cubrid")]
+    #[test]
+    fn cubrid_surface_is_available_without_a_namespaced_subclass() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            assert!(source.contains("const CUBRID_ATTR_ISOLATION_LEVEL = 1000;"));
+            assert!(source.contains("const CUBRID_SCH_ATTR_WITH_SYNONYM = 20;"));
+            assert!(source.contains("public function cubrid_schema("));
+            assert!(!source.contains("class Cubrid extends \\PDO"));
+            let tokens = crate::lexer::tokenize(source.as_ref())
+                .expect("tokenize PDO_CUBRID prelude");
+            crate::parser::parse(&tokens).expect("parse PDO_CUBRID prelude");
+        }
     }
 
     /// PDO_OCI keeps its legacy PDO constants and never defines a `Pdo\Oci` subclass.

@@ -17,6 +17,11 @@ use std::process::{self, Command};
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 
+/// Reports whether the optional official CUBRID CCI PDO profile is selected.
+fn pdo_cubrid_enabled() -> bool {
+    cfg!(feature = "pdo-cubrid") || std::env::var_os("ELEPHC_PDO_CUBRID").is_some()
+}
+
 /// Reports whether the optional FreeTDS PDO archive/link profile is selected.
 fn pdo_dblib_enabled() -> bool {
     cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
@@ -218,7 +223,8 @@ impl BridgeStaticlib {
                 || pdo_informix_enabled()
                 || pdo_ibm_enabled()
                 || pdo_sqlsrv_enabled()
-                || pdo_oci_enabled())
+                || pdo_oci_enabled()
+                || pdo_cubrid_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
                 if !self.build_staticlib(&workspace) {
@@ -306,6 +312,9 @@ impl BridgeStaticlib {
             }
             if pdo_oci_enabled() {
                 features.push("oci");
+            }
+            if pdo_cubrid_enabled() {
+                features.push("cubrid");
             }
             if !features.is_empty() {
                 cmd.args(["--features", &features.join(",")]);

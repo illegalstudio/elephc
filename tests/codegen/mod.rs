@@ -43,6 +43,8 @@ mod pdo_ibm;
 mod pdo_sqlsrv;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
+#[cfg(feature = "pdo-cubrid")]
+mod pdo_cubrid;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;

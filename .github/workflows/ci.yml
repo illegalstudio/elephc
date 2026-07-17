@@ -82,6 +82,9 @@ jobs:
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -176,6 +179,9 @@ jobs:
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -269,6 +275,9 @@ jobs:
 
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
+
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge

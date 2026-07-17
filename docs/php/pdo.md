@@ -1,6 +1,6 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, PDO_IBM, PDO_SQLSRV, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, PDO_IBM, PDO_SQLSRV, PDO_OCI, and PDO_CUBRID: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
@@ -8,7 +8,8 @@ sidebar:
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, **MySQL / MariaDB**, optional **FreeTDS
 PDO_DBLIB**, optional **PDO_FIREBIRD**, optional **PDO_ODBC**, and optional
-**PDO_INFORMIX**, optional **PDO_IBM**, optional **Microsoft PDO_SQLSRV**, and optional **Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+**PDO_INFORMIX**, optional **PDO_IBM**, optional **Microsoft PDO_SQLSRV**, optional
+**Oracle PDO_OCI**, and optional **PDO_CUBRID** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
 PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
 transactions. The DSN prefix selects the driver.
 
@@ -27,6 +28,8 @@ PDO_IBM follows PECL 1.7.0 and uses the same CLI/ODBC ABI with an installed IBM
 Db2 or Informix client driver.
 PDO_SQLSRV follows Microsoft Drivers for PHP for SQL Server 5.13.1 and uses an
 installed Microsoft ODBC Driver 18 or 17.
+PDO_CUBRID follows the current official external extension and dynamically loads the
+same CUBRID CCI client, avoiding a CUBRID SDK requirement while compiling elephc.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -89,10 +92,13 @@ $sqlsrv = new PDO("sqlsrv:Server=127.0.0.1,1433;Database=app;Encrypt=yes", "sa",
 
 // Oracle through the optional PDO_OCI / Instant Client profile.
 $oracle = new PDO("oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8", "me", "secret");
+
+// CUBRID through the optional official CCI client profile.
+$cubrid = new PDO("cubrid:host=127.0.0.1;port=33000;dbname=cubdb", "dba", "");
 ```
 
 The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
-`dblib:`, `firebird:`, `odbc:`, `informix:`, `ibm:`, `sqlsrv:`, or `oci:`. A colonless value may
+`dblib:`, `firebird:`, `odbc:`, `informix:`, `ibm:`, `sqlsrv:`, `oci:`, or `cubrid:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -134,6 +140,9 @@ colon throws a `PDOException`.
   real PHP.
 - **DBLIB**: like php-src, constructor credentials become the DB-Library login
   credentials and take precedence over credentials embedded in the DSN.
+- **CUBRID**: constructor credentials replace `user` / `password` DSN values, while
+  string-keyed constructor options are appended as CCI URL options in source order,
+  matching PDO_CUBRID's factory.
 
 ### Persistent connections
 
@@ -838,6 +847,42 @@ elephc and the bridge itself therefore needs neither Oracle headers nor a client
   status attribute, or driver subclass. `PDO::quote()` uses the driver's single-quote
   doubling implementation.
 
+## PDO_CUBRID notes
+
+PDO_CUBRID is optional because PHP's official external extension delegates its protocol
+and authentication behavior to the CUBRID CCI client:
+
+```bash
+cargo run --features pdo-cubrid -- app.php
+```
+
+Install the CCI client for the target platform. If the dynamic loader cannot find
+`libcascci` under its conventional name, point `CUBRID_CCI_LIBRARY` at the exact shared
+library path. The profile is SDK-independent at build time and preserves CCI as the
+runtime boundary.
+
+- **Version surface.** The extension keeps its historical constants directly on `PDO`
+  and exposes `PDO::cubrid_schema()`; it has no `Pdo\Cubrid` subclass. Because it is
+  source-built outside php-src, that surface is available on every elephc PHP 8.0–8.6
+  compatibility target when the Cargo profile is enabled.
+- **DSN and options.** `host`, `port`, `dbname`, `user`, and `password` are translated to
+  CCI's connection URL. Constructor credentials override DSN credentials. String-keyed
+  constructor options become CCI URL properties, as in the official driver.
+- **Execution.** Native CCI prepare/bind/execute, repeated named placeholders,
+  positional placeholders, scroll orientations, multiple result sets, affected rows,
+  textual `lastInsertId()`, autocommit, explicit transactions, and liveness checks are
+  implemented. `bindParam()`'s CUBRID type-name option, ENUM conversion, array-to-CCI
+  collection binding, BLOB/CLOB file-or-stream input, and fetched BLOB/CLOB values use
+  the same native CCI conversion and LOB APIs as the official extension.
+- **Attributes and schema.** Isolation level (`1000`), lock timeout (`1001`), maximum
+  string length (`1002`), query timeout, and autocommit use the corresponding live CCI
+  calls. `cubrid_schema()` covers the official schema constants 1–20.
+- **Quoting and metadata.** `PDO::quote()` calls CCI's connection-aware
+  `cci_escape_string()` and returns its exact output, including the official driver's
+  unusual absence of enclosing quotes. `getColumnMeta()` reports the official `type`,
+  `name`, `table`, `def`, `precision`, `scale`, nullability, auto-increment, key, and
+  reverse-index fields.
+
 ## TLS / encrypted connections
 
 PostgreSQL and MySQL connect over TLS with [rustls](https://github.com/rustls/rustls).
@@ -1218,6 +1263,9 @@ preserve source SQL evaluation order, and retain the rendered text for
   classification descriptor fields cross the native ODBC ABI.
 - PDO_OCI's autocommit, prefetch, call-timeout, action, module, client-info, and
   client-identifier attributes are implemented through Oracle Instant Client.
+- PDO_CUBRID's autocommit, timeout, isolation, lock-timeout, maximum-string-length,
+  schema, scroll-cursor, rowset, LOB, quoting, and native metadata hooks are implemented
+  through the official CCI client.
 - `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected
   when the active driver has no corresponding php-src hook/capability.
 

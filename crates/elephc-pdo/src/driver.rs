@@ -11,6 +11,8 @@
 /// Identifies a PDO backend compiled into this bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DriverKind {
+    #[cfg(feature = "cubrid")]
+    Cubrid,
     #[cfg(feature = "dblib")]
     Dblib,
     #[cfg(feature = "firebird")]
@@ -32,6 +34,8 @@ pub(crate) enum DriverKind {
 
 /// Drivers exposed to PHP, in the stable order used by the existing bridge.
 pub(crate) const AVAILABLE: &[DriverKind] = &[
+    #[cfg(feature = "cubrid")]
+    DriverKind::Cubrid,
     #[cfg(feature = "dblib")]
     DriverKind::Dblib,
     #[cfg(feature = "firebird")]
@@ -55,6 +59,8 @@ impl DriverKind {
     /// Returns the lowercase PDO driver name exposed by PHP.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            #[cfg(feature = "cubrid")]
+            Self::Cubrid => "cubrid",
             #[cfg(feature = "dblib")]
             Self::Dblib => "dblib",
             #[cfg(feature = "firebird")]
@@ -78,6 +84,8 @@ impl DriverKind {
     /// Returns the DSN prefix, including its separating colon.
     pub(crate) const fn dsn_prefix(self) -> &'static str {
         match self {
+            #[cfg(feature = "cubrid")]
+            Self::Cubrid => "cubrid:",
             #[cfg(feature = "dblib")]
             Self::Dblib => "dblib:",
             #[cfg(feature = "firebird")]
@@ -116,6 +124,8 @@ mod tests {
     fn available_driver_order_is_stable() {
         let names: Vec<_> = AVAILABLE.iter().map(|driver| driver.name()).collect();
         let mut expected = Vec::new();
+        #[cfg(feature = "cubrid")]
+        expected.push("cubrid");
         #[cfg(feature = "dblib")]
         expected.push("dblib");
         #[cfg(feature = "firebird")]
@@ -140,6 +150,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("sqlite::memory:"), Some(DriverKind::Sqlite));
         assert_eq!(DriverKind::from_dsn("pgsql:host=localhost"), Some(DriverKind::Pgsql));
         assert_eq!(DriverKind::from_dsn("mysql:host=localhost"), Some(DriverKind::Mysql));
+        #[cfg(feature = "cubrid")]
+        assert_eq!(DriverKind::from_dsn("cubrid:dbname=demodb"), Some(DriverKind::Cubrid));
         #[cfg(feature = "dblib")]
         assert_eq!(DriverKind::from_dsn("dblib:host=localhost"), Some(DriverKind::Dblib));
         #[cfg(feature = "firebird")]

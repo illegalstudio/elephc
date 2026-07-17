@@ -31,7 +31,7 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC + Informix/IBM profiles + Oracle 23ai)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + CUBRID 11.4 + ODBC + Informix/IBM profiles + Oracle 23ai)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
@@ -92,6 +92,19 @@ jobs:
           --health-timeout 10s
           --health-retries 30
 
+      cubrid:
+        image: cubrid/cubrid:11.4
+        env:
+          CUBRID_DB: cubdb
+          CUBRID_LOCALE: en_US
+        ports:
+          - 33000:33000
+        options: >-
+          --health-cmd "bash -lc 'gosu cubrid csql -u dba -C cubdb -c \"SELECT 1;\"'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
       oracle:
         image: gvenzl/oracle-free:23-slim-faststart
         env:
@@ -122,6 +135,7 @@ jobs:
       ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
       ELEPHC_SQLSRV_DSN: 'sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=Elephc_Pdo!2026_Test'
       ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
+      ELEPHC_CUBRID_DSN: 'cubrid:host=127.0.0.1;port=33000;dbname=cubdb'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
       # or dropped from this job would make a live test that executed NOTHING look
@@ -443,3 +457,22 @@ jobs:
         env:
           ELEPHC_PDO_OCI: '1'
         run: cargo test --features pdo-oci --test codegen_tests -- --ignored pdo_oci --test-threads=1
+
+      - name: Install the CUBRID CCI client from the service image
+        run: |
+          docker cp '${{ job.services.cubrid.id }}:/home/cubrid/CUBRID/cci/lib/libcascci.so.11.2' "$RUNNER_TEMP/libcascci.so.11.2"
+          ln -s libcascci.so.11.2 "$RUNNER_TEMP/libcascci.so"
+
+      - name: PDO_CUBRID bridge unit tests
+        run: 'cargo test -p elephc-pdo --features cubrid cubrid::tests::'
+
+      - name: PDO_CUBRID compiled surface tests
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+        run: cargo test --features pdo-cubrid --test codegen_tests pdo_cubrid_surface -- --test-threads=1
+
+      - name: Live CUBRID CCI codegen test
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+          CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
+        run: cargo test --features pdo-cubrid --test codegen_tests -- --ignored pdo_cubrid --test-threads=1

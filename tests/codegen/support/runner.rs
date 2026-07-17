@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+/// Reports whether codegen fixtures should build the official CUBRID CCI profile.
+fn pdo_cubrid_enabled() -> bool {
+    cfg!(feature = "pdo-cubrid") || std::env::var_os("ELEPHC_PDO_CUBRID").is_some()
+}
+
 /// Reports whether codegen fixtures should build and link the FreeTDS PDO profile.
 fn pdo_dblib_enabled() -> bool {
     cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
@@ -214,11 +219,15 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         let requires_oci_profile = bridge.lib_name == "elephc_pdo"
             && pdo_oci_enabled()
             && OCI_BRIDGE_BUILT.get().is_none();
+        let requires_cubrid_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_cubrid_enabled()
+            && CUBRID_BRIDGE_BUILT.get().is_none();
         if !requires_libpq_profile
             && !requires_dblib_profile
             && !requires_firebird_profile
             && !requires_odbc_profile
             && !requires_oci_profile
+            && !requires_cubrid_profile
             && !bridge_staticlib_needs_build(&archive_path, bridge.package)
         {
             continue;
@@ -251,6 +260,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             }
             if pdo_oci_enabled() {
                 features.push("oci");
+            }
+            if pdo_cubrid_enabled() {
+                features.push("cubrid");
             }
             if !features.is_empty() {
                 command.args(["--features", &features.join(",")]);
@@ -290,6 +302,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         }
         if requires_oci_profile {
             let _ = OCI_BRIDGE_BUILT.set(());
+        }
+        if requires_cubrid_profile {
+            let _ = CUBRID_BRIDGE_BUILT.set(());
         }
     }
 }
