@@ -2,7 +2,7 @@
 title: "fileowner() — internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 118
 ---
 
 ## `fileowner()` — internals
@@ -34,6 +34,11 @@ function fileowner(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

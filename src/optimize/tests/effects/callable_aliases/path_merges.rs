@@ -21,6 +21,7 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
                 ExprKind::Closure {
                     params: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: None,
                     by_ref_return: false,
@@ -81,7 +82,9 @@ fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -149,7 +152,9 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -223,7 +228,9 @@ fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,

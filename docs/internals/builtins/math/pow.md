@@ -2,7 +2,7 @@
 title: "pow() — internals"
 description: "Compiler internals for pow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 265
 ---
 
 ## `pow()` — internals
@@ -31,6 +31,11 @@ function pow(float $num, float $exponent): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pow.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

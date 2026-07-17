@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Writes one byte through a raw pointer.",
+    extension: true,
 }
 
 /// Validates pointer and integer value arguments and returns `PhpType::Void`.

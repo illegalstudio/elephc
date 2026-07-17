@@ -2,7 +2,7 @@
 title: "is_readable() — internals"
 description: "Compiler internals for is_readable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 126
+  order: 130
 ---
 
 ## `is_readable()` — internals
@@ -34,6 +34,11 @@ function is_readable(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

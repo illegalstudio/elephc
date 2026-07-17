@@ -33,6 +33,30 @@ expect_builtin_arity_error!(
     "mb_ereg_match() takes 2 or 3 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_strlen_wrong_args,
+    "<?php mb_strlen();",
+    "mb_strlen() takes 1 or 2 arguments"
+);
+
+/// Verifies that `mb_strlen()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_strlen_string_type() {
+    expect_error(
+        "<?php mb_strlen([1, 2]);",
+        "mb_strlen() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strlen()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strlen_encoding_type() {
+    expect_error(
+        "<?php mb_strlen('abc', 123);",
+        "mb_strlen() encoding argument must be string or null",
+    );
+}
+
 /// Verifies that `mb_ereg_match()` rejects a non-string pattern.
 #[test]
 fn test_error_mb_ereg_match_pattern_type() {

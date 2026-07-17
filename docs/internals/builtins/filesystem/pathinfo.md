@@ -2,7 +2,7 @@
 title: "pathinfo() — internals"
 description: "Compiler internals for pathinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 139
 ---
 
 ## `pathinfo()` — internals
@@ -32,6 +32,11 @@ function pathinfo(string $path, int $flags = 15): array
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

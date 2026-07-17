@@ -36,7 +36,7 @@ pub(crate) fn acquire_if_refcounted(
     value
 }
 
-/// Emits a release operation when the value can carry runtime lifetime state.
+/// Emits a type-gated release; the backend filters the value's ownership state.
 pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) {
     let php_type = ctx.builder.value_php_type(value.value);
     if Ownership::php_type_needs_lifetime_tracking(&php_type)
@@ -65,5 +65,5 @@ pub(crate) fn collect_cycles(ctx: &mut LoweringContext<'_, '_>, span: Option<Spa
 
 /// Returns whether an ownership state means the value is potentially released by this path.
 pub(crate) fn may_require_release(ownership: Ownership) -> bool {
-    matches!(ownership, Ownership::Owned | Ownership::MaybeOwned)
+    ownership.may_require_release()
 }

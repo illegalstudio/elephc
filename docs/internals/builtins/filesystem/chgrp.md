@@ -2,7 +2,7 @@
 title: "chgrp() — internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 100
+  order: 104
 ---
 
 ## `chgrp()` — internals
@@ -32,6 +32,11 @@ function chgrp(string $filename, string $group): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "stream_get_transports() — internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 209
 ---
 
 ## `stream_get_transports()` — internals
@@ -31,6 +31,11 @@ function stream_get_transports(): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

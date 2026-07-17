@@ -7,6 +7,8 @@ sidebar:
 
 Pointers provide low-level memory access. A pointer is a 64-bit memory address stored in a single register.
 
+> **Strict mode:** pointers are an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects the `ptr` type, `ptr_cast<T>`, and every `ptr_*` builtin.
+
 ## Creating pointers
 
 ```php

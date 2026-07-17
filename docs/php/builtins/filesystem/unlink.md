@@ -2,7 +2,7 @@
 title: "unlink()"
 description: "Deletes a file."
 sidebar:
-  order: 152
+  order: 156
 ---
 
 ## unlink()
@@ -17,6 +17,11 @@ Deletes a file.
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -65,6 +65,9 @@ fn rewrite_expr(
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(rewrite_expr(
             inner,
             class_name,
@@ -159,6 +162,7 @@ fn rewrite_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -183,6 +187,7 @@ fn rewrite_expr(
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
             variadic: variadic.clone(),
+            variadic_by_ref: *variadic_by_ref,
             variadic_type: variadic_type.clone(),
             return_type: return_type.clone(),
             body: body.clone(),
@@ -264,6 +269,15 @@ fn rewrite_expr(
         } => ExprKind::NullsafeMethodCall {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),
             method: method.clone(),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(rewrite_expr(object, class_name, parent_name)?),
+            method: Box::new(rewrite_expr(method, class_name, parent_name)?),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
         ExprKind::StaticMethodCall {

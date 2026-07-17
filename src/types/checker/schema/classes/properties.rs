@@ -17,7 +17,8 @@ use crate::types::PhpType;
 use super::super::super::{infer_expr_type_syntactic, Checker};
 use super::super::validation::visibility_rank;
 use super::super::interfaces::{build_property_contract, merge_property_contract};
-use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
+use super::state::ClassBuildState;
+use super::{collect_attribute_args, collect_attribute_names};
 
 /// Applies property schema validation and metadata for all static and instance
 /// properties declared in `class`. Static properties are validated for PHP
@@ -247,6 +248,7 @@ fn apply_instance_property(
         );
     }
 
+    let mut is_declared_slot = false;
     let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
         checker.validate_schema_declared_default_type(
             &declared_ty,
@@ -255,6 +257,7 @@ fn apply_instance_property(
             &format!("Property {}::${} default", class.name, prop.name),
         )?;
         state.declared_properties.insert(prop.name.clone());
+        is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
@@ -270,6 +273,8 @@ fn apply_instance_property(
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    state.property_declared_slots.push(is_declared_slot);
+    state.property_reference_slots.push(prop.by_ref);
     state
         .property_attribute_names
         .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
@@ -291,6 +296,11 @@ fn apply_instance_property(
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
+    }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
     }
     // Fresh declarations only ever add to `abstract_properties`. Concrete
     // declarations of a brand-new property never appear there in the first
@@ -321,6 +331,14 @@ fn apply_instance_property_redeclaration(
     prop: &ClassProperty,
     parent_declaring_class: &str,
 ) -> Result<(), CompileError> {
+    let inherited_visibility = state
+        .property_visibilities
+        .get(&prop.name)
+        .cloned()
+        .unwrap_or(Visibility::Public);
+    if inherited_visibility == Visibility::Private {
+        return apply_private_parent_property_shadowing(state, class, checker, prop);
+    }
     if state.final_properties.contains(&prop.name) {
         return Err(CompileError::new(
             prop.span,
@@ -331,15 +349,16 @@ fn apply_instance_property_redeclaration(
         ));
     }
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
-        validate_instance_property_override(
-            state,
-            class,
-            checker,
-            prop,
-            declared_ty.as_ref(),
-            parent_declaring_class,
+    validate_instance_property_override(
+        state,
+        class,
+        checker,
+        prop,
+        declared_ty.as_ref(),
+        parent_declaring_class,
     )?;
 
+    let is_declared_slot = declared_ty.is_some();
     let ty = if let Some(declared_ty) = declared_ty {
         checker.validate_schema_declared_default_type(
             &declared_ty,
@@ -358,6 +377,12 @@ fn apply_instance_property_redeclaration(
     let slot = find_instance_property_slot(state, &prop.name);
     state.prop_types[slot] = (prop.name.clone(), ty);
     state.defaults[slot] = prop.default.clone();
+    if let Some(slot_declared) = state.property_declared_slots.get_mut(slot) {
+        *slot_declared = is_declared_slot;
+    }
+    if let Some(slot_reference) = state.property_reference_slots.get_mut(slot) {
+        *slot_reference = prop.by_ref;
+    }
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -395,6 +420,104 @@ fn apply_instance_property_redeclaration(
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
     }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
+    Ok(())
+}
+
+/// Records a child property with the same name as a private parent property as a
+/// fresh physical slot, matching PHP's private-property shadowing semantics.
+fn apply_private_parent_property_shadowing(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    checker: &Checker,
+    prop: &ClassProperty,
+) -> Result<(), CompileError> {
+    let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
+    let is_declared_slot = declared_ty.is_some();
+    let ty = if let Some(declared_ty) = declared_ty {
+        checker.validate_declared_default_type(
+            &declared_ty,
+            prop.default.as_ref(),
+            prop.span,
+            &format!("Property {}::${} default", class.name, prop.name),
+        )?;
+        state.declared_properties.insert(prop.name.clone());
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+    } else if let Some(default) = &prop.default {
+        state.declared_properties.remove(&prop.name);
+        infer_expr_type_syntactic(default)
+    } else {
+        state.declared_properties.remove(&prop.name);
+        PhpType::Int
+    };
+
+    let slot_index = state.prop_types.len();
+    state.prop_types.push((prop.name.clone(), ty));
+    state
+        .property_offsets
+        .insert(prop.name.clone(), 8 + slot_index * 16);
+    state.defaults.push(prop.default.clone());
+    state.property_declared_slots.push(is_declared_slot);
+    state.property_reference_slots.push(prop.by_ref);
+    state
+        .property_declaring_classes
+        .insert(prop.name.clone(), class.name.clone());
+    state
+        .property_attribute_names
+        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
+    state
+        .property_attribute_args
+        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
+    state
+        .property_visibilities
+        .insert(prop.name.clone(), prop.visibility.clone());
+    apply_set_visibility(state, prop);
+    replace_active_property_flags(state, class, checker, prop)?;
+    Ok(())
+}
+
+/// Replaces the name-keyed flags for the property currently visible from this
+/// class after private-parent shadowing creates a fresh child slot.
+fn replace_active_property_flags(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    checker: &Checker,
+    prop: &ClassProperty,
+) -> Result<(), CompileError> {
+    if prop.is_final {
+        state.final_properties.insert(prop.name.clone());
+    } else {
+        state.final_properties.remove(&prop.name);
+    }
+    if class.is_readonly_class || prop.readonly {
+        state.readonly_properties.insert(prop.name.clone());
+    } else {
+        state.readonly_properties.remove(&prop.name);
+    }
+    if prop.by_ref {
+        state.reference_properties.insert(prop.name.clone());
+    } else {
+        state.reference_properties.remove(&prop.name);
+    }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
+    if prop.is_abstract {
+        state.abstract_properties.insert(prop.name.clone());
+        let contract = build_property_contract(checker, &class.name, prop)?;
+        state
+            .abstract_property_hooks
+            .insert(prop.name.clone(), contract);
+    } else {
+        state.abstract_properties.remove(&prop.name);
+        state.abstract_property_hooks.remove(&prop.name);
+    }
     Ok(())
 }
 
@@ -417,17 +540,6 @@ fn validate_instance_property_override(
         .get(&prop.name)
         .cloned()
         .unwrap_or(Visibility::Public);
-    if inherited_visibility == Visibility::Private {
-        // PHP allows shadowing a private parent property with a fresh slot in the child,
-        // but our property layout uses one slot per name. Reject until proper scoping is added.
-        return Err(CompileError::new(
-            prop.span,
-            &format!(
-                "Cannot redeclare property {}::${}: parent class {} has a private property with the same name (shadowing private parent properties is not yet supported)",
-                class.name, prop.name, parent_declaring_class
-            ),
-        ));
-    }
     if visibility_rank(&prop.visibility) < visibility_rank(&inherited_visibility) {
         return Err(CompileError::new(
             prop.span,
@@ -579,10 +691,10 @@ fn inherited_static_property_type(state: &ClassBuildState, property: &str) -> Ph
 /// parent's resolved types in `state.prop_types`. Returns `PhpType::Int`
 /// if the property is not found, matching the undeclared-property default.
 fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> PhpType {
+    let slot = find_instance_property_slot(state, property);
     state
         .prop_types
-        .iter()
-        .find(|(name, _)| name == property)
+        .get(slot)
         .map(|(_, ty)| ty.clone())
         .unwrap_or(PhpType::Int)
 }
@@ -591,10 +703,20 @@ fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> 
 /// Panics if the property is not found; the caller is responsible for ensuring
 /// the property exists via prior checks on `state.property_declaring_classes`.
 fn find_instance_property_slot(state: &ClassBuildState, name: &str) -> usize {
+    if let Some(index) = state
+        .property_offsets
+        .get(name)
+        .and_then(|offset| offset.checked_sub(8))
+        .filter(|payload_offset| payload_offset % 16 == 0)
+        .map(|payload_offset| payload_offset / 16)
+        .filter(|index| *index < state.prop_types.len())
+    {
+        return index;
+    }
     state
         .prop_types
         .iter()
-        .position(|(prop_name, _)| prop_name == name)
+        .rposition(|(prop_name, _)| prop_name == name)
         .expect("redeclaration path: property must exist in prop_types when declaring_classes has it")
 }
 

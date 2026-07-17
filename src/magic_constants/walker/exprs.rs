@@ -52,6 +52,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(walk_expr(*inner, pass))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(walk_expr(*inner, pass))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(walk_expr(*inner, pass))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(walk_expr(*inner, pass))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(walk_expr(*inner, pass))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
@@ -129,6 +130,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -150,6 +152,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             ExprKind::Closure {
                 params: new_params,
                 variadic,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 body: new_body,
@@ -239,6 +242,15 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         } => ExprKind::NullsafeMethodCall {
             object: Box::new(walk_expr(*object, pass)),
             method,
+            args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(walk_expr(*object, pass)),
+            method: Box::new(walk_expr(*method, pass)),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::StaticMethodCall {

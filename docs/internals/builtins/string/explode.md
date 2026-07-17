@@ -2,7 +2,7 @@
 title: "explode() — internals"
 description: "Compiler internals for explode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 350
 ---
 
 ## `explode()` — internals
@@ -33,6 +33,11 @@ function explode(string $separator, string $string, int $limit = PHP_INT_MAX): a
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/explode.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

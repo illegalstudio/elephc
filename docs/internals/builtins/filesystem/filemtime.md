@@ -2,7 +2,7 @@
 title: "filemtime() — internals"
 description: "Compiler internals for filemtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 113
+  order: 117
 ---
 
 ## `filemtime()` — internals
@@ -36,6 +36,11 @@ function filemtime(string $filename): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

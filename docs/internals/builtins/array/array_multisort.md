@@ -36,6 +36,10 @@ function array_multisort(array $array1, int $array2): bool
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array1`, `$array2`.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_multisort()`](../../../php/builtins/array/array_multisort.md)

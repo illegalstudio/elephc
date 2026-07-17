@@ -378,6 +378,35 @@ fn test_static_keyword() {
     );
 }
 
+/// Verifies `declare(strict_types=1);` token sequence includes `Declare`.
+#[test]
+fn test_declare_keyword() {
+    let t = tokens("<?php declare(strict_types=1);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Declare,
+            Token::LParen,
+            Token::Identifier("strict_types".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies the alternative `declare` syntax recognizes `enddeclare` as its closing keyword.
+#[test]
+fn test_enddeclare_keyword() {
+    let t = tokens("<?php declare(ticks=1): echo 1; enddeclare;");
+    assert!(t.contains(&Token::Declare));
+    assert!(t.contains(&Token::Colon));
+    assert!(t.contains(&Token::EndDeclare));
+}
+
 // --- Reference parameter ---
 
 /// Verifies `extern` compiler extension keyword tokenizes alongside `function`.

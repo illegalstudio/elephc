@@ -2,7 +2,7 @@
 title: "strtolower()"
 description: "Converts a string to lowercase."
 sidebar:
-  order: 398
+  order: 403
 ---
 
 ## strtolower()
@@ -17,6 +17,11 @@ Converts a string to lowercase.
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtolower.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

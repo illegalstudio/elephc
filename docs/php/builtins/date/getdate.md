@@ -2,7 +2,7 @@
 title: "getdate()"
 description: "Returns date/time information."
 sidebar:
-  order: 89
+  order: 93
 ---
 
 ## getdate()
@@ -17,6 +17,11 @@ Returns date/time information.
 - `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/getdate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

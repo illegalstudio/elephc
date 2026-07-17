@@ -473,17 +473,22 @@ fn require_isset_integer_like_index(
     }
 }
 
-/// Returns the instruction that produced an SSA value, when it has one.
-fn source_instruction(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<Instruction>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(Some(inst_ref.clone()))
+/// Returns the meaningful producer of an SSA value, looking through ownership acquires.
+fn source_instruction(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<Option<Instruction>> {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(None);
+        };
+        let inst_ref = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst_ref.op != Op::Acquire {
+            return Ok(Some(inst_ref.clone()));
+        }
+        value = expect_operand(inst_ref, 0)?;
+    }
 }

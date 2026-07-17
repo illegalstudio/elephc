@@ -2,7 +2,7 @@
 title: "file_put_contents()"
 description: "Writes data to a file."
 sidebar:
-  order: 163
+  order: 167
 ---
 
 ## file_put_contents()
@@ -18,6 +18,11 @@ Writes data to a file.
 - `$data` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

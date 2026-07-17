@@ -284,6 +284,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. }
@@ -328,6 +329,17 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             visit_expr(object, st);
+            for a in args {
+                visit_expr(a, st);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            visit_expr(object, st);
+            visit_expr(method, st);
             for a in args {
                 visit_expr(a, st);
             }

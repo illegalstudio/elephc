@@ -2,7 +2,7 @@
 title: "empty() — internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 274
+  order: 278
 ---
 
 ## `empty()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:619](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L619) (`lower_empty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1216](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1216) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 
@@ -32,6 +32,11 @@ function empty(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/empty.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/empty.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

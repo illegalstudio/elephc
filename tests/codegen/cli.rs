@@ -105,6 +105,97 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies plain `--web` assembly keeps the compact auto-start core while
+/// pruning public session APIs and callable-handler machinery that user code
+/// does not reference.
+#[test]
+fn test_cli_web_prunes_unused_session_surface_from_assembly() {
+    let dir = make_cli_test_dir("elephc_cli_web_pruned_prelude");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--web")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile pruned web program");
+    assert!(
+        output.status.success(),
+        "elephc --web failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read web assembly");
+    assert!(
+        asm.contains("_fn__u__u_elephc_u_session_u_start_u_core"),
+        "plain web assembly must retain the auto-start session core"
+    );
+    assert!(
+        !asm.contains(".globl _fn_session_u_start\n"),
+        "plain web assembly must not emit the public option-heavy session_start wrapper"
+    );
+    assert!(
+        !asm.contains("_fn_session_u_set_u_save_u_handler"),
+        "plain web assembly must not emit session_set_save_handler"
+    );
+    assert!(
+        !asm.contains("__ElephcCallableSessionHandler"),
+        "plain web assembly must not emit legacy callable-handler dispatch"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies repeated boxed-Mixed callable sites reuse module-wide descriptor
+/// wrappers instead of regenerating the full candidate set in every function.
+#[test]
+fn test_cli_runtime_callable_descriptors_are_shared_across_call_sites() {
+    let dir = make_cli_test_dir("elephc_cli_callable_descriptor_dedup");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class InvokableTarget { public function __invoke(int $value): int { return $value + 1; } }
+function first(mixed $callback): mixed { return call_user_func($callback, 1); }
+function second(mixed $callback): mixed { return call_user_func($callback, 2); }
+function plus_one(int $value): int { return $value + 1; }
+echo first('plus_one');
+echo second('plus_one');
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile callable dedup fixture");
+    assert!(
+        output.status.success(),
+        "callable dedup fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read callable assembly");
+    assert!(
+        asm.contains("_eir_first_callable_invoker"),
+        "the first dynamic call site must emit shared invokers"
+    );
+    assert!(
+        !asm.contains("_eir_second_callable_invoker"),
+        "the second equivalent call site must reuse the first site's invokers"
+    );
+
+    let run = run_binary(&dir.join("main"), &dir);
+    assert!(
+        run.status.success(),
+        "callable dedup fixture failed at runtime: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "23");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--emit-ir` prints textual EIR and stops before assembly, object,
 /// or binary emission.
 #[test]

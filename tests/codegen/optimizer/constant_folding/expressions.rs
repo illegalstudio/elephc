@@ -9,6 +9,18 @@
 
 use super::*;
 
+/// Returns only `main`'s section of the user assembly. Synthetic builtin
+/// method bodies (e.g. the eval Reflection surface) legitimately call runtime
+/// string helpers and would trip needle-based assertions about user code.
+fn main_function_asm(user_asm: &str) -> &str {
+    let Some(start) = user_asm.find("@fn name=main ") else {
+        return user_asm;
+    };
+    let rest = &user_asm[start..];
+    let end = rest[1..].find("@fn name=").map_or(rest.len(), |i| i + 1);
+    &rest[..end]
+}
+
 /// Verifies that nested integer arithmetic with literals is constant-folded at compile time
 /// and the result is emitted directly as a literal in the generated binary.
 #[test]
@@ -58,7 +70,7 @@ fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     );
 
     assert!(
-        !user_asm.contains("__rt_concat"),
+        !main_function_asm(&user_asm).contains("__rt_concat"),
         "constant-folded concat expression should not call __rt_concat in user assembly:\n{}",
         user_asm
     );
@@ -90,7 +102,7 @@ fn test_constant_folding_null_coalesce_removes_runtime_concat_call() {
     );
 
     assert!(
-        !user_asm.contains("__rt_concat"),
+        !main_function_asm(&user_asm).contains("__rt_concat"),
         "constant-folded null coalesce should not leave __rt_concat in user assembly:\n{}",
         user_asm
     );
@@ -205,7 +217,7 @@ fn test_constant_folding_string_cast_removes_runtime_itoa_call() {
         compile_source_to_asm_with_options("<?php echo (string)42;", &dir, 8_388_608, false, false);
 
     assert!(
-        !user_asm.contains("__rt_itoa"),
+        !main_function_asm(&user_asm).contains("__rt_itoa"),
         "constant-folded string cast should not leave __rt_itoa in user assembly:\n{}",
         user_asm
     );

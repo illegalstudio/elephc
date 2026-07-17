@@ -6,6 +6,12 @@ This directory contains small, deterministic benchmark programs used to compare:
 - the PHP interpreter
 - equivalent `C` implementations
 
+For the focused `eval()`/`elephc-magician` benchmarks, see
+[`magician/README.md`](magician/README.md). That suite compares native elephc,
+elephc through runtime eval, native PHP, and PHP through eval while recording
+eval invocation counts, fragment size, literal-vs-dynamic source shape, and
+parse-cache expectations.
+
 Run the suite with:
 
 ```bash

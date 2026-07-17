@@ -2,7 +2,7 @@
 title: "__elephc_phar_list_entries() — internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 443
+  order: 448
 ---
 
 ## `__elephc_phar_list_entries()` — internals
@@ -32,6 +32,10 @@ function __elephc_phar_list_entries(string $filename): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

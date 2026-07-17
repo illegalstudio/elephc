@@ -2,7 +2,7 @@
 title: "ptr_write32() — internals"
 description: "Compiler internals for ptr_write32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 301
 ---
 
 ## `ptr_write32()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write32.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:166](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L166) (`lower_ptr_write32`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:161](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L161) (`lower_ptr_write32`)
 - **Function symbol**: `lower_ptr_write32()`
 
 
@@ -32,6 +32,11 @@ function ptr_write32(pointer $pointer, int $value): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write32.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

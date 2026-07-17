@@ -2,7 +2,7 @@
 title: "filesize() — internals"
 description: "Compiler internals for filesize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 116
+  order: 120
 ---
 
 ## `filesize()` — internals
@@ -35,6 +35,11 @@ function filesize(string $filename): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

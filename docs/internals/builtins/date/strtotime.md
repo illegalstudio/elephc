@@ -2,7 +2,7 @@
 title: "strtotime() — internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 96
+  order: 100
 ---
 
 ## `strtotime()` — internals
@@ -38,6 +38,11 @@ function strtotime(string $datetime, int $baseTimestamp = null): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

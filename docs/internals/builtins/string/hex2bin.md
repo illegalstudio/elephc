@@ -2,7 +2,7 @@
 title: "hex2bin() — internals"
 description: "Compiler internals for hex2bin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 360
+  order: 364
 ---
 
 ## `hex2bin()` — internals
@@ -32,6 +32,11 @@ function hex2bin(string $string): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hex2bin.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hex2bin.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

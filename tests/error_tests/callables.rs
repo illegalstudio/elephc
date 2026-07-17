@@ -42,16 +42,11 @@ fn test_error_class_exists_requires_literal_name() {
     );
 }
 
-/// Verifies that error class exists requires literal autoload flag.
-#[test]
-fn test_error_class_exists_requires_literal_autoload_flag() {
-    // Verifies `class_exists()` with a runtime variable as the autoload flag
-    // produces a diagnostic because AOT mode requires a literal bool or int.
-    expect_error(
-        r#"<?php $autoload = false; class_exists("DateTime", $autoload);"#,
-        "class_exists() autoload argument must be a literal bool or int in AOT mode",
-    );
-}
+// NOTE: class_exists() (and the other class-like existence probes) accept a
+// dynamic autoload flag: it never contributes an AOT autoload demand and
+// existence still folds from the literal class name. Only the class-relation
+// builtins (class_implements/class_parents/class_uses) keep the literal
+// autoload requirement, covered below.
 
 /// Verifies that error interface exists wrong args.
 #[test]

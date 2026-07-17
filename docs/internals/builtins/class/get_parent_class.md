@@ -2,7 +2,7 @@
 title: "get_parent_class() — internals"
 description: "Compiler internals for get_parent_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 80
+  order: 84
 ---
 
 ## `get_parent_class()` — internals
@@ -31,6 +31,11 @@ function get_parent_class(mixed $object_or_class = null): string
 ## What the type checker enforces
 
 - **Arity**: takes 0–1 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/get_parent_class.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_parent_class.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

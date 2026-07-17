@@ -93,6 +93,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmn x15, #1");                                         // check whether this entry stores an inline integer key
     emitter.instruction("b.eq __rt_hash_free_deep_after_key");                  // integer keys have no heap ownership to release
     emitter.instruction("ldr x0, [x13, #8]");                                   // load key pointer
+    emitter.instruction("cbz x0, __rt_hash_free_deep_after_key");               // empty string keys store no heap key pointer
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
     emitter.instruction("ldr w15, [x0, #-12]");                                 // load key refcount from heap header
     emitter.instruction("subs w15, w15, #1");                                   // decrement key refcount

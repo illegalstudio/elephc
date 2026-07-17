@@ -58,6 +58,7 @@ const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
+    ctx.begin_instruction(inst_id);
     let inst = ctx
         .function
         .instruction(inst_id)
@@ -79,6 +80,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -167,9 +169,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
+        Op::DynamicObjectNewWithoutConstructorMixed => {
+            objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
+        }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
@@ -185,6 +192,15 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::LoadReflectionStaticProperty => {
+            static_properties::lower_load_reflection_static_property(ctx, &inst)
+        }
+        Op::ReflectionStaticPropertyInitialized => {
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
+        }
+        Op::StoreReflectionStaticProperty => {
+            static_properties::lower_store_reflection_static_property(ctx, &inst)
+        }
         Op::Call => lower_direct_call(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
@@ -193,10 +209,21 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
+        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
+        Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
+        Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
+        Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
+        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
+        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
+        Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
+        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
+        Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
@@ -414,8 +441,55 @@ fn promote_local_slot_for_ref_capture(
     release_replaced_value: bool,
 ) -> Result<()> {
     if local_slot_stores_ref_cell_pointer(ctx, slot) {
+        let Some(state_offset) = ctx.ref_cell_state_offset(slot) else {
+            return Ok(());
+        };
+        let promote = ctx.next_label("promote_local_ref_cell");
+        let done = ctx.next_label("promote_local_ref_cell_done");
+        let state_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, promote)); // create the fallback cell only on the first runtime promotion
+                ctx.emitter
+                    .instruction(&format!("b {}", done));                         // reuse the existing cell on later loop iterations
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test whether this slot already stores a fallback cell
+                ctx.emitter
+                    .instruction(&format!("je {}", promote));                       // create the fallback cell only on the first runtime promotion
+                ctx.emitter
+                    .instruction(&format!("jmp {}", done));                         // reuse the existing cell on later loop iterations
+            }
+        }
+        ctx.emitter.label(&promote);
+        promote_local_slot_for_ref_capture_unchecked(
+            ctx,
+            slot,
+            owner_slot,
+            capture_ty,
+            release_replaced_value,
+        )?;
+        ctx.emitter.label(&done);
         return Ok(());
     }
+    promote_local_slot_for_ref_capture_unchecked(
+        ctx,
+        slot,
+        owner_slot,
+        capture_ty,
+        release_replaced_value,
+    )
+}
+
+/// Allocates and installs a ref-cell after the caller has ruled out an existing cell.
+fn promote_local_slot_for_ref_capture_unchecked(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    owner_slot: Option<LocalSlotId>,
+    capture_ty: &PhpType,
+    release_replaced_value: bool,
+) -> Result<()> {
     reject_multiword_ref_param_local(capture_ty, "capture")?;
     let local_ty = ctx.local_php_type(slot)?;
     let offset = ctx.local_offset(slot)?;
@@ -606,6 +680,8 @@ fn function_signature_from_eir_with_param_count(
             .take(param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; param_count],
+        param_attributes: Vec::new(),
         defaults: function
             .params
             .iter()
@@ -645,12 +721,29 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     if signature.params.iter().any(|(name, _)| name == &variadic) {
         return;
     }
+    let variadic_index = signature.params.len();
+    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
+        signature.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_ref = if signature.ref_params.len() > variadic_index {
+        signature.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if signature.declared_params.len() > variadic_index {
+        signature.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
     signature.defaults.push(None);
-    signature.ref_params.push(false);
-    signature.declared_params.push(false);
+    signature.ref_params.push(variadic_ref);
+    signature.declared_params.push(variadic_declared);
+    signature.param_type_exprs.push(variadic_type_expr);
 }
 
 /// Lowers a concrete include-loaded function variant activation marker.
@@ -1548,6 +1641,7 @@ fn emit_runtime_call_wrapper_inline(
         &label,
         ctx.emitter,
         ctx.data,
+        ctx.shared,
         false,
     )?;
     ctx.emitter.label(&done_label);
@@ -1765,17 +1859,6 @@ fn first_class_callable_descriptor(
             method_name,
         ));
     }
-    if let Some(callee) = ctx.callable_function_by_name(target) {
-        return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: function_symbol(&callee.name),
-            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
-            sig: Some(function_signature_from_eir(callee)),
-            invocation: callable_descriptor::CallableDescriptorInvocation::named(
-                callable_descriptor::CallableDescriptorShape::Function,
-                callee.name.clone(),
-            ),
-        }));
-    }
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: ctx.emitter.target.extern_symbol(target),
@@ -1789,6 +1872,17 @@ fn first_class_callable_descriptor(
     }
     if let Some(descriptor) = first_class_builtin_descriptor(ctx, target)? {
         return Ok(Some(descriptor));
+    }
+    if let Some(callee) = ctx.callable_function_by_name(target) {
+        return Ok(Some(FirstClassCallableDescriptor {
+            entry_label: function_symbol(&callee.name),
+            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            sig: Some(function_signature_from_eir(callee)),
+            invocation: callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Function,
+                callee.name.clone(),
+            ),
+        }));
     }
     Ok(None)
 }
@@ -1903,6 +1997,15 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
             return Ok(());
         }
         emit_object_tostring_call(ctx, value, normalized)?;
+        return store_if_result(ctx, inst);
+    }
+    if inst.result_php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
@@ -2870,11 +2973,15 @@ fn lower_mixed_method_call(
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
     if candidates.is_empty() {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+        }
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
     let done_label = ctx.next_label("mixed_method_done");
     let match_labels = candidates
@@ -2889,7 +2996,7 @@ fn lower_mixed_method_call(
 
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &no_match_label);
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -2905,6 +3012,14 @@ fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&no_match_label);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
+
+    ctx.emitter.label(&non_object_label);
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
@@ -3712,11 +3827,12 @@ fn lower_throwable_standard_method(
     store_if_result(ctx, inst)
 }
 
-/// Loads `Throwable::getMessage()` from payload offsets 8/16 into string result registers.
+/// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
 fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
     abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     Ok(PhpType::Str)
 }
 
@@ -4307,7 +4423,6 @@ struct RefArgWriteback {
     param_index: usize,
     source_value: ValueId,
     source_slot: LocalSlotId,
-    source_is_ref_cell: bool,
     source_ty: PhpType,
     cell_offset: usize,
 }
@@ -4517,13 +4632,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     }
     let late_bound_static = is_late_bound_static_receiver(receiver_label);
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver.as_str())
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!("static method call on unknown class {}", receiver))
-        })?;
+    let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_static_method_call(
+                ctx,
+                inst,
+                receiver.as_str(),
+                method_name,
+            );
+        }
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call on unknown class {}",
+            receiver
+        )));
+    };
     let method_key = php_symbol_key(method_name);
     let impl_class = receiver_info
         .static_method_impl_classes
@@ -4570,6 +4692,22 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     } else {
         None
     };
+    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
+        let no_override_label = ctx.next_label("eval_late_static_no_override");
+        let done_label = ctx.next_label("eval_late_static_done");
+        builtins::lower_eval_native_frame_static_method_call(
+            ctx,
+            inst,
+            receiver.as_str(),
+            method_name,
+            &no_override_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&no_override_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let call_args = materialize_static_method_call_args_with_refs(
         ctx,
         &called_class_id,
@@ -4596,7 +4734,19 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Lowers a direct static-method call against a class declared by a previous eval fragment.
+fn lower_eval_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = method_name_data(ctx, inst)?.to_string();
+    let (receiver_label, method_name) = parse_static_method_target(&target)?;
+    let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    builtins::lower_eval_static_method_call(ctx, inst, receiver.as_str(), method_name)
 }
 
 /// Lowers `self::method()` or `parent::method()` when it targets an instance method.
@@ -5460,6 +5610,17 @@ fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
 }
 
+/// Converts the currently loaded associative-array argument into boxed Mixed values.
+fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded associative-array argument to the Mixed conversion helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+}
+
 /// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
 fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,
@@ -5639,7 +5800,6 @@ fn plan_ref_arg_writebacks(
             param_index,
             source_value: *value,
             source_slot: source.slot,
-            source_is_ref_cell: source.is_ref_cell,
             source_ty,
             cell_offset: 0,
         });
@@ -5804,36 +5964,13 @@ fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,
     writeback: &RefArgWriteback,
 ) -> Result<()> {
-    if writeback.source_is_ref_cell
-        || local_slot_stores_ref_cell_pointer(ctx, writeback.source_slot)
-    {
-        let offset = ctx.local_offset(writeback.source_slot)?;
-        let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-        abi::emit_store_to_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            pointer_reg,
-            0,
-        );
-        return Ok(());
-    }
-    let offset = ctx.local_offset(writeback.source_slot)?;
-    abi::emit_store(ctx.emitter, &writeback.source_ty, offset);
-    Ok(())
+    ctx.store_current_result_to_local(writeback.source_slot)
 }
 
 /// Loads a local variable's address for a by-reference method-call argument.
 fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let source = local_ref_arg_source(ctx, value)?;
-    let slot = source.slot;
-    let offset = ctx.local_offset(slot)?;
-    if source.is_ref_cell || local_slot_stores_ref_cell_pointer(ctx, slot) {
-        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-    } else {
-        abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-    }
-    Ok(())
+    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))
 }
 
 /// Returns true when a value already holds a direct pointer to an array element slot.
@@ -5854,7 +5991,6 @@ fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> 
 /// Describes a local operand used as a by-reference call argument.
 struct LocalRefArgSource {
     slot: LocalSlotId,
-    is_ref_cell: bool,
 }
 
 /// Resolves an EIR value back to a local slot and whether it already stores a ref-cell pointer.
@@ -5871,9 +6007,8 @@ fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Loc
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    let is_ref_cell = match inst_ref.op {
-        Op::LoadLocal => false,
-        Op::LoadRefCell => true,
+    match inst_ref.op {
+        Op::LoadLocal | Op::LoadRefCell => {}
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "by-reference method call argument from opcode {}",
@@ -5886,7 +6021,7 @@ fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Loc
             "by-reference load argument has no local slot",
         ));
     };
-    Ok(LocalRefArgSource { slot, is_ref_cell })
+    Ok(LocalRefArgSource { slot })
 }
 
 /// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
@@ -6016,10 +6151,7 @@ pub(super) fn direct_call_stack_pad_bytes(
     ctx: &FunctionContext<'_>,
     overflow_bytes: usize,
 ) -> usize {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 if overflow_bytes > 0 => 16,
-        _ => 0,
-    }
+    abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
 /// Lowers a signed integer comparison into a boolean result value.
@@ -6059,11 +6191,7 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
-    let source_ty = if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        load_ref_param_local_to_result(ctx, slot)?
-    } else {
-        ctx.load_local_to_result(slot)?
-    };
+    let source_ty = ctx.load_local_to_result(slot)?;
     let result_ty = ctx.value_php_type(result)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
@@ -6076,18 +6204,41 @@ fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
-    let source_ty = load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+        return ctx.store_result_value(result);
+    }
+    if !ctx.local_ref_cell_representation_is_dynamic(slot) {
+        let source_ty = ctx.load_raw_local_to_result(slot)?;
+        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        return ctx.store_result_value(result);
+    }
+    let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "dynamic ref-cell slot {} has no representation flag",
+            slot.as_raw()
+        ))
+    })?;
+    let ref_cell = ctx.next_label("dynamic_load_ref_cell");
+    let done = ctx.next_label("dynamic_load_ref_cell_done");
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the alias representation after runtime promotion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select the alias representation after runtime promotion
+        }
+    }
+    let source_ty = ctx.load_raw_local_to_result(slot)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&ref_cell);
+    load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    ctx.emitter.label(&done);
     ctx.store_result_value(result)
-}
-
-/// Loads the value pointed to by an incoming by-reference local parameter.
-fn load_ref_param_local_to_result(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-) -> Result<PhpType> {
-    let ty = ctx.local_php_type(slot)?;
-    load_ref_cell_local_to_result_as(ctx, slot, &ty)
 }
 
 /// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
@@ -6228,11 +6379,7 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let value = expect_operand(inst, 0)?;
     let reset_concat_after_store =
         inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        store_value_to_ref_param_local(ctx, slot, value)?;
-    } else {
-        ctx.store_value_to_local(slot, value)?;
-    }
+    ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
     }
@@ -6276,7 +6423,44 @@ fn instruction_for_value<'a>(
 fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type);
+    }
+    if !ctx.local_ref_cell_representation_is_dynamic(slot) {
+        return ctx.store_value_to_raw_local(slot, value);
+    }
+    let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "dynamic ref-cell slot {} has no representation flag",
+            slot.as_raw()
+        ))
+    })?;
+    let ref_cell = ctx.next_label("dynamic_store_ref_cell");
+    let done = ctx.next_label("dynamic_store_ref_cell_done");
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
+        }
+    }
+    ctx.store_value_to_raw_local(slot, value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done));                    // join dynamic ref-cell storage paths
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join dynamic ref-cell storage paths
+        }
+    }
+    ctx.emitter.label(&ref_cell);
+    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Promotes an existing raw local slot into a heap ref-cell pointer.
@@ -6361,6 +6545,52 @@ fn release_local_ref_cell_owner(
     Ok(())
 }
 
+/// Lowers a deferred `release_local_slot`: releases the refcounted value currently
+/// held in a local frame slot, typed by the slot's FINAL storage type.
+///
+/// Lowering emits this op before a retaining loop store when the slot's storage
+/// type still looked untracked at that point but a later store on a back-edge
+/// path could widen it (issue #534: an inner `for` counter widened Int→Mixed by
+/// its checked-add update leaked one Mixed box per outer iteration when the
+/// outer body re-initialized it). Only here, after widening finished, is the
+/// decision sound. The slot is either zero (prologue zero-initializes cleanup
+/// locals, and the null-guarded release helpers skip zero) or an owned value
+/// boxed by a previous retaining store, so releasing it is always balanced.
+fn lower_release_local_slot(
+    ctx: &mut FunctionContext<'_>,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    // A slot promoted on a predecessor path holds the cell address, not an
+    // owned value. The forward analysis intentionally ignores promotions that
+    // occur only after this instruction, including after a loop exit.
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let offset = ctx.local_offset(slot)?;
+    if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
+        // A merged path can hold either raw storage or a cell pointer. Slots
+        // with a runtime representation flag release only the raw path; slots
+        // that are always cells (notably by-ref params) remain excluded.
+        if ctx.ref_cell_state_offset(slot).is_some() {
+            super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        }
+        return Ok(());
+    }
+    match ty {
+        // Owned strings are freed through the validating helper, which skips
+        // null/uninitialized slots and non-heap (.rodata) literal pointers.
+        PhpType::Str => super::frame::emit_main_string_cleanup(ctx, offset),
+        PhpType::Callable => super::frame::emit_main_refcounted_cleanup(ctx, offset, &ty),
+        other if other.is_refcounted() => {
+            super::frame::emit_main_refcounted_cleanup(ctx, offset, &other)
+        }
+        // The slot never widened to refcounted storage: nothing can be owned.
+        // Lowering normally prunes these, so this arm is only a safety net.
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.
 fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
@@ -6399,16 +6629,6 @@ fn clear_local_slot_storage(
         }
     }
     Ok(())
-}
-
-/// Stores an SSA value through the pointer held by an incoming by-reference local parameter.
-fn store_value_to_ref_param_local(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    value: ValueId,
-) -> Result<()> {
-    let target_ty = ctx.local_php_type(slot)?;
-    store_value_to_ref_cell_as(ctx, slot, value, &target_ty)
 }
 
 /// Stores an SSA value through a local ref-cell pointer using the supplied alias type.
@@ -6579,9 +6799,9 @@ fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?;
     let symbol = ir_global_symbol(name);
-    let result = inst.result.ok_or_else(|| {
-        CodegenIrError::invalid_module("load_global missing result value")
-    })?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
     ctx.data
         .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
@@ -6596,7 +6816,7 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    let store_ty = if crate::superglobals::is_superglobal(&name) {
+    let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
         ty.codegen_repr()
     } else {
         let source_ty = ty.codegen_repr();
@@ -6762,15 +6982,10 @@ fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
 fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let source_ty = ctx.local_php_type(slot)?.codegen_repr();
-    let offset = ctx.local_offset(slot)?;
     let ref_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
     let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        abi::load_at_offset(ctx.emitter, ref_cell_reg, offset);
-    } else {
-        abi::emit_frame_slot_address(ctx.emitter, ref_cell_reg, offset);
-    }
+    ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_tag_reg,
@@ -6789,8 +7004,12 @@ fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers PHP echo output for a previously computed SSA value.
 fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    if let PhpType::Object(class_name) = ctx.value_php_type(value)?.codegen_repr() {
-        return lower_object_echo_value(ctx, value, &class_name);
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Object(class_name) => return lower_object_echo_value(ctx, value, &class_name),
+        PhpType::Mixed | PhpType::Union(_) => {
+            return conversions::emit_mixed_string_context_stdout(ctx, value);
+        }
+        _ => {}
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;

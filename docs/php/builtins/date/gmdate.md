@@ -2,7 +2,7 @@
 title: "gmdate()"
 description: "Formats a GMT/UTC date and time."
 sidebar:
-  order: 90
+  order: 94
 ---
 
 ## gmdate()
@@ -18,6 +18,11 @@ Formats a GMT/UTC date and time.
 - `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/gmdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/gmdate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -159,8 +159,15 @@ fn direct_new_fiber_callback_sig(expr: &Expr) -> Option<FunctionSig> {
     let callback = args.first()?;
     match &callback.kind {
         ExprKind::Closure {
-            params, variadic, ..
-        } => Some(callback_sig_from_closure_params(params, variadic.as_deref())),
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => Some(callback_sig_from_closure_params(
+            params,
+            variadic.as_deref(),
+            *variadic_by_ref,
+        )),
         _ => None,
     }
 }
@@ -172,8 +179,15 @@ fn callback_sig_for_expr(
 ) -> Option<FunctionSig> {
     match &callback.kind {
         ExprKind::Closure {
-            params, variadic, ..
-        } => Some(callback_sig_from_closure_params(params, variadic.as_deref())),
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => Some(callback_sig_from_closure_params(
+            params,
+            variadic.as_deref(),
+            *variadic_by_ref,
+        )),
         ExprKind::Variable(name) => ctx
             .callable_param_signature(name)
             .cloned()
@@ -194,6 +208,8 @@ fn callback_sig_for_binding(
         StaticCallableBinding::ExternFunction(name) => {
             ctx.extern_functions.get(name.as_str()).map(|sig| FunctionSig {
                 params: sig.params.clone(),
+                param_type_exprs: vec![None; sig.params.len()],
+                param_attributes: Vec::new(),
                 defaults: vec![None; sig.params.len()],
                 return_type: sig.return_type.clone(),
                 declared_return: true,
@@ -294,6 +310,7 @@ fn class_method_sig(
 fn callback_sig_from_closure_params(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&str>,
+    variadic_by_ref: bool,
 ) -> FunctionSig {
     let mut sig = FunctionSig {
         params: params
@@ -307,6 +324,11 @@ fn callback_sig_from_closure_params(
                 )
             })
             .collect(),
+        param_type_exprs: params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .collect(),
+        param_attributes: Vec::new(),
         defaults: params
             .iter()
             .map(|(_, _, default, _)| default.clone())
@@ -323,8 +345,9 @@ fn callback_sig_from_closure_params(
         if !sig.params.iter().any(|(name, _)| name == variadic_name) {
             sig.params
                 .push((variadic_name.to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+            sig.param_type_exprs.push(None);
             sig.defaults.push(None);
-            sig.ref_params.push(false);
+            sig.ref_params.push(variadic_by_ref);
             sig.declared_params.push(false);
         }
     }
@@ -342,6 +365,8 @@ fn start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
             .iter()
             .map(|(name, _)| (name.clone(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: sig.param_type_exprs.clone(),
+        param_attributes: Vec::new(),
         defaults: sig.defaults.clone(),
         return_type: PhpType::Mixed,
         declared_return: false,

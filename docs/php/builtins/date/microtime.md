@@ -2,7 +2,7 @@
 title: "microtime()"
 description: "Returns the current Unix timestamp with microseconds."
 sidebar:
-  order: 94
+  order: 98
 ---
 
 ## microtime()
@@ -17,6 +17,11 @@ Returns the current Unix timestamp with microseconds.
 - `$as_float` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/microtime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -15,13 +15,17 @@ use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
     Terminator,
 };
-use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
+use crate::ir_lower::context::{
+    FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext,
+};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
-    type_satisfies_array_access_for_ir,
+    reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
+    reflection_function_binding_for_expr, reflection_method_binding_for_expr,
+    reflection_property_binding_for_expr, static_callable_binding_for_expr,
+    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -45,7 +49,14 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             then_body,
             elseif_clauses,
             else_body,
-        } => lower_if(ctx, condition, then_body, elseif_clauses, else_body.as_deref(), stmt.span),
+        } => lower_if(
+            ctx,
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body.as_deref(),
+            stmt.span,
+        ),
         StmtKind::IfDef {
             symbol,
             then_body,
@@ -58,8 +69,18 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             condition,
             update,
             body,
-        } => lower_for(ctx, init.as_deref(), condition.as_ref(), update.as_deref(), body),
-        StmtKind::ArrayAssign { array, index, value } => {
+        } => lower_for(
+            ctx,
+            init.as_deref(),
+            condition.as_ref(),
+            update.as_deref(),
+            body,
+        ),
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
             lower_array_assign(ctx, array, index, value, stmt.span);
         }
         StmtKind::NestedArrayAssign { target, value } => {
@@ -77,7 +98,14 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             value_var,
             value_by_ref,
             body,
-        } => lower_foreach(ctx, array, key_var.as_deref(), value_var, *value_by_ref, body),
+        } => lower_foreach(
+            ctx,
+            array,
+            key_var.as_deref(),
+            value_var,
+            *value_by_ref,
+            body,
+        ),
         StmtKind::Switch {
             subject,
             cases,
@@ -201,6 +229,9 @@ fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
 /// Emits EIR for `echo`.
 fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
     let value = lower_expr(ctx, expr);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     ctx.emit_void(
         Op::EchoValue,
         vec![value.value],
@@ -234,6 +265,11 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     let direct_closure = matches!(value.kind, ExprKind::Closure { .. }) || bound_closure;
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
+    let reflected_class = reflection_class_binding_for_expr(ctx, value);
+    let reflected_function = reflection_function_binding_for_expr(ctx, value);
+    let reflected_property = reflection_property_binding_for_expr(ctx, value);
+    let reflected_method = reflection_method_binding_for_expr(ctx, value);
+    let reflected_args = reflection_arg_array_binding_for_expr(value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -262,6 +298,21 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         if let Some(target) = static_callable {
             ctx.bind_static_callable_local(name, target);
         }
+    }
+    if let Some(reflected_class) = reflected_class {
+        ctx.bind_reflection_class_local(name, reflected_class);
+    }
+    if let Some(reflected_function) = reflected_function {
+        ctx.bind_reflection_function_local(name, reflected_function);
+    }
+    if let Some((reflected_class, reflected_property)) = reflected_property {
+        ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
+    }
+    if let Some((reflected_class, reflected_method)) = reflected_method {
+        ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
+    }
+    if let Some(reflected_args) = reflected_args {
+        ctx.bind_reflection_arg_array_local(name, reflected_args);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
@@ -293,7 +344,11 @@ fn contextualize_array_assignment(
     if !matches!(php_type.codegen_repr(), PhpType::Array(_)) {
         return (lowered, php_type);
     }
-    let contextual_ty = ctx.local_type(name).codegen_repr();
+    let contextual_ty = if crate::superglobals::is_superglobal(name) {
+        crate::superglobals::superglobal_type().codegen_repr()
+    } else {
+        ctx.local_type(name).codegen_repr()
+    };
     if !matches!(contextual_ty, PhpType::AssocArray { .. }) {
         return (lowered, php_type);
     }
@@ -354,8 +409,15 @@ fn lower_if(
     span: Span,
 ) {
     let merge = ctx.builder.create_named_block("if.merge", Vec::new());
-    let merge_reachable =
-        lower_if_chain(ctx, condition, then_body, elseif_clauses, else_body, merge, span);
+    let merge_reachable = lower_if_chain(
+        ctx,
+        condition,
+        then_body,
+        elseif_clauses,
+        else_body,
+        merge,
+        span,
+    );
     ctx.builder.position_at_end(merge);
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
@@ -400,25 +462,26 @@ fn lower_if_chain(
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    let else_reachable = if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
-        lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
-    } else if let Some(else_body) = else_body {
-        lower_block(ctx, else_body);
-        if !ctx.builder.insertion_block_is_terminated() {
-            branch_to(ctx, merge);
-            true
+    let else_reachable =
+        if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
+            lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
+        } else if let Some(else_body) = else_body {
+            lower_block(ctx, else_body);
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(ctx, merge);
+                true
+            } else {
+                false
+            }
         } else {
-            false
-        }
-    } else {
-        lower_noop(ctx, span);
-        if !ctx.builder.insertion_block_is_terminated() {
-            branch_to(ctx, merge);
-            true
-        } else {
-            false
-        }
-    };
+            lower_noop(ctx, span);
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(ctx, merge);
+                true
+            } else {
+                false
+            }
+        };
     merge_reachable |= else_reachable;
     let else_initialized = ctx.initialized_slots_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(
@@ -593,7 +656,11 @@ fn lower_for(
 /// be freed (a per-write heap leak that exhausts the heap under `--web`). Non-string
 /// refcounted values (objects, arrays) are moved, or retained only when borrowed,
 /// by the write itself, so they must not be released here.
-fn release_persisted_string_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+fn release_persisted_string_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
     let ty = ctx.builder.value_php_type(value.value);
     // Only release a FRESH owning string temporary (a call/concat result, etc.).
     // A borrowed load of a variable that still owns the string (e.g. the prelude's
@@ -694,11 +761,24 @@ fn lower_array_assign(
             Some(span),
         );
         let elem_ty = indexed_array_write_element_type(ctx, array_value, updated_ty.as_ref());
-        finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
+        finish_indexed_array_local_write(
+            ctx,
+            array,
+            array_value,
+            updated_ty,
+            needs_storeback,
+            span,
+        );
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
         return;
     }
-    ctx.emit_void(op, vec![array_value.value, index_value.value, value_value.value], None, op.default_effects(), Some(span));
+    ctx.emit_void(
+        op,
+        vec![array_value.value, index_value.value, value_value.value],
+        None,
+        op.default_effects(),
+        Some(span),
+    );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
 }
@@ -736,6 +816,7 @@ fn lower_string_key_array_promotion(
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
     let assoc_ty = promoted_assoc_array_type(current_ty, value_ty);
+    ctx.prepare_mutated_local_owner(array, array_value, assoc_ty.clone(), Some(span));
     let hash = ctx.emit_value(
         Op::ArrayToHash,
         vec![array_value.value],
@@ -753,7 +834,7 @@ fn lower_string_key_array_promotion(
     );
     release_persisted_string_operand(ctx, index, span);
     release_persisted_string_operand(ctx, value, span);
-    ctx.store_mutated_local(array, hash, assoc_ty, Some(span));
+    ctx.store_prepared_mutated_local(array, hash, assoc_ty, Some(span));
 }
 
 /// Writes `value` into the indexed local `array` under a boxed Mixed/Union key.
@@ -788,9 +869,7 @@ fn lower_mixed_key_array_set(
 fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType {
     let value_ty = normalize_array_write_element_type(value_ty.codegen_repr());
     let assoc_value_ty = match current_ty.codegen_repr() {
-        PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => {
-            value_ty
-        }
+        PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => value_ty,
         PhpType::Array(elem_ty) => {
             let elem_ty = normalize_array_write_element_type(elem_ty.codegen_repr());
             if elem_ty == value_ty {
@@ -808,7 +887,12 @@ fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType 
 }
 
 /// Lowers a nested array assignment that already carries an expression target.
-fn lower_nested_array_assign(ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span) {
+fn lower_nested_array_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+) {
     let target = lower_expr(ctx, target);
     let value = lower_expr(ctx, value);
     ctx.emit_void(
@@ -832,18 +916,38 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
         Op::RuntimeCall
     };
     if op == Op::ArrayPush {
-        let (array_value, updated_ty, needs_storeback) = if ref_bound_mixed_indexed_array_write(ctx, array, value) {
-            (array_value, Some(ctx.local_type(array)), true)
-        } else {
-            prepare_indexed_array_local_write(ctx, array_value, value, span)
-        };
-        ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
+        let (array_value, updated_ty, needs_storeback) =
+            if ref_bound_mixed_indexed_array_write(ctx, array, value) {
+                (array_value, Some(ctx.local_type(array)), true)
+            } else {
+                prepare_indexed_array_local_write(ctx, array_value, value, span)
+            };
+        ctx.emit_void(
+            op,
+            vec![array_value.value, value.value],
+            None,
+            op.default_effects(),
+            Some(span),
+        );
         let elem_ty = indexed_array_write_element_type(ctx, array_value, updated_ty.as_ref());
-        finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
+        finish_indexed_array_local_write(
+            ctx,
+            array,
+            array_value,
+            updated_ty,
+            needs_storeback,
+            span,
+        );
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
+    ctx.emit_void(
+        op,
+        vec![array_value.value, value.value],
+        None,
+        op.default_effects(),
+        Some(span),
+    );
     release_persisted_string_operand(ctx, value, span);
 }
 
@@ -969,9 +1073,9 @@ pub(super) fn ref_bound_mixed_indexed_array_write(
 /// Returns the refined array type after writing a value into an indexed array.
 fn indexed_array_write_updated_type(current_ty: PhpType, value_ty: PhpType) -> Option<PhpType> {
     match current_ty.codegen_repr() {
-        PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => {
-            Some(PhpType::Array(Box::new(normalize_empty_array_write_element_type(value_ty))))
-        }
+        PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => Some(
+            PhpType::Array(Box::new(normalize_empty_array_write_element_type(value_ty))),
+        ),
         PhpType::Array(elem_ty) if elem_ty.codegen_repr() == PhpType::Mixed => None,
         PhpType::Array(elem_ty) => {
             let elem_ty = elem_ty.codegen_repr();
@@ -997,8 +1101,7 @@ fn indexed_array_write_needs_mixed_conversion(current_ty: &PhpType, updated_ty: 
     let PhpType::Array(updated_elem) = updated_ty.codegen_repr() else {
         return false;
     };
-    updated_elem.codegen_repr() == PhpType::Mixed
-        && current_elem.codegen_repr() != PhpType::Mixed
+    updated_elem.codegen_repr() == PhpType::Mixed && current_elem.codegen_repr() != PhpType::Mixed
 }
 
 /// Returns true for the placeholder element type used by empty indexed arrays.
@@ -1023,6 +1126,8 @@ fn lower_typed_assign(
     ctx.clear_pending_static_callable_result();
     let php_type = ctx.type_expr_to_php_type_for_value(type_expr);
     let static_callable = static_callable_binding_for_expr(ctx, value);
+    let reflected_class = reflection_class_binding_for_expr(ctx, value);
+    let reflected_property = reflection_property_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -1045,6 +1150,12 @@ fn lower_typed_assign(
     if let Some(target) = static_callable {
         ctx.bind_static_callable_local(name, target);
     }
+    if let Some(reflected_class) = reflected_class {
+        ctx.bind_reflection_class_local(name, reflected_class);
+    }
+    if let Some((reflected_class, reflected_property)) = reflected_property {
+        ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
+    }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
     }
@@ -1063,14 +1174,7 @@ fn coerce_typed_assign_value(
         return value;
     }
     match target_ty {
-        PhpType::Mixed => ctx.emit_value(
-            Op::MixedBox,
-            vec![value.value],
-            None,
-            PhpType::Mixed,
-            Op::MixedBox.default_effects(),
-            Some(span),
-        ),
+        PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         _ => value,
     }
 }
@@ -1126,7 +1230,12 @@ fn lower_foreach(
     } else {
         let value_ty = foreach_value_type(&source_ty);
         if value_ty == PhpType::Mixed {
-            initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
+            initialize_foreach_mixed_local_if_needed(
+                ctx,
+                value_var,
+                value_needs_null_init,
+                array.span,
+            );
         } else if value_needs_null_init {
             ctx.declare_local(value_var, value_ty.clone());
             ctx.set_local_type(value_var, value_ty);
@@ -1158,7 +1267,10 @@ fn lower_foreach(
     ctx.builder.position_at_end(body_block);
     let cleanup = ctx
         .value_is_owning_temporary(source)
-        .then_some(LoopCleanup { value: source, span: array.span });
+        .then_some(LoopCleanup {
+            value: source,
+            span: array.span,
+        });
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -1217,7 +1329,11 @@ fn lower_foreach(
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
 fn foreach_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Callable => PhpType::Callable,
+        PhpType::Array(elem) => match elem.codegen_repr() {
+            PhpType::Callable => PhpType::Callable,
+            PhpType::Object(class_name) => PhpType::Object(class_name),
+            _ => PhpType::Mixed,
+        },
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
@@ -1250,15 +1366,8 @@ fn initialize_foreach_mixed_local_if_needed(
     ctx.declare_local(name, PhpType::Mixed);
     ctx.set_local_type(name, PhpType::Mixed);
     let null = emit_null_value(ctx, Some(span));
-    let boxed = ctx.emit_value(
-        Op::MixedBox,
-        vec![null.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    );
-    ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+    let boxed = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
+    ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
 }
 
 /// Lowers a `switch` with source-ordered pattern evaluation and PHP fallthrough.
@@ -1312,7 +1421,11 @@ fn lower_static_switch_dispatch(
             let Some(value) = int_case_value(case_expr) else {
                 continue;
             };
-            switch_cases.push(SwitchCase { value, target: *case_block, args: Vec::new() });
+            switch_cases.push(SwitchCase {
+                value,
+                target: *case_block,
+                args: Vec::new(),
+            });
         }
     }
     ctx.builder.terminate(Terminator::Switch {
@@ -1375,7 +1488,12 @@ fn lower_dynamic_switch_dispatch(
                 let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
                 ctx.emit_value(
                     Op::ICmp,
-                    vec![int_subject.expect("non-string subject is pre-coerced").value, case_value.value],
+                    vec![
+                        int_subject
+                            .expect("non-string subject is pre-coerced")
+                            .value,
+                        case_value.value,
+                    ],
                     Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
                     PhpType::Bool,
                     Op::ICmp.default_effects(),
@@ -1419,29 +1537,40 @@ fn lower_switch_bodies(
     default_block: BlockId,
     exit: BlockId,
 ) {
+    let default_index = default
+        .and_then(|default| switch_default_source_index(cases, default))
+        .unwrap_or(cases.len());
     ctx.clear_static_callable_locals();
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: exit,
         cleanup: None,
     });
-    for (index, ((_, body), block)) in cases.iter().zip(blocks).enumerate() {
-        ctx.builder.position_at_end(*block);
-        lower_block(ctx, body);
-        if !ctx.builder.insertion_block_is_terminated() {
-            if let Some(next_block) = blocks.get(index + 1) {
-                branch_to(ctx, *next_block);
-            } else {
-                branch_to(ctx, default_block);
+    for index in 0..=cases.len() {
+        if default.is_some() && default_index == index {
+            ctx.builder.position_at_end(default_block);
+            if let Some(default) = default {
+                lower_block(ctx, default);
             }
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(ctx, blocks.get(index).copied().unwrap_or(exit));
+            }
+            ctx.clear_static_callable_locals();
         }
-        ctx.clear_static_callable_locals();
+        if let Some((_, body)) = cases.get(index) {
+            ctx.builder.position_at_end(blocks[index]);
+            lower_block(ctx, body);
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(
+                    ctx,
+                    switch_next_body_block(index + 1, blocks, default_index, default_block, exit),
+                );
+            }
+            ctx.clear_static_callable_locals();
+        }
     }
-    ctx.builder.position_at_end(default_block);
-    if let Some(default) = default {
-        lower_block(ctx, default);
-    }
-    if !ctx.builder.insertion_block_is_terminated() {
+    if default.is_none() {
+        ctx.builder.position_at_end(default_block);
         branch_to(ctx, exit);
     }
     ctx.loop_stack.pop();
@@ -1449,8 +1578,59 @@ fn lower_switch_bodies(
     ctx.clear_static_callable_locals();
 }
 
+/// Returns the source-order insertion point for a non-empty switch default body.
+fn switch_default_source_index(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &[Stmt],
+) -> Option<usize> {
+    if cases.is_empty() {
+        return Some(0);
+    }
+    let default_start = default.first()?.span;
+    if default_start == Span::dummy() {
+        return None;
+    }
+    let mut default_index = 0;
+    for (conditions, _) in cases {
+        let case_start = conditions.first()?.span;
+        if case_start == Span::dummy() {
+            return None;
+        }
+        if span_is_before(case_start, default_start) {
+            default_index += 1;
+        }
+    }
+    Some(default_index)
+}
+
+/// Returns the block that follows one source-ordered switch body.
+fn switch_next_body_block(
+    next_index: usize,
+    blocks: &[BlockId],
+    default_index: usize,
+    default_block: BlockId,
+    exit: BlockId,
+) -> BlockId {
+    if default_index == next_index {
+        default_block
+    } else {
+        blocks.get(next_index).copied().unwrap_or(exit)
+    }
+}
+
+/// Returns true when `span` appears before `pivot` in the same source file.
+fn span_is_before(span: Span, pivot: Span) -> bool {
+    span.line < pivot.line || (span.line == pivot.line && span.col < pivot.col)
+}
+
 /// Lowers include/require statements through a high-level runtime call.
-fn lower_include(ctx: &mut LoweringContext<'_, '_>, path: &Expr, once: bool, required: bool, span: Span) {
+fn lower_include(
+    ctx: &mut LoweringContext<'_, '_>,
+    path: &Expr,
+    once: bool,
+    required: bool,
+    span: Span,
+) {
     let path = lower_expr(ctx, path);
     let label = format!("include once={} required={}", once, required);
     let data = ctx.intern_string(&label);
@@ -1477,7 +1657,12 @@ fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, label: &str, span:
 }
 
 /// Lowers an include-once guarded body.
-fn lower_include_once_guard(ctx: &mut LoweringContext<'_, '_>, label: &str, body: &[Stmt], span: Span) {
+fn lower_include_once_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    label: &str,
+    body: &[Stmt],
+    span: Span,
+) {
     let data = ctx.intern_string(label);
     let should_run = ctx
         .builder
@@ -1492,8 +1677,12 @@ fn lower_include_once_guard(ctx: &mut LoweringContext<'_, '_>, label: &str, body
             Some(span),
         )
         .expect("include_once_guard produces a branch condition");
-    let body_block = ctx.builder.create_named_block("include_once_body", Vec::new());
-    let after_block = ctx.builder.create_named_block("include_once_after", Vec::new());
+    let body_block = ctx
+        .builder
+        .create_named_block("include_once_body", Vec::new());
+    let after_block = ctx
+        .builder
+        .create_named_block("include_once_after", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: should_run,
         then_target: body_block,
@@ -1538,11 +1727,12 @@ fn lower_try_catch(
     catches: &[CatchClause],
     span: Span,
 ) {
-    let handler_block = ctx.builder.create_named_block("try.catch_dispatch", Vec::new());
+    let handler_block = ctx
+        .builder
+        .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
 
-    ctx.clear_static_callable_locals();
     ctx.emit_void(
         Op::TryPushHandler,
         Vec::new(),
@@ -1557,6 +1747,7 @@ fn lower_try_catch(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     lower_catch_dispatch(ctx, catches, after_block, span);
     ctx.builder.position_at_end(after_block);
@@ -1600,11 +1791,12 @@ fn lower_try_catch_finally(
     finally_body: &[Stmt],
     span: Span,
 ) {
-    let handler_block = ctx.builder.create_named_block("try.catch_dispatch", Vec::new());
+    let handler_block = ctx
+        .builder
+        .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
 
-    ctx.clear_static_callable_locals();
     ctx.emit_void(
         Op::TryPushHandler,
         Vec::new(),
@@ -1622,6 +1814,7 @@ fn lower_try_catch_finally(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
     ctx.builder.position_at_end(after_block);
@@ -1661,7 +1854,9 @@ fn lower_catch_dispatch(
     }
 
     let current = lower_current_exception(ctx, span);
-    ctx.builder.terminate(Terminator::Throw { value: current.value });
+    ctx.builder.terminate(Terminator::Throw {
+        value: current.value,
+    });
 }
 
 /// Lowers catch dispatch for `try`/`catch`/`finally`.
@@ -1692,7 +1887,9 @@ fn lower_catch_dispatch_with_finally(
     let current = lower_current_exception(ctx, span);
     lower_block(ctx, finally_body);
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Throw { value: current.value });
+        ctx.builder.terminate(Terminator::Throw {
+            value: current.value,
+        });
     }
 }
 
@@ -1713,7 +1910,8 @@ fn lower_catch_match(
         let mismatch = if idx + 1 == catch.exception_types.len() {
             next_catch
         } else {
-            ctx.builder.create_named_block("try.catch_type_next", Vec::new())
+            ctx.builder
+                .create_named_block("try.catch_type_next", Vec::new())
         };
         let current = lower_current_exception(ctx, span);
         let data = ctx.intern_class_name(catch_type.as_str());
@@ -1752,12 +1950,15 @@ fn lower_current_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> Low
 
 /// Binds and clears the active exception for a matched catch clause.
 fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span: Span) {
-    let (immediate, php_type) = catch.variable.as_ref().map_or((None, PhpType::Void), |variable| {
-        let php_type = catch_variable_type(catch);
-        let slot = ctx.declare_local(variable, php_type.clone());
-        ctx.set_local_type(variable, php_type.clone());
-        (Some(Immediate::LocalSlot(slot)), php_type)
-    });
+    let (immediate, php_type) = catch
+        .variable
+        .as_ref()
+        .map_or((None, PhpType::Void), |variable| {
+            let php_type = catch_variable_type(catch);
+            let slot = ctx.declare_local(variable, php_type.clone());
+            ctx.set_local_type(variable, php_type.clone());
+            (Some(Immediate::LocalSlot(slot)), php_type)
+        });
     ctx.builder.emit_with_effects(
         Op::CatchBind,
         Vec::new(),
@@ -1773,7 +1974,11 @@ fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span
 /// Returns the local type to use for a catch variable.
 fn catch_variable_type(catch: &CatchClause) -> PhpType {
     if catch.exception_types.len() == 1 {
-        return PhpType::Object(catch.exception_types[0].trim_start_matches('\\').to_string());
+        return PhpType::Object(
+            catch.exception_types[0]
+                .trim_start_matches('\\')
+                .to_string(),
+        );
     }
     PhpType::Object("Throwable".to_string())
 }
@@ -1793,7 +1998,11 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.continue_block, loop_cleanup_count_for_branch(level));
+    terminate_branch(
+        ctx,
+        frame.continue_block,
+        loop_cleanup_count_for_branch(level),
+    );
 }
 
 /// Lowers a return statement using the current function return contract.
@@ -1908,13 +2117,7 @@ fn acquire_borrowed_return_value(
     }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
-        Some(
-            Op::ArrayGet
-                | Op::HashGet
-                | Op::PropGet
-                | Op::DynamicPropGet
-                | Op::NullsafePropGet
-        )
+        Some(Op::ArrayGet | Op::HashGet | Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
     ) {
         return value;
     }
@@ -1930,6 +2133,7 @@ fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    ctx.emit_eval_scope_finalizer(None);
     ctx.builder.terminate(Terminator::Return { value });
 }
 
@@ -1942,7 +2146,10 @@ fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cle
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
-    ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
+    ctx.builder.terminate(Terminator::Br {
+        target,
+        args: Vec::new(),
+    });
 }
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
@@ -2123,7 +2330,11 @@ fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: 
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
-fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span: Span) -> LoweredValue {
+fn lower_list_unpack_index(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: usize,
+    span: Span,
+) -> LoweredValue {
     ctx.emit_value(
         Op::ConstI64,
         Vec::new(),
@@ -2192,7 +2403,11 @@ fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
 /// Lowers a static local variable initialization.
 fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(name, ctx.builder.value_php_type(value.value), LocalKind::StaticLocal);
+    let slot = ctx.declare_local_with_kind(
+        name,
+        ctx.builder.value_php_type(value.value),
+        LocalKind::StaticLocal,
+    );
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -2282,12 +2497,14 @@ fn magic_set_receiver_has_method(
     let Some(class_info) = ctx.classes.get(normalized) else {
         return false;
     };
-    if class_info.properties.iter().any(|(name, _)| name == property) {
+    if class_info
+        .properties
+        .iter()
+        .any(|(name, _)| name == property)
+    {
         return false;
     }
-    class_info
-        .methods
-        .contains_key(&php_symbol_key("__set"))
+    class_info.methods.contains_key(&php_symbol_key("__set"))
 }
 
 /// Lowers an undeclared property write to a normal `__set` instance-method call.
@@ -2400,6 +2617,25 @@ fn contextualize_property_array_assignment(
 }
 
 /// Lowers a static property write.
+///
+/// A static property outlives the enclosing scope, so it must hold its own
+/// reference to a refcounted value. There are two storage disciplines, matched
+/// to what the codegen store actually does:
+///
+/// - **Boxing store** (a Mixed/Union slot receiving a non-Mixed value, e.g.
+///   `Class::$h = new C()`): codegen boxes the value with `__rt_mixed_from_value`,
+///   which takes its *own* retained reference to the child. The slot therefore
+///   keeps a reference independent of the source, so an owning temporary must be
+///   *released* after the store (its reference is not the one the slot holds), and
+///   a borrowed source must be left untouched. Acquiring here would leak the extra
+///   reference on top of the box's retained one.
+/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
+///   move): the store consumes (moves) its value operand. An owning temporary is
+///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
+///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
+///   (e.g. `Class::$h = $handler` where `$handler` is a `?SessionHandlerInterface`
+///   parameter) leaves the property dangling once the borrow's owner releases its
+///   reference, so a later read dispatches on freed memory (a fatal "on null").
 fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -2408,7 +2644,43 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
+    if static_property_store_boxes_value(ctx, receiver, property, value) {
+        store_static_property(ctx, receiver, property, value.value, span);
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
+    let value = if ctx.value_is_owning_temporary(value) {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
     store_static_property(ctx, receiver, property, value.value, span);
+}
+
+/// Returns true when the codegen static-property store boxes `value` into a
+/// Mixed/Union slot with its own retained reference.
+///
+/// This mirrors `box_static_property_value_if_needed` in the EIR backend: a
+/// non-Mixed value assigned to a Mixed/Union slot is boxed with
+/// `__rt_mixed_from_value`, which retains the refcounted child. In that case the
+/// slot holds a reference independent of the source, so `lower_static_property_assign`
+/// releases an owning-temporary source instead of moving it in. When the declaring
+/// class/property metadata is unavailable, this conservatively reports `false` so the
+/// moving-store discipline (acquire-if-borrowed) is used.
+fn static_property_store_boxes_value(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    value: LoweredValue,
+) -> bool {
+    let Some(slot_ty) = static_property_type(ctx, receiver, property) else {
+        return false;
+    };
+    let value_ty = ctx.builder.value_php_type(value.value);
+    matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
 }
 
 /// Lowers `Class::$prop[] = value`.
@@ -2437,6 +2709,17 @@ fn lower_static_property_array_push(
 
     let property_value = load_static_property(ctx, receiver, property, span);
     let value = lower_expr(ctx, value);
+    if static_property_may_be_eval_dynamic(ctx, receiver) {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, value.value],
@@ -2474,9 +2757,8 @@ fn lower_static_property_array_assign(
         return;
     }
 
-    let property_value = if let Some(property_ty) =
-        static_property_type(ctx, receiver, property)
-            .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+    let property_value = if let Some(property_ty) = static_property_type(ctx, receiver, property)
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         load_static_property_as(ctx, receiver, property, property_ty, span)
     } else {
@@ -2484,6 +2766,17 @@ fn lower_static_property_array_assign(
     };
     let index = lower_expr(ctx, index);
     let value = lower_expr(ctx, value);
+    if static_property_may_be_eval_dynamic(ctx, receiver) {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, index.value, value.value],
@@ -2491,6 +2784,20 @@ fn lower_static_property_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Returns true when a named static-property receiver may resolve through eval metadata.
+fn static_property_may_be_eval_dynamic(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> bool {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return false;
+    };
+    ctx.has_eval_barrier()
+        && !ctx
+            .classes
+            .contains_key(class_name.as_str().trim_start_matches('\\'))
 }
 
 /// Lowers `$object->prop[] = value`.
@@ -2532,7 +2839,12 @@ fn lower_property_array_push(
             Op::PropSet.default_effects(),
             Some(span),
         );
-        release_rewritten_property_value_after_retaining_store(ctx, &property_ty, property_value, span);
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
         return;
     }
 
@@ -2589,7 +2901,12 @@ fn lower_property_array_assign(
             Op::PropSet.default_effects(),
             Some(span),
         );
-        release_rewritten_property_value_after_retaining_store(ctx, &property_ty, property_value, span);
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
         return;
     }
     if let Some(property_ty) =
@@ -2623,13 +2940,17 @@ fn lower_property_array_assign(
             Op::PropSet.default_effects(),
             Some(span),
         );
-        release_rewritten_property_value_after_retaining_store(ctx, &property_ty, property_value, span);
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
         return;
     }
 
-    if let Some(property_ty) =
-        object_property_type(ctx, object.value, property)
-            .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
@@ -2674,7 +2995,8 @@ fn release_property_assignment_source_after_retaining_store(
     if !ctx.value_is_owning_temporary(value) {
         return;
     }
-    if !property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value)) {
+    if !property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
+    {
         return;
     }
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
@@ -2739,7 +3061,13 @@ fn indexed_property_array_element_type(property_ty: &PhpType) -> Option<PhpType>
 
 /// Emits a no-op marker for declaration-only or frontend-only statements.
 fn lower_noop(ctx: &mut LoweringContext<'_, '_>, span: Span) {
-    ctx.emit_void(Op::Nop, Vec::new(), None, Op::Nop.default_effects(), Some(span));
+    ctx.emit_void(
+        Op::Nop,
+        Vec::new(),
+        None,
+        Op::Nop.default_effects(),
+        Some(span),
+    );
 }
 
 /// Records a function variant group in high-level EIR metadata form.
@@ -2781,7 +3109,10 @@ fn lower_function_variant_mark(
 /// Emits a branch to `target` if the current block can still fall through.
 fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
+        ctx.builder.terminate(Terminator::Br {
+            target,
+            args: Vec::new(),
+        });
     }
 }
 
@@ -2856,7 +3187,10 @@ fn emit_const_bool(
             span,
         )
         .expect("const_bool produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Emits a null sentinel value.
@@ -2874,7 +3208,10 @@ fn emit_null_value(ctx: &mut LoweringContext<'_, '_>, span: Option<Span>) -> Low
             span,
         )
         .expect("const_null produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Coerces a value to the current function return storage type when needed.
@@ -2897,14 +3234,7 @@ fn coerce_to_return_type(
             coerce_return_scalar_source(ctx, value, span, coerce_to_tagged_scalar)
         }
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
-            ctx.emit_value(
-                Op::MixedBox,
-                vec![value.value],
-                None,
-                ctx.return_php_type.clone(),
-                Op::MixedBox.default_effects(),
-                span,
-            )
+            ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
         IrType::Heap(_) => ctx.emit_value(
             Op::RuntimeCall,
@@ -2941,7 +3271,10 @@ fn coerce_to_tagged_scalar(
     if value.ir_type == IrType::TaggedScalar {
         return value;
     }
-    if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Void) {
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Void
+    ) {
         return ctx.emit_value(
             Op::ConstNull,
             Vec::new(),
@@ -2977,8 +3310,14 @@ fn coerce_container_to_return_type(
             Op::ArrayToMixed
         }
         (
-            PhpType::AssocArray { value: source_value, .. },
-            PhpType::AssocArray { value: return_value, .. },
+            PhpType::AssocArray {
+                value: source_value,
+                ..
+            },
+            PhpType::AssocArray {
+                value: return_value,
+                ..
+            },
         ) if source_value.codegen_repr() != PhpType::Mixed
             && return_value.codegen_repr() == PhpType::Mixed =>
         {
@@ -3185,7 +3524,9 @@ fn static_receiver_class_name(
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {
             let current = ctx.current_class.as_deref()?;
-            ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
+            ctx.classes
+                .get(current)
+                .and_then(|class_info| class_info.parent.clone())
         }
     }
 }
@@ -3202,10 +3543,8 @@ fn object_property_type(
     };
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .visible_property(property)
+        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

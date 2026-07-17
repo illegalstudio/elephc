@@ -106,6 +106,94 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
+    /// lifetime-tracked storage.
+    ///
+    /// Lowering emits `release_local_slot` before a loop store when the slot's
+    /// storage type LOOKS untracked at that point but a later store on a
+    /// back-edge path may still widen it (e.g. a `for` counter widened
+    /// Int→Mixed by its checked-add update). Once the whole body is lowered the
+    /// final storage types are known, so ops guarding slots that stayed
+    /// untracked are rewritten to `nop`s. This keeps scalar slots eligible for
+    /// dead-store elimination and load forwarding, which conservatively exclude
+    /// any slot named by an unknown op.
+    pub fn prune_untracked_release_local_slot_ops(&mut self) {
+        for inst in &mut self.func.instructions {
+            if inst.op != Op::ReleaseLocalSlot {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                continue;
+            };
+            let storage_type = &self.func.locals[slot.as_raw() as usize].php_type;
+            if Ownership::php_type_needs_lifetime_tracking(storage_type) {
+                continue;
+            }
+            // The slot's final storage is a plain scalar: the deferred release
+            // can never free anything, so erase it instead of shipping a no-op
+            // that pessimizes slot analyses in later passes.
+            inst.op = Op::Nop;
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
+        }
+    }
+
+    /// Neutralizes deferred releases for concrete local loads that stayed borrowed.
+    ///
+    /// Lowering cannot know whether a later source-order store will widen a local's
+    /// final frame storage to Mixed. It therefore emits releases for concrete heap
+    /// loads provisionally. Once all stores are known, keep those releases only when
+    /// codegen must unbox and retain a concrete payload from a Mixed slot.
+    pub fn prune_borrowed_local_load_release_ops(&mut self) {
+        let mut prune = Vec::new();
+        for (index, inst) in self.func.instructions.iter().enumerate() {
+            if inst.op != Op::Release {
+                continue;
+            }
+            let Some(source) = inst.operands.first().copied() else {
+                continue;
+            };
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            if value.ownership == Ownership::Owned {
+                continue;
+            }
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
+                continue;
+            }
+            if !local_load_release_is_deferred_candidate(&value.php_type) {
+                continue;
+            }
+            if local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) {
+                continue;
+            }
+            prune.push(index);
+        }
+        for index in prune {
+            let inst = &mut self.func.instructions[index];
+            inst.op = Op::Nop;
+            inst.operands.clear();
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
+        }
+    }
+
     /// Returns the semantic role of a local slot.
     pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind {
         self.func.locals[slot.as_raw() as usize].kind
@@ -400,6 +488,30 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
         ) => incoming,
         _ => PhpType::Mixed,
     }
+}
+
+/// Returns whether lowering emits a provisional release for this concrete local-load type.
+fn local_load_release_is_deferred_candidate(result_type: &PhpType) -> bool {
+    matches!(
+        result_type.codegen_repr(),
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Iterable
+    )
+}
+
+/// Returns whether codegen retains a concrete heap payload extracted from Mixed local storage.
+fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &PhpType) -> bool {
+    matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(
+            result_type.codegen_repr(),
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Iterable
+        )
 }
 
 /// Returns true when a local storage shape can represent PHP null as a zero pointer.

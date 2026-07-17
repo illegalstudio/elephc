@@ -22,6 +22,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
         "MultipleIterator".to_string(),
         FlattenedClass {
             name: "MultipleIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Iterator".to_string()],
             is_abstract: false,
@@ -32,6 +33,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: multiple_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

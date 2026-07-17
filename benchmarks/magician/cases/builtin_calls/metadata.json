@@ -1,0 +1,12 @@
+{
+  "description": "Repeated eval-side calls to common scalar builtins.",
+  "eval_fragments": [
+    {
+      "label": "builtin-step",
+      "source": "$sum += strlen(\"abcdef\") + intval(\"7\");",
+      "invocations": 3000,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

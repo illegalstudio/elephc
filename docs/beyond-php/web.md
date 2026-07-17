@@ -184,11 +184,54 @@ count; a slow request occupies exactly one worker for its duration.
   serves one connection at a time, a kept-alive connection holds a worker until it
   closes or times out — size `--workers` accordingly.
 
+## Sessions
+
+Sessions are available under `--web` via PHP's standard session functions,
+providing persistent state across HTTP requests.
+
+- `session_start()` initializes the session, populates the `$_SESSION`
+  superglobal, and sends a `Set-Cookie: PHPSESSID=...` header on the first
+  request (when no session cookie is present).
+- Data persists across requests via a session cookie (`PHPSESSID` by default).
+  Subsequent requests carry the cookie and `session_start()` loads the matching
+  session file.
+- Session data is stored in files, matching PHP's default
+  `session.save_handler = files`.
+- The configured save path defaults to an empty string, which the files handler
+  resolves to `sys_get_temp_dir()`. It also accepts php-src's
+  `[depth;[mode;]]path` sharding grammar.
+- `session_write_close()` is called automatically at handler end via a finally
+  block, so session data is flushed even if the handler exits early or throws.
+- File locking (`flock`) prevents concurrent requests from overwriting each
+  other's session data.
+- Custom object and legacy callable save handlers are supported alongside the
+  built-in files handler, including strict-ID and lazy-timestamp interfaces.
+- Serialized payloads use a binary-safe pointer/length bridge, so embedded NUL
+  bytes and all three PHP session serializers round-trip exactly.
+
+```php
+<?php
+session_start();
+
+if (!isset($_SESSION['count'])) {
+    $_SESSION['count'] = 0;
+}
+$_SESSION['count']++;
+
+header('Content-Type: text/plain');
+echo "Visits: " . $_SESSION['count'] . "\n";
+echo "Session ID: " . session_id() . "\n";
+```
+
+See `examples/web-session/` for a runnable demo, and [Sessions](../php/sessions.md)
+for the full function reference.
+
 ## Limitations
 
 The serve loop, per-request fresh state, request input (`$_SERVER` / `$_GET` /
-`$_POST` / `$_COOKIE` / `$_REQUEST` / `$_ENV` / `$_FILES` / `php://input`), and
-response control (`http_response_code()` / `header()` / `setcookie()`) are
+`$_POST` / `$_COOKIE` / `$_REQUEST` / `$_ENV` / `$_FILES` / `php://input`),
+response control (`http_response_code()` / `header()` / `setcookie()`), and
+sessions (`session_start()` / `$_SESSION` / `session_write_close()`) are
 available. The following are not yet available:
 
 - **`$argc` / `$argv` not populated** — the binary's own argv is consumed by the
@@ -200,9 +243,7 @@ available. The following are not yet available:
   workers promptly; there is no graceful connection drain yet.
 - **No response streaming** — the whole body is buffered before it is sent.
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
-- **No sessions** — `$_SESSION` / `session_start()` are not provided. Cookies
-  (`$_COOKIE`, `setcookie()`) are, so you can build session handling yourself.
-- **Not supported in this release:** sessions, static file serving, in-process
+- **Not supported in this release:** static file serving, in-process
   TLS, HTTP/2–3 — front the server with a reverse proxy for these (below).
 
 ## Behind a reverse proxy

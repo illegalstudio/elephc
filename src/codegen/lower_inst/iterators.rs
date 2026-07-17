@@ -194,6 +194,7 @@ pub(super) fn lower_iter_current_value(
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
+            retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
         }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
@@ -221,6 +222,17 @@ fn iter_current_result_type(ctx: &FunctionContext<'_>, inst: &Instruction) -> Re
         return Ok(PhpType::Void);
     };
     Ok(ctx.value_php_type(result)?.codegen_repr())
+}
+
+/// Retains concrete indexed-array foreach values that are returned without Mixed boxing.
+fn retain_current_indexed_value_if_unboxed(
+    emitter: &mut crate::codegen::emit::Emitter,
+    elem: &PhpType,
+    result_ty: &PhpType,
+) {
+    if elem.codegen_repr() == result_ty.codegen_repr() {
+        abi::emit_incref_if_refcounted(emitter, &elem.codegen_repr());
+    }
 }
 
 /// Boxes an indexed iterator element only when the EIR result expects `Mixed`.
@@ -267,6 +279,7 @@ pub(super) fn lower_iter_current_value_ref(
             ))
         }
     }
+    ctx.mark_promoted_ref_cell(slot);
     Ok(())
 }
 

@@ -10,7 +10,7 @@
 
 use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG,
+    HASH_UNKNOWN_ALGO_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
@@ -99,6 +99,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
+    out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
@@ -162,6 +163,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _hash_init_unknown_algo_msg\n_hash_init_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_INIT_UNKNOWN_ALGO_MSG
     ));
+    out.push_str(&format!(
+        ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
+        MB_STRLEN_UNKNOWN_ENCODING_MSG
+    ));
+    out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
+    out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");
+    out.push_str(".globl _mb_strlen_utf32le_name\n_mb_strlen_utf32le_name:\n    .asciz \"UTF-32LE\"\n");
+    out.push_str(".globl _mb_strlen_8bit_name\n_mb_strlen_8bit_name:\n    .asciz \"8bit\"\n");
+    out.push_str(".globl _mb_strlen_binary_name\n_mb_strlen_binary_name:\n    .asciz \"binary\"\n");
+    out.push_str(".globl _mb_strlen_7bit_name\n_mb_strlen_7bit_name:\n    .asciz \"7bit\"\n");
     // Fixed algorithm-name constants for md5()/sha1(): both route through the
     // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
     // load these literal names into the algorithm-name register pair before

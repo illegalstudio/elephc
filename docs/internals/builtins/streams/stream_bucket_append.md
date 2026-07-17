@@ -2,7 +2,7 @@
 title: "stream_bucket_append() — internals"
 description: "Compiler internals for stream_bucket_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 335
+  order: 339
 ---
 
 ## `stream_bucket_append()` — internals
@@ -31,6 +31,11 @@ function stream_bucket_append(mixed $brigade, mixed $bucket): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_append.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_append.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

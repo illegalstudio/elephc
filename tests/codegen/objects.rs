@@ -15,6 +15,8 @@ mod classes;
 mod gc_aliasing;
 #[path = "objects/magic_methods.rs"]
 mod magic_methods;
+#[path = "objects/cloning.rs"]
+mod cloning;
 #[path = "objects/property_access/mod.rs"]
 mod property_access;
 #[path = "objects/constructor_promotion.rs"]

@@ -2,7 +2,7 @@
 title: "hash_file() — internals"
 description: "Compiler internals for hash_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 184
+  order: 188
 ---
 
 ## `hash_file()` — internals
@@ -31,6 +31,11 @@ function hash_file(string $algo, string $filename, bool $binary = false): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

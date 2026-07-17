@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer() — internals"
 description: "Compiler internals for stream_set_write_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 215
+  order: 219
 ---
 
 ## `stream_set_write_buffer()` — internals
@@ -31,6 +31,11 @@ function stream_set_write_buffer(resource $stream, int $size): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

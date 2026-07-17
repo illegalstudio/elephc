@@ -2,7 +2,7 @@
 title: "realpath()"
 description: "Returns canonicalized absolute pathname."
 sidebar:
-  order: 139
+  order: 143
 ---
 
 ## realpath()
@@ -17,6 +17,11 @@ Returns canonicalized absolute pathname.
 - `$path` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

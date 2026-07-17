@@ -44,6 +44,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -461,13 +462,34 @@ fn parse_array_literal(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RBracket, "']'")
+}
+
+/// Parses the legacy `array(...)` literal form after its opening parenthesis.
+pub(super) fn parse_legacy_array_literal(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RParen, "')'")
+}
+
+/// Parses an array literal body up to `closing`, starting at the opening token.
+fn parse_array_literal_with_terminator(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    closing: &Token,
+    closing_desc: &str,
+) -> Result<Expr, CompileError> {
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+    let mut auto_key_initialized = false;
+    while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
@@ -476,7 +498,7 @@ fn parse_array_literal(
                 ));
             }
             *pos += 1;
-            if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+            if *pos < tokens.len() && tokens[*pos].0 == *closing {
                 break;
             }
         }
@@ -498,20 +520,29 @@ fn parse_array_literal(
             is_assoc = true;
             *pos += 1;
             let value = parse_expr(tokens, pos)?;
-            update_next_auto_key_from_explicit_key(&expr, &mut next_auto_key);
+            update_next_auto_key_from_explicit_key(
+                &expr,
+                &mut next_auto_key,
+                &mut auto_key_initialized,
+            );
             assoc_elems.push((expr, value));
         } else if is_assoc {
             let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
             assoc_elems.push((key, expr));
             next_auto_key += 1;
+            auto_key_initialized = true;
         } else {
             elems.push(expr);
             next_auto_key += 1;
+            auto_key_initialized = true;
         }
         first = false;
     }
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-        return Err(CompileError::new(span, "Expected ']'"));
+    if *pos >= tokens.len() || tokens[*pos].0 != *closing {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected {closing_desc}"),
+        ));
     }
     *pos += 1;
     if is_assoc {
@@ -538,10 +569,65 @@ fn promote_indexed_array_items_to_assoc(
 }
 
 /// Advances the automatic integer key cursor after a statically known integer key.
-fn update_next_auto_key_from_explicit_key(key: &Expr, next_auto_key: &mut i64) {
-    if let ExprKind::IntLiteral(value) = &key.kind {
-        if *value >= *next_auto_key {
-            *next_auto_key = *value + 1;
+///
+/// The first integer-like key seeds the cursor unconditionally so a leading
+/// negative key continues from there (PHP 8.3 semantics); later keys only
+/// raise it.
+fn update_next_auto_key_from_explicit_key(
+    key: &Expr,
+    next_auto_key: &mut i64,
+    auto_key_initialized: &mut bool,
+) {
+    if let Some(value) = explicit_integer_array_key(key) {
+        let candidate = value.saturating_add(1);
+        if !*auto_key_initialized || candidate > *next_auto_key {
+            *next_auto_key = candidate;
         }
+        *auto_key_initialized = true;
     }
+}
+
+/// Returns the integer key PHP assigns to an explicit array key literal,
+/// covering the int-normalizing forms: bools, integral floats, canonical
+/// numeric strings, and negated numeric literals.
+fn explicit_integer_array_key(key: &Expr) -> Option<i64> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        ExprKind::FloatLiteral(value) => integral_float_array_key(*value),
+        ExprKind::StringLiteral(value) => php_integer_string_array_key(value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            ExprKind::FloatLiteral(value) => integral_float_array_key(-*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the integer key for a float literal PHP casts without truncation.
+fn integral_float_array_key(value: f64) -> Option<i64> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    if value < i64::MIN as f64 || value >= i64::MAX as f64 {
+        return None;
+    }
+    Some(value as i64)
+}
+
+/// Returns the integer key for a canonical PHP integer string ("0", no
+/// leading zeros, no "-0"); other strings stay string keys.
+fn php_integer_string_array_key(value: &str) -> Option<i64> {
+    if value == "0" {
+        return value.parse().ok();
+    }
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    if digits.is_empty()
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse().ok()
 }

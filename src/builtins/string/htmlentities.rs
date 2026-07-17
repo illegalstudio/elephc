@@ -23,6 +23,7 @@ builtin! {
     area: String,
     params: [string: Str, flags: Int = DefaultSpec::Int(11), encoding: Str = DefaultSpec::Str("UTF-8")],
     returns: Str,
+    returns_independent_storage: true,
     lower: lower,
     summary: "Converts all applicable characters in a string into their HTML entities.",
     php_manual: "https://www.php.net/manual/en/function.htmlentities.php",

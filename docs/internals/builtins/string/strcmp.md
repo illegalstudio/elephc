@@ -2,7 +2,7 @@
 title: "strcmp() — internals"
 description: "Compiler internals for strcmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 391
+  order: 396
 ---
 
 ## `strcmp()` — internals
@@ -32,6 +32,11 @@ function strcmp(string $string1, string $string2): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strcmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcmp.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

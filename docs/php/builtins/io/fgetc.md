@@ -2,7 +2,7 @@
 title: "fgetc()"
 description: "Gets a character from the given file pointer."
 sidebar:
-  order: 158
+  order: 162
 ---
 
 ## fgetc()
@@ -17,6 +17,11 @@ Gets a character from the given file pointer.
 - `$stream` (`resource`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetc.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

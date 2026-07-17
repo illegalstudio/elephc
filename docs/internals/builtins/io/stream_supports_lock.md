@@ -2,7 +2,7 @@
 title: "stream_supports_lock() — internals"
 description: "Compiler internals for stream_supports_lock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 225
+  order: 229
 ---
 
 ## `stream_supports_lock()` — internals
@@ -32,6 +32,11 @@ function stream_supports_lock(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/stream_supports_lock.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_supports_lock.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

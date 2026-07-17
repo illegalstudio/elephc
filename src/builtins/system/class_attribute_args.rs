@@ -30,6 +30,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns the constructor arguments of a named attribute applied to a class.",
+    extension: true,
 }
 
 /// Validates both arguments are string literals, resolves the class and attribute,

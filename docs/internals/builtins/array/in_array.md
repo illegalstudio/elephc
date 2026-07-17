@@ -32,6 +32,11 @@ function in_array(mixed $needle, array $haystack, bool $strict = false): bool
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/in_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/in_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `in_array()`](../../../php/builtins/array/in_array.md)

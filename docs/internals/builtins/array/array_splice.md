@@ -33,6 +33,12 @@ function array_splice(array $array, int $offset, int $length = null): array
 - **Arity**: takes 2–3 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_splice.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_splice.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `array_splice()`](../../../php/builtins/array/array_splice.md)

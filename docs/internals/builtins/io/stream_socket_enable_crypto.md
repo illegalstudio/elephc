@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto() — internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 222
 ---
 
 ## `stream_socket_enable_crypto()` — internals
@@ -31,6 +31,11 @@ function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

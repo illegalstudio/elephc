@@ -2,7 +2,7 @@
 title: "json_decode() — internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 230
+  order: 234
 ---
 
 ## `json_decode()` — internals
@@ -32,6 +32,11 @@ function json_decode(string $json, bool $associative = null, int $depth = 512, i
 ## What the type checker enforces
 
 - **Arity**: takes 1–4 arguments (3 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown() — internals"
 description: "Compiler internals for stream_socket_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 224
+  order: 228
 ---
 
 ## `stream_socket_shutdown()` — internals
@@ -32,6 +32,11 @@ function stream_socket_shutdown(resource $stream, int $mode): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

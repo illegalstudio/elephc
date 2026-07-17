@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Unpacks a PHP zval pointer into an owned elephc Mixed value.",
+    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Mixed`.

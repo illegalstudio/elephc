@@ -37,6 +37,10 @@ function array_intersect_assoc(array $array, ...$arrays): mixed
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$arrays`.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_intersect_assoc()`](../../../php/builtins/array/array_intersect_assoc.md)

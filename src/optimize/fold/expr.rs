@@ -8,24 +8,32 @@
 //! Key details:
 //! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
 
-use super::super::{fold_block, try_prune_match_expr};
 use super::super::*;
+use super::super::{fold_block, try_prune_match_expr};
 use super::casts::try_fold_cast;
 use super::ops::{
-    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate,
-    try_fold_not, try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
+    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
+    try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
 
 /// Folds default expressions in function parameters.
 /// Returns a new parameter list with each parameter's default expression folded.
 pub(in crate::optimize) fn fold_params(
-    params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
-) -> Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> {
+    params: Vec<(
+        String,
+        Option<crate::parser::ast::TypeExpr>,
+        Option<Expr>,
+        bool,
+    )>,
+) -> Vec<(
+    String,
+    Option<crate::parser::ast::TypeExpr>,
+    Option<Expr>,
+    bool,
+)> {
     params
         .into_iter()
-        .map(|(name, type_expr, default, is_ref)| {
-            (name, type_expr, default.map(fold_expr), is_ref)
-        })
+        .map(|(name, type_expr, default, is_ref)| (name, type_expr, default.map(fold_expr), is_ref))
         .collect()
 }
 
@@ -42,6 +50,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
         is_static: property.is_static,
         is_abstract: property.is_abstract,
         by_ref: property.by_ref,
+        is_promoted: property.is_promoted,
         default: property.default.map(fold_expr),
         span: property.span,
         attributes: property.attributes,
@@ -58,7 +67,9 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         is_final: method.is_final,
         has_body: method.has_body,
         params: fold_params(method.params),
+        param_attributes: method.param_attributes,
         variadic: method.variadic,
+        variadic_by_ref: method.variadic_by_ref,
         variadic_type: method.variadic_type,
         return_type: method.return_type,
         by_ref_return: method.by_ref_return,
@@ -91,9 +102,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
-        ExprKind::IncludeValue { .. } => unreachable!(
-            "ExprKind::IncludeValue must be expanded by the resolver"
-        ),
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
@@ -126,6 +137,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             try_fold_bit_not(&inner).unwrap_or_else(|| ExprKind::BitNot(Box::new(inner)))
         }
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(fold_expr(*inner))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(fold_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(fold_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(fold_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => {
@@ -243,6 +255,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -254,6 +267,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params: fold_params(params),
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: fold_block(body),
@@ -300,18 +314,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property,
         },
-        ExprKind::DynamicPropertyAccess { object, property } => {
-            ExprKind::DynamicPropertyAccess {
-                object: Box::new(fold_expr(*object)),
-                property: Box::new(fold_expr(*property)),
-            }
-        }
-        ExprKind::NullsafePropertyAccess { object, property } => {
-            ExprKind::NullsafePropertyAccess {
-                object: Box::new(fold_expr(*object)),
-                property,
-            }
-        }
+        ExprKind::DynamicPropertyAccess { object, property } => ExprKind::DynamicPropertyAccess {
+            object: Box::new(fold_expr(*object)),
+            property: Box::new(fold_expr(*property)),
+        },
+        ExprKind::NullsafePropertyAccess { object, property } => ExprKind::NullsafePropertyAccess {
+            object: Box::new(fold_expr(*object)),
+            property,
+        },
         ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             ExprKind::NullsafeDynamicPropertyAccess {
                 object: Box::new(fold_expr(*object)),
@@ -337,6 +347,15 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         } => ExprKind::NullsafeMethodCall {
             object: Box::new(fold_expr(*object)),
             method,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(fold_expr(*object)),
+            method: Box::new(fold_expr(*method)),
             args: args.into_iter().map(fold_expr).collect(),
         },
         ExprKind::StaticMethodCall {

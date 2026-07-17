@@ -2,7 +2,7 @@
 title: "base64_encode() — internals"
 description: "Compiler internals for base64_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 341
+  order: 345
 ---
 
 ## `base64_encode()` — internals
@@ -32,6 +32,11 @@ function base64_encode(string $string): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "is_writeable() — internals"
 description: "Compiler internals for is_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 128
+  order: 132
 ---
 
 ## `is_writeable()` — internals
@@ -34,6 +34,11 @@ function is_writeable(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

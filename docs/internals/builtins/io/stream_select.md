@@ -2,7 +2,7 @@
 title: "stream_select() — internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 210
+  order: 214
 ---
 
 ## `stream_select()` — internals
@@ -31,6 +31,12 @@ function stream_select(array $read, array $write, array $except, int $seconds, i
 ## What the type checker enforces
 
 - **Arity**: takes 4–5 arguments (1 optional).
+- **By-reference parameters**: `$read`, `$write`, `$except`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_select.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_select.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$read`, `$write`, `$except`.
 
 ## Cross-references

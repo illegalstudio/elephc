@@ -2,7 +2,7 @@
 title: "random_int() — internals"
 description: "Compiler internals for random_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 264
+  order: 268
 ---
 
 ## `random_int()` — internals
@@ -31,6 +31,11 @@ function random_int(int $min, int $max): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/random_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/random_int.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

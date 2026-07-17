@@ -2,7 +2,7 @@
 title: "gethostname() — internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 179
+  order: 183
 ---
 
 ## `gethostname()` — internals
@@ -34,6 +34,11 @@ function gethostname(): string
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -19,6 +19,78 @@ fn test_error_bitwise_compound_assignment_requires_ints() {
     );
 }
 
+/// Tests that `declare()` with no directive is rejected with a clear diagnostic.
+#[test]
+fn test_error_declare_requires_directive_name() {
+    expect_error(
+        "<?php declare();",
+        "Expected a directive name in 'declare(...)'",
+    );
+}
+
+/// Tests that declare values cannot be variables because PHP requires literals.
+#[test]
+fn test_error_declare_value_must_be_literal() {
+    expect_error(
+        "<?php declare(ticks=$ticks);",
+        "declare(ticks) value must be a literal",
+    );
+}
+
+/// Tests that a compound expression is not accepted as a declare literal.
+#[test]
+fn test_error_declare_rejects_literal_expression() {
+    expect_error(
+        "<?php declare(ticks=1 + 0);",
+        "declare(ticks) value must be a literal",
+    );
+}
+
+/// Tests that callable expressions are rejected instead of being parsed and silently discarded.
+#[test]
+fn test_error_declare_rejects_call_value() {
+    expect_error(
+        "<?php declare(ticks=side_effect());",
+        "declare(ticks) value must be a literal",
+    );
+}
+
+/// Tests that strict_types accepts only the integer literals zero and one.
+#[test]
+fn test_error_declare_strict_types_requires_zero_or_one() {
+    expect_error(
+        "<?php declare(strict_types=2);",
+        "strict_types declaration must have 0 or 1 as its value",
+    );
+}
+
+/// Tests that strict_types must precede every executable or declaration statement.
+#[test]
+fn test_error_declare_strict_types_must_be_first() {
+    expect_error(
+        "<?php echo 1; declare(strict_types=1);",
+        "strict_types declaration must be the very first statement in the script",
+    );
+}
+
+/// Tests that strict_types cannot control a braced body.
+#[test]
+fn test_error_declare_strict_types_rejects_block_mode() {
+    expect_error(
+        "<?php declare(strict_types=1) { echo 1; }",
+        "strict_types declaration must not use block mode",
+    );
+}
+
+/// Tests that alternative declare syntax requires its `enddeclare` terminator.
+#[test]
+fn test_error_declare_alternative_syntax_requires_enddeclare() {
+    expect_error(
+        "<?php declare(ticks=1): echo 1;",
+        "Expected 'enddeclare' after declare block",
+    );
+}
+
 /// Tests that direct reference assignment rejects a non-variable source.
 #[test]
 fn test_error_reference_assignment_requires_variable_source() {

@@ -3,7 +3,7 @@
 //! Every PHP-visible registered builtin is emitted as one object; internal builtins are skipped.
 //!
 //! Called from:
-//! - `src/bin/gen_builtins.rs` via `elephc::builtins::docs::export_builtins_json()`.
+//! - `tools/gen_builtins.rs` (example target) via `elephc::builtins::docs::export_builtins_json()`.
 //!
 //! Key details:
 //! - Uses `crate::builtins::registry::{names, lookup}` so `inventory::iter` runs in the same
@@ -69,6 +69,14 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
     }
 }
 
+/// Returns true when a PHP-visible builtin exists in the static AOT surface:
+/// `builtin!` registry entries plus compiler-resident constructs (`isset`,
+/// `strval`, predicate aliases, ...). Documentation tooling uses this to tell
+/// resident names apart from genuinely eval-only builtins.
+pub fn aot_php_visible_builtin_exists(name: &str) -> bool {
+    crate::types::checker::builtins::is_php_visible_builtin_function(name)
+}
+
 /// Builds the documentation JSON array for every PHP-visible registered builtin.
 ///
 /// Iterates the registry in sorted name order, skips `internal` builtins, and emits one object per
@@ -120,6 +128,7 @@ fn build_json(include_internal: bool) -> Value {
             "name": spec.name,
             "area": area_str(spec.area),
             "internal": spec.internal,
+            "extension": spec.extension,
             "params": params,
             "variadic": spec.variadic,
             "returns": type_spec_str(&spec.returns),

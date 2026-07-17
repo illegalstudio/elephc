@@ -2,7 +2,7 @@
 title: "header() — internals"
 description: "Compiler internals for header(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 275
+  order: 279
 ---
 
 ## `header()` — internals
@@ -37,6 +37,11 @@ function header(string $header, bool $replace = true, int $response_code = 0): v
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/header.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -742,6 +742,27 @@ fn test_parse_variadic_function() {
     }
 }
 
+/// Verifies that `&...$args` is preserved separately from ordinary variadic syntax.
+#[test]
+fn test_parse_by_ref_variadic_function() {
+    let stmts = parse_source("<?php function foo(&$first, &...$args) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params,
+            variadic,
+            variadic_by_ref,
+            ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "first");
+            assert!(params[0].3);
+            assert_eq!(variadic.as_deref(), Some("args"));
+            assert!(*variadic_by_ref);
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
 #[test]
 // Verifies that `<?php function foo($a, $b, ...$rest) { }` parses a variadic function with
 // two regular parameters "a" and "b", and `variadic` set to `Some("rest")`.
@@ -798,6 +819,26 @@ fn test_parse_typed_variadic_closure_param() {
     let stmts = parse_source("<?php $f = function (int ...$xs) { return 0; };");
     // The closure is the RHS of the assignment expression statement; assert it parsed cleanly.
     assert_eq!(stmts.len(), 1);
+}
+
+/// Verifies that by-reference variadic syntax is retained for closure signatures.
+#[test]
+fn test_parse_by_ref_variadic_closure_param() {
+    let stmts = parse_source("<?php $f = function (&...$xs) { return 0; };");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Closure {
+                variadic,
+                variadic_by_ref,
+                ..
+            } => {
+                assert_eq!(variadic.as_deref(), Some("xs"));
+                assert!(*variadic_by_ref);
+            }
+            other => panic!("Expected Closure, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
 }
 
 #[test]

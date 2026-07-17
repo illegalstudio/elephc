@@ -19,7 +19,7 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::{expect_operand, store_if_result};
+use super::{expect_operand, has_eval_context, lower_eval_class_relation, store_if_result};
 
 enum ClassLikeTarget {
     Class(String),
@@ -35,7 +35,12 @@ pub(crate) fn lower_class_relation(
     name: &str,
 ) -> Result<()> {
     super::ensure_arg_count_between(inst, name, 1, 2)?;
-    let target = resolve_relation_target(ctx, expect_operand(inst, 0)?)?;
+    let target_value = expect_operand(inst, 0)?;
+    if has_eval_context(ctx) {
+        return lower_eval_class_relation(ctx, inst, target_value, name);
+    }
+
+    let target = resolve_relation_target(ctx, target_value)?;
     if matches!(target, ClassLikeTarget::Unknown) {
         emit_boxed_bool(ctx, false);
         return store_if_result(ctx, inst);
