@@ -159,3 +159,28 @@ echo $out[0], $out[1], "|", $item;"#,
     );
     assert_eq!(out, "a!b!|b!");
 }
+
+/// A generic `array` return with an empty branch specializes to the associative
+/// shape built by concrete string values from `foreach`. The empty branch must
+/// be converted to the same hash ABI instead of requesting an unsupported
+/// `AssocArray -> Array(Mixed)` runtime conversion (the web `ini_get_all()` CI
+/// regression exposed by issue #405).
+#[test]
+fn test_foreach_string_value_key_preserves_assoc_return_with_empty_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function collect(bool $empty): array {
+    if ($empty) { return []; }
+    $out = [];
+    foreach (["name", "role"] as $key) {
+        $out[$key] = strtoupper($key);
+    }
+    return $out;
+}
+$empty = collect(true);
+$values = collect(false);
+echo count($empty), "|", $values["name"], "|", $values["role"];
+"#,
+    );
+    assert_eq!(out, "0|NAME|ROLE");
+}

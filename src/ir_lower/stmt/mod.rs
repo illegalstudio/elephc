@@ -3331,6 +3331,11 @@ fn coerce_container_to_return_type(
         {
             Op::HashToMixed
         }
+        (PhpType::Array(source_elem), PhpType::AssocArray { .. })
+            if source_elem.as_ref() == &PhpType::Never =>
+        {
+            Op::ArrayToHash
+        }
         _ => return None,
     };
     Some(ctx.emit_value(

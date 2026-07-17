@@ -296,13 +296,16 @@ impl Checker {
 
 /// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
 ///
-/// Returns `Some(PhpType)` only when every non-void return in `return_types` is the same
-/// array type (including `array<T>` or `assocArray` shapes). Returns `None` if returns differ,
-/// include non-array types, or are all `void`.
+/// Returns `Some(PhpType)` only when every non-void, non-empty return in
+/// `return_types` is the same array type (including `array<T>` or `assocArray`
+/// shapes). An empty indexed array is neutral because it can be materialized in
+/// either concrete storage family at the return boundary. Returns `None` if
+/// non-empty returns differ, include non-array types, or are all `void`.
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {
     let mut specific: Option<PhpType> = None;
+    let mut empty_array: Option<PhpType> = None;
     for return_info in return_types {
         let return_ty = &return_info.ty;
         if matches!(return_ty, PhpType::Void) {
@@ -311,13 +314,17 @@ fn inferred_specific_array_type_from_infos(
         if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
             return None;
         }
+        if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
+            empty_array = Some(return_ty.clone());
+            continue;
+        }
         match &specific {
             None => specific = Some(return_ty.clone()),
             Some(existing) if existing == return_ty => {}
             _ => return None,
         }
     }
-    specific
+    specific.or(empty_array)
 }
 
 /// Returns true when a function return type is a homogeneous array of callables.
