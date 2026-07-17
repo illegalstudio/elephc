@@ -104,61 +104,6 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "buffer_len" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "buffer_len() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Buffer(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "buffer_len() argument must be buffer<T>",
-                ));
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "buffer_free" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "buffer_free() takes exactly 1 argument"));
-            }
-            match &args[0].kind {
-                ExprKind::Variable(name) => {
-                    if checker.current_class.is_some() && name == "this" {
-                        return Err(CompileError::new(span, "buffer_free() cannot free $this"));
-                    }
-                    if checker.active_ref_params.contains(name)
-                        || checker.active_globals.contains(name)
-                        || checker.active_statics.contains(name)
-                    {
-                        return Err(CompileError::new(
-                            span,
-                            "buffer_free() argument must be a local variable",
-                        ));
-                    }
-                }
-                _ => {
-                    let ty = checker.infer_type(&args[0], env)?;
-                    if !matches!(ty, PhpType::Buffer(_)) {
-                        return Err(CompileError::new(
-                            span,
-                            "buffer_free() argument must be buffer<T>",
-                        ));
-                    }
-                    return Err(CompileError::new(
-                        span,
-                        "buffer_free() argument must be a local variable",
-                    ));
-                }
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Buffer(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "buffer_free() argument must be buffer<T>",
-                ));
-            }
-            Ok(Some(PhpType::Void))
-        }
         _ => Ok(None),
     }
 }

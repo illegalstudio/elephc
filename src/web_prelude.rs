@@ -63,12 +63,12 @@ impl PhpVersion {
 /// The PHP source prepended under `--web`. Phase 2 Task 2: extern declarations;
 /// Task 5: $_SERVER; Task 6: $_GET parsed from the query string; Task 7: $_POST
 /// parsed from a `application/x-www-form-urlencoded` body (read binary-safe via
-/// `ptr_read_string(elephc_web_body_ptr(), elephc_web_body_len())`). The query/
+/// `__elephc_ptr_read_string(elephc_web_body_ptr(), elephc_web_body_len())`). The query/
 /// body parsers are built inline (element-by-element into the superglobal),
 /// mirroring the $_SERVER pattern, to stay within the type checker's proven
 /// capabilities (a helper function returning a freshly-built assoc array trips
 /// return-type inference / union widening).
-const WEB_PRELUDE_SRC: &str = r#"<?php
+pub(crate) const WEB_PRELUDE_SRC: &str = r#"<?php
 extern "elephc_web" {
     function elephc_web_method(): string;
     function elephc_web_uri(): string;
@@ -239,7 +239,7 @@ if (strpos(strtoupper($__elephc_ct), 'APPLICATION/X-WWW-FORM-URLENCODED') !== fa
     $__elephc_body_len = elephc_web_body_len();
     $__elephc_body = '';
     if ($__elephc_body_len > 0) {
-        $__elephc_body = ptr_read_string(elephc_web_body_ptr(), $__elephc_body_len);
+        $__elephc_body = __elephc_ptr_read_string(elephc_web_body_ptr(), $__elephc_body_len);
     }
     if ($__elephc_body !== '') {
         $__elephc_ppairs = explode('&', $__elephc_body);
@@ -266,7 +266,7 @@ if (strpos(strtoupper($__elephc_ct), 'MULTIPART/FORM-DATA') !== false) {
         $__elephc_mpv_len = elephc_web_multipart_value_len($__elephc_mpi);
         $__elephc_mpv = '';
         if ($__elephc_mpv_len > 0) {
-            $__elephc_mpv = ptr_read_string(
+            $__elephc_mpv = __elephc_ptr_read_string(
                 elephc_web_multipart_value_ptr($__elephc_mpi),
                 $__elephc_mpv_len
             );
@@ -352,15 +352,16 @@ interface SessionUpdateTimestampHandlerInterface {
 function __elephc_session_stage_bytes(string $data): ptr {
     $__elephc_sb_len = strlen($data);
     $__elephc_sb_ptr = elephc_web_session_data_stage($__elephc_sb_len);
-    if ($__elephc_sb_len > 0) { ptr_write_string($__elephc_sb_ptr, $data); }
+    if ($__elephc_sb_len > 0) { __elephc_ptr_write_string($__elephc_sb_ptr, $data); }
     return $__elephc_sb_ptr;
 }
 function __elephc_session_copy_bytes(ptr $data, int $len): string {
     if ($len === 0) { return ''; }
-    // `ptr_read_string()` is borrowed. Materialize it through `str_repeat()` so
-    // the returned PHP string owns compiler-heap storage and cannot be changed
-    // by the next bridge key/value publication during session decoding.
-    return str_repeat(ptr_read_string($data, $len), 1);
+    // `__elephc_ptr_read_string()` returns a borrowed view. Materialize it
+    // through `str_repeat()` so the returned PHP string owns compiler-heap
+    // storage and cannot be changed by the next bridge key/value publication
+    // during session decoding.
+    return str_repeat(__elephc_ptr_read_string($data, $len), 1);
 }
 function __elephc_session_read_file(string $id, string $save_path, int $read_and_close): string {
     $__elephc_rf_ptr = elephc_web_session_read_bytes($id, $save_path, $read_and_close);
@@ -1684,7 +1685,7 @@ if (elephc_web_session_get_auto_start() === 1) { __elephc_session_start_core(0);
 /// uncaught exception sets a 500 status instead of crashing the worker (the
 /// process would otherwise die and the master would respawn it, dropping the
 /// connection). The `0;` placeholder body is replaced with the real statements.
-const WEB_WRAP_SRC: &str =
+pub(crate) const WEB_WRAP_SRC: &str =
     "<?php try { $__elephc_wrap = 0; } catch (\\Throwable $__elephc_exc) { http_response_code(500); } finally { if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE && __ElephcSessionState::$shutdown) { session_write_close(); } }";
 
 /// Prepends the web prelude when compiling with `--web` and wraps the whole

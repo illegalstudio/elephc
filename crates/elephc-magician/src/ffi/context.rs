@@ -32,6 +32,19 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
+/// Marks this program's eval bridge as strict-PHP: extension builtins
+/// (`ptr_*`, `buffer_*`, `class_attribute_*`) disappear from eval dispatch and
+/// introspection, matching the PHP interpreter where those names do not exist.
+///
+/// Generated code emits this call while initializing the eval context, only in
+/// binaries compiled with `elephc --strict-php`. The flag is thread-local and
+/// elephc programs run every eval on the initializing thread, so one call
+/// covers the program lifetime.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
+    crate::strict_php_mode::set_strict_php_mode(enabled != 0);
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// # Safety

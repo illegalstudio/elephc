@@ -327,7 +327,7 @@ omitted:
 
 `name`, `area`, `params`, `variadic?`, `min_args?`, `max_args?`, `arity_error?`,
 `returns`, `returns_fresh_storage?`, `by_ref_return?`, `check?`, `lazy_check?`, `lower`,
-`summary`, `examples?`, `php_manual?`, `deprecation?`, `internal?`.
+`summary`, `examples?`, `php_manual?`, `deprecation?`, `extension?`, `internal?`.
 
 - **`params`** — `[name: TypeSpec, name: TypeSpec = DefaultSpec::Variant, ...]`. A
   parameter with `= DefaultSpec::…` is optional; without it, required. Prefix a
@@ -353,6 +353,9 @@ omitted:
   tighter/looser than its declared parameter list, or needs a verbatim error message.
 - **`summary` / `examples` / `php_manual` / `deprecation`** — documentation metadata
   surfaced by the `gen_builtins` exporter.
+- **`extension: true`** — an elephc extension with no PHP equivalent (`ptr_*`,
+  `zval_*`, `buffer_*`, `class_attribute_*`, …). `--strict-php` hides it from user
+  programs; update `EXPECTED_EXTENSION_BUILTINS` in `src/builtins/parity_tests.rs`.
 - **`internal: true`** — a compiler-internal builtin that is not PHP-visible and is
   excluded from catalogs and docs.
 
@@ -447,10 +450,25 @@ when relevant:
 
 ### 8. Not every "builtin" is a function
 
-A small set of PHP language constructs — `isset`, `unset`, `empty`, `exit`, `die`, plus
-the `buffer_*` intrinsics — are l-value/lazy constructs with dedicated EIR paths and are
-intentionally kept in the checker (`numeric`/`arrays` `check_builtin`), not in the
-registry. Do not migrate those into `builtin!`.
+A small set of PHP language constructs — `isset`, `unset`, `empty`, `exit`, `die` — are
+l-value/lazy constructs with dedicated EIR paths and are intentionally kept in the
+checker (`numeric`/`arrays` `check_builtin`), not in the registry. Do not migrate those
+into `builtin!`. `buffer_new` is similar (its call form is dedicated syntax lowered as
+`ExprKind::BufferNew`; only its name lives in the catalog), while `buffer_len` and
+`buffer_free` are ordinary registry builtins under `src/builtins/pointers/`.
+
+Builtins that are elephc extensions with no PHP equivalent must declare
+`extension: true` in `builtin!` so `--strict-php` hides them from user programs; the
+pinned set lives in `src/builtins/parity_tests.rs` (`EXPECTED_EXTENSION_BUILTINS`).
+Injected compiler preludes must never call a PHP-visible extension builtin — use an
+`internal: true` `__elephc_*` alias instead (see `src/builtins/pointers/__elephc_ptr_read_string.rs`);
+the `preludes_never_call_php_visible_extension_builtins` gate enforces this.
+
+On the eval side, magician derives its extension set from `EvalArea::RawMemory`
+plus the `SYMBOLS_EXTENSION_BUILTINS` list (`crates/elephc-magician/src/interpreter/builtins/spec.rs`)
+instead of a per-declaration flag; the `extension_builtin_sets_agree_across_registries`
+gate in `tests/builtin_parity_tests.rs` pins that derivation against the compiler
+registry, so adding an extension builtin to either registry forces both sides to agree.
 
 ## Adding functionality via a Rust crate (bridge crates)
 

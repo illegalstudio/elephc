@@ -7,6 +7,8 @@ sidebar:
 
 FFI lets elephc programs call C library functions directly, with automatic type marshalling.
 
+> **Strict mode:** `extern` declarations are an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects them.
+
 ## Declaring extern functions
 ```php
 <?php

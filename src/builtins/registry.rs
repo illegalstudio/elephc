@@ -255,6 +255,16 @@ fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
             }
             sig.return_type = PhpType::Void;
         }
+        // Preserves the legacy typed first-class signature: the registry param is
+        // Mixed by generality, but the wrapper must demand a buffer so first-class
+        // use keeps rejecting non-buffer arguments at check time instead of
+        // failing later in codegen.
+        "buffer_len" => {
+            if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
+                *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+            }
+            sig.return_type = PhpType::Int;
+        }
         _ => {}
     }
 }

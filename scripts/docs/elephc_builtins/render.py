@@ -239,6 +239,13 @@ def _availability_section(b: dict) -> str:
         lines.append(
             "- **`eval()` (magician interpreter)**: not available inside eval'd code."
         )
+    if b.get("is_extension"):
+        lines.append(
+            "- **Strict PHP mode**: hidden — this builtin is an elephc extension "
+            "with no PHP equivalent, so programs compiled with "
+            "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
+            "treat the name as nonexistent, in compiled code and inside eval'd code."
+        )
     return "\n".join(lines)
 
 

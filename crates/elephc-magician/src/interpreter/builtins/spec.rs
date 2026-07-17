@@ -103,10 +103,31 @@ pub(in crate::interpreter) struct EvalBuiltinSpec {
     pub(in crate::interpreter) home_file: &'static str,
 }
 
+/// Symbols-area builtins that are elephc extensions (attribute introspection
+/// without a PHP equivalent). The rest of the extension surface is exactly the
+/// `RawMemory` area, so `is_extension` derives from area + this list instead of
+/// growing every `eval_builtin!` arm with a new field. The cross-registry gate
+/// `extension_builtin_sets_agree_across_registries` in the elephc workspace
+/// pins this derivation against the compiler registry's `extension` flags.
+const SYMBOLS_EXTENSION_BUILTINS: &[&str] = &[
+    "class_attribute_args",
+    "class_attribute_names",
+    "class_get_attributes",
+];
+
 impl EvalBuiltinSpec {
     /// Returns this builtin's file-layout area.
     pub(in crate::interpreter) fn area(&self) -> EvalArea {
         self.area
+    }
+
+    /// Returns whether this builtin is an elephc extension with no PHP
+    /// equivalent. Strict-PHP binaries hide extension builtins from eval
+    /// dispatch and introspection so eval'd code behaves like the PHP
+    /// interpreter, where these names do not exist.
+    pub(in crate::interpreter) fn is_extension(&self) -> bool {
+        matches!(self.area, EvalArea::RawMemory)
+            || SYMBOLS_EXTENSION_BUILTINS.contains(&self.name)
     }
 
     /// Returns the number of required leading parameters.

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_iterable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1394](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1394) (`lower_is_iterable`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1392](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1392) (`lower_is_iterable`)
 - **Function symbol**: `lower_is_iterable()`
 
 

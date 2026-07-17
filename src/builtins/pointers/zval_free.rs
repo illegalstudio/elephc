@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Frees a PHP zval pointer allocated by `zval_pack`.",
+    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Void`.

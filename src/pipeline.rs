@@ -56,11 +56,13 @@ pub(crate) fn compile(config: CliConfig) {
         extra_link_paths,
         extra_frameworks,
         defines,
+        strict_php,
         web,
         with_crates,
     } = config;
     let filename = filename.as_str();
     codegen::set_null_repr(null_repr);
+    crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename, target, emit);
     let mut timings = CompileTimings::new(emit_timings);
@@ -99,6 +101,17 @@ pub(crate) fn compile(config: CliConfig) {
     let main_file_path = Path::new(filename).to_path_buf();
     let parsed = magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
     timings.record_since("magic-constants", phase_started);
+
+    // Strict-PHP audit of the main file: after magic-constant substitution
+    // (matching the include/autoload audit sites) and before
+    // `conditional::apply` consumes `ifdef` nodes, so every elephc-only
+    // construct is reported with its span. Included and autoloaded user files
+    // are audited where they are parsed (resolver / autoloader), so injected
+    // compiler preludes are never audited.
+    if let Err(e) = crate::strict_php::check_file(&parsed, filename) {
+        errors::report(&e);
+        process::exit(1);
+    }
 
     let parsed = conditional::apply(parsed, &defines);
 

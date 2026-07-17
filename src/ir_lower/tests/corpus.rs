@@ -11,6 +11,11 @@
 use std::path::{Path, PathBuf};
 
 /// Verifies every checked example program lowers to validated printable EIR.
+///
+/// The `strict-php` example is lowered with strict-PHP mode enabled, matching
+/// its documented `elephc --strict-php` invocation: it deliberately declares a
+/// user function named after an extension builtin, which only PHP-compatible
+/// (strict) resolution accepts.
 #[test]
 fn lowers_examples_corpus() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -19,6 +24,14 @@ fn lowers_examples_corpus() {
     assert!(!fixtures.is_empty(), "expected example PHP fixtures");
 
     for fixture in fixtures {
+        let strict = fixture
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .is_some_and(|name| name == "strict-php");
+        // RAII guard: if lowering a strict fixture panics, the guard still
+        // restores the state during unwinding, so no later fixture can
+        // accidentally run with strict mode inherited.
+        let _guard = strict.then(crate::strict_php::scoped_enable);
         let module = super::lower_file(&fixture);
         assert!(
             !module.functions.is_empty(),

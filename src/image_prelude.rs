@@ -33,7 +33,7 @@ mod detect;
 
 /// The elephc-PHP image prelude: `elephc_image` externs, `IMAGETYPE_*`
 /// constants, the `GdImage` class, and the procedural image functions.
-const IMAGE_PRELUDE_SRC: &str = r#"<?php
+pub(crate) const IMAGE_PRELUDE_SRC: &str = r#"<?php
 
 extern "elephc_image" {
     function elephc_img_create_truecolor(int $width, int $height): int;
@@ -953,10 +953,10 @@ function imagecreatefromstring(string $data): GdImage {
     // (auto-detecting the format, as PHP does). ptr_write_string is binary-safe,
     // so embedded NUL bytes in the encoded image survive the transfer.
     $_buf = elephc_img_stage_ptr($_len);
-    if (ptr_is_null($_buf)) {
+    if (__elephc_ptr_is_null($_buf)) {
         throw new ImageException("imagecreatefromstring(): could not allocate decode buffer");
     }
-    ptr_write_string($_buf, $data);
+    __elephc_ptr_write_string($_buf, $data);
     $_h = elephc_img_create_from_stage($_len);
     if ($_h < 0) {
         throw new ImageException("imagecreatefromstring(): data is not a recognized image");
@@ -977,7 +977,7 @@ function _elephc_img_output(int $handle, int $fmt, ?string $file, int $quality):
     }
     $_len = elephc_img_encoded_len();
     $_ptr = elephc_img_encoded_ptr();
-    $_bytes = ptr_read_string($_ptr, $_len);
+    $_bytes = __elephc_ptr_read_string($_ptr, $_len);
     elephc_img_encoded_clear();
     echo $_bytes;
     return true;
@@ -1129,10 +1129,10 @@ function getimagesizefromstring(string $data) {
         return false;
     }
     $_buf = elephc_img_stage_ptr($_len);
-    if (ptr_is_null($_buf)) {
+    if (__elephc_ptr_is_null($_buf)) {
         return false;
     }
-    ptr_write_string($_buf, $data);
+    __elephc_ptr_write_string($_buf, $data);
     if (elephc_img_probe_stage($_len) !== 0) {
         return false;
     }
@@ -1185,7 +1185,7 @@ function exif_tagname(int $index) {
     if ($_len < 0) {
         return false;
     }
-    return ptr_read_string(elephc_img_out_ptr(), $_len);
+    return __elephc_ptr_read_string(elephc_img_out_ptr(), $_len);
 }
 
 function exif_read_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false) {
@@ -1202,9 +1202,9 @@ function exif_read_data(string $filename, ?string $required_sections = null, boo
     $_n = elephc_img_kv_count();
     for ($_i = 0; $_i < $_n; $_i++) {
         $_klen = elephc_img_kv_key($_i);
-        $_key = ptr_read_string(elephc_img_out_ptr(), $_klen);
+        $_key = __elephc_ptr_read_string(elephc_img_out_ptr(), $_klen);
         $_vlen = elephc_img_kv_val($_i);
-        $_val = ptr_read_string(elephc_img_out_ptr(), $_vlen);
+        $_val = __elephc_ptr_read_string(elephc_img_out_ptr(), $_vlen);
         $result[$_key] = $_val;
     }
     return $result;
@@ -1223,7 +1223,7 @@ function exif_thumbnail(string $filename, &$width = 0, &$height = 0, &$image_typ
     if ($_len < 0) {
         return false;
     }
-    $_bytes = ptr_read_string(elephc_img_out_ptr(), $_len);
+    $_bytes = __elephc_ptr_read_string(elephc_img_out_ptr(), $_len);
     $width = elephc_exif_thumb_width();
     $height = elephc_exif_thumb_height();
     $image_type = elephc_exif_thumb_type();
@@ -1236,10 +1236,10 @@ function iptcparse(string $iptcblock) {
         return false;
     }
     $_buf = elephc_img_in_ptr($_len);
-    if (ptr_is_null($_buf)) {
+    if (__elephc_ptr_is_null($_buf)) {
         return false;
     }
-    ptr_write_string($_buf, $iptcblock);
+    __elephc_ptr_write_string($_buf, $iptcblock);
     $_keys = elephc_iptc_parse($_len);
     if ($_keys < 0) {
         return false;
@@ -1249,12 +1249,12 @@ function iptcparse(string $iptcblock) {
     $result = [];
     for ($_i = 0; $_i < $_keys; $_i++) {
         $_klen = elephc_iptc_key($_i);
-        $_key = ptr_read_string(elephc_img_out_ptr(), $_klen);
+        $_key = __elephc_ptr_read_string(elephc_img_out_ptr(), $_klen);
         $_nv = elephc_iptc_val_count($_i);
         $_sub = [];
         for ($_j = 0; $_j < $_nv; $_j++) {
             $_vlen = elephc_iptc_val($_i, $_j);
-            $_sub[] = ptr_read_string(elephc_img_out_ptr(), $_vlen);
+            $_sub[] = __elephc_ptr_read_string(elephc_img_out_ptr(), $_vlen);
         }
         $result[$_key] = $_sub;
     }
@@ -1267,15 +1267,15 @@ function iptcembed(string $iptcdata, string $jpeg_file_name, int $spool = 0) {
     // new JPEG as a string, and additionally echoes it when $spool >= 2.
     $_len = strlen($iptcdata);
     $_buf = elephc_img_in_ptr($_len);
-    if (ptr_is_null($_buf)) {
+    if (__elephc_ptr_is_null($_buf)) {
         return false;
     }
-    ptr_write_string($_buf, $iptcdata);
+    __elephc_ptr_write_string($_buf, $iptcdata);
     $_outlen = elephc_iptc_embed($jpeg_file_name, $_len);
     if ($_outlen < 0) {
         return false;
     }
-    $_bytes = ptr_read_string(elephc_img_out_ptr(), $_outlen);
+    $_bytes = __elephc_ptr_read_string(elephc_img_out_ptr(), $_outlen);
     if ($spool >= 2) {
         echo $_bytes;
     }
@@ -2309,10 +2309,10 @@ class Imagick implements Iterator, Countable {
             throw new ImagickException("Imagick::readImageBlob(): empty blob");
         }
         $_buf = elephc_img_stage_ptr($_len);
-        if (ptr_is_null($_buf)) {
+        if (__elephc_ptr_is_null($_buf)) {
             throw new ImagickException("Imagick::readImageBlob(): allocation failed");
         }
-        ptr_write_string($_buf, $image);
+        __elephc_ptr_write_string($_buf, $image);
         if (elephc_imagick_read_blob($this->wand, $_len) !== 0) {
             throw new ImagickException("Imagick::readImageBlob(): unrecognized image data");
         }
@@ -2357,7 +2357,7 @@ class Imagick implements Iterator, Countable {
         if ($_len < 0) {
             throw new ImagickException("Imagick::getImageBlob(): no image or encode failed");
         }
-        $_bytes = ptr_read_string(elephc_img_encoded_ptr(), $_len);
+        $_bytes = __elephc_ptr_read_string(elephc_img_encoded_ptr(), $_len);
         elephc_img_encoded_clear();
         return $_bytes;
     }
@@ -4531,10 +4531,10 @@ class Gmagick {
             throw new GmagickException("Gmagick::readimageblob(): empty blob");
         }
         $_buf = elephc_img_stage_ptr($_len);
-        if (ptr_is_null($_buf)) {
+        if (__elephc_ptr_is_null($_buf)) {
             throw new GmagickException("Gmagick::readimageblob(): allocation failed");
         }
-        ptr_write_string($_buf, $image);
+        __elephc_ptr_write_string($_buf, $image);
         if (elephc_imagick_read_blob($this->wand, $_len) !== 0) {
             throw new GmagickException("Gmagick::readimageblob(): unrecognized image data");
         }
@@ -4570,7 +4570,7 @@ class Gmagick {
         if ($_len < 0) {
             throw new GmagickException("Gmagick::getimageblob(): no image or encode failed");
         }
-        $_bytes = ptr_read_string(elephc_img_encoded_ptr(), $_len);
+        $_bytes = __elephc_ptr_read_string(elephc_img_encoded_ptr(), $_len);
         elephc_img_encoded_clear();
         return $_bytes;
     }

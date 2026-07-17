@@ -210,6 +210,9 @@ fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, Compile
     let tokens = crate::lexer::tokenize(&content).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
+    // Strict-PHP audit of the autoloaded user file on its freshly parsed AST,
+    // before resolution can synthesize compiler-internal names into it.
+    crate::strict_php::check_file(&parsed, &file_label)?;
     let resolved = crate::resolver::resolve(parsed, path.parent().unwrap_or(base_dir))?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;

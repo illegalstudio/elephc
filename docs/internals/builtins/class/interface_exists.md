@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/interface_exists.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L583) (`lower_class_like_exists`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:581](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L581) (`lower_class_like_exists`)
 - **Function symbol**: `lower_class_like_exists()`
 
 

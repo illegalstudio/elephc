@@ -28,7 +28,7 @@ use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
 pub(crate) mod arrays;
-mod buffers;
+pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
 pub(crate) mod debug;
@@ -64,8 +64,6 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     match key.as_str() {
         "closure_bind" => lower_closure_bind(ctx, inst),
         "eval" => eval::lower_eval(ctx, inst),
-        "buffer_len" => buffers::lower_buffer_len(ctx, inst),
-        "buffer_free" => buffers::lower_buffer_free(ctx, inst),
         "strval" => lower_strval(ctx, inst),
         "method_exists" | "property_exists" => lower_member_exists(ctx, inst, key.as_str()),
         "is_integer" | "is_long" => {

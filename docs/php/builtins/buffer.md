@@ -9,5 +9,5 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`buffer_free()`](./buffer/buffer_free.md) | `(buffer $buffer): mixed` | `mixed` | ✓ | ✓ |
+| [`buffer_free()`](./buffer/buffer_free.md) | `(buffer $buffer): void` | `void` | ✓ | ✓ |
 | [`buffer_len()`](./buffer/buffer_len.md) | `(buffer $buffer): int` | `int` | ✓ | ✓ |

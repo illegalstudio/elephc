@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Writes one machine word through a raw pointer.",
+    extension: true,
 }
 
 /// Validates pointer and word-compatible value arguments and returns `PhpType::Void`.

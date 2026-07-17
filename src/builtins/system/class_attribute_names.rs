@@ -29,6 +29,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns the list of attribute names applied to a class.",
+    extension: true,
 }
 
 /// Validates that the argument is a string literal class name, resolves the class,

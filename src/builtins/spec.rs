@@ -235,6 +235,13 @@ pub struct BuiltinSpec {
     pub php_manual: Option<&'static str>,
     /// A deprecation message, or `None` if the builtin is not deprecated.
     pub deprecation: Option<&'static str>,
+    /// When `true`, the builtin is an elephc extension with no PHP equivalent
+    /// (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`, …). `--strict-php`
+    /// hides extension builtins from user programs: they stop resolving as
+    /// builtins, and user code may declare functions with these names, exactly
+    /// as under the PHP interpreter. The set is pinned by
+    /// `parity_tests::extension_builtin_set_is_pinned`.
+    pub extension: bool,
     /// When `true`, the builtin is not PHP-visible and is not emitted in catalogs
     /// or documentation; it is only used internally by the compiler.
     pub internal: bool,
@@ -251,6 +258,7 @@ mod macro_tests {
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
     builtin! { name: "__macro_owned_probe", area: Internal, params: [], returns: Mixed, returns_fresh_storage: true, lower: lower, summary: "owned probe", internal: true }
     builtin! { name: "__macro_independent_probe", area: Internal, params: [value: Str], returns: Str, returns_independent_storage: true, lower: lower, summary: "independent probe", internal: true }
+    builtin! { name: "__macro_ext_probe", area: Internal, params: [], returns: Null, lower: lower, summary: "extension probe", extension: true, internal: true }
 
     /// Verifies macro registration and the fresh/independent storage metadata defaults.
     #[test]
@@ -272,6 +280,22 @@ mod macro_tests {
         assert!(owned_spec.returns_fresh_storage);
         assert!(independent_spec.returns_independent_storage);
     }
+
+    /// Verifies the `extension` flag defaults to false and is set by the macro arm,
+    /// so `--strict-php` classification is opt-in per builtin declaration.
+    #[test]
+    fn macro_registers_extension_flag() {
+        let default_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_probe")
+            .expect("macro probe must be registered");
+        let ext_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_ext_probe")
+            .expect("extension probe must be registered");
+        assert!(!default_spec.extension);
+        assert!(ext_spec.extension);
+    }
 }
 
 #[cfg(test)]
@@ -289,7 +313,7 @@ mod tests {
             returns_independent_storage: false,
             by_ref_return: false, check: None, lazy_check: false,
             lower: noop_lower, summary: "len", examples: &[], php_manual: None,
-            deprecation: None, internal: false,
+            deprecation: None, extension: false, internal: false,
         };
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);

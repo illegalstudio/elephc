@@ -1206,6 +1206,9 @@ class Builtin:
     eval_support: Optional[dict] = None
     # True when only the eval interpreter exposes this builtin (no AOT support).
     eval_only: bool = False
+    # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
+    # class_attribute_*); `--strict-php` hides them from user programs.
+    is_extension: bool = False
 
 
 def slug(name: str) -> str:

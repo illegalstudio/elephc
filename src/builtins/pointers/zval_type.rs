@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns the PHP zval type byte for a zval pointer.",
+    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Int`.

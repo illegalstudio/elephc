@@ -12,8 +12,9 @@
 
 use super::builtins::{
     eval_builtin_param_names, eval_builtin_signature_shape, eval_date_procedural_alias_names,
-    eval_declared_builtin_exists, eval_declared_builtin_spec, eval_php_visible_builtin_exists,
-    eval_php_visible_builtin_function_names, EvalBuiltinDefaultValue,
+    eval_declared_builtin_exists, eval_declared_builtin_spec, eval_extension_builtin_names,
+    eval_php_visible_builtin_exists, eval_php_visible_builtin_function_names,
+    EvalBuiltinDefaultValue,
 };
 
 /// A compact, comparison-friendly view of an eval builtin call signature.
@@ -46,6 +47,14 @@ pub fn php_visible_builtin_names() -> &'static [&'static str] {
 pub fn php_visible_builtin_is_registry_declared(name: &str) -> bool {
     let canonical = php_symbol_key(name);
     eval_declared_builtin_exists(&canonical)
+}
+
+/// Returns the eval builtins that are elephc extensions (no PHP equivalent),
+/// in stable sorted order. Strict-PHP binaries hide exactly this set from eval
+/// dispatch and introspection; parity gates compare it against the compiler
+/// registry's `extension`-flagged builtins.
+pub fn extension_builtin_names() -> &'static [&'static str] {
+    eval_extension_builtin_names()
 }
 
 /// Returns comparison metadata for one eval builtin signature, when named calls are tracked.

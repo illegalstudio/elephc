@@ -25,12 +25,13 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Copies raw bytes from a pointer into a PHP string of the given length.",
+    extension: true,
 }
 
 /// Validates pointer and integer length arguments and returns `PhpType::Str`.
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 2 arguments).
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(crate) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, "ptr_read_string()")?;
     let len_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;

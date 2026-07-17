@@ -877,6 +877,15 @@ Eval builtin dispatch supports direct calls, named arguments, callable
 dispatch, `call_user_func()`, `call_user_func_array()`, and `function_exists()`
 where listed below unless a note says otherwise.
 
+> **Strict mode:** in binaries compiled with
+> [`--strict-php`](../compiling/cli-reference.md#strict-php-mode), the
+> elephc-extension builtins below — the whole "Raw memory and buffers" row plus
+> `class_attribute_names()`, `class_attribute_args()`, and
+> `class_get_attributes()` — do not exist inside eval'd code either: calling one
+> is a runtime fatal like any unknown function, and
+> `function_exists()`/`is_callable()` report them as missing, matching the PHP
+> interpreter.
+
 | Area | Builtins |
 |---|---|
 | System, time, and environment | `time()`, `microtime()`, `hrtime()`, `date()`, `gmdate()`, `mktime()`, `gmmktime()`, `checkdate()`, `getdate()`, `localtime()`, `strtotime()`, `date_default_timezone_get()`, `date_default_timezone_set()`, `http_response_code()`, `header()`, `phpversion()`, `php_uname()`, `sleep()`, `usleep()`, `getcwd()`, `sys_get_temp_dir()`, `getenv()`, `putenv()` |
