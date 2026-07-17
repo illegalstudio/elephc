@@ -1,6 +1,6 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
@@ -8,7 +8,7 @@ sidebar:
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, **MySQL / MariaDB**, optional **FreeTDS
 PDO_DBLIB**, optional **PDO_FIREBIRD**, optional **PDO_ODBC**, and optional
-**PDO_INFORMIX**, and optional **Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+**PDO_INFORMIX**, optional **PDO_IBM**, and optional **Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
 PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
 transactions. The DSN prefix selects the driver.
 
@@ -23,6 +23,8 @@ PDO_OCI loads Oracle Instant Client dynamically through ODPI-C, preserving the o
 extension's external Oracle-client boundary without requiring proprietary headers at build time.
 PDO_INFORMIX follows PECL 1.3.7 and delegates to the IBM/HCL Client SDK through
 the platform ODBC driver manager.
+PDO_IBM follows PECL 1.7.0 and uses the same CLI/ODBC ABI with an installed IBM
+Db2 or Informix client driver.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -77,12 +79,15 @@ $odbc = new PDO("odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Database=
 // Informix through the optional Client SDK CLI/ODBC profile.
 $informix = new PDO("informix:Driver={IBM INFORMIX ODBC DRIVER};Server=ol_informix;Database=app", "me", "secret");
 
+// Db2 through the optional PDO_IBM CLI/ODBC profile.
+$db2 = new PDO("ibm:DATABASE=SAMPLE;HOSTNAME=127.0.0.1;PORT=50000;PROTOCOL=TCPIP", "db2inst1", "secret");
+
 // Oracle through the optional PDO_OCI / Instant Client profile.
 $oracle = new PDO("oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8", "me", "secret");
 ```
 
 The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
-`dblib:`, `firebird:`, `odbc:`, `informix:`, or `oci:`. A colonless value may
+`dblib:`, `firebird:`, `odbc:`, `informix:`, `ibm:`, or `oci:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -696,12 +701,55 @@ compatibility target.
   attribute, so those requests follow PDO's IM001 path.
 - **Metadata.** `getColumnMeta()` follows PECL's associative shape: `scale`, the
   optional base `table`, `native_type`, boolean `not_null`/`unsigned`/
-  `auto_increment` flag entries, and the PHP-version-aware `pdo_type`. Informix
+  `auto_increment` flag entries, and the PHP-version-aware `pdo_type`, followed
+  by PDO core's common `name`, `len`, and `precision` fields. Informix
   binary and long-value fetches are streams, while metadata uses `PARAM_LOB`
   only for Informix BLOB/CLOB UDTs, preserving the extension's own distinction.
 - **Targets.** The Rust bridge and unixODBC ABI build on macOS ARM64, Linux ARM64,
   and Linux x86_64. A live connection additionally requires an IBM/HCL Client
   SDK and Informix ODBC driver built for that same target.
+
+## PDO_IBM notes
+
+PDO_IBM remains a PECL extension and requires an IBM Db2 or Informix CLI/ODBC
+driver registered with the target's driver manager:
+
+```bash
+cargo run --features pdo-ibm -- app.php
+```
+
+The implementation tracks stable PECL PDO_IBM 1.7.0. Its seven historical
+`PDO::SQL_ATTR_*` constants remain available on PHP 8.0–8.6. `Pdo\Ibm` and its
+shorter `ATTR_*` spellings exist from PHP 8.4; PHP 8.5 deprecates only the
+historical aliases. IBM i/PASE-only `I5_*` constants are deliberately absent
+because elephc's supported targets are macOS and Linux.
+
+- **DSNs.** `ibm:<cataloged-database>` uses `SQLConnect`; a body containing `=`
+  uses `SQLDriverConnect`. Constructor credentials are appended only when the
+  direct connection string does not already contain them.
+- **Attributes.** Autocommit is live. Info user/account/application/workstation
+  strings and trusted-context user/password are writable; the corresponding
+  readable attributes follow PDO_IBM, including its disabled trusted-context
+  fallthrough to the trusted user ID. Trusted context enablement is applied
+  before connect from the constructor options array.
+- **Values and parameters.** Ordinary scalar values use CLI's text representation.
+  Binary, XML, BLOB, and CLOB columns are exposed as streams. Native scalar
+  input/output parameters are supported, while `PARAM_LOB` remains input-only
+  like PDO_IBM.
+- **Execution.** Transactions, native diagnostics, scroll cursors, cursor names,
+  multiple rowsets, and Db2 `IDENTITY_VAL_LOCAL()` last-insert IDs use the CLI
+  handle. IDS connections retain their latest serial value. Natural result-column
+  names are upper-cased by default, as in PDO_IBM's handle factory.
+- **Metadata.** `getColumnMeta()` reports `scale`, optional `table`, `native_type`,
+  associative boolean flags, `pdo_type`, and PDO core's `name`, `len`, and
+  `precision`. The upstream 1.7.0 BOOLEAN/BIT switch fallthrough to `PARAM_LOB`
+  is intentionally preserved for exact compatibility.
+- **Connection information.** `ATTR_CLIENT_VERSION` reports `1.7.0` and
+  `ATTR_SERVER_INFO` returns the DBMS name. On supported non-PASE targets,
+  PDO_IBM does not expose `ATTR_SERVER_VERSION` or connection status.
+- **Targets.** The bridge builds on all three supported targets through unixODBC.
+  A live connection additionally needs a compatible IBM CLI/ODBC driver; IBM's
+  proprietary client is not redistributed by elephc or public CI images.
 
 ## PDO_OCI notes
 
@@ -1087,7 +1135,8 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
-  profile; DBLIB, Firebird, ODBC, and OCI are available through their optional profiles.
+  profile; DBLIB, Firebird, ODBC, Informix, IBM, and OCI are available through
+  their optional profiles.
   The central registry intentionally reports
   only drivers present in the selected archive rather than advertising inert names.
 
@@ -1110,6 +1159,8 @@ preserve source SQL evaluation order, and retain the rendered text for
   boolean value options are readable and writable, matching the driver's php-src hook.
 - PDO_FIREBIRD's format, isolation, writable-transaction, autocommit, and
   fetch-table-name attributes are implemented, including their PHP-version aliases.
+- PDO_IBM's client-info and trusted-context attributes are implemented through
+  the installed IBM CLI driver, including the PHP 8.4 class and PHP 8.5 alias deprecations.
 - PDO_OCI's autocommit, prefetch, call-timeout, action, module, client-info, and
   client-identifier attributes are implemented through Oracle Instant Client.
 - `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected

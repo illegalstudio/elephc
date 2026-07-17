@@ -36,6 +36,11 @@ fn pdo_informix_enabled() -> bool {
     cfg!(feature = "pdo-informix") || std::env::var_os("ELEPHC_PDO_INFORMIX").is_some()
 }
 
+/// Reports whether codegen fixtures should build the IBM Db2 CLI/ODBC profile.
+fn pdo_ibm_enabled() -> bool {
+    cfg!(feature = "pdo-ibm") || std::env::var_os("ELEPHC_PDO_IBM").is_some()
+}
+
 /// Reports whether codegen fixtures should build the Oracle Instant Client profile.
 fn pdo_oci_enabled() -> bool {
     cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
@@ -199,7 +204,7 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             && pdo_firebird_enabled()
             && FIREBIRD_BRIDGE_BUILT.get().is_none();
         let requires_odbc_profile = bridge.lib_name == "elephc_pdo"
-            && (pdo_odbc_enabled() || pdo_informix_enabled())
+            && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled())
             && ODBC_BRIDGE_BUILT.get().is_none();
         let requires_oci_profile = bridge.lib_name == "elephc_pdo"
             && pdo_oci_enabled()
@@ -232,6 +237,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             }
             if pdo_informix_enabled() {
                 features.push("informix");
+            }
+            if pdo_ibm_enabled() {
+                features.push("ibm");
             }
             if pdo_oci_enabled() {
                 features.push("oci");
@@ -375,7 +383,7 @@ pub(crate) fn link_binary(
     let needs_dblib = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
         && pdo_dblib_enabled();
     let needs_odbc = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
-        && (pdo_odbc_enabled() || pdo_informix_enabled());
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled());
 
     match target().platform {
         Platform::MacOS => {

@@ -31,8 +31,8 @@
 //!   MySQL/MariaDB), so their binaries have no system database-client runtime
 //!   dependency. The optional PDO_DBLIB profile links FreeTDS like php-src;
 //!   PDO_FIREBIRD uses the pure-Rust Firebird wire protocol on every target,
-//!   PDO_ODBC links the system driver manager, and PDO_OCI loads Oracle Instant
-//!   Client dynamically through ODPI-C.
+//!   PDO_ODBC, PDO_INFORMIX, and PDO_IBM link the system driver manager, while
+//!   PDO_OCI loads Oracle Instant Client dynamically through ODPI-C.
 
 mod driver;
 #[cfg(feature = "dblib")]
@@ -41,7 +41,7 @@ mod dblib;
 mod firebird;
 mod ini;
 mod my;
-#[cfg(any(feature = "odbc", feature = "informix"))]
+#[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
 mod odbc;
 #[cfg(feature = "oci")]
 mod oci;
@@ -67,7 +67,7 @@ enum Conn {
     Dblib(dblib::DblibConn),
     #[cfg(feature = "firebird")]
     Firebird(firebird::FirebirdConn),
-    #[cfg(any(feature = "odbc", feature = "informix"))]
+    #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
     Odbc(odbc::OdbcConn),
     #[cfg(feature = "oci")]
     Oci(oci::OciConn),
@@ -84,7 +84,7 @@ impl Conn {
             Self::Dblib(_) => driver::DriverKind::Dblib,
             #[cfg(feature = "firebird")]
             Self::Firebird(_) => driver::DriverKind::Firebird,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Self::Odbc(connection) => connection.driver_kind(),
             #[cfg(feature = "oci")]
             Self::Oci(_) => driver::DriverKind::Oci,
@@ -101,7 +101,7 @@ enum Stmt {
     Dblib(dblib::DblibStmt),
     #[cfg(feature = "firebird")]
     Firebird(firebird::FirebirdStmt),
-    #[cfg(any(feature = "odbc", feature = "informix"))]
+    #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
     Odbc(odbc::OdbcStmt),
     #[cfg(feature = "oci")]
     Oci(oci::OciStmt),
@@ -250,12 +250,12 @@ fn store_open_failure(dsn: &str, message: &str) {
         {
             (String::new(), 0)
         }
-    } else if dsn.starts_with("odbc:") || dsn.starts_with("informix:") {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+    } else if dsn.starts_with("odbc:") || dsn.starts_with("informix:") || dsn.starts_with("ibm:") {
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         {
             odbc::open_diagnostic()
         }
-        #[cfg(not(any(feature = "odbc", feature = "informix")))]
+        #[cfg(not(any(feature = "odbc", feature = "informix", feature = "ibm")))]
         {
             (String::new(), 0)
         }
@@ -360,6 +360,12 @@ fn dblib_stmt_os_errmsg_cell() -> &'static Mutex<CString> {
 fn firebird_attribute_cell() -> &'static Mutex<CString> {
     static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+}
+
+/// Static buffer for the most recent PDO_IBM string-valued attribute result.
+fn ibm_attribute_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
 }
 
 /// Static buffer for the most recent `elephc_pdo_server_version` result.
@@ -490,6 +496,8 @@ fn open_conn_for_dsn(
         Some(driver::DriverKind::Informix) => {
             odbc::OdbcConn::open_informix(dsn).map(Conn::Odbc)
         }
+        #[cfg(feature = "ibm")]
+        Some(driver::DriverKind::Ibm) => odbc::OdbcConn::open_ibm(dsn).map(Conn::Odbc),
         #[cfg(feature = "oci")]
         Some(driver::DriverKind::Oci) => oci::OciConn::open(dsn).map(Conn::Oci),
         Some(driver::DriverKind::Sqlite) => {
@@ -552,7 +560,7 @@ fn persistent_connection_is_live(conn_id: i64) -> bool {
         Some(Conn::Dblib(connection)) => connection.is_alive(),
         #[cfg(feature = "firebird")]
         Some(Conn::Firebird(connection)) => connection.is_alive(),
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         Some(Conn::Odbc(connection)) => connection.is_alive(),
         #[cfg(feature = "oci")]
         Some(Conn::Oci(connection)) => connection.is_alive(),
@@ -571,7 +579,7 @@ fn evict_persistent_connection(conn_id: i64) {
         Stmt::Dblib(statement) => statement.conn_id != conn_id,
         #[cfg(feature = "firebird")]
         Stmt::Firebird(statement) => statement.conn_id != conn_id,
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         Stmt::Odbc(statement) => statement.conn_id != conn_id,
         #[cfg(feature = "oci")]
         Stmt::Oci(statement) => statement.conn_id != conn_id,
@@ -779,12 +787,14 @@ fn open_persistent_dsn(
 /// v54 exposes PDO_OCI constructor SQLSTATE and native ORA diagnostics.
 /// v55 adds PDO_INFORMIX column scale/type/flag metadata and widens the generic
 /// native-type/table-name accessors to the shared CLI backend.
+/// v56 adds PDO_IBM 1.7.0 connection attributes and metadata, and completes the
+/// common PDO core `name`/`len`/`precision` metadata for CLI-backed drivers.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
     // Guarded like every other extern purely for uniformity — "every `#[no_mangle]`
     // body opens with `ffi_guard`" is a grep-checkable invariant, and a constant
     // body simply never reaches the fallback.
-    ffi_guard(55, || 55)
+    ffi_guard(56, || 56)
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -830,6 +840,8 @@ pub extern "C" fn elephc_pdo_available_driver_name(index: i64) -> *const c_char 
             driver::DriverKind::Odbc => static_cstr(b"odbc\0"),
             #[cfg(feature = "informix")]
             driver::DriverKind::Informix => static_cstr(b"informix\0"),
+            #[cfg(feature = "ibm")]
+            driver::DriverKind::Ibm => static_cstr(b"ibm\0"),
             #[cfg(feature = "oci")]
             driver::DriverKind::Oci => static_cstr(b"oci\0"),
             driver::DriverKind::Mysql => static_cstr(b"mysql\0"),
@@ -1088,7 +1100,7 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
                 Some(sql) => c.execute(sql, Vec::new()).map_or(-1, |_| c.changes),
                 None => -1,
             },
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => match cstr_arg(sql) {
                 Some(sql) => c.exec(sql),
                 None => -1,
@@ -1138,7 +1150,7 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
                 .unwrap_or(0),
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(_)) => 0,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.last_insert_id().parse().unwrap_or(0),
             #[cfg(feature = "oci")]
             Some(Conn::Oci(_)) => 0,
@@ -1185,7 +1197,7 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id_text(
                     .unwrap_or_default(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(_)) => String::new(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.last_insert_id(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(_)) => String::new(),
@@ -1210,7 +1222,7 @@ pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.changes,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.changes,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.changes,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.changes,
@@ -1233,7 +1245,7 @@ pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.transaction("BEGIN TRANSACTION", true) as i64,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.begin() as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.begin() as i64,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.begin() as i64,
@@ -1256,7 +1268,7 @@ pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.transaction("COMMIT TRANSACTION", false) as i64,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.commit() as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.commit() as i64,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.commit() as i64,
@@ -1279,7 +1291,7 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.transaction("ROLLBACK TRANSACTION", false) as i64,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.rollback() as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.rollback() as i64,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.rollback() as i64,
@@ -1310,7 +1322,7 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.in_transaction as i64,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.in_transaction as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.in_transaction as i64,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.in_transaction as i64,
@@ -1329,7 +1341,7 @@ pub extern "C" fn elephc_pdo_in_transaction(conn_id: i64) -> i64 {
 pub extern "C" fn elephc_pdo_set_autocommit(conn_id: i64, enabled: i64) -> i64 {
     ffi_guard(0, || match lock_recover(conns()).get_mut(&conn_id) {
         Some(Conn::Mysql(c)) => c.set_autocommit(enabled != 0),
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         Some(Conn::Odbc(c)) => c.set_attribute(0, enabled) as i64,
         #[cfg(feature = "oci")]
         Some(Conn::Oci(c)) => c.set_attribute_int(0, enabled) as i64,
@@ -1343,7 +1355,7 @@ pub extern "C" fn elephc_pdo_set_autocommit(conn_id: i64, enabled: i64) -> i64 {
 pub extern "C" fn elephc_pdo_autocommit(conn_id: i64) -> i64 {
     ffi_guard(-1, || match lock_recover(conns()).get_mut(&conn_id) {
         Some(Conn::Mysql(c)) => c.autocommit as i64,
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         Some(Conn::Odbc(c)) => c.attribute(0).unwrap_or(-1),
         #[cfg(feature = "oci")]
         Some(Conn::Oci(c)) => c.attribute_int(0).unwrap_or(-1),
@@ -1438,7 +1450,7 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
             Some(Conn::Dblib(c)) => c.errcode(),
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(c)) => c.errcode(),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(c)) => c.errcode(),
             #[cfg(feature = "oci")]
             Some(Conn::Oci(c)) => c.errcode(),
@@ -1462,7 +1474,7 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
                 Some(Conn::Dblib(c)) => c.errmsg().to_string(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.errmsg().to_string(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.errmsg().to_string(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(c)) => c.errmsg().to_string(),
@@ -1491,7 +1503,7 @@ pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
                 Some(Conn::Dblib(c)) => c.sqlstate().to_string(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.sqlstate().to_string(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.sqlstate().to_string(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(c)) => c.sqlstate().to_string(),
@@ -1518,7 +1530,7 @@ pub extern "C" fn elephc_pdo_set_busy_timeout(conn_id: i64, ms: i64) -> i64 {
             Some(Conn::Dblib(_)) => 1,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(_)) => 1,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(_)) => 1,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(_)) => 1,
@@ -1745,7 +1757,7 @@ pub extern "C" fn elephc_pdo_odbc_set_attribute(
     value: i64,
 ) -> i64 {
     ffi_guard(0, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Conn::Odbc(connection)) = lock_recover(conns()).get_mut(&conn_id) {
             return connection.set_attribute(attribute, value) as i64;
         }
@@ -1758,7 +1770,7 @@ pub extern "C" fn elephc_pdo_odbc_set_attribute(
 #[no_mangle]
 pub extern "C" fn elephc_pdo_odbc_attribute(conn_id: i64, attribute: i64) -> i64 {
     ffi_guard(-1, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Conn::Odbc(connection)) = lock_recover(conns()).get(&conn_id) {
             return connection.attribute(attribute).unwrap_or(-1);
         }
@@ -1777,7 +1789,7 @@ pub unsafe extern "C" fn elephc_pdo_odbc_stmt_set_cursor_name(
     name: *const c_char,
 ) -> i64 {
     ffi_guard(0, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let (Some(name), Some(Stmt::Odbc(statement))) =
             (cstr_arg(name), lock_recover(stmts()).get_mut(&stmt_id))
         {
@@ -1793,13 +1805,13 @@ pub unsafe extern "C" fn elephc_pdo_odbc_stmt_set_cursor_name(
 pub extern "C" fn elephc_pdo_odbc_stmt_cursor_name(stmt_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
         let name = {
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get_mut(&stmt_id) {
                 statement.cursor_name()
             } else {
                 String::new()
             }
-            #[cfg(not(any(feature = "odbc", feature = "informix")))]
+            #[cfg(not(any(feature = "odbc", feature = "informix", feature = "ibm")))]
             String::new()
         };
         let _ = stmt_id;
@@ -1811,7 +1823,7 @@ pub extern "C" fn elephc_pdo_odbc_stmt_cursor_name(stmt_id: i64) -> *const c_cha
 #[no_mangle]
 pub extern "C" fn elephc_pdo_odbc_stmt_set_assume_utf8(stmt_id: i64, enabled: i64) -> i64 {
     ffi_guard(0, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get_mut(&stmt_id) {
             return statement.set_assume_utf8(enabled != 0) as i64;
         }
@@ -1824,12 +1836,66 @@ pub extern "C" fn elephc_pdo_odbc_stmt_set_assume_utf8(stmt_id: i64, enabled: i6
 #[no_mangle]
 pub extern "C" fn elephc_pdo_odbc_stmt_assume_utf8(stmt_id: i64) -> i64 {
     ffi_guard(0, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get(&stmt_id) {
             return statement.assume_utf8() as i64;
         }
         let _ = stmt_id;
         0
+    })
+}
+
+/// Writes one string-valued PDO_IBM client/trusted-context connection attribute.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_ibm_set_attribute_text(
+    conn_id: i64,
+    attribute: i64,
+    value: *const c_char,
+) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "ibm")]
+        if let (Some(value), Some(Conn::Odbc(connection))) =
+            (cstr_arg(value), lock_recover(conns()).get_mut(&conn_id))
+        {
+            return connection.set_ibm_attribute_text(attribute, value) as i64;
+        }
+        let _ = (conn_id, attribute, value);
+        0
+    })
+}
+
+/// Reads one string-valued PDO_IBM client/trusted-context connection attribute.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_ibm_attribute_text(
+    conn_id: i64,
+    attribute: i64,
+) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let value = {
+            #[cfg(feature = "ibm")]
+            if let Some(Conn::Odbc(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+                connection.ibm_attribute_text(attribute).unwrap_or_default()
+            } else {
+                String::new()
+            }
+            #[cfg(not(feature = "ibm"))]
+            String::new()
+        };
+        let _ = (conn_id, attribute);
+        store_cstr(ibm_attribute_cell(), &value)
+    })
+}
+
+/// Reads PDO_IBM's integer-valued trusted-context enablement attribute.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_ibm_attribute_int(conn_id: i64, attribute: i64) -> i64 {
+    ffi_guard(-1, || {
+        #[cfg(feature = "ibm")]
+        if let Some(Conn::Odbc(connection)) = lock_recover(conns()).get_mut(&conn_id) {
+            return connection.ibm_attribute_int(attribute).unwrap_or(-1);
+        }
+        let _ = (conn_id, attribute);
+        -1
     })
 }
 
@@ -1973,7 +2039,7 @@ pub extern "C" fn elephc_pdo_server_version(conn_id: i64) -> *const c_char {
                 Some(Conn::Dblib(c)) => c.tds_version().to_string(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.server_version(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.server_version(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(c)) => c.server_version(),
@@ -2001,7 +2067,7 @@ pub extern "C" fn elephc_pdo_client_version(conn_id: i64) -> *const c_char {
                 Some(Conn::Dblib(c)) => c.client_version(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.client_version(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.client_version(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(c)) => c.client_version(),
@@ -2029,7 +2095,7 @@ pub extern "C" fn elephc_pdo_server_info(conn_id: i64) -> *const c_char {
                 Some(Conn::Dblib(_)) => String::new(),
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.server_version(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(c)) => c.server_info(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(c)) => c.server_info(),
@@ -2058,7 +2124,7 @@ pub extern "C" fn elephc_pdo_connection_status(conn_id: i64) -> *const c_char {
                 }
                 #[cfg(feature = "firebird")]
                 Some(Conn::Firebird(c)) => c.connection_status(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(_)) => String::new(),
                 #[cfg(feature = "oci")]
                 Some(Conn::Oci(_)) => String::new(),
@@ -2083,7 +2149,7 @@ pub extern "C" fn elephc_pdo_backend_pid(conn_id: i64) -> i64 {
             Some(Conn::Dblib(_)) => 0,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(_)) => 0,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(_)) => 0,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(_)) => 0,
@@ -2107,7 +2173,7 @@ pub extern "C" fn elephc_pdo_warning_count(conn_id: i64) -> i64 {
             Some(Conn::Dblib(_)) => 0,
             #[cfg(feature = "firebird")]
             Some(Conn::Firebird(_)) => 0,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Conn::Odbc(_)) => 0,
             #[cfg(feature = "oci")]
             Some(Conn::Oci(_)) => 0,
@@ -2664,7 +2730,7 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
                     },
                     None => Err(()),
                 },
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Conn::Odbc(connection)) => match cstr_arg(sql) {
                     Some(sql) => odbc::OdbcStmt::new(connection, conn_id, sql, emulated == 2)
                         .map(Stmt::Odbc)
@@ -2729,7 +2795,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *co
             Some(Stmt::Dblib(s)) => s.parameter_index(name),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.parameter_index(name),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.parameter_index(name),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.parameter_index(name),
@@ -2752,7 +2818,7 @@ pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.bind_int(idx, val) as i64,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.bind_int(idx, val) as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.bind_int(idx, val) as i64,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.bind_int(idx, val) as i64,
@@ -2775,7 +2841,7 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
             Some(Stmt::Dblib(s)) => s.bind_double(idx, val) as i64,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.bind_double(idx, val) as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.bind_double(idx, val) as i64,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.bind_double(idx, val) as i64,
@@ -2823,7 +2889,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(
                     s.bind_text(idx, bytes_arg(val, len)) as i64
                 }
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 if val.is_null() {
                     s.bind_null(idx) as i64
@@ -2894,7 +2960,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_text_national(
                     s.bind_text(idx, bytes_arg(val, len)) as i64
                 }
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 if val.is_null() {
                     s.bind_null(idx) as i64
@@ -2945,7 +3011,7 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.bind_null(idx) as i64,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.bind_null(idx) as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.bind_null(idx) as i64,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.bind_null(idx) as i64,
@@ -2972,7 +3038,7 @@ pub extern "C" fn elephc_pdo_bind_bool(stmt_id: i64, idx: i64, val: i64) -> i64 
             Some(Stmt::Dblib(s)) => s.bind_int(idx, truthy) as i64,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.bind_int(idx, truthy) as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.bind_int(idx, truthy) as i64,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.bind_int(idx, truthy) as i64,
@@ -3023,7 +3089,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_blob(
                     s.bind_blob(idx, bytes_arg(ptr, len)) as i64
                 }
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 if ptr.is_null() {
                     s.bind_null(idx) as i64
@@ -3074,7 +3140,7 @@ pub extern "C" fn elephc_pdo_bind_output(
         let _ = (idx, pdo_type, max_length);
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(statement)) => {
                 statement.bind_output(idx, pdo_type, max_length)
             }
@@ -3090,7 +3156,7 @@ pub extern "C" fn elephc_pdo_bind_output(
 
 /// Copies one completed native output bind into the shared binary buffer.
 /// Returns its byte length, `-2` for SQL NULL, or `-3` when the slot is not an
-/// OCI output bind.
+/// native OCI/CLI output bind.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_output_data(stmt_id: i64, idx: i64) -> i64 {
     ffi_guard(-3, || {
@@ -3098,7 +3164,7 @@ pub extern "C" fn elephc_pdo_output_data(stmt_id: i64, idx: i64) -> i64 {
         let value: Option<Option<Vec<u8>>> = {
             let guard = lock_recover(stmts());
             match guard.get(&stmt_id) {
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(statement)) => {
                     statement.output_value(idx).map(|value| value.data.clone())
                 }
@@ -3128,7 +3194,7 @@ pub extern "C" fn elephc_pdo_output_is_lob(stmt_id: i64, idx: i64) -> i64 {
         let _ = idx;
         let guard = lock_recover(stmts());
         match guard.get(&stmt_id) {
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(statement)) => statement
                 .output_value(idx)
                 .map_or(0, |value| value.lob as i64),
@@ -3136,6 +3202,22 @@ pub extern "C" fn elephc_pdo_output_is_lob(stmt_id: i64, idx: i64) -> i64 {
             Some(Stmt::Oci(statement)) => statement
                 .output_value(idx)
                 .map_or(0, |value| value.lob as i64),
+            _ => 0,
+        }
+    })
+}
+
+/// Reports whether one completed CLI output bind used PDO_IBM's native integer path.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_output_is_numeric(stmt_id: i64, idx: i64) -> i64 {
+    ffi_guard(0, || {
+        let _ = idx;
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
+            Some(Stmt::Odbc(statement)) => statement
+                .output_value(idx)
+                .map_or(0, |value| value.numeric as i64),
             _ => 0,
         }
     })
@@ -3158,7 +3240,7 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
                 s.reset();
                 1
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 s.reset();
                 1
@@ -3204,7 +3286,7 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
                 s.clear_bindings();
                 1
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 s.clear_bindings();
                 1
@@ -3278,7 +3360,7 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
                 }
                 s.step()
             }
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 if s.needs_execute() {
                     let conn_id = s.conn_id;
@@ -3355,7 +3437,7 @@ pub extern "C" fn elephc_pdo_step_oriented(
             Some(Stmt::Dblib(_)) => 0,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(_)) => 0,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => {
                 if s.needs_execute() {
                     let conn_id = s.conn_id;
@@ -3504,7 +3586,7 @@ pub extern "C" fn elephc_pdo_next_rowset(stmt_id: i64) -> i64 {
         if matches!(sguard.get(&stmt_id), Some(Stmt::Firebird(_))) {
             return 0;
         }
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Stmt::Odbc(statement)) = sguard.get_mut(&stmt_id) {
             let conn_id = statement.conn_id;
             let mut cguard = lock_recover(conns());
@@ -3536,7 +3618,7 @@ pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_count(),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.column_count(),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.column_count(),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.column_count(),
@@ -3560,7 +3642,7 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
                 Some(Stmt::Dblib(s)) => s.column_name(i),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.column_name(i),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.column_name(i),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.column_name(i),
@@ -3586,7 +3668,7 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_type(i),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.column_type(i),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.column_type(i),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.column_type(i),
@@ -3648,7 +3730,7 @@ pub extern "C" fn elephc_pdo_column_native_type(stmt_id: i64, i: i64) -> *const 
                 Some(Stmt::Dblib(s)) => s.column_native_type(i),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.column_native_type(i),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.column_native_type(i),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.column_native_type(i),
@@ -3675,7 +3757,7 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
                 Some(Stmt::Dblib(_)) => String::new(),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(_)) => String::new(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.column_table_name(i),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(_)) => String::new(),
@@ -3693,7 +3775,7 @@ pub extern "C" fn elephc_pdo_column_table_name(stmt_id: i64, i: i64) -> *const c
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_flags(stmt_id: i64, i: i64) -> i64 {
     ffi_guard(0, || match lock_recover(stmts()).get(&stmt_id) {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         Some(Stmt::Odbc(statement)) => statement.column_flags(i),
         Some(Stmt::Mysql(statement)) => statement.column_flags(i),
         _ => 0,
@@ -3704,7 +3786,7 @@ pub extern "C" fn elephc_pdo_column_flags(stmt_id: i64, i: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_informix_column_scale(stmt_id: i64, column: i64) -> i64 {
     ffi_guard(0, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
         if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get(&stmt_id) {
             return statement.column_scale(column);
         }
@@ -3717,7 +3799,33 @@ pub extern "C" fn elephc_pdo_informix_column_scale(stmt_id: i64, column: i64) ->
 #[no_mangle]
 pub extern "C" fn elephc_pdo_informix_column_pdo_type(stmt_id: i64, column: i64) -> i64 {
     ffi_guard(2, || {
-        #[cfg(any(feature = "odbc", feature = "informix"))]
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
+        if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_pdo_type(column);
+        }
+        let _ = (stmt_id, column);
+        2
+    })
+}
+
+/// Returns PDO_IBM's `SQLDescribeCol` scale, or zero for another driver.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_ibm_column_scale(stmt_id: i64, column: i64) -> i64 {
+    ffi_guard(0, || {
+        #[cfg(feature = "ibm")]
+        if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get(&stmt_id) {
+            return statement.column_scale(column);
+        }
+        let _ = (stmt_id, column);
+        0
+    })
+}
+
+/// Returns PDO_IBM's metadata `pdo_type`, including its upstream BOOLEAN fallthrough.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_ibm_column_pdo_type(stmt_id: i64, column: i64) -> i64 {
+    ffi_guard(2, || {
+        #[cfg(feature = "ibm")]
         if let Some(Stmt::Odbc(statement)) = lock_recover(stmts()).get(&stmt_id) {
             return statement.column_pdo_type(column);
         }
@@ -3794,6 +3902,8 @@ pub extern "C" fn elephc_pdo_column_len(stmt_id: i64, i: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_len(i),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(_)) => -1,
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
+            Some(Stmt::Odbc(s)) => s.column_len(i),
             Some(Stmt::Postgres(s)) => s.column_len(i),
             Some(Stmt::Mysql(s)) => s.column_len(i),
             _ => -1,
@@ -3824,6 +3934,8 @@ pub extern "C" fn elephc_pdo_column_precision(stmt_id: i64, i: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_precision(i),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(_)) => -1,
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
+            Some(Stmt::Odbc(s)) => s.column_precision(i),
             Some(Stmt::Postgres(s)) => s.column_precision(i),
             Some(Stmt::Mysql(s)) => s.column_precision(i),
             Some(Stmt::Sqlite(_)) => 0,
@@ -4047,7 +4159,7 @@ pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_int(i),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.column_int(i),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.column_int(i),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.column_int(i),
@@ -4070,7 +4182,7 @@ pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
             Some(Stmt::Dblib(s)) => s.column_double(i),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.column_double(i),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.column_double(i),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.column_double(i),
@@ -4096,7 +4208,7 @@ pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.column_data(i).len() as i64,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.column_data(i).len() as i64,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.column_data(i).len() as i64,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.column_data(i).len() as i64,
@@ -4122,7 +4234,7 @@ pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_c
                 Some(Stmt::Dblib(s)) => s.column_data(i),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.column_data(i),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.column_data(i),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.column_data(i),
@@ -4151,7 +4263,7 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
                 Some(Stmt::Dblib(s)) => s.column_data(i),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.column_data(i),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.column_data(i),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.column_data(i),
@@ -4176,7 +4288,7 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
             Some(Stmt::Dblib(_)) => 1,
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(_)) => 1,
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(_)) => 1,
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(_)) => 1,
@@ -4263,7 +4375,7 @@ pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
             Some(Stmt::Dblib(s)) => s.errcode(),
             #[cfg(feature = "firebird")]
             Some(Stmt::Firebird(s)) => s.errcode(),
-            #[cfg(any(feature = "odbc", feature = "informix"))]
+            #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
             Some(Stmt::Odbc(s)) => s.errcode(),
             #[cfg(feature = "oci")]
             Some(Stmt::Oci(s)) => s.errcode(),
@@ -4303,7 +4415,7 @@ pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
                 Some(Stmt::Dblib(s)) => s.errmsg().to_string(),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.errmsg().to_string(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.errmsg().to_string(),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.errmsg().to_string(),
@@ -4387,7 +4499,7 @@ pub extern "C" fn elephc_pdo_stmt_sent_sql(stmt_id: i64) -> *const c_char {
                 Some(Stmt::Dblib(s)) => s.sent_sql.clone(),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.sent_sql.clone(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.sent_sql.clone(),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.sent_sql.clone(),
@@ -4417,7 +4529,7 @@ pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
                 Some(Stmt::Dblib(s)) => s.sqlstate().to_string(),
                 #[cfg(feature = "firebird")]
                 Some(Stmt::Firebird(s)) => s.sqlstate().to_string(),
-                #[cfg(any(feature = "odbc", feature = "informix"))]
+                #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm"))]
                 Some(Stmt::Odbc(s)) => s.sqlstate().to_string(),
                 #[cfg(feature = "oci")]
                 Some(Stmt::Oci(s)) => s.sqlstate().to_string(),
@@ -4531,11 +4643,11 @@ mod tests {
     }
 
     /// The ABI version constant tracks the current bridge surface; the per-version
-    /// history is enumerated on `elephc_pdo_version`'s own docblock. v55 exposes
-    /// complete PDO_INFORMIX column metadata on top of v54 open diagnostics.
+    /// history is enumerated on `elephc_pdo_version`'s own docblock. v56 exposes
+    /// PDO_IBM and completes common CLI column metadata on top of v55.
     #[test]
-    fn version_is_v55() {
-        assert_eq!(elephc_pdo_version(), 55);
+    fn version_is_v56() {
+        assert_eq!(elephc_pdo_version(), 56);
     }
 
     /// Connection-information accessors return empty strings for unknown handles.

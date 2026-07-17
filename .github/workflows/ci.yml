@@ -73,6 +73,9 @@ jobs:
       - name: Build optional PDO_INFORMIX profile
         run: cargo build -p elephc-pdo --features informix
 
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -161,6 +164,9 @@ jobs:
       - name: Build optional PDO_INFORMIX profile
         run: cargo build -p elephc-pdo --features informix
 
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
+
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci
 
@@ -248,6 +254,9 @@ jobs:
 
       - name: Build optional PDO_INFORMIX profile
         run: cargo build -p elephc-pdo --features informix
+
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
 
       - name: Build optional PDO_OCI profile
         run: cargo build -p elephc-pdo --features oci

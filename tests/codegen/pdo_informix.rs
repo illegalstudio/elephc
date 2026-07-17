@@ -55,7 +55,9 @@ $meta = $stmt->getColumnMeta(0);
 echo $meta["scale"] . ":" . $meta["native_type"] . ":";
 echo (array_key_exists("not_null", $meta["flags"]) && array_key_exists("unsigned", $meta["flags"])
     && array_key_exists("auto_increment", $meta["flags"]) ? "flags" : "missing") . ":";
-echo $meta["pdo_type"] . "|";
+echo $meta["pdo_type"] . ":";
+echo (array_key_exists("name", $meta) && array_key_exists("len", $meta)
+    && array_key_exists("precision", $meta) ? "core" : "missing") . "|";
 $row = $stmt->fetch(PDO::FETCH_ASSOC);
 echo implode(",", array_keys($row)) . ":" . gettype($row["ID"]) . ":" . $row["ID"] . ":" . $row["NAME"] . "|";
 $db->beginTransaction();
@@ -72,6 +74,6 @@ echo "FAIL:" . $fatal->getMessage();
     );
     let out = compile_and_run(&source);
     assert!(out.starts_with("informix|1.3.7:"), "unexpected PDO_INFORMIX output: {out}");
-    assert!(out.contains("|1|0:INTEGER:flags:2|ID,NAME:string:7:Éléphant|1|"), "unexpected PDO_INFORMIX output: {out}");
+    assert!(out.contains("|1|0:INTEGER:flags:2:core|ID,NAME:string:7:Éléphant|1|"), "unexpected PDO_INFORMIX output: {out}");
     assert!(out.ends_with(":native"), "unexpected PDO_INFORMIX output: {out}");
 }

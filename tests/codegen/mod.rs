@@ -37,6 +37,8 @@ mod pdo_firebird;
 mod pdo_odbc;
 #[cfg(feature = "pdo-informix")]
 mod pdo_informix;
+#[cfg(feature = "pdo-ibm")]
+mod pdo_ibm;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
 mod pdo_mysql;

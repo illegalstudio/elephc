@@ -31,7 +31,7 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC + Informix profile + Oracle 23ai)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC + Informix/IBM profiles + Oracle 23ai)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
@@ -386,7 +386,21 @@ jobs:
       - name: PDO_INFORMIX compiled surface tests
         env:
           ELEPHC_PDO_INFORMIX: '1'
-        run: cargo test --features pdo-informix --test codegen_tests pdo_informix --test-threads=1
+        run: cargo test --features pdo-informix --test codegen_tests pdo_informix -- --test-threads=1
+
+      - name: Build the PDO_IBM 1.7.0 CLI profile
+        # IBM's proprietary CLI driver is not redistributed by hosted runners.
+        # This validates the shared ODBC ABI and compiled PHP version surface;
+        # the ignored live fixture is runnable where the IBM driver is installed.
+        run: cargo build -p elephc-pdo --features ibm
+
+      - name: PDO_IBM bridge unit tests
+        run: 'cargo test -p elephc-pdo --features ibm odbc::tests::'
+
+      - name: PDO_IBM compiled surface tests
+        env:
+          ELEPHC_PDO_IBM: '1'
+        run: cargo test --features pdo-ibm --test codegen_tests pdo_ibm -- --test-threads=1
 
       - name: Build the Oracle Instant Client PDO_OCI bridge staticlib
         run: cargo build -p elephc-pdo --features oci

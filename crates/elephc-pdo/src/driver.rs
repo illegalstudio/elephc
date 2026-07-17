@@ -17,6 +17,8 @@ pub(crate) enum DriverKind {
     Firebird,
     #[cfg(feature = "informix")]
     Informix,
+    #[cfg(feature = "ibm")]
+    Ibm,
     #[cfg(feature = "odbc")]
     Odbc,
     #[cfg(feature = "oci")]
@@ -34,6 +36,8 @@ pub(crate) const AVAILABLE: &[DriverKind] = &[
     DriverKind::Firebird,
     #[cfg(feature = "informix")]
     DriverKind::Informix,
+    #[cfg(feature = "ibm")]
+    DriverKind::Ibm,
     #[cfg(feature = "odbc")]
     DriverKind::Odbc,
     #[cfg(feature = "oci")]
@@ -53,6 +57,8 @@ impl DriverKind {
             Self::Firebird => "firebird",
             #[cfg(feature = "informix")]
             Self::Informix => "informix",
+            #[cfg(feature = "ibm")]
+            Self::Ibm => "ibm",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc",
             #[cfg(feature = "oci")]
@@ -72,6 +78,8 @@ impl DriverKind {
             Self::Firebird => "firebird:",
             #[cfg(feature = "informix")]
             Self::Informix => "informix:",
+            #[cfg(feature = "ibm")]
+            Self::Ibm => "ibm:",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc:",
             #[cfg(feature = "oci")]
@@ -106,6 +114,8 @@ mod tests {
         expected.push("firebird");
         #[cfg(feature = "informix")]
         expected.push("informix");
+        #[cfg(feature = "ibm")]
+        expected.push("ibm");
         #[cfg(feature = "odbc")]
         expected.push("odbc");
         #[cfg(feature = "oci")]
@@ -126,6 +136,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("firebird:dbname=test.fdb"), Some(DriverKind::Firebird));
         #[cfg(feature = "informix")]
         assert_eq!(DriverKind::from_dsn("informix:inventory"), Some(DriverKind::Informix));
+        #[cfg(feature = "ibm")]
+        assert_eq!(DriverKind::from_dsn("ibm:SAMPLE"), Some(DriverKind::Ibm));
         #[cfg(feature = "odbc")]
         assert_eq!(DriverKind::from_dsn("odbc:example"), Some(DriverKind::Odbc));
         #[cfg(feature = "oci")]

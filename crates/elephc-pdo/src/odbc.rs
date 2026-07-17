@@ -1,12 +1,12 @@
 //! Purpose:
-//! System CLI backend matching php-src's PDO_ODBC and PECL PDO_INFORMIX behavior.
+//! System CLI backend matching php-src's PDO_ODBC plus PECL PDO_INFORMIX/PDO_IBM.
 //!
 //! Called from:
-//! - The PDO bridge root when built with the optional `odbc` or `informix` feature.
+//! - The PDO bridge root with the optional `odbc`, `informix`, or `ibm` feature.
 //!
 //! Key details:
-//! - Uses the ODBC 3 CLI ABI through `odbc-sys`, like both PHP extensions delegate to a driver manager.
-//! - Materializes scalar result rows as text/null and preserves Informix LOB stream metadata.
+//! - Uses the ODBC 3 CLI ABI through `odbc-sys`, as the official drivers delegate to a driver manager.
+//! - Materializes scalar result rows as text/null and preserves Informix/IBM LOB metadata.
 //! - Keeps statement handles alive across `SQLMoreResults`, cursor-name, and scroll operations.
 
 use std::collections::HashMap;
@@ -29,8 +29,26 @@ const SQL_AUTOCOMMIT_ON: isize = 1;
 const SQL_CUR_USE_IF_NEEDED: i64 = 0;
 const SQL_CUR_USE_ODBC: i64 = 1;
 const SQL_CUR_USE_DRIVER: i64 = 2;
+#[cfg(feature = "informix")]
 const SQL_INFX_ATTR_ODBC_TYPES_ONLY: i32 = 2257;
+#[cfg(feature = "informix")]
 const SQL_INFX_ATTR_LO_AUTOMATIC: i32 = 2262;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_INFO_USERID: i32 = 1281;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_INFO_ACCTSTR: i32 = 1282;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_INFO_APPLNAME: i32 = 1283;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_INFO_WRKSTNNAME: i32 = 1284;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_USE_TRUSTED_CONTEXT: i32 = 2561;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_TRUSTED_CONTEXT_USERID: i32 = 2562;
+#[cfg(feature = "ibm")]
+const PDO_IBM_ATTR_TRUSTED_CONTEXT_PASSWORD: i32 = 2563;
+#[cfg(feature = "ibm")]
+const SQL_IBM_ATTR_GET_GENERATED_VALUE: i32 = 2583;
 
 unsafe extern "system" {
     /// Applies a driver-specific numeric connection attribute not modeled by `odbc-sys`.
@@ -40,6 +58,26 @@ unsafe extern "system" {
         attribute: i32,
         value: *mut c_void,
         string_length: i32,
+    ) -> SqlReturn;
+    /// Reads a driver-specific connection attribute not modeled by `odbc-sys`.
+    #[cfg(feature = "ibm")]
+    #[link_name = "SQLGetConnectAttr"]
+    fn SQLGetConnectAttrRaw(
+        connection_handle: HDbc,
+        attribute: i32,
+        value: *mut c_void,
+        buffer_length: i32,
+        string_length: *mut i32,
+    ) -> SqlReturn;
+    /// Reads IBM's generated-value statement attribute not modeled by `odbc-sys`.
+    #[cfg(feature = "ibm")]
+    #[link_name = "SQLGetStmtAttr"]
+    fn SQLGetStmtAttrRaw(
+        statement_handle: HStmt,
+        attribute: i32,
+        value: *mut c_void,
+        buffer_length: i32,
+        string_length: *mut i32,
     ) -> SqlReturn;
     /// Assigns an ANSI cursor name to a prepared ODBC statement.
     fn SQLSetCursorName(
@@ -63,6 +101,23 @@ enum CliFlavor {
     Odbc,
     #[cfg(feature = "informix")]
     Informix,
+    #[cfg(feature = "ibm")]
+    Ibm,
+}
+
+/// Maps PDO_IBM's public sequential constants to IBM CLI's native attribute IDs.
+#[cfg(feature = "ibm")]
+fn ibm_native_connection_attribute(attribute: i32) -> Option<i32> {
+    match attribute {
+        PDO_IBM_ATTR_INFO_USERID => Some(1281),
+        PDO_IBM_ATTR_INFO_ACCTSTR => Some(1284),
+        PDO_IBM_ATTR_INFO_APPLNAME => Some(1283),
+        PDO_IBM_ATTR_INFO_WRKSTNNAME => Some(1282),
+        PDO_IBM_ATTR_USE_TRUSTED_CONTEXT => Some(2561),
+        PDO_IBM_ATTR_TRUSTED_CONTEXT_USERID => Some(2562),
+        PDO_IBM_ATTR_TRUSTED_CONTEXT_PASSWORD => Some(2563),
+        _ => None,
+    }
 }
 
 impl CliFlavor {
@@ -73,6 +128,8 @@ impl CliFlavor {
             Self::Odbc => "odbc:",
             #[cfg(feature = "informix")]
             Self::Informix => "informix:",
+            #[cfg(feature = "ibm")]
+            Self::Ibm => "ibm:",
         }
     }
 }
@@ -183,6 +240,8 @@ struct OpenOptions {
     cursor_library: i64,
     assume_utf8: bool,
     auto_commit: bool,
+    #[cfg(feature = "ibm")]
+    ibm_attributes: Vec<(i32, String)>,
 }
 
 /// Splits an ODBC connection string without treating semicolons inside braced values as separators.
@@ -225,6 +284,8 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
     let mut cursor_library = SQL_CUR_USE_IF_NEEDED;
     let mut assume_utf8 = false;
     let mut auto_commit = true;
+    #[cfg(feature = "ibm")]
+    let mut ibm_attributes = Vec::new();
     for part in split_connection_fields(body) {
         let lower = part.to_ascii_lowercase();
         if let Some(value) = lower.strip_prefix("user=") {
@@ -239,6 +300,16 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
             assume_utf8 = value != "0";
         } else if let Some(value) = lower.strip_prefix("elephc_odbc_autocommit=") {
             auto_commit = value != "0";
+        } else if let Some(value) = lower.strip_prefix("elephc_ibm_attr_") {
+            #[cfg(feature = "ibm")]
+            if let Some((attribute, _)) = value.split_once('=') {
+                let key_length = "elephc_ibm_attr_".len() + attribute.len() + 1;
+                if let Ok(attribute) = attribute.parse() {
+                    ibm_attributes.push((attribute, decode_credential(&part[key_length..])));
+                }
+            }
+            #[cfg(not(feature = "ibm"))]
+            let _ = value;
         } else if lower.starts_with("connect_timeout=") {
             // PDO_ODBC does not implement PDO::ATTR_TIMEOUT; the common prelude
             // folds it for network drivers, so discard it before DriverConnect.
@@ -256,6 +327,8 @@ fn parse_open_options(dsn: &str, flavor: CliFlavor) -> Result<OpenOptions, Strin
         cursor_library,
         assume_utf8,
         auto_commit,
+        #[cfg(feature = "ibm")]
+        ibm_attributes,
     })
 }
 
@@ -306,6 +379,12 @@ impl OdbcConn {
         Self::open(dsn, CliFlavor::Informix)
     }
 
+    /// Opens a PDO_IBM named data source or direct IBM CLI connection string.
+    #[cfg(feature = "ibm")]
+    pub fn open_ibm(dsn: &str) -> Result<Self, String> {
+        Self::open(dsn, CliFlavor::Ibm)
+    }
+
     /// Opens either CLI flavor while retaining its distinct PDO identity.
     fn open(dsn: &str, flavor: CliFlavor) -> Result<Self, String> {
         remember_open_error(&ErrorState {
@@ -354,6 +433,43 @@ impl OdbcConn {
                 let _ = SQLFreeHandle(HandleType::Env, env);
             }
             return Err(error.message);
+        }
+        #[cfg(feature = "ibm")]
+        if flavor == CliFlavor::Ibm {
+            for (attribute, value) in &options.ibm_attributes {
+                let Some(native_attribute) = ibm_native_connection_attribute(*attribute) else {
+                    continue;
+                };
+                let result = if *attribute == PDO_IBM_ATTR_USE_TRUSTED_CONTEXT {
+                    let enabled = (value != "0") as isize;
+                    unsafe {
+                        SQLSetConnectAttrRaw(
+                            dbc_handle,
+                            native_attribute,
+                            enabled as *mut c_void,
+                            odbc_sys::IS_INTEGER,
+                        )
+                    }
+                } else {
+                    unsafe {
+                        SQLSetConnectAttrRaw(
+                            dbc_handle,
+                            native_attribute,
+                            value.as_ptr().cast_mut().cast(),
+                            value.len() as i32,
+                        )
+                    }
+                };
+                if !succeeded(result) {
+                    let error = diagnostic(HandleType::Dbc, dbc, "SQLSetConnectAttr IBM");
+                    remember_open_error(&error);
+                    unsafe {
+                        let _ = SQLFreeHandle(HandleType::Dbc, dbc);
+                        let _ = SQLFreeHandle(HandleType::Env, env);
+                    }
+                    return Err(error.message);
+                }
+            }
         }
         let cursor_result = unsafe {
             SQLSetConnectAttr(
@@ -471,6 +587,8 @@ impl OdbcConn {
             CliFlavor::Odbc => crate::driver::DriverKind::Odbc,
             #[cfg(feature = "informix")]
             CliFlavor::Informix => crate::driver::DriverKind::Informix,
+            #[cfg(feature = "ibm")]
+            CliFlavor::Ibm => crate::driver::DriverKind::Ibm,
         }
     }
 
@@ -525,6 +643,9 @@ impl OdbcConn {
             }
         }
         self.error = ErrorState::default();
+        if self.is_ibm() {
+            self.refresh_ibm_ids_last_insert_id(statement_handle);
+        }
         unsafe { let _ = SQLFreeHandle(HandleType::Stmt, statement); };
         if self.is_informix() && sql.trim_start().to_ascii_lowercase().starts_with("insert") {
             self.refresh_informix_last_insert_id();
@@ -536,6 +657,24 @@ impl OdbcConn {
     fn is_informix(&self) -> bool {
         #[cfg(feature = "informix")]
         if self.flavor == CliFlavor::Informix {
+            return true;
+        }
+        false
+    }
+
+    /// Reports whether this shared CLI handle belongs to PDO_IBM.
+    fn is_ibm(&self) -> bool {
+        #[cfg(feature = "ibm")]
+        if self.flavor == CliFlavor::Ibm {
+            return true;
+        }
+        false
+    }
+
+    /// Reports whether this shared CLI handle belongs to PDO_ODBC itself.
+    fn is_odbc(&self) -> bool {
+        #[cfg(feature = "odbc")]
+        if self.flavor == CliFlavor::Odbc {
             return true;
         }
         false
@@ -579,13 +718,86 @@ impl OdbcConn {
         unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
     }
 
-    /// Returns the most recent Informix SERIAL value as PDO text.
-    pub fn last_insert_id(&self) -> String {
-        if self.is_informix() {
-            self.last_insert_id.to_string()
-        } else {
-            String::new()
+    /// Reads PDO_IBM's IDS generated-value statement attribute before handle release.
+    fn refresh_ibm_ids_last_insert_id(&mut self, statement: HStmt) {
+        #[cfg(feature = "ibm")]
+        {
+            if !self.is_ibm() || !self.server_info().starts_with("IDS") {
+                return;
+            }
+            let mut buffer = [0u8; 64];
+            let result = unsafe {
+                SQLGetStmtAttrRaw(
+                    statement,
+                    SQL_IBM_ATTR_GET_GENERATED_VALUE,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as i32,
+                    ptr::null_mut(),
+                )
+            };
+            if succeeded(result) {
+                let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+                let value = String::from_utf8_lossy(&buffer[..end]).trim().parse().unwrap_or(0);
+                if value != 0 {
+                    self.last_insert_id = value;
+                }
+            }
         }
+        #[cfg(not(feature = "ibm"))]
+        let _ = statement;
+    }
+
+    /// Returns the current Db2 identity or most recent Informix SERIAL as PDO text.
+    pub fn last_insert_id(&mut self) -> String {
+        if self.is_informix() {
+            return self.last_insert_id.to_string();
+        }
+        if self.is_ibm() {
+            let server = self.server_info();
+            if server.starts_with("DB2") {
+                return self
+                    .query_scalar_text("SELECT IDENTITY_VAL_LOCAL() FROM SYSIBM.SYSDUMMY1")
+                    .unwrap_or_default();
+            }
+            return self.last_insert_id.to_string();
+        }
+        String::new()
+    }
+
+    /// Executes one scalar CLI query for driver helper hooks such as last-insert-id.
+    fn query_scalar_text(&mut self, sql: &str) -> Option<String> {
+        let mut raw = Handle::null();
+        if !succeeded(unsafe { SQLAllocHandle(HandleType::Stmt, self.dbc.as_handle(), &mut raw) }) {
+            self.error = diagnostic(HandleType::Dbc, self.dbc.as_handle(), "SQLAllocHandle: STMT");
+            return None;
+        }
+        let statement = raw.as_hstmt();
+        let executed = unsafe { SQLExecDirect(statement, sql.as_ptr(), sql.len() as i32) };
+        if !succeeded(executed) || !succeeded(unsafe { SQLFetch(statement) }) {
+            self.error = diagnostic(HandleType::Stmt, raw, "SQLExecDirect");
+            unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
+            return None;
+        }
+        let mut buffer = [0u8; 128];
+        let mut indicator = 0isize;
+        let read = unsafe {
+            SQLGetData(
+                statement,
+                1,
+                CDataType::Char,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as isize,
+                &mut indicator,
+            )
+        };
+        unsafe { let _ = SQLFreeHandle(HandleType::Stmt, raw); };
+        if !succeeded(read) || indicator == NULL_DATA {
+            return Some("0".to_string());
+        }
+        let length = usize::try_from(indicator)
+            .unwrap_or(0)
+            .min(buffer.len().saturating_sub(1));
+        Some(String::from_utf8_lossy(&buffer[..length]).trim().to_string())
     }
 
     /// Starts a manual transaction by disabling native autocommit when needed.
@@ -667,6 +879,105 @@ impl OdbcConn {
         }
     }
 
+    /// Writes one PDO_IBM string-valued CLI connection attribute.
+    #[cfg(feature = "ibm")]
+    pub fn set_ibm_attribute_text(&mut self, attribute: i64, value: &str) -> bool {
+        let Ok(attribute) = i32::try_from(attribute) else {
+            return false;
+        };
+        if !matches!(
+            attribute,
+            PDO_IBM_ATTR_INFO_USERID
+                | PDO_IBM_ATTR_INFO_ACCTSTR
+                | PDO_IBM_ATTR_INFO_APPLNAME
+                | PDO_IBM_ATTR_INFO_WRKSTNNAME
+                | PDO_IBM_ATTR_TRUSTED_CONTEXT_USERID
+                | PDO_IBM_ATTR_TRUSTED_CONTEXT_PASSWORD
+        ) {
+            return false;
+        }
+        let native_attribute = ibm_native_connection_attribute(attribute)
+            .expect("validated PDO_IBM attribute must have a native CLI mapping");
+        let result = unsafe {
+            SQLSetConnectAttrRaw(
+                self.dbc,
+                native_attribute,
+                value.as_ptr().cast_mut().cast(),
+                value.len() as i32,
+            )
+        };
+        if !succeeded(result) {
+            self.error = diagnostic(HandleType::Dbc, self.dbc.as_handle(), "SQLSetConnectAttr IBM");
+            return false;
+        }
+        self.error = ErrorState::default();
+        true
+    }
+
+    /// Reads one PDO_IBM string-valued CLI connection attribute.
+    #[cfg(feature = "ibm")]
+    pub fn ibm_attribute_text(&mut self, attribute: i64) -> Option<String> {
+        let attribute = i32::try_from(attribute).ok()?;
+        if !matches!(
+            attribute,
+            PDO_IBM_ATTR_INFO_USERID
+                | PDO_IBM_ATTR_INFO_ACCTSTR
+                | PDO_IBM_ATTR_INFO_APPLNAME
+                | PDO_IBM_ATTR_INFO_WRKSTNNAME
+                | PDO_IBM_ATTR_TRUSTED_CONTEXT_USERID
+        ) {
+            return None;
+        }
+        let native_attribute = ibm_native_connection_attribute(attribute)
+            .expect("validated PDO_IBM attribute must have a native CLI mapping");
+        let mut buffer = [0u8; 256];
+        let mut length = 0i32;
+        let result = unsafe {
+            SQLGetConnectAttrRaw(
+                self.dbc,
+                native_attribute,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as i32,
+                &mut length,
+            )
+        };
+        if !succeeded(result) {
+            self.error = diagnostic(HandleType::Dbc, self.dbc.as_handle(), "SQLGetConnectAttr IBM");
+            return None;
+        }
+        self.error = ErrorState::default();
+        let length = usize::try_from(length).unwrap_or(0).min(buffer.len());
+        Some(String::from_utf8_lossy(&buffer[..length]).into_owned())
+    }
+
+    /// Reads PDO_IBM's trusted-context enablement flag.
+    #[cfg(feature = "ibm")]
+    pub fn ibm_attribute_int(&mut self, attribute: i64) -> Option<i64> {
+        let attribute = i32::try_from(attribute).ok()?;
+        if attribute != PDO_IBM_ATTR_USE_TRUSTED_CONTEXT {
+            return None;
+        }
+        let native_attribute = ibm_native_connection_attribute(attribute)
+            .expect("validated PDO_IBM attribute must have a native CLI mapping");
+        let mut value = 0i32;
+        let mut length = 0i32;
+        let result = unsafe {
+            SQLGetConnectAttrRaw(
+                self.dbc,
+                native_attribute,
+                (&mut value as *mut i32).cast(),
+                std::mem::size_of::<i32>() as i32,
+                &mut length,
+            )
+        };
+        if !succeeded(result) {
+            self.error = diagnostic(HandleType::Dbc, self.dbc.as_handle(), "SQLGetConnectAttr IBM");
+            return None;
+        }
+        self.error = ErrorState::default();
+        Some((value != 0) as i64)
+    }
+
     /// Reads one textual SQLGetInfo field.
     pub fn info(&mut self, info_type: InfoType) -> String {
         let mut buffer = [0u8; 256];
@@ -700,6 +1011,8 @@ impl OdbcConn {
             CliFlavor::Odbc => "ODBC-unixODBC".to_string(),
             #[cfg(feature = "informix")]
             CliFlavor::Informix => "1.3.7".to_string(),
+            #[cfg(feature = "ibm")]
+            CliFlavor::Ibm => "1.7.0".to_string(),
         }
     }
 
@@ -805,11 +1118,18 @@ fn informix_metadata_is_lob(native_type: &str) -> bool {
         || native_type.ends_with("_UDT_CLOB")
 }
 
+/// Reproduces PDO_IBM 1.7.0's metadata switch, including BOOLEAN/BIT fallthrough.
+#[cfg(feature = "ibm")]
+fn ibm_metadata_is_lob(data_type: i16) -> bool {
+    matches!(data_type, -7 | 16 | -2 | -3 | -4 | -98 | -99 | -370)
+}
+
 /// Completed CLI output value copied before its native execution buffer expires.
 #[derive(Clone)]
 pub(crate) struct OdbcOutputValue {
     pub(crate) data: Option<Vec<u8>>,
     pub(crate) lob: bool,
+    pub(crate) numeric: bool,
 }
 
 /// One materialized ODBC result column.
@@ -817,7 +1137,9 @@ struct OdbcColumn {
     name: String,
     wide: bool,
     lob: bool,
-    metadata_lob: bool,
+    metadata_pdo_lob: bool,
+    len: i64,
+    precision: i64,
     scale: i64,
     table: String,
     native_type: String,
@@ -1176,9 +1498,7 @@ impl OdbcStmt {
             connection.error = self.error.clone();
             return Err(self.error.message.clone());
         }
-        let execution_info = if result == SqlReturn::SUCCESS_WITH_INFO
-            && !connection.is_informix()
-        {
+        let execution_info = if result == SqlReturn::SUCCESS_WITH_INFO && connection.is_odbc() {
             Some(diagnostic(
                 HandleType::Stmt,
                 self.stmt.as_handle(),
@@ -1212,10 +1532,17 @@ impl OdbcStmt {
                     Some(bytes.to_vec())
                 }
             };
-            self.output_values[slot] = Some(OdbcOutputValue { data, lob: false });
+            self.output_values[slot] = Some(OdbcOutputValue {
+                data,
+                lob: false,
+                numeric: matches!(descriptors[occurrence].1.0, -7 | 4 | 5 | 16),
+            });
         }
         self.sent_sql.clear();
         self.materialize_current_result(connection)?;
+        if connection.is_ibm() {
+            connection.refresh_ibm_ids_last_insert_id(self.stmt);
+        }
         if self.is_insert && connection.is_informix() {
             connection.refresh_informix_last_insert_id();
         }
@@ -1267,12 +1594,13 @@ impl OdbcStmt {
                 return Err(self.error.message.clone());
             }
             let informix = connection.is_informix();
-            let native_type = if informix {
+            let ibm = connection.is_ibm();
+            let native_type = if informix || ibm {
                 column_text_attribute(self.stmt, index as u16, Desc::TypeName).unwrap_or_default()
             } else {
                 String::new()
             };
-            let lob = informix
+            let informix_lob = informix
                 && (matches!(
                     data_type,
                     SqlDataType::EXT_LONG_VARCHAR
@@ -1280,18 +1608,29 @@ impl OdbcStmt {
                         | SqlDataType::EXT_VAR_BINARY
                         | SqlDataType::EXT_LONG_VAR_BINARY
                 ) || data_type.0 == 17);
-            let metadata_lob = informix && informix_metadata_is_lob(&native_type);
+            let ibm_lob = ibm
+                && matches!(data_type.0, -2 | -3 | -4 | -98 | -99 | -370);
+            let lob = informix_lob || ibm_lob;
+            let metadata_pdo_lob = (informix && informix_metadata_is_lob(&native_type))
+                || (ibm && {
+                    #[cfg(feature = "ibm")]
+                    {
+                        ibm_metadata_is_lob(data_type.0)
+                    }
+                    #[cfg(not(feature = "ibm"))]
+                    false
+                });
             let mut flags = 0;
             if nullable == Nullability::NO_NULLS {
                 flags |= 1;
             }
-            if informix
+            if (informix || ibm)
                 && column_numeric_attribute(self.stmt, index as u16, Desc::Unsigned)
                     .is_some_and(|value| value != 0)
             {
                 flags |= 2;
             }
-            if informix
+            if (informix || ibm)
                 && column_numeric_attribute(self.stmt, index as u16, Desc::AutoUniqueValue)
                     .is_some_and(|value| value != 0)
             {
@@ -1307,9 +1646,11 @@ impl OdbcStmt {
                             | SqlDataType::EXT_W_LONG_VARCHAR
                     ),
                 lob,
-                metadata_lob,
+                metadata_pdo_lob,
+                len: i64::try_from(size).unwrap_or(i64::MAX),
+                precision: i64::from(scale),
                 scale: i64::from(scale),
-                table: if informix {
+                table: if informix || ibm {
                     column_text_attribute(self.stmt, index as u16, Desc::BaseTableName)
                         .unwrap_or_default()
                 } else {
@@ -1528,6 +1869,24 @@ impl OdbcStmt {
             .unwrap_or_default()
     }
 
+    /// Returns PDO core's common maximum column length captured by `SQLDescribeCol`.
+    pub fn column_len(&self, index: i64) -> i64 {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.len)
+            .unwrap_or(-1)
+    }
+
+    /// Returns PDO core's common precision field, which CLI drivers fill from scale.
+    pub fn column_precision(&self, index: i64) -> i64 {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.columns.get(index))
+            .map(|column| column.precision)
+            .unwrap_or_default()
+    }
+
     /// Returns Informix not-null, unsigned, and auto-increment descriptor bits.
     pub fn column_flags(&self, index: i64) -> i64 {
         usize::try_from(index)
@@ -1542,7 +1901,7 @@ impl OdbcStmt {
         if usize::try_from(index)
             .ok()
             .and_then(|index| self.columns.get(index))
-            .is_some_and(|column| column.metadata_lob)
+            .is_some_and(|column| column.metadata_pdo_lob)
         {
             3
         } else {
@@ -1626,6 +1985,32 @@ mod tests {
         assert_eq!(options.password, "secret");
     }
 
+    /// Parses a PDO_IBM direct DSN and extracts constructor-only CLI attributes.
+    #[test]
+    #[cfg(feature = "ibm")]
+    fn parses_ibm_direct_dsn_options() {
+        let options = parse_open_options(
+            "ibm:DATABASE=SAMPLE;HOSTNAME=db2;elephc_ibm_attr_1283=elephc%3Bapp;elephc_ibm_attr_2561=1",
+            CliFlavor::Ibm,
+        )
+        .unwrap();
+        assert_eq!(options.source, "DATABASE=SAMPLE;HOSTNAME=db2");
+        assert_eq!(
+            options.ibm_attributes,
+            [(PDO_IBM_ATTR_INFO_APPLNAME, "elephc;app".to_string()), (PDO_IBM_ATTR_USE_TRUSTED_CONTEXT, "1".to_string())]
+        );
+    }
+
+    /// Keeps public PDO constant ordering distinct from IBM CLI's account/workstation IDs.
+    #[test]
+    #[cfg(feature = "ibm")]
+    fn maps_ibm_public_attributes_to_native_cli_ids() {
+        assert_eq!(ibm_native_connection_attribute(PDO_IBM_ATTR_INFO_USERID), Some(1281));
+        assert_eq!(ibm_native_connection_attribute(PDO_IBM_ATTR_INFO_ACCTSTR), Some(1284));
+        assert_eq!(ibm_native_connection_attribute(PDO_IBM_ATTR_INFO_APPLNAME), Some(1283));
+        assert_eq!(ibm_native_connection_attribute(PDO_IBM_ATTR_INFO_WRKSTNNAME), Some(1282));
+    }
+
     /// Applies ODBC brace quoting to semicolons and closing braces.
     #[test]
     fn quotes_connection_values() {
@@ -1664,6 +2049,18 @@ mod tests {
         assert!(informix_metadata_is_lob("BLOB"));
         assert!(informix_metadata_is_lob("sql_infx_udt_clob"));
         assert!(!informix_metadata_is_lob("LONG VARCHAR"));
+    }
+
+    /// Preserves PDO_IBM's BOOLEAN/BIT fallthrough and binary/LOB metadata mapping.
+    #[test]
+    #[cfg(feature = "ibm")]
+    fn recognizes_ibm_metadata_lob_types() {
+        assert!(ibm_metadata_is_lob(16));
+        assert!(ibm_metadata_is_lob(-7));
+        assert!(ibm_metadata_is_lob(-98));
+        assert!(ibm_metadata_is_lob(-370));
+        assert!(!ibm_metadata_is_lob(4));
+        assert!(!ibm_metadata_is_lob(12));
     }
 
     /// Executes binds, typed text fetches, transactions, and multiple results against a live DSN.
