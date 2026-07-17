@@ -9724,17 +9724,12 @@ fn lower_nullable_dynamic_method_expr_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let fatal_block = ctx
         .builder
         .create_named_block("dynamic_method.null.fatal", Vec::new());
     let call_block = ctx
         .builder
         .create_named_block("dynamic_method.non_null.call", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("dynamic_method.nullable.merge", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -9755,12 +9750,7 @@ fn lower_nullable_dynamic_method_expr_call(
     terminate_dynamic_method_call_on_null(ctx, method, expr);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_dynamic_method_call_with_receiver(ctx, object, method, args, expr);
-    store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
-    branch_to(ctx, merge);
-
-    ctx.builder.position_at_end(merge);
-    take_owned_temp(ctx, &temp_name, expr.span)
+    lower_dynamic_method_call_with_receiver(ctx, object, method, args, expr)
 }
 
 /// Throws a catchable PHP `Error` with the runtime dynamic method name.
