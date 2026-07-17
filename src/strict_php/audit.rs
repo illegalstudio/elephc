@@ -2,7 +2,8 @@
 //! The `--strict-php` AST audit pass: walks a parsed user program and reports a
 //! `CompileError` for every elephc-only construct (`ifdef`, `packed class`,
 //! `extern`, `ptr_cast<T>`, `buffer_new<T>`, typed local declarations,
-//! `ptr`/`buffer<T>` type annotations, and compiler-reserved `__elephc_*` names).
+//! `ptr`/`buffer<T>` type annotations, and compiler-reserved `__elephc_*` names)
+//! in every expression position, including PHP attribute arguments.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` — on the main file right after parsing, and on

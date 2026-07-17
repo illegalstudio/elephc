@@ -117,7 +117,9 @@ at the source level:
 - extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
   `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
   (`int $x = 5;`), and `ptr`/`buffer<T>` type annotations — is reported with a
-  `rejected by --strict-php` diagnostic, one error per violation;
+  `rejected by --strict-php` diagnostic, one error per violation, wherever the
+  construct appears (statement bodies, closures, class members, and PHP
+  attribute arguments alike);
 - extension builtins (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`) behave
   as if they did not exist, exactly as under the PHP interpreter:
   `function_exists()` returns `false` for them, calling one is an undefined
