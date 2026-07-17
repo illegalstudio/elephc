@@ -1232,10 +1232,28 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
-  profile; DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, and OCI are available through
-  their optional profiles.
+  profile; DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, OCI, and CUBRID are available
+  through their optional profiles.
   The central registry intentionally reports
   only drivers present in the selected archive rather than advertising inert names.
+
+### Validation boundary
+
+- CI builds the default PDO bridge and every optional driver profile on macOS AArch64,
+  Linux AArch64, and Linux x86_64. Surface tests select the PHP-version-specific API
+  independently from the target architecture.
+- The live-database workflow exercises PostgreSQL, MySQL/MariaDB, DBLIB, Firebird, ODBC,
+  SQLSRV, OCI, and CUBRID on Linux, including the libpq GSSAPI/Kerberos profile. SQLite is
+  exercised directly by the ordinary codegen suite and needs no external service.
+- PDO_INFORMIX and PDO_IBM require proprietary Client SDK installations and servers that
+  the public workflow cannot redistribute. CI builds their profiles and runs unit plus
+  compiled-surface tests; a fully native live qualification still requires externally
+  supplied IBM/HCL client libraries, DSNs, and credentials.
+- Live services are not replicated on every target architecture. The three-target jobs
+  prove that every optional bridge builds for the supported matrix; the hermetic live
+  workflow supplies protocol/runtime acceptance on Linux x86_64. Do not interpret that
+  split as proof that each proprietary client installation has been exercised on all
+  three targets.
 
 ### Driver-specific client options
 

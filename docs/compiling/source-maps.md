@@ -1,4 +1,9 @@
-# Source maps
+---
+title: "Source maps"
+description: "The versioned JSON source-map schema emitted by --source-map, including function ranges, EIR labels, source spans, and optimization provenance."
+sidebar:
+  order: 8
+---
 
 `elephc --source-map file.php` writes a `file.map` sidecar next to the generated
 assembly, mapping the assembly back to PHP source. The map is a JSON document

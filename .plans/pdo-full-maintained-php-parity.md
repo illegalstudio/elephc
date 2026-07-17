@@ -1,17 +1,24 @@
 # PDO full maintained-PHP parity
 
-- [ ] Freeze the PHP 8.2–8.5 PDO reference matrix from versioned php-src/PECL sources.
+- [x] Freeze the PHP 8.2–8.5 PDO reference matrix from versioned php-src/PECL sources.
 - [x] Replace availability and DSN dispatch conditionals with a single compiled-driver registry.
 - [ ] Migrate driver-specific attributes, subclasses, statements, and capability hooks to the registry.
 - [x] Implement `pdo.dsn.*` alias resolution with PHP-compatible configuration precedence.
 - [ ] Remove the documented common PDO/PDOStatement divergences.
-- [ ] Add PDO_DBLIB / `Pdo\Dblib` with versioned constants and FreeTDS live tests.
-- [ ] Add PDO_FIREBIRD / `Pdo\Firebird` with versioned constants and Firebird live tests.
-- [ ] Add PDO_ODBC / `Pdo\Odbc` with unixODBC/iODBC live tests.
-- [ ] Add PDO_OCI compatibility for PHP 8.2–8.5, including the post-8.3 PECL split.
-- [ ] Add the maintained external PDO_CUBRID, PDO_IBM, PDO_INFORMIX, and PDO_SQLSRV surfaces.
+- [x] Add PDO_DBLIB / `Pdo\Dblib` with versioned constants and FreeTDS live tests.
+- [x] Add PDO_FIREBIRD / `Pdo\Firebird` with versioned constants and Firebird live tests.
+- [x] Add PDO_ODBC / `Pdo\Odbc` with unixODBC/iODBC live tests.
+- [x] Add PDO_OCI compatibility for PHP 8.2–8.5, including the post-8.3 PECL split.
+- [x] Add the maintained external PDO_CUBRID, PDO_IBM, PDO_INFORMIX, and PDO_SQLSRV surfaces.
 - [ ] Validate every available backend on macOS AArch64, Linux AArch64, and Linux x86_64.
 - [ ] Regenerate the complete documentation/compatibility report and close every recorded gap.
+
+Current qualification boundary: all eleven drivers in the frozen matrix are implemented,
+and every optional profile builds in the three-target CI matrix. PostgreSQL, MySQL,
+DBLIB, Firebird, ODBC, SQLSRV, OCI, and CUBRID have Linux live acceptance; Informix and
+IBM retain unit and compiled-surface coverage until redistributable proprietary Client SDK
+and server fixtures are available. Cross-target live execution and the documented common
+PDO divergences therefore remain open and prevent a literal 100% certification claim.
 
 ## Normative scope
 

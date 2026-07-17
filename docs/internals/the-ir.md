@@ -1367,7 +1367,7 @@ that need optional helpers.
 
 EIR does not choose physical registers, spill slots, callee-saved preservation,
 stack alignment, syscall numbers, object file directives, or symbol decoration.
-Those remain in `src/codegen/abi/` and platform helpers.
+Those remain in `src/codegen_support/abi/` and platform helpers.
 
 The EIR backend consumes:
 

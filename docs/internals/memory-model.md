@@ -493,7 +493,7 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 
 These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
 
-The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen/runtime/data/`. Together they emit these static data tables:
+The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen_support/runtime/data/`. Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
@@ -632,7 +632,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
 - **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
 - **Kind-0 resources** (generic/unknown resource kind, including synthetic user-wrapper handles `>= 0x40000000`) are not auto-freed by the Mixed deep-free path — their lifecycle remains managed by the wrapper layer or the user's explicit `close()` call. Kinds 1–4 (native stream fd, HashContext, `popen` pipe, `opendir` stream) are auto-released at scope exit
-- **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (documented in `src/codegen/runtime/strings/hash_context.rs`)
+- **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (implemented by the crypto bridge and its Mixed ownership hooks)
 
 ### Targeted cycle collection
 

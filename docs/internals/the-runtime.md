@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `fibers/`, `generators/`
+**Source:** `src/codegen_support/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `pdo/`, `spl/`, `system/`, `pointers/`, `fibers/`, `generators/`, `zval/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -38,7 +38,7 @@ __rt_build_argv    build $argv from C strings
 
 ## Diagnostic routines
 
-**Source:** `src/codegen/runtime/diagnostics.rs`
+**Source:** `src/codegen_support/runtime/diagnostics.rs`
 
 These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written to stderr. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
 
@@ -50,7 +50,7 @@ These helpers implement PHP's `@` error-suppression operator and the runtime war
 
 ## String routines
 
-**Source:** `src/codegen/runtime/strings/`
+**Source:** `src/codegen_support/runtime/strings/`
 
 ### `__rt_itoa` — Integer to string
 
@@ -198,7 +198,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Callable routines
 
-**Source:** `src/codegen/runtime/callables/` (4 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/callables/` (4 files including `mod.rs`)
 
 These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value, plus the `Closure::bind` family helper. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
 
@@ -225,7 +225,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (131 files)
+**Source:** `src/codegen_support/runtime/arrays/` (150 files)
 
 ### Core allocation
 
@@ -358,7 +358,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (40 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)
+**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus 27 files under `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/`)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -382,7 +382,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ## Exception routines
 
-**Source:** `src/codegen/runtime/exceptions.rs` plus `src/codegen/runtime/exceptions/` (6 files)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (6 files)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -477,7 +477,7 @@ All regex routines use PCRE2 through the PCRE2 POSIX-compatible wrapper (`pcre2_
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (108 files)
+**Source:** `src/codegen_support/runtime/io/` (114 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -579,7 +579,7 @@ Userspace `streamWrapper` classes registered with `stream_wrapper_register()` di
 
 ## Pointer routines
 
-**Source:** `src/codegen/runtime/pointers/` (7 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/pointers/` (7 files including `mod.rs`)
 
 These helpers support the compiler-specific pointer builtins.
 
@@ -594,7 +594,7 @@ These helpers support the compiler-specific pointer builtins.
 
 ## Buffer routines
 
-**Source:** `src/codegen/runtime/buffers/` (5 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/buffers/` (5 files including `mod.rs`)
 
 These helpers support the compiler-specific `buffer<T>` hot-path data type.
 
@@ -624,9 +624,44 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 | `__rt_hash_may_have_cyclic_values` | Scan hash entries to check if any contain refcounted children | `x0` = hash pointer | `x0` = 0 (scalar-only) or 1 (has cycles) |
 | `__rt_match_unhandled` | Abort with `Fatal error: unhandled match case` | — | does not return |
 
+## zval bridge routines
+
+**Source:** `src/codegen_support/runtime/zval/` (11 files including `mod.rs`)
+
+These routines implement the compiler extension that converts owned elephc values to and
+from PHP-compatible `zval`, `zend_string`, and `zend_array` layouts. Packed and hash arrays
+are rebuilt recursively, and the free helpers release every PHP-shaped child exactly once.
+
+| Routine | What it does |
+|---|---|
+| `__rt_zval_string_new` | Allocate a PHP-compatible `zend_string` and copy source bytes |
+| `__rt_zval_djbx33a` | Compute the hash stored in a PHP string or hash key |
+| `__rt_zval_pack` / `__rt_zval_pack_element` | Convert a boxed elephc `Mixed` value or one typed element into an owned 16-byte `zval` |
+| `__rt_zval_pack_array_packed` / `__rt_zval_pack_array_hash` | Rebuild indexed or associative arrays as PHP `zend_array` storage |
+| `__rt_zval_unpack` / `__rt_zval_unpack_array` | Convert a PHP-shaped scalar/array back into an owned boxed elephc value |
+| `__rt_zval_type` | Return the PHP type tag stored in a `zval` |
+| `__rt_zval_free_array` | Recursively release a packed/hash `zend_array` and its children |
+| `__rt_zval_free` / `__rt_zval_free_children` | Release one `zval` and any owned string/array payload |
+
+## PDO callback routines
+
+**Source:** `src/codegen_support/runtime/pdo/` (5 files including `mod.rs`)
+
+The PDO bridge calls these target-aware adapters when SQLite invokes a compiled-PHP
+collation, scalar function, or aggregate. They box native SQLite arguments, re-enter the
+generated callable dispatcher, translate the return value, and contain exceptions at the
+C callback boundary.
+
+| Routine | What it does |
+|---|---|
+| `__rt_pdo_call_collation` | Invoke a PHP collation comparator and coerce its result to an integer ordering value |
+| `__rt_pdo_call_scalar` | Invoke a PHP scalar SQLite UDF with boxed row arguments and translate its scalar result |
+| `__rt_pdo_call_agg_step` | Invoke an aggregate step callback and persist its returned accumulator |
+| `__rt_pdo_call_agg_final` | Invoke an aggregate finalizer and translate the completed aggregate result |
+
 ## Object and stdClass routines
 
-**Source:** `src/codegen/runtime/objects/` (6 files)
+**Source:** `src/codegen_support/runtime/objects/` (6 files)
 
 These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
@@ -646,7 +681,7 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 
 ## SPL and iterable routines
 
-**Source:** `src/codegen/runtime/spl/` (3 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/spl/` (3 files including `mod.rs`)
 
 These helpers back SPL container classes whose PHP surface needs custom runtime storage. `SplDoublyLinkedList` (and its `SplStack` / `SplQueue` subclasses) store a class id, an owned indexed array of boxed `Mixed` cells, an iterator index, and iterator-mode bits. `SplFixedArray` stores a class id and a fixed-size storage array of owned boxed `Mixed` cells (or null for unset/null slots). Mutating methods take ownership of the boxed `Mixed` arguments prepared by call lowering, and resize/overwrite paths release any replaced cell first.
 
@@ -678,7 +713,7 @@ These helpers back SPL container classes whose PHP surface needs custom runtime 
 
 ## Generator routines
 
-**Source:** `src/codegen/runtime/generators/` (3 files: `mod.rs`, `coro.rs`, `frame.rs`)
+**Source:** `src/codegen_support/runtime/generators/` (3 files: `mod.rs`, `coro.rs`, `frame.rs`)
 
 These helpers back the built-in `Generator` class. Generators are **stackful coroutines** that reuse the [Fiber runtime](#fiber-routines): a `Generator` object reuses the Fiber 232-byte layout (so it can drive itself through `__rt_fiber_switch` / `suspend` / `resume` / `throw`) plus a small block of generator-specific fields (`last_key`, `last_value`, `return_value`, `auto_key`, `delegated_iter`) at offsets 184..224 inside the otherwise-unused Fiber reserved region. The generated generator body runs on its own coroutine stack and calls `__rt_gen_suspend` at each `yield`; the accessor helpers below drive the coroutine for the public Iterator surface, `send()`/`throw()`, and `getReturn()`.
 
@@ -701,7 +736,7 @@ Generators are stamped as object heap blocks (heap kind `4`) because `Generator`
 
 ## Fiber routines
 
-**Source:** `src/codegen/runtime/fibers/` (4 files plus the `api/` subdirectory)
+**Source:** `src/codegen_support/runtime/fibers/` (8 files including the target-aware `api/` subdirectory)
 
 These helpers implement PHP 8.1-style cooperative coroutines. They are emitted by the shared runtime on every supported target.
 
@@ -723,12 +758,18 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted b
 
 ## How routines are emitted
 
-**File:** `src/codegen/runtime/emitters.rs`
+**File:** `src/codegen_support/runtime/emitters.rs`
 
-The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup.
+The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. It
+covers strings, arrays/hashes and GC, callables, I/O, system/date/JSON/regex helpers,
+exceptions, objects/SPL, buffers, pointers, the zval bridge, optional PDO callbacks,
+fibers, and generators. Each runtime module owns the shared helper surface and dispatches
+internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI
+setup. The four `__rt_pdo_*` adapters are emitted only when `RuntimeFeatures::pdo_udf` is
+reachable; the zval pack/unpack family is always available to extension codegen.
 
 ```rust
-pub fn emit_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // diagnostics: runtime warning emission and @ suppression state
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
@@ -742,6 +783,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
+    // PDO: callback adapters when features.pdo_udf is reachable
     // fibers: guarded stack allocation, context switch, entry trampoline, Fiber API
 }
 ```
@@ -754,7 +796,7 @@ The runtime can also be emitted in **position-independent mode** for `--emit cdy
 
 ## Runtime data
 
-The runtime data layer lives in `src/codegen/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
+The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
