@@ -9,6 +9,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -91,6 +92,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -173,6 +175,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -216,6 +219,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -259,6 +263,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -301,6 +306,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -343,6 +349,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -385,6 +392,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -427,6 +435,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -469,6 +478,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -512,6 +522,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -555,6 +566,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -605,6 +617,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -656,6 +669,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -705,6 +719,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -754,6 +769,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -797,6 +813,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -846,6 +863,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -886,6 +904,153 @@
     "sub_area": "IO"
   },
   {
+    "area": "Pointer",
+    "canonical_name": "__elephc_ptr_is_null",
+    "description": "Internal prelude alias of ptr_is_null.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_ptr_is_null",
+      "codegen_line": 51,
+      "notes": [
+        "Lowers `ptr_is_null(pointer)` by comparing the raw pointer address to zero."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/__elephc_ptr_is_null.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_ptr_is_null",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pointer",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "__elephc_ptr_is_null",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "__elephc_ptr_read_string",
+    "description": "Internal prelude alias of ptr_read_string.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_ptr_read_string",
+      "codegen_line": 129,
+      "notes": [
+        "Lowers `ptr_read_string(pointer, length)` by copying raw bytes into an owned PHP string."
+      ],
+      "runtime_helpers": [
+        "__rt_ptr_read_string"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/__elephc_ptr_read_string.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_ptr_read_string",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pointer",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "__elephc_ptr_read_string",
+    "sub_area": "Pointer"
+  },
+  {
+    "area": "Pointer",
+    "canonical_name": "__elephc_ptr_write_string",
+    "description": "Internal prelude alias of ptr_write_string.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen/lower_inst/builtins/pointers.rs",
+      "codegen_function": "lower_ptr_write_string",
+      "codegen_line": 166,
+      "notes": [
+        "Lowers `ptr_write_string(pointer, string)` by copying PHP string bytes into raw memory."
+      ],
+      "runtime_helpers": [
+        "__rt_ptr_write_string"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/pointers/__elephc_ptr_write_string.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_ptr_write_string",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pointer",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "__elephc_ptr_write_string",
+    "sub_area": "Pointer"
+  },
+  {
     "area": "Misc",
     "canonical_name": "__elephc_strtotime_raw",
     "description": "Internal raw strtotime alias returning a plain integer.",
@@ -895,6 +1060,7 @@
     },
     "eval_only": false,
     "in_catalog": false,
+    "is_extension": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
@@ -963,6 +1129,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1023,6 +1190,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1081,6 +1249,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1125,6 +1294,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1177,6 +1347,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1250,6 +1421,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1321,6 +1493,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1392,6 +1565,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1457,6 +1631,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1505,6 +1680,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1565,6 +1741,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1638,6 +1815,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1716,6 +1894,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1793,6 +1972,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1852,6 +2032,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1919,6 +2100,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -1977,6 +2159,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2024,6 +2207,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2087,6 +2271,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2131,6 +2316,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2201,6 +2387,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2252,6 +2439,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2297,6 +2485,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2358,6 +2547,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2422,6 +2612,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2480,6 +2671,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2517,6 +2709,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2555,6 +2748,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2635,6 +2829,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2706,6 +2901,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2767,6 +2963,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2826,6 +3023,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2884,6 +3082,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -2957,6 +3156,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3015,6 +3215,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3068,6 +3269,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3142,6 +3344,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3212,6 +3415,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3283,6 +3487,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3353,6 +3558,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3442,6 +3648,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3514,6 +3721,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3559,6 +3767,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3615,6 +3824,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3687,6 +3897,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3747,6 +3958,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3805,6 +4017,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3868,6 +4081,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3919,6 +4133,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -3987,6 +4202,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4051,6 +4267,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4108,6 +4325,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4173,6 +4391,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4237,6 +4456,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4302,6 +4522,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4362,6 +4583,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4428,6 +4650,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4493,6 +4716,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4553,13 +4777,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1176,
+      "codegen_line": 1190,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -4590,7 +4815,7 @@
   {
     "area": "Buffer",
     "canonical_name": "buffer_free",
-    "description": "Lowers `buffer_free()` through the direct buffer opcode helper.",
+    "description": "Frees a buffer<T> and nulls the local variable that held it.",
     "eval": {
       "area": "raw_memory",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs",
@@ -4613,19 +4838,20 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/buffers.rs",
       "codegen_function": "lower_buffer_free",
-      "codegen_line": 24,
+      "codegen_line": 25,
       "notes": [
         "Lowers `buffer_free()` through the direct buffer opcode helper."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": null,
+      "sig_file": "src/builtins/pointers/buffer_free.rs",
       "sig_line": null
     },
     "name": "buffer_free",
@@ -4639,7 +4865,7 @@
           "type": "buffer"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "void",
       "variadic": null
     },
     "slug": "buffer_free",
@@ -4648,7 +4874,7 @@
   {
     "area": "Buffer",
     "canonical_name": "buffer_len",
-    "description": "Lowers `buffer_len()` through the direct buffer opcode helper.",
+    "description": "Returns the logical element count of a buffer<T>.",
     "eval": {
       "area": "raw_memory",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs",
@@ -4671,19 +4897,20 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/buffers.rs",
       "codegen_function": "lower_buffer_len",
-      "codegen_line": 19,
+      "codegen_line": 20,
       "notes": [
         "Lowers `buffer_len()` through the direct buffer opcode helper."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": null,
+      "sig_file": "src/builtins/pointers/buffer_len.rs",
       "sig_line": null
     },
     "name": "buffer_len",
@@ -4729,6 +4956,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4785,6 +5013,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4852,6 +5081,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4920,6 +5150,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -4978,6 +5209,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5054,6 +5286,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5138,6 +5371,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5211,6 +5445,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5282,6 +5517,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5353,6 +5589,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5420,6 +5657,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5492,6 +5730,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5576,6 +5815,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5654,6 +5894,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5719,6 +5960,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5783,13 +6025,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 583,
+      "codegen_line": 581,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal or dynamic string names."
       ],
@@ -5848,6 +6091,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5912,6 +6156,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -5983,6 +6228,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6054,6 +6300,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6125,6 +6372,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6192,6 +6440,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6261,6 +6510,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6331,6 +6581,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6389,6 +6640,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6453,13 +6705,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 1025,
+      "codegen_line": 1023,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header.",
         "Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.",
@@ -6524,6 +6777,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6585,6 +6839,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6643,6 +6898,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6701,6 +6957,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6759,6 +7016,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6823,6 +7081,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6884,6 +7143,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -6939,6 +7199,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7011,13 +7272,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 372,
+      "codegen_line": 370,
       "notes": [
         "Lowers `define(\"NAME\", value)` with the duplicate-name runtime guard."
       ],
@@ -7076,13 +7338,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 551,
+      "codegen_line": 549,
       "notes": [
         "Lowers `defined(\"NAME\")` for compile-time string constant names."
       ],
@@ -7134,6 +7397,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7192,6 +7456,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7254,6 +7519,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7322,6 +7588,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7382,6 +7649,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7442,13 +7710,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1218,
+      "codegen_line": 1232,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -7508,13 +7777,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 583,
+      "codegen_line": 581,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal or dynamic string names."
       ],
@@ -7573,6 +7843,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7631,6 +7902,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7687,6 +7959,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7757,6 +8030,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7832,6 +8106,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7890,6 +8165,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -7956,6 +8232,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8021,6 +8298,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8082,6 +8360,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8142,6 +8421,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8215,6 +8495,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8290,6 +8571,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8351,6 +8633,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8412,6 +8695,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8473,6 +8757,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8540,6 +8825,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8608,6 +8894,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8671,6 +8958,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8734,6 +9022,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8797,6 +9086,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8860,6 +9150,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8924,6 +9215,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -8986,6 +9278,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9049,6 +9342,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9112,6 +9406,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9174,13 +9469,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 1142,
+      "codegen_line": 1156,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -9246,6 +9542,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9318,6 +9615,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9382,6 +9680,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9459,6 +9758,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9549,6 +9849,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9630,6 +9931,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9697,6 +9999,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9782,6 +10085,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9869,6 +10173,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -9942,6 +10247,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10022,6 +10328,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10117,6 +10424,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10203,6 +10511,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10263,6 +10572,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10324,6 +10634,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10390,6 +10701,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10455,13 +10767,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 566,
+      "codegen_line": 564,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -10524,6 +10837,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10584,6 +10898,7 @@
     },
     "eval_only": true,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10632,6 +10947,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10690,6 +11006,7 @@
     },
     "eval_only": true,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10746,6 +11063,7 @@
     },
     "eval_only": true,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10795,6 +11113,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10838,6 +11157,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10881,6 +11201,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10931,6 +11252,7 @@
     },
     "eval_only": true,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -10987,6 +11309,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11045,6 +11368,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11103,6 +11427,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11154,6 +11479,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11207,6 +11533,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11272,6 +11599,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11332,6 +11660,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11393,6 +11722,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11447,6 +11777,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11501,6 +11832,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11561,6 +11893,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11627,6 +11960,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11700,6 +12034,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11767,13 +12102,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 419,
+      "codegen_line": 417,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -11825,6 +12161,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11891,6 +12228,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -11991,6 +12329,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12090,6 +12429,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12157,6 +12497,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12228,6 +12569,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12299,6 +12641,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12370,6 +12713,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12449,6 +12793,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12516,6 +12861,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12569,6 +12915,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12636,6 +12983,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12717,6 +13065,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12795,6 +13144,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12880,6 +13230,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -12974,6 +13325,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13054,6 +13406,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13133,6 +13486,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13212,6 +13566,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13272,6 +13627,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13337,6 +13693,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13409,6 +13766,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13502,6 +13860,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13583,6 +13942,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13653,6 +14013,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13724,6 +14085,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13801,6 +14163,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13873,6 +14236,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13933,6 +14297,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -13999,6 +14364,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14070,13 +14436,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 583,
+      "codegen_line": 581,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal or dynamic string names."
       ],
@@ -14135,13 +14502,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 1109,
+      "codegen_line": 1123,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -14196,6 +14564,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14269,6 +14638,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14341,13 +14711,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1603,
+      "codegen_line": 1617,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -14401,13 +14772,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 1336,
+      "codegen_line": 1350,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -14471,13 +14843,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 712,
+      "codegen_line": 710,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -14532,6 +14905,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14594,6 +14968,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14657,6 +15032,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14719,6 +15095,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14777,13 +15154,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 1336,
+      "codegen_line": 1350,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -14835,6 +15213,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -14893,13 +15272,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 1336,
+      "codegen_line": 1350,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -14951,13 +15331,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1394,
+      "codegen_line": 1408,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -15009,6 +15390,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15072,6 +15454,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15130,13 +15513,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_null_builtin",
-      "codegen_line": 1593,
+      "codegen_line": 1607,
       "notes": [
         "Lowers `is_null()` for concrete scalar values and boxed Mixed payloads."
       ],
@@ -15188,6 +15572,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15246,13 +15631,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1618,
+      "codegen_line": 1632,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -15305,6 +15691,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15367,6 +15754,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15425,13 +15813,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1634,
+      "codegen_line": 1648,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -15485,13 +15874,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_static_type_predicate",
-      "codegen_line": 1336,
+      "codegen_line": 1350,
       "notes": [
         "Lowers a static `is_*` predicate for concrete non-Mixed values."
       ],
@@ -15555,6 +15945,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15627,6 +16018,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15689,6 +16081,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15751,6 +16144,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15821,6 +16215,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15893,6 +16288,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -15957,6 +16353,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16040,6 +16437,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16133,6 +16531,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16198,6 +16597,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16243,6 +16643,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16308,6 +16709,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16381,6 +16783,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16442,6 +16845,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16505,6 +16909,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16571,6 +16976,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16644,6 +17050,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16717,6 +17124,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16787,6 +17195,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16856,6 +17265,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -16935,6 +17345,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17000,6 +17411,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17058,6 +17470,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17116,6 +17529,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17177,6 +17591,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17244,6 +17659,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17309,6 +17725,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17379,6 +17796,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17461,6 +17879,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17535,6 +17954,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17604,6 +18024,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17673,6 +18094,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17731,6 +18153,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17825,6 +18248,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17928,6 +18352,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -17994,6 +18419,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18053,6 +18479,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18120,6 +18547,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18198,6 +18626,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18279,6 +18708,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18341,6 +18771,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18399,6 +18830,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18466,6 +18898,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18533,6 +18966,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18616,6 +19050,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18702,6 +19137,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18755,13 +19191,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 541,
+      "codegen_line": 539,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -18798,6 +19235,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18854,6 +19292,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -18927,6 +19366,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19010,6 +19450,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19103,6 +19544,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19183,6 +19625,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19269,6 +19712,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19361,6 +19805,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19448,6 +19893,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19524,6 +19970,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19584,6 +20031,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19642,6 +20090,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19700,6 +20149,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19751,6 +20201,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19807,6 +20258,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19872,6 +20324,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19932,6 +20385,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -19992,6 +20446,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20056,6 +20511,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20129,6 +20585,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20194,6 +20651,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20258,6 +20716,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20331,6 +20790,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20404,6 +20864,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20475,6 +20936,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20542,6 +21004,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20602,6 +21065,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20666,6 +21130,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20739,6 +21204,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20810,6 +21276,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20878,6 +21345,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20938,6 +21406,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -20998,6 +21467,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21061,6 +21531,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21119,6 +21590,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21179,6 +21651,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21242,6 +21715,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21295,6 +21769,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21338,6 +21813,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21394,6 +21870,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21463,6 +21940,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21521,6 +21999,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21582,6 +22061,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21652,6 +22132,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21716,6 +22197,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21788,6 +22270,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21853,6 +22336,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21898,6 +22382,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -21968,6 +22453,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22039,6 +22525,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22107,6 +22594,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22164,6 +22652,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22224,6 +22713,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22282,6 +22772,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22340,6 +22831,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22399,6 +22891,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22472,6 +22965,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22537,6 +23031,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22595,6 +23090,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22646,6 +23142,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22708,6 +23205,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22780,6 +23278,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22831,6 +23330,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22883,6 +23383,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -22943,6 +23444,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23003,6 +23505,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23063,6 +23566,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23127,6 +23631,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23195,6 +23700,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23263,6 +23769,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23336,6 +23843,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23421,6 +23929,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23518,6 +24027,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23605,6 +24115,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23690,6 +24201,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23775,6 +24287,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23848,6 +24361,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23921,6 +24435,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -23994,6 +24509,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24067,6 +24583,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24132,6 +24649,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24198,6 +24716,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24269,6 +24788,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24340,6 +24860,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24405,6 +24926,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24463,6 +24985,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24524,6 +25047,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24582,6 +25106,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24658,6 +25183,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24743,6 +25269,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24826,6 +25353,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -24923,6 +25451,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25020,6 +25549,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25105,6 +25635,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25172,6 +25703,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25244,6 +25776,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25309,6 +25842,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25371,6 +25905,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25443,6 +25978,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25496,6 +26032,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25539,6 +26076,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25589,6 +26127,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25647,6 +26186,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25707,6 +26247,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25791,6 +26332,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25883,6 +26425,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -25957,6 +26500,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26028,6 +26572,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26105,6 +26650,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26183,6 +26729,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26259,6 +26806,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26333,6 +26881,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26412,6 +26961,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26497,6 +27047,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26576,6 +27127,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26667,6 +27219,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26764,6 +27317,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26843,6 +27397,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26909,6 +27464,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -26976,6 +27532,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27048,6 +27605,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27122,6 +27680,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27180,6 +27739,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27240,6 +27800,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27300,13 +27861,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 1079,
+      "codegen_line": 1093,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
@@ -27372,6 +27934,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27444,6 +28007,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27516,6 +28080,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27600,6 +28165,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27672,6 +28238,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27738,6 +28305,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27811,6 +28379,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27883,6 +28452,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -27975,6 +28545,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28063,6 +28634,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28126,6 +28698,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28178,6 +28751,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28238,6 +28812,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28296,6 +28871,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28360,6 +28936,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28422,6 +28999,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28467,6 +29045,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28533,6 +29112,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28611,13 +29191,14 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_class_like_exists",
-      "codegen_line": 583,
+      "codegen_line": 581,
       "notes": [
         "Lowers AOT class/interface/enum existence checks for literal or dynamic string names."
       ],
@@ -28682,6 +29263,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28752,6 +29334,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28819,6 +29402,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28885,6 +29469,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -28957,6 +29542,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29024,6 +29610,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29084,6 +29671,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29130,6 +29718,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29202,6 +29791,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29260,6 +29850,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29320,6 +29911,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29380,6 +29972,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29445,6 +30038,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29512,6 +30106,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29583,6 +30178,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29664,6 +30260,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29737,6 +30334,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29822,6 +30420,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29888,6 +30487,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29932,6 +30532,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -29985,6 +30586,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -30030,6 +30632,7 @@
     },
     "eval_only": false,
     "in_catalog": true,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,

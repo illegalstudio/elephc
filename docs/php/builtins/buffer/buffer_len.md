@@ -1,6 +1,6 @@
 ---
 title: "buffer_len()"
-description: "Lowers `buffer_len()` through the direct buffer opcode helper."
+description: "Returns the logical element count of a buffer<T>."
 sidebar:
   order: 65
 ---
@@ -11,7 +11,7 @@ sidebar:
 function buffer_len(buffer $buffer): int
 ```
 
-Lowers `buffer_len()` through the direct buffer opcode helper.
+Returns the logical element count of a buffer<T>.
 
 **Parameters**:
 - `$buffer` (`buffer`)
@@ -22,6 +22,7 @@ Lowers `buffer_len()` through the direct buffer opcode helper.
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_len.rs)).
+- **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

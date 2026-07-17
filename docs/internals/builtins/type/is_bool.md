@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_bool.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_bool.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1336](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1336) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1350](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1350) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 

@@ -28,6 +28,7 @@ mod local_analysis;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
+mod shared_state;
 pub mod value_placement;
 mod web;
 

@@ -14,7 +14,9 @@ use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
@@ -24,11 +26,11 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream
-    /// resources, `LOCK_*` constants), array constants, JSON integer constants, and preg flag
-    /// constants. All other tables (function declarations, classes, interfaces, enums, etc.)
-    /// are initialized empty.
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
+    /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
+    /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
+    /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -39,6 +41,9 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // Deprecated session-id constant; elephc is cookie-only so it always
+        // resolves to the empty string (see `codegen::prescan::collect_constants`).
+        constants.insert("SID".to_string(), PhpType::Str);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
@@ -71,6 +76,12 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in DATE_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in SESSION_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in ERROR_LEVEL_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
 

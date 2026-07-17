@@ -27,14 +27,21 @@ use crate::parser::ast::{
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 /// Lowers an optimized typed AST program into a validated EIR module.
+///
+/// `web` mirrors the CLI `--web` flag (the same source
+/// `codegen_ir::block_emit::emit_module` receives) and is stored on the
+/// returned module so every lowering entry point in `function.rs` can gate
+/// request-superglobal type seeding on it; see `Module::web`.
 pub(crate) fn lower(
     program: &Program,
     check_result: &CheckResult,
     target: Target,
     source_path: Option<&Path>,
+    web: bool,
 ) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
+    module.web = web;
     let constants = crate::codegen::collect_constants(program, target.platform);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);

@@ -89,6 +89,14 @@ pub struct Module {
     pub packed_layouts: PackedLayoutTable,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_runtime_features: RuntimeFeatures,
+    /// True when this module is being lowered for a `--web` compile. Threaded
+    /// down from the CLI flag (`CliConfig.web`, mirroring what
+    /// `codegen_ir::block_emit::emit_module` receives) so lowering can gate
+    /// request-superglobal (`$_SERVER`/`$_SESSION`/…) type seeding: only
+    /// `--web` builds pre-initialize the shared `_eir_global_*` storage for
+    /// those names, so a non-web read/write must not assume a live Hash
+    /// pointer is already there.
+    pub web: bool,
 }
 
 impl Module {
@@ -133,6 +141,7 @@ impl Module {
             packed_layouts: PackedLayoutTable::default(),
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
+            web: false,
         }
     }
 

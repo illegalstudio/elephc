@@ -846,11 +846,26 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
 /// Snapshots the indexed-array length into the iterator state so `IterNext` compares
 /// against the original length rather than re-reading it each iteration. PHP snapshots
 /// the array length at loop entry, so elements appended during iteration are not visited.
+/// A null/sentinel source (a missed outer array read) snapshots length zero so the loop
+/// body never runs instead of dereferencing the sentinel as an array header.
 fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
     let array_reg = abi::int_result_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let null_label = ctx.next_label("iter_len_null_source");
+    let done_label = ctx.next_label("iter_len_done");
     abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    // -- guard the source: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_label,
+    );
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done_label);
     abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
 }
 

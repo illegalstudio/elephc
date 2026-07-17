@@ -25,6 +25,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns a null raw pointer.",
+    extension: true,
 }
 
 /// Returns `PhpType::Pointer(None)` unconditionally (no arguments to validate).

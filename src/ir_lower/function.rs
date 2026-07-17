@@ -56,15 +56,17 @@ pub(crate) fn lower_main(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
+    let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     let all_global_var_names = collect_global_var_names(program);
+    let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         program,
-        check_result.global_env.clone(),
-        check_result.global_env.clone(),
+        top_level_env.clone(),
+        top_level_env,
         &check_result.functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
@@ -85,9 +87,32 @@ pub(crate) fn lower_main(
         all_global_var_names,
         module.source_path.clone(),
         None,
+        web,
     );
     add_closures(module, closures);
     module.add_function(function);
+}
+
+/// Returns `global_env` with request-superglobal entries removed unless `web`.
+///
+/// `check_result.global_env` (the checker's top-level environment) always
+/// carries the fixed `AssocArray{Str, Mixed}` type for `$_SERVER`/`$_SESSION`/…
+/// because the checker seeds every scope so PHP source can read/write them
+/// without a `global` declaration. Only `--web` builds pre-initialize the
+/// shared `_eir_global_*` storage those types imply; a non-web `main`/function
+/// env must not inherit the seeded type, or a bare read dereferences a
+/// zeroed (never-initialized) global as if it were a live Hash pointer and
+/// crashes. Stripping the entries here makes the env-derived type lookups
+/// fall back to `Mixed`, matching `env_from_signature`'s web gate.
+fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
+    if web {
+        return global_env.clone();
+    }
+    let mut env = global_env.clone();
+    for name in crate::superglobals::SUPERGLOBALS {
+        env.remove(*name);
+    }
+    env
 }
 
 /// Collects PHP variable names that any function-like body declares with `global`.
@@ -196,6 +221,7 @@ pub(crate) fn lower_user_function(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
+    let web = module.web;
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result.functions.get(name).unwrap_or(&fallback);
     let eir_signature =
@@ -230,8 +256,8 @@ pub(crate) fn lower_user_function(
         &mut function,
         &mut module.data,
         body,
-        env_from_signature(&eir_signature),
-        check_result.global_env.clone(),
+        env_from_signature(&eir_signature, web),
+        web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
@@ -252,6 +278,7 @@ pub(crate) fn lower_user_function(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        web,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -270,6 +297,7 @@ pub(crate) fn lower_class_method(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
+    let web = module.web;
     let fallback = signature_from_ast(params, return_type);
     let signature = module
         .class_infos
@@ -294,7 +322,7 @@ pub(crate) fn lower_class_method(
     };
     function.source_signature = Some(source_signature(&name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    let mut env = env_from_signature(&signature);
+    let mut env = env_from_signature(&signature, web);
     let mut body_params = signature.params.clone();
     if is_static {
         let hidden_called_class = (CALLED_CLASS_ID_PARAM.to_string(), PhpType::Int);
@@ -326,7 +354,7 @@ pub(crate) fn lower_class_method(
         &mut module.data,
         body,
         env,
-        check_result.global_env.clone(),
+        web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
@@ -347,6 +375,7 @@ pub(crate) fn lower_class_method(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        web,
     );
     add_closures(module, closures);
     module.class_methods.push(function);
@@ -408,6 +437,7 @@ pub(crate) fn lower_eval_aot_function(
         collect_global_var_names(body),
         module.source_path.clone(),
         None,
+        module.web,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -509,6 +539,7 @@ pub(crate) fn lower_eval_aot_scope_read_function(
         collect_global_var_names(body),
         module.source_path.clone(),
         eval_scope_reads,
+        module.web,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -547,6 +578,7 @@ pub(crate) fn lower_property_init_thunk(
     if !class_info.defaults.iter().any(|default| default.is_some()) {
         return;
     }
+    let web = module.web;
     let body = property_init_body(class_info);
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
@@ -582,7 +614,7 @@ pub(crate) fn lower_property_init_thunk(
         &mut module.data,
         &body,
         env,
-        check_result.global_env.clone(),
+        web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
@@ -603,6 +635,7 @@ pub(crate) fn lower_property_init_thunk(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        web,
     );
     add_closures(module, closures);
     module.add_function(function);
@@ -744,7 +777,7 @@ fn lower_closure_function_with_signature(
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
     attach_generator_source_if_needed(&mut function, body, signature.params.len());
-    let env = env_with_closure_captures(&signature, captures);
+    let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
@@ -781,6 +814,7 @@ fn lower_closure_function_with_signature(
         collect_global_var_names(body),
         parent.source_path().map(str::to_string),
         None,
+        parent.web,
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
     signature
@@ -818,6 +852,7 @@ fn lower_body_into_function(
         std::collections::HashSet<String>,
         std::collections::BTreeSet<String>,
     )>,
+    web: bool,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
@@ -853,6 +888,7 @@ fn lower_body_into_function(
         in_main,
         all_global_var_names,
         source_path,
+        web,
     );
     ctx.by_ref_return = function_by_ref_return;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1223,20 +1259,43 @@ fn closure_capture_params(captures: &[(String, PhpType, bool)]) -> Vec<FunctionP
 }
 
 /// Creates an initial local type environment from a function signature.
-fn env_from_signature(signature: &FunctionSig) -> TypeEnv {
-    signature
+///
+/// Under `--web`, request superglobals (`$_SERVER`/`$_GET`/`$_POST`/`$_SESSION`/…)
+/// are seeded here so `local_type` returns their fixed `AssocArray{Str, Mixed}`
+/// type inside function bodies. Without this, `$_SESSION = []` in a function
+/// contextualizes as a scalar `Array(Never)` instead of a hash and crashes the
+/// runtime when the store targets the shared `_eir_global__u_SESSION` slot.
+/// `or_insert` never clobbers a parameter that happens to share a superglobal
+/// name.
+///
+/// Outside `--web` nothing pre-initializes that shared global storage, so the
+/// seeding is skipped: `local_type` falls back to `Mixed` for these names,
+/// matching pre-superglobal-support behavior and avoiding a read/index-write
+/// that dereferences a never-initialized (zeroed) global as a live Hash
+/// pointer. See `crate::ir_lower::context::LoweringContext::global_alias_type`
+/// for the matching gate on the fallback lookup path.
+fn env_from_signature(signature: &FunctionSig, web: bool) -> TypeEnv {
+    let mut env: TypeEnv = signature
         .params
         .iter()
         .map(|(name, php_type)| (name.clone(), php_type.clone()))
-        .collect()
+        .collect();
+    if web {
+        for name in crate::superglobals::SUPERGLOBALS {
+            env.entry((*name).to_string())
+                .or_insert_with(crate::superglobals::superglobal_type);
+        }
+    }
+    env
 }
 
 /// Creates a closure environment that includes hidden captured locals.
 fn env_with_closure_captures(
     signature: &FunctionSig,
     captures: &[(String, PhpType, bool)],
+    web: bool,
 ) -> TypeEnv {
-    let mut env = env_from_signature(signature);
+    let mut env = env_from_signature(signature, web);
     for (name, php_type, _) in captures {
         env.insert(name.clone(), php_type.clone());
     }

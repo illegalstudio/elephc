@@ -121,7 +121,29 @@ fn declared_builtin_registry() -> &'static DeclaredBuiltinRegistry {
 }
 
 /// Looks up a declaratively migrated eval builtin with PHP case-insensitive matching.
+///
+/// This is the single resolution choke point for eval builtin dispatch and
+/// introspection (`function_exists`/`is_callable` probes), so the strict-PHP
+/// filter lives here: in binaries compiled with `--strict-php`, extension
+/// builtins resolve to `None` and eval'd code behaves as if the names did not
+/// exist, exactly like the PHP interpreter.
 pub(in crate::interpreter) fn eval_declared_builtin_spec(
+    name: &str,
+) -> Option<&'static EvalBuiltinSpec> {
+    let key = name.trim_start_matches('\\').to_ascii_lowercase();
+    let spec = declared_builtin_registry().by_name.get(&key).copied()?;
+    if crate::strict_php_mode::strict_php_mode() && spec.is_extension() {
+        return None;
+    }
+    Some(spec)
+}
+
+/// Looks up an eval builtin spec WITHOUT the strict-PHP filter.
+///
+/// Metadata derivations (the extension-name list itself, docs exporters) need
+/// the raw registry regardless of the thread's strict state; every dispatch or
+/// introspection path must use `eval_declared_builtin_spec` instead.
+pub(in crate::interpreter) fn eval_raw_declared_builtin_spec(
     name: &str,
 ) -> Option<&'static EvalBuiltinSpec> {
     let key = name.trim_start_matches('\\').to_ascii_lowercase();

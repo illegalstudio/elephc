@@ -26,6 +26,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns the byte size of the named pointer target type.",
+    extension: true,
 }
 
 /// Validates that the argument is a known string literal type name and returns `PhpType::Int`.

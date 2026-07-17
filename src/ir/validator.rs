@@ -451,6 +451,8 @@ fn validate_opcode_rules(
         | LoadReflectionStaticProperty
         | ReflectionStaticPropertyInitialized
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
+        ThrowError => check_count(inst_id, inst, 0, "0"),
+        ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
         | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
@@ -504,7 +506,7 @@ fn validate_opcode_rules(
                 "Heap(Mixed)",
             )
         }
-        HashLen | HashGet | HashIsset | HashSet | HashAppend | HashEnsureUnique
+        HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
         | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }

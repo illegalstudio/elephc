@@ -2436,28 +2436,75 @@ fn emit_constructor_call(
 pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        return lower_object_prop_get_with_null_guard(ctx, inst, object, &property);
+    }
+    lower_prop_get_nonnull(ctx, inst, object, &property)
+}
+
+/// Guards statically typed object receivers before selecting declared, dynamic,
+/// stdClass, or magic-property lowering.
+fn lower_object_prop_get_with_null_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("prop_get_null_receiver");
+    let done_label = ctx.next_label("prop_get_done");
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        base_reg,
+        scratch_reg,
+        &null_label,
+    );
+    lower_prop_get_nonnull(ctx, inst, object, property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    if inst.op != Op::NullsafePropGet {
+        emit_property_on_null_warning(ctx, property);
+    }
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    store_if_result(ctx, inst)?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Selects the property representation after a statically typed object receiver
+/// has been proven non-null, or for receiver shapes with their own null handling.
+fn lower_prop_get_nonnull(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, &property);
+        return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
     if let Some(class_name) = union_object_member_class(ctx, object)? {
-        return lower_union_object_prop_get(ctx, inst, object, &class_name, &property);
+        return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
     }
     if matches!(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_prop_get(ctx, inst, object, &property);
+        return lower_mixed_prop_get(ctx, inst, object, property);
     }
     if object_is_builtin_stdclass(ctx, object)? {
-        return lower_stdclass_prop_get(ctx, inst, object, &property);
+        return lower_stdclass_prop_get(ctx, inst, object, property);
     }
-    if let Some(class_name) = magic_get_receiver_class(ctx, object, &property)? {
-        return lower_magic_get_prop(ctx, inst, object, &class_name, &property);
+    if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
+        return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
-    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
-        return lower_allow_dynamic_prop_get(ctx, inst, object, &property, offset);
+    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
+        return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
     }
-    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     if slot.is_declared {
@@ -3104,6 +3151,56 @@ pub(super) fn lower_dynamic_prop_get(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        return lower_object_dynamic_prop_get_with_null_guard(
+            ctx,
+            inst,
+            object,
+            property_value,
+        );
+    }
+    lower_dynamic_prop_get_nonnull(ctx, inst, object, property_value)
+}
+
+/// Guards a statically typed object before evaluating any runtime-name property
+/// representation that would otherwise dereference the null-container sentinel.
+fn lower_object_dynamic_prop_get_with_null_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property_value: ValueId,
+) -> Result<()> {
+    let null_label = ctx.next_label("dynamic_prop_get_null_receiver");
+    let done_label = ctx.next_label("dynamic_prop_get_done");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        object_reg,
+        scratch_reg,
+        &null_label,
+    );
+    lower_dynamic_prop_get_nonnull(ctx, inst, object, property_value)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_dynamic_property_on_null_warning(ctx, property_value)?;
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    store_if_result(ctx, inst)?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Selects dynamic-property lowering after a typed object receiver has been
+/// proven non-null, or for receiver shapes with their own runtime null checks.
+fn lower_dynamic_prop_get_nonnull(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property_value: ValueId,
+) -> Result<()> {
     if let Some(property) = const_string_operand(ctx, property_value)? {
         return lower_const_dynamic_prop_get(ctx, object, property, inst);
     }
@@ -3117,6 +3214,37 @@ pub(super) fn lower_dynamic_prop_get(
         return lower_runtime_dynamic_stdclass_prop_get(ctx, inst, object, property_value);
     }
     lower_runtime_dynamic_declared_prop_get(ctx, object, property_value, inst)
+}
+
+/// Emits PHP's runtime-name warning for a dynamic property read on null.
+fn emit_dynamic_property_on_null_warning(
+    ctx: &mut FunctionContext<'_>,
+    property_value: ValueId,
+) -> Result<()> {
+    emit_property_warning_fragment(ctx, b"Warning: Attempt to read property \"");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_string_value_to_regs(property_value, "x1", "x2")?,
+        Arch::X86_64 => ctx.load_string_value_to_regs(property_value, "rdi", "rsi")?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_property_warning_fragment(ctx, b"\" on null\n");
+    Ok(())
+}
+
+/// Writes one static fragment through the suppressible PHP warning channel.
+fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
+    let (label, len) = ctx.data.add_string(bytes);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Lowers a dynamic property read when the property expression is a literal string.
@@ -3392,7 +3520,9 @@ fn ensure_dynamic_property_slot_results_supported(
         return Ok(());
     }
     for slot in slots {
-        if slot.php_type.codegen_repr() != result_ty {
+        let slot_ty = slot.php_type.codegen_repr();
+        let can_tag_nullable_int = result_ty == PhpType::TaggedScalar && slot_ty == PhpType::Int;
+        if slot_ty != result_ty && !can_tag_nullable_int {
             return Err(CodegenIrError::unsupported(format!(
                 "{} with declared property {}::${} PHP type {:?} and result PHP type {:?}",
                 inst.op.name(),
@@ -3409,7 +3539,7 @@ fn ensure_dynamic_property_slot_results_supported(
 /// Verifies that a runtime miss can be materialized in the EIR result register shape.
 fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Result<()> {
     match inst.result_php_type.codegen_repr() {
-        PhpType::Mixed | PhpType::Bool | PhpType::Int => Ok(()),
+        PhpType::Mixed | PhpType::TaggedScalar | PhpType::Bool | PhpType::Int => Ok(()),
         ty => Err(CodegenIrError::unsupported(format!(
             "{} runtime miss for result PHP type {:?}",
             inst.op.name(),
@@ -3444,15 +3574,17 @@ fn materialize_loaded_property_result(
 
 /// Emits a PHP null value for a dynamic property lookup that matched no declared slot.
 fn emit_dynamic_property_miss_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    if inst.result_php_type.codegen_repr() == PhpType::Mixed {
-        emit_boxed_null(ctx);
-        return;
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Mixed => emit_boxed_null(ctx),
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        }
+        _ => abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            RUNTIME_NULL_SENTINEL,
+        ),
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        RUNTIME_NULL_SENTINEL,
-    );
 }
 
 /// Emits a runtime string comparison branch against one declared property name.

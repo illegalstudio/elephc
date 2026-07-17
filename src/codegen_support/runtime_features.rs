@@ -838,6 +838,22 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
         // simple-variable form (`$cb(...)`); `ExprCall` covers complex callee expressions.
         ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => true,
         ExprKind::FunctionCall { name, args } => {
+            let function_name = php_symbol_key(name.as_str().trim_start_matches('\\'));
+            if function_name == "session_set_save_handler" || function_name == "eval" {
+                return true;
+            }
+            if matches!(function_name.as_str(), "function_exists" | "is_callable")
+                && args.first().is_some_and(|arg| {
+                    matches!(
+                        &arg.kind,
+                        ExprKind::StringLiteral(value)
+                            if php_symbol_key(value.trim_start_matches('\\'))
+                                == "session_set_save_handler"
+                    )
+                })
+            {
+                return true;
+            }
             function_call_needs_descriptor_invoker(name.as_str(), args)
         }
         // `new Fiber($cb)` selects a runtime callable descriptor by name. Unlike the
@@ -848,6 +864,9 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
                 && args
                     .first()
                     .is_some_and(fiber_callback_may_be_runtime_dispatch)
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            php_symbol_key(name.as_str().trim_start_matches('\\')) == "session_set_save_handler"
         }
         _ => false,
     }
@@ -1121,6 +1140,23 @@ mod tests {
         assert!(
             features_for("<?php $cb = \"cb\"; echo preg_replace_callback(\"/a/\", $cb, \"a\");")
                 .descriptor_invoker
+        );
+    }
+
+    /// Verifies every static reference form for the custom session-handler API keeps
+    /// the runtime callable dispatcher needed by its callback methods.
+    #[test]
+    fn test_runtime_features_include_descriptor_invoker_for_session_save_handler_references() {
+        assert!(
+            features_for("<?php session_set_save_handler('o', 'c', 'r', 'w', 'd', 'g');")
+                .descriptor_invoker
+        );
+        assert!(
+            features_for("<?php echo function_exists('session_set_save_handler');")
+                .descriptor_invoker
+        );
+        assert!(
+            features_for("<?php $setter = session_set_save_handler(...);").descriptor_invoker
         );
     }
 

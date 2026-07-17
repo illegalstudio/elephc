@@ -179,6 +179,9 @@ elephc --gc-stats heavy.php
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
+# Accept only PHP-compatible constructs (reject every elephc extension)
+elephc --strict-php app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 

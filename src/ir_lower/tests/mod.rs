@@ -55,7 +55,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
     let ast = crate::optimize::eliminate_dead_code(ast);
-    crate::ir_lower::lower_program(&ast, &check_result, target).expect("EIR lowering failed")
+    crate::ir_lower::lower_program(&ast, &check_result, target, false).expect("EIR lowering failed")
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.

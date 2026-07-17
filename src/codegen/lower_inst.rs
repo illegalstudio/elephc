@@ -40,6 +40,7 @@ mod callables;
 mod comparisons;
 mod conversions;
 mod enums;
+mod exceptions;
 mod externs;
 mod floats;
 mod hashes;
@@ -151,7 +152,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
-        Op::HashGet => hashes::lower_hash_get(ctx, &inst),
+        Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
+        Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
@@ -234,6 +236,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
+        Op::ThrowError => lower_throw_error(ctx, &inst),
+        Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
         Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
         Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
         Op::CatchCurrent => lower_catch_current(ctx, &inst),
@@ -1641,6 +1645,7 @@ fn emit_runtime_call_wrapper_inline(
         &label,
         ctx.emitter,
         ctx.data,
+        ctx.shared,
         false,
     )?;
     ctx.emitter.label(&done_label);
@@ -2786,6 +2791,32 @@ fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     super::lower_term::lower_throw_value(ctx, value)
 }
 
+/// Lowers a static-message catchable PHP `Error` without evaluating later operands.
+fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects no operands",
+            inst.op.name()
+        )));
+    }
+    let data = expect_data(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?
+        .clone();
+    exceptions::emit_error(ctx, &message);
+    Ok(())
+}
+
+/// Lowers a runtime-string catchable PHP `Error` without evaluating later operands.
+fn lower_throw_error_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let message = expect_operand(inst, 0)?;
+    exceptions::emit_error_value(ctx, message)
+}
+
 /// Pushes an EIR exception handler and branches to the handler block after `longjmp`.
 fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let token = expect_i64(inst)?;
@@ -2898,6 +2929,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             object_ty
         )));
     };
+    guard_static_method_receiver(ctx, object, &method_name)?;
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);
     }
@@ -2961,6 +2993,30 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Rejects the raw null-container representation before a static object method dispatch.
+fn guard_static_method_receiver(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let receiver_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let null_label = ctx.next_label("static_method_receiver_null");
+    let done_label = ctx.next_label("static_method_receiver_checked");
+    ctx.load_value_to_reg(object, receiver_reg)?;
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        receiver_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Lowers an instance-method call whose receiver is boxed as `Mixed`.
@@ -3352,31 +3408,10 @@ fn lower_nullable_receiver_interface_method_call(
 
 /// Emits PHP's fatal diagnostic for calling an instance method on null.
 fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) {
-    let message = format!(
-        "Fatal error: Call to a member function {}() on null\n",
-        method_name
+    exceptions::emit_error(
+        ctx,
+        &format!("Call to a member function {}() on null", method_name),
     );
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the member-call-on-null fatal to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the member-call-on-null fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the member-call-on-null fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the member-call-on-null fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the member-call-on-null fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Returns the direct runtime intrinsic for built-in `Generator` instance methods.
@@ -6815,7 +6850,7 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    let store_ty = if crate::superglobals::is_superglobal(&name) {
+    let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
         ty.codegen_repr()
     } else {
         let source_ty = ty.codegen_repr();

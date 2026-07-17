@@ -58,7 +58,23 @@ pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     require_indexed_array(ctx.load_value_to_result(array)?, inst)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("array_len_null");
+    let done_label = ctx.next_label("array_len_done");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    super::exceptions::emit_error(
+        ctx,
+        "Only arrays and Traversables can be unpacked, null given",
+    );
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -616,8 +632,17 @@ fn lower_array_get_aarch64(
     ctx.load_value_to_reg(index, result_reg)?;
     ctx.load_value_to_reg(array, array_reg)?;
     let null_label = ctx.next_label("array_get_null");
+    let null_receiver_label = ctx.next_label("array_get_null_recv");
+    let fallback_label = ctx.next_label("array_get_fallback");
     let done_label = ctx.next_label("array_get_done");
 
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_receiver_label,
+    );
     ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -629,6 +654,12 @@ fn lower_array_get_aarch64(
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
     }
+    abi::emit_jump(ctx.emitter, &fallback_label);
+    ctx.emitter.label(&null_receiver_label);
+    if warn_on_missing {
+        emit_array_offset_on_null_warning(ctx);
+    }
+    ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
@@ -695,8 +726,17 @@ fn lower_array_get_x86_64(
     ctx.load_value_to_reg(array, array_reg)?;
     ctx.load_value_to_reg(index, result_reg)?;
     let null_label = ctx.next_label("array_get_null");
+    let null_receiver_label = ctx.next_label("array_get_null_recv");
+    let fallback_label = ctx.next_label("array_get_fallback");
     let done_label = ctx.next_label("array_get_done");
 
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_receiver_label,
+    );
     ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -708,6 +748,12 @@ fn lower_array_get_x86_64(
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
     }
+    abi::emit_jump(ctx.emitter, &fallback_label);
+    ctx.emitter.label(&null_receiver_label);
+    if warn_on_missing {
+        emit_array_offset_on_null_warning(ctx);
+    }
+    ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
@@ -986,8 +1032,13 @@ fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
 }
 
+/// Emits PHP's warning for a direct array-offset read whose receiver is null.
+pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_warn_array_offset_on_null");
+}
+
 /// Emits the null/miss fallback in the result shape expected by the array element type.
-fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
+pub(super) fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
     match elem_ty {
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
@@ -1002,7 +1053,11 @@ fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType
         },
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                ptr_reg,
+                crate::codegen::NULL_SENTINEL,
+            );
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         }
         PhpType::Mixed => match ctx.emitter.target.arch {

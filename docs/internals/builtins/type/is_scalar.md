@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_scalar.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1634](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1634) (`lower_is_scalar`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1648](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1648) (`lower_is_scalar`)
 - **Function symbol**: `lower_is_scalar()`
 
 

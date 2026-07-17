@@ -6370,10 +6370,28 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
+    mark_eval_strict_php(ctx);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Marks the eval bridge as strict-PHP when this compilation runs with
+/// `--strict-php`, so runtime eval hides extension builtins exactly like the
+/// AOT surface does. Emits nothing in normal compilations: non-strict binaries
+/// never reference the setter symbol, and the bridge's flag defaults to off.
+fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>) {
+    if !crate::strict_php::is_enabled() {
+        return;
+    }
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, 1);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_set_strict_php");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Returns the hidden frame slot that owns this function's persistent eval context.
@@ -10218,7 +10236,7 @@ fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, 
 
 /// Returns one unambiguous codegen type used for a program global, if available.
 fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
-    let is_superglobal = crate::superglobals::is_superglobal(name);
+    let is_typed_superglobal = ctx.module.web && crate::superglobals::is_superglobal(name);
     let mut inferred = None;
     for function in ctx
         .module
@@ -10236,7 +10254,7 @@ fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpTyp
             if !matches!(inst.op, Op::LoadGlobal | Op::StoreGlobal) {
                 continue;
             }
-            if !is_superglobal {
+            if !is_typed_superglobal {
                 // Regular globals always hold one boxed Mixed word (see
                 // `lower_store_global`); store operands carry narrower source
                 // types, so per-instruction inference would reject globals

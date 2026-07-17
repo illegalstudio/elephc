@@ -810,3 +810,30 @@ fn eval_php_visible_builtins_are_static_or_documented_eval_only() {
         "eval exposes builtins outside the static catalog and eval-only allowlist: {unexpected:?}"
     );
 }
+
+/// Verifies the two registries agree on which builtins are elephc extensions:
+/// the eval interpreter's extension set must equal the compiler's PHP-visible
+/// extension set minus the static-only names (`zval_*`, which magician does not
+/// implement). `--strict-php` relies on this agreement to hide the same names
+/// on the AOT surface (catalog) and inside runtime eval (magician dispatch).
+#[test]
+fn extension_builtin_sets_agree_across_registries() {
+    let static_only = STATIC_ONLY_REGISTRY_BUILTINS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let expected = elephc::builtin_metadata::extension_builtin_names()
+        .iter()
+        .copied()
+        .filter(|name| !static_only.contains(name))
+        .collect::<BTreeSet<_>>();
+    let eval_extensions = elephc_magician::builtin_metadata::extension_builtin_names()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        eval_extensions, expected,
+        "eval extension set must match the compiler's extension set minus static-only builtins"
+    );
+}

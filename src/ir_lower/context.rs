@@ -144,6 +144,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub by_ref_return: bool,
     pub in_main: bool,
     pub all_global_var_names: HashSet<String>,
+    /// `true` when lowering for a `--web` compile. Gates whether a bare
+    /// request-superglobal name (`$_SERVER`/`$_SESSION`/…) is trusted to
+    /// resolve to the fixed `AssocArray{Str, Mixed}` type: only `--web`
+    /// builds pre-initialize that shared global storage, so a CLI build must
+    /// fall back to the ordinary local/top-level type lookup (typically
+    /// `Mixed`) instead of assuming a live Hash pointer. See `global_alias_type`.
+    pub web: bool,
     owner_name: String,
     closures: Vec<Function>,
     pending_static_callable_result: Option<StaticCallableBinding>,
@@ -183,6 +190,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         in_main: bool,
         all_global_var_names: HashSet<String>,
         source_path: Option<String>,
+        web: bool,
     ) -> Self {
         let return_type = return_ir_type(&return_php_type);
         Self {
@@ -223,6 +231,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             by_ref_return: false,
             in_main,
             all_global_var_names,
+            web,
             owner_name,
             closures: Vec::new(),
             pending_static_callable_result: None,
@@ -319,14 +328,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns the storage type for a `global` alias name.
     ///
-    /// Request superglobals resolve to their fixed `AssocArray{Str, Mixed}` type
-    /// directly: inside a function the `top_level_env` snapshot may not carry
-    /// them, but their global slot must still be a Hash pointer (not a boxed
-    /// Mixed cell) so the function read agrees with the prelude's StoreGlobal.
-    /// Ordinary PHP globals use boxed Mixed storage in every scope because any
-    /// function with `global $x` can replace the value with a different runtime type.
+    /// Under `--web`, request superglobals resolve to their fixed
+    /// `AssocArray{Str, Mixed}` type directly: inside a function the
+    /// `top_level_env` snapshot may not carry them, but their global slot
+    /// must still be a Hash pointer (not a boxed Mixed cell) so the function
+    /// read agrees with the prelude's StoreGlobal. Outside `--web` nothing
+    /// pre-initializes that shared global storage, so trusting the fixed Hash
+    /// type here would read a null/zeroed `.comm` slot as a live Hash pointer
+    /// and crash; fall through to the ordinary env lookup (typically `Mixed`)
+    /// instead. Ordinary PHP globals use boxed Mixed storage in every scope
+    /// because a function declaring `global $x` may replace its runtime type.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
-        if crate::superglobals::is_superglobal(name) {
+        if self.web && crate::superglobals::is_superglobal(name) {
             return crate::superglobals::superglobal_type();
         }
         PhpType::Mixed
@@ -709,9 +722,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, kind);
-        // Superglobals carry a fixed `AssocArray{Str, Mixed}` type in every scope.
-        // Ordinary globals are boxed Mixed cells even in main so function writes
-        // through `global $x` cannot make later top-level loads reinterpret the slot.
+        // Under `--web`, superglobals carry a fixed `AssocArray{Str, Mixed}` type
+        // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
         } else {
@@ -1724,7 +1736,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let op = self.builder.value_defining_op(value);
         (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
             || (php_type.is_refcounted() && php_type != PhpType::Str))
-            && matches!(op, Some(Op::ArrayGet | Op::HashGet))
+            && matches!(op, Some(Op::ArrayGet | Op::HashGet | Op::HashGetSilent))
     }
 
     /// Returns whether an index-read receiver is itself an owned intermediate
@@ -1751,6 +1763,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::ArrayGet
                     | Op::ArrayGetSilent
                     | Op::HashGet
+                    | Op::HashGetSilent
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
             )

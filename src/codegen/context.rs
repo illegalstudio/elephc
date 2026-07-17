@@ -25,6 +25,7 @@ use crate::types::PhpType;
 
 use super::frame::FrameLayout;
 use super::local_analysis::LocalSlotAnalysis;
+use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
@@ -42,6 +43,7 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) function: &'a Function,
     pub(super) emitter: &'a mut Emitter,
     pub(super) data: &'a mut DataSection,
+    pub(super) shared: &'a mut SharedCodegenState,
     pub(super) placement: ValuePlacement,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
@@ -69,6 +71,7 @@ impl<'a> FunctionContext<'a> {
         function: &'a Function,
         emitter: &'a mut Emitter,
         data: &'a mut DataSection,
+        shared: &'a mut SharedCodegenState,
         layout: FrameLayout,
         is_main: bool,
         gc_stats: bool,
@@ -80,6 +83,7 @@ impl<'a> FunctionContext<'a> {
             function,
             emitter,
             data,
+            shared,
             placement: layout.value_placement,
             allocation: layout.allocation,
             callee_saved_offsets: layout.callee_saved_offsets,

@@ -21,7 +21,7 @@
 //!   name, area, params, variadic?, min_args?, max_args?, arity_error?, returns,
 //!   returns_fresh_storage?, returns_independent_storage?, by_ref_return?, check?,
 //!   lazy_check?, lower, summary, examples?, php_manual?,
-//!   deprecation?, internal?
+//!   deprecation?, extension?, internal?
 //!
 //! Example:
 //! ```ignore
@@ -42,7 +42,10 @@
 /// `name`, `area`, `params`, `variadic`?, `min_args`?, `max_args`?, `arity_error`?,
 /// `returns`, `returns_fresh_storage`?, `returns_independent_storage`?,
 /// `by_ref_return`?, `check`?, `lazy_check`?, `lower`, `summary`, `examples`?,
-/// `php_manual`?, `deprecation`?, `internal`?
+/// `php_manual`?, `deprecation`?, `extension`?, `internal`?
+///
+/// `extension` (optional `bool`, default `false`) marks the builtin as an elephc
+/// extension with no PHP equivalent; `--strict-php` hides it from user programs.
 ///
 /// `max_args` (optional `usize`) caps the maximum argument count enforced by the
 /// registry's `check_arity` only; it does not affect `function_sig` or the parity gate.
@@ -92,6 +95,7 @@ macro_rules! builtin {
         $(examples: $examples:expr,)?
         $(php_manual: $php_manual:expr,)?
         $(deprecation: $deprecation:expr,)?
+        $(extension: $extension:expr,)?
         $(internal: $internal:expr)?
         $(,)?
     ) => {
@@ -119,6 +123,7 @@ macro_rules! builtin {
                 examples: builtin!(@opt_examples $($examples)?),
                 php_manual: builtin!(@opt_str $($php_manual)?),
                 deprecation: builtin!(@opt_str $($deprecation)?),
+                extension: builtin!(@opt_bool $($extension)?),
                 internal: builtin!(@opt_bool $($internal)?),
             }
         }

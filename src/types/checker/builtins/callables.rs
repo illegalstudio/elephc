@@ -1039,9 +1039,11 @@ pub(crate) fn check_call_user_func_array(
     {
         return Ok(PhpType::Mixed);
     }
-    if callback_ty == PhpType::Callable
+    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
         && call_user_func_array_arg_container_is_supported(&arg_array_ty)
     {
+        // A Mixed/Union callback is validated and dispatched at runtime by tag
+        // (string name, closure, or array), matching PHP's runtime callable check.
         return Ok(PhpType::Mixed);
     }
     Err(CompileError::new(
@@ -1156,7 +1158,12 @@ pub(crate) fn check_call_user_func(
         }
         return Ok(PhpType::Mixed);
     }
-    if callback_ty == PhpType::Callable {
+    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
+        // A Mixed/Union callback — e.g. a callable stored in an untyped property
+        // and read back boxed — is validated at runtime: the `Op::ExprCall`
+        // lowering unboxes it and dispatches by tag (string name, closure, or
+        // array), matching PHP's runtime callable check. The concrete callee
+        // return type is not statically known, so the call yields Mixed.
         for arg in &args[1..] {
             checker.infer_type(arg, env)?;
         }

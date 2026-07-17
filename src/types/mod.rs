@@ -24,6 +24,8 @@ pub(crate) mod fibers;
 pub(crate) mod date_constants;
 /// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
 pub(crate) mod ent_constants;
+/// PHP `E_*` error-level integer constants (`error_reporting` bitmask levels).
+pub(crate) mod error_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
@@ -38,6 +40,8 @@ mod return_alias;
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// `ext/session` integer constants (`PHP_SESSION_*`).
+pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 pub(crate) mod stream_constants;

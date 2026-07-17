@@ -1000,6 +1000,53 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
+  `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
+  `session_write_close()` (auto-called at handler end via a finally block),
+  `session_regenerate_id()`, `session_unset()`, `session_destroy()`,
+  `session_set_cookie_params()` / `session_get_cookie_params()`, file-based
+  storage (matching PHP's `session.save_handler = files`; an empty configured
+  save path resolves to `sys_get_temp_dir()`), `flock`-based concurrency safety,
+  `PHP_SESSION_DISABLED` / `PHP_SESSION_NONE` / `PHP_SESSION_ACTIVE` constants.
+- [x] **Phase 5.1** — session parity: predefined `PHP_SESSION_*` / `SID`
+  constants (no runtime `define()`); custom save handlers via the object form
+  `session_set_save_handler(SessionHandlerInterface)` plus `SessionHandler`,
+  `SessionIdInterface`, `SessionUpdateTimestampHandlerInterface`;
+  `session.use_strict_mode`, `serialize_handler` (`php`/`php_serialize`/
+  `php_binary`), `lazy_write`, probabilistic auto-GC (`gc_probability`/
+  `gc_divisor`/`gc_maxlifetime`), `sid_length`/`sid_bits_per_character`,
+  complete `session_cache_limiter()` headers, `session_abort()`/`session_reset()`/
+  `session_gc()`/`session_encode()`/`session_decode()`/`session_module_name()`/
+  `session_commit()`/`session_register_shutdown()`. Also supports the legacy
+  6-callable `session_set_save_handler($open, $close, $read, …)` form (deprecated
+  in 8.4) for function-name and closure callables, wired through a general
+  enhancement that lets `call_user_func`/`call_user_func_array` dispatch a boxed
+  `Mixed` callback by runtime tag; instance array callables `[$obj, 'method']` in
+  that form now dispatch through the same boxed-`Mixed` path (only static
+  `['Class', 'method']` array callables still need the object form).
+  Fixed a pre-existing CLI SIGSEGV (superglobal type seeding gated on
+  `--web`) and two EIR ownership bugs on `static` property stores: a borrowed
+  object is now acquired (so it dispatches after the borrow is released), and
+  overwriting a Mixed/nullable-object static slot now releases the previous
+  object instead of leaking it on every reassignment.
+- [x] **Phase 5.2** — session runtime configuration: `ini_get()` / `ini_set()` /
+  `ini_get_all()` scoped to the `session.*` directive surface (PHP `ini_get`
+  string convention — integers as decimals, booleans as `'1'`/`''`; unknown
+  directives return `false`); `session.auto_start` seeded per worker from the
+  `ELEPHC_SESSION_AUTO_START` environment variable (auto-starts the session in
+  the request bootstrap, `php.ini`-`PERDIR`-style); `session.referer_check`
+  enforcement (a cookie-supplied ID whose request `Referer` lacks the configured
+  substring is invalidated, starting a fresh session). Adds the ini-settable
+  config surface for `session.use_only_cookies`, `session.use_trans_sid` /
+  `trans_sid_*`, and `session.upload_progress.*` (output URL-rewriting and live
+  upload-progress runtime behavior tracked separately).
+- [x] **Phase 5.3** — php-src lifecycle and storage parity: binary-safe
+  pointer/length payload ABI; files-handler `[depth;[mode;]]path`, nested GC,
+  no-follow/ownership hardening, and complete writes; active callback status,
+  abort/restart/read-and-close/regenerate sequencing; Cookie/GET/POST SID
+  transport without redundant cookies; `save_handler`, `cookie_partitioned`,
+  `use_cookies`, and `lazy_write` INI coverage; custom-handler lazy snapshots;
+  and `php_binary` plus non-cookie upload-progress IDs.
 
 ## v0.27.x — Shared and static libraries (C ABI)
 

@@ -237,7 +237,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests)' \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
@@ -265,7 +265,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests)' \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
@@ -293,7 +293,107 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'not binary(codegen_tests)' \
+            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  web-tests-macos-aarch64:
+    name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run web test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(web_tests) or binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/2 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  web-tests-linux-x86_64:
+    name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run web test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(web_tests) or binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/2 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  web-tests-linux-aarch64:
+    name: Web Tests (linux-aarch64 ${{ matrix.shard }}/2)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run web test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(web_tests) or binary(web_session_tests)' \
+            --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
@@ -599,6 +699,9 @@ jobs:
       - non-codegen-tests-macos-aarch64
       - non-codegen-tests-linux-x86_64
       - non-codegen-tests-linux-aarch64
+      - web-tests-macos-aarch64
+      - web-tests-linux-x86_64
+      - web-tests-linux-aarch64
       - codegen-tests-macos-aarch64
       - codegen-tests-linux-x86_64
       - codegen-tests-linux-aarch64
@@ -614,6 +717,9 @@ jobs:
           test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.web-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.web-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.web-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"

@@ -40,6 +40,7 @@ mod runtime_cache;
 mod debug_info;
 mod source_map;
 mod span;
+mod strict_php;
 mod string_bytes;
 mod superglobals;
 mod termination;

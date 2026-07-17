@@ -128,6 +128,7 @@ fn build_json(include_internal: bool) -> Value {
             "name": spec.name,
             "area": area_str(spec.area),
             "internal": spec.internal,
+            "extension": spec.extension,
             "params": params,
             "variadic": spec.variadic,
             "returns": type_spec_str(&spec.returns),

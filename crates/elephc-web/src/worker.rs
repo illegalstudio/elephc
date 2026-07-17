@@ -25,6 +25,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 
 use crate::request_state;
+use crate::session::upload_progress;
 
 /// Pending-connection backlog for each worker's listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
@@ -161,6 +162,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 .timer(TokioTimer::new())
                 .header_read_timeout(Duration::from_secs(30))
                 .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
+                    // Seed session deployment config before upload-progress body
+                    // draining. The PHP prelude repeats this reset immediately
+                    // before the handler, so both phases see identical values and
+                    // no request can inherit the prior request's session settings.
+                    unsafe { crate::session::elephc_web_session_reset() };
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
@@ -182,7 +188,14 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     // runs, since handler() cannot yield on the current-thread runtime.
                     // Collect with a size cap (0 = unlimited); an over-limit body
                     // short-circuits to 413 without ever running the PHP handler.
-                    let collected = if max_body == 0 {
+                    //
+                    // For a tracked `session.upload_progress` multipart upload, the body
+                    // is drained frame-by-frame so progress can be written to the session
+                    // file as bytes arrive, while still buffering the complete body the
+                    // handler sees. Non-tracked requests keep the simple fast path.
+                    let collected = if let Some(mut tracker) = upload_progress::begin(&headers, &query) {
+                        drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                    } else if max_body == 0 {
                         req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
                     } else {
                         Limited::new(req.into_body(), max_body)
@@ -208,10 +221,32 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         server_port: addr.port(),
                         protocol,
                     };
+                    // Capture the request Cookie/Host before `headers` is moved into
+                    // set_request; they gate/steer optional `session.use_trans_sid`
+                    // URL rewriting (Cookie → is the SID already client-held?, Host →
+                    // same-origin matching). The rewrite itself stays gated by session
+                    // config, so the default path only pays these two small lookups.
+                    let req_cookie = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("cookie"))
+                        .map(|(_, v)| v.clone());
+                    let req_host = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("host"))
+                        .map(|(_, v)| v.clone());
                     request_state::set_request(method, uri, path, query, headers, body, meta);
                     let resp_body = run_handler(handler);
                     let status = request_state::take_status();
-                    let resp_headers = request_state::take_headers();
+                    let mut resp_headers = request_state::take_headers();
+                    // Propagate the session id through same-origin URLs / forms when
+                    // `session.use_trans_sid` is active (no-op otherwise). Runs on the
+                    // plaintext body, before the gzip decision below.
+                    let resp_body = crate::trans_sid::maybe_rewrite_response(
+                        req_cookie.as_deref(),
+                        req_host.as_deref(),
+                        &mut resp_headers,
+                        resp_body,
+                    );
                     // gzip the body when the client accepts it, the body is large
                     // enough to be worth it, and the handler did not already set a
                     // Content-Encoding.
@@ -259,6 +294,34 @@ fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(data).ok()?;
     encoder.finish().ok()
+}
+
+/// Drains the request body frame-by-frame while feeding an upload-progress
+/// `Tracker`, returning the fully buffered body (byte-identical to what the
+/// simple `collect()` path would produce). Each received data frame is appended
+/// to the buffer and passed to `tracker.update`, which writes throttled progress
+/// snapshots into the session file. The existing `max_body` cap is preserved:
+/// an over-limit body returns `Err(())` so the caller short-circuits to 413
+/// without running the handler. Once the body is fully drained, `tracker.complete`
+/// performs the final progress write (or cleanup removal).
+async fn drain_with_progress(
+    mut body: hyper::body::Incoming,
+    max_body: usize,
+    tracker: &mut upload_progress::Tracker,
+) -> Result<Vec<u8>, ()> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|_| ())?;
+        if let Ok(data) = frame.into_data() {
+            buf.extend_from_slice(&data);
+            if max_body > 0 && buf.len() > max_body {
+                return Err(());
+            }
+            tracker.update(&buf);
+        }
+    }
+    tracker.complete(&buf);
+    Ok(buf)
 }
 
 /// Runs the PHP handler for one request and returns the captured response body.

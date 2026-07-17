@@ -254,8 +254,14 @@ Key invariants:
 - **Separate surfaces still need hand-wiring** when relevant: the EIR emitter/runtime
   routine, optimizer effects (`src/optimize/effects/builtins.rs`), and the
   runtime-callable wrapper exclusion (`src/codegen/callable_dispatch.rs`).
-- `isset`/`unset`/`empty`/`exit`/`die`/`buffer_*` are language constructs that stay
+- `isset`/`unset`/`empty`/`exit`/`die` are language constructs that stay
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
+  `buffer_new` is catalog-name-only (its call form is dedicated syntax); `buffer_len`
+  and `buffer_free` are ordinary registry builtins.
+- **elephc-only builtins declare `extension: true`** so `--strict-php` hides them from
+  user programs (pinned in `src/builtins/parity_tests.rs`). Injected preludes must call
+  `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
+  parity gate scans the prelude sources to enforce this.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
   PHP-visible builtins); keep the parity gates in `src/builtins/parity_tests.rs` green.
 - Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
@@ -523,15 +529,22 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` tracks all planned and completed work, organized by version.
+`ROADMAP.md` is the planning document, organized by version. It stays as it is:
 
+- **Do not add entries to record implemented work.** Implementations are documented in `CHANGELOG.md` under `[Unreleased]` (see below). The roadmap only gains new items when work is being *planned*, under the appropriate future version.
+- When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
-- New work items go under the appropriate future version.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
 
 ## Changelog management
 
 `CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+
+**Every implementation lands a bullet under the `## [Unreleased]` section in the same PR** — one terse, user-facing entry describing what shipped, not how it was implemented. If the `[Unreleased]` section does not exist, add it at the top of the file (under the header, above the newest version section) together with its compare link at the top of the link list at the end of the file:
+
+```
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v<latest>...HEAD
+```
 
 When cutting a release:
 

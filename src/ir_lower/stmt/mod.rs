@@ -344,7 +344,11 @@ fn contextualize_array_assignment(
     if !matches!(php_type.codegen_repr(), PhpType::Array(_)) {
         return (lowered, php_type);
     }
-    let contextual_ty = ctx.local_type(name).codegen_repr();
+    let contextual_ty = if crate::superglobals::is_superglobal(name) {
+        crate::superglobals::superglobal_type().codegen_repr()
+    } else {
+        ctx.local_type(name).codegen_repr()
+    };
     if !matches!(contextual_ty, PhpType::AssocArray { .. }) {
         return (lowered, php_type);
     }
@@ -2114,7 +2118,14 @@ fn acquire_borrowed_return_value(
     }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
-        Some(Op::ArrayGet | Op::HashGet | Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+        Some(
+            Op::ArrayGet
+                | Op::HashGet
+                | Op::HashGetSilent
+                | Op::PropGet
+                | Op::DynamicPropGet
+                | Op::NullsafePropGet
+        )
     ) {
         return value;
     }
@@ -2614,6 +2625,25 @@ fn contextualize_property_array_assignment(
 }
 
 /// Lowers a static property write.
+///
+/// A static property outlives the enclosing scope, so it must hold its own
+/// reference to a refcounted value. There are two storage disciplines, matched
+/// to what the codegen store actually does:
+///
+/// - **Boxing store** (a Mixed/Union slot receiving a non-Mixed value, e.g.
+///   `Class::$h = new C()`): codegen boxes the value with `__rt_mixed_from_value`,
+///   which takes its *own* retained reference to the child. The slot therefore
+///   keeps a reference independent of the source, so an owning temporary must be
+///   *released* after the store (its reference is not the one the slot holds), and
+///   a borrowed source must be left untouched. Acquiring here would leak the extra
+///   reference on top of the box's retained one.
+/// - **Moving store** (every other case: concrete-typed slot, or a Mixed→Mixed
+///   move): the store consumes (moves) its value operand. An owning temporary is
+///   moved in as-is, but a *borrowed* value (a parameter, local, or container read)
+///   must be `Acquire`d first. Without this, storing a borrowed `Mixed`
+///   (e.g. `Class::$h = $handler` where `$handler` is a `?SessionHandlerInterface`
+///   parameter) leaves the property dangling once the borrow's owner releases its
+///   reference, so a later read dispatches on freed memory (a fatal "on null").
 fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -2622,7 +2652,43 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
+    if static_property_store_boxes_value(ctx, receiver, property, value) {
+        store_static_property(ctx, receiver, property, value.value, span);
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return;
+    }
+    let value = if ctx.value_is_owning_temporary(value) {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
     store_static_property(ctx, receiver, property, value.value, span);
+}
+
+/// Returns true when the codegen static-property store boxes `value` into a
+/// Mixed/Union slot with its own retained reference.
+///
+/// This mirrors `box_static_property_value_if_needed` in the EIR backend: a
+/// non-Mixed value assigned to a Mixed/Union slot is boxed with
+/// `__rt_mixed_from_value`, which retains the refcounted child. In that case the
+/// slot holds a reference independent of the source, so `lower_static_property_assign`
+/// releases an owning-temporary source instead of moving it in. When the declaring
+/// class/property metadata is unavailable, this conservatively reports `false` so the
+/// moving-store discipline (acquire-if-borrowed) is used.
+fn static_property_store_boxes_value(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    value: LoweredValue,
+) -> bool {
+    let Some(slot_ty) = static_property_type(ctx, receiver, property) else {
+        return false;
+    };
+    let value_ty = ctx.builder.value_php_type(value.value);
+    matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
 }
 
 /// Lowers `Class::$prop[] = value`.

@@ -297,6 +297,7 @@ pub enum Op {
     ArrayGet,
     ArrayGetSilent,
     HashGet,
+    HashGetSilent,
     ArrayIsset,
     HashIsset,
     ArrayElemAddr,
@@ -426,6 +427,8 @@ pub enum Op {
     ErrorSuppressEnd,
     Warn,
     ThrowException,
+    ThrowError,
+    ThrowErrorValue,
     TryPushHandler,
     TryPopHandler,
     CatchCurrent,
@@ -542,18 +545,21 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent | HashGet
+            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
+            | HashGetSilent
             | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGet | HashGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | PropInitialized
-            | LoadPropRefCell => E::READS_HEAP,
+            ArrayLen | HashLen => E::READS_HEAP | E::MAY_FATAL,
+            ArrayKeyExists | OffsetExists | PropGet | PropInitialized | LoadPropRefCell => {
+                E::READS_HEAP
+            }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
@@ -610,6 +616,13 @@ impl Op {
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
+            ThrowError | ThrowErrorValue => {
+                E::MAY_THROW
+                    | E::READS_GLOBAL
+                    | E::WRITES_GLOBAL
+                    | E::ALLOC_HEAP
+                    | E::WRITES_HEAP
+            }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
@@ -746,6 +759,7 @@ impl Op {
             ArrayGet => "array_get",
             ArrayGetSilent => "array_get_silent",
             HashGet => "hash_get",
+            HashGetSilent => "hash_get_silent",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
             ArrayElemAddr => "array_elem_addr",
@@ -857,6 +871,8 @@ impl Op {
             ErrorSuppressEnd => "error_suppress_end",
             Warn => "warn",
             ThrowException => "throw_exception",
+            ThrowError => "throw_error",
+            ThrowErrorValue => "throw_error_value",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",
             CatchCurrent => "catch_current",

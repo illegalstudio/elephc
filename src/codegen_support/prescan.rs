@@ -15,9 +15,11 @@ use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -38,6 +40,10 @@ pub(crate) fn collect_constants(
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
             PhpType::Str,
         ),
+    );
+    constants.insert(
+        "SID".to_string(),
+        (ExprKind::StringLiteral(String::new()), PhpType::Str),
     );
     constants.insert(
         "PATHINFO_DIRNAME".to_string(),
@@ -139,6 +145,18 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in DATE_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in SESSION_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in ERROR_LEVEL_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

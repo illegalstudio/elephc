@@ -55,6 +55,8 @@ pub mod pdo_prelude;
 pub mod resolver;
 /// Source span tracking.
 pub mod span;
+/// `--strict-php` mode state and PHP-compatibility audit pass.
+pub mod strict_php;
 mod string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;

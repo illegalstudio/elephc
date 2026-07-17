@@ -129,10 +129,16 @@ fn append_eval_only_records(records: &mut Vec<Value>, include_internal: bool) {
                 })
             })
             .collect();
+        // Appended records have no static `builtin!` spec, so the extension
+        // classification comes from the eval registry's derived set (this is
+        // how the catalog-name-only `buffer_new` gets flagged).
+        let extension = elephc_magician::builtin_metadata::extension_builtin_names()
+            .contains(&meta.name.as_str());
         records.push(json!({
             "name": meta.name,
             "area": meta.area,
             "internal": internal,
+            "extension": extension,
             "params": params,
             "variadic": meta.variadic,
             "returns": "mixed",
