@@ -17,6 +17,8 @@ pub(crate) enum DriverKind {
     Firebird,
     #[cfg(feature = "odbc")]
     Odbc,
+    #[cfg(feature = "oci")]
+    Oci,
     Mysql,
     Pgsql,
     Sqlite,
@@ -30,6 +32,8 @@ pub(crate) const AVAILABLE: &[DriverKind] = &[
     DriverKind::Firebird,
     #[cfg(feature = "odbc")]
     DriverKind::Odbc,
+    #[cfg(feature = "oci")]
+    DriverKind::Oci,
     DriverKind::Mysql,
     DriverKind::Pgsql,
     DriverKind::Sqlite,
@@ -45,6 +49,8 @@ impl DriverKind {
             Self::Firebird => "firebird",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc",
+            #[cfg(feature = "oci")]
+            Self::Oci => "oci",
             Self::Mysql => "mysql",
             Self::Pgsql => "pgsql",
             Self::Sqlite => "sqlite",
@@ -60,6 +66,8 @@ impl DriverKind {
             Self::Firebird => "firebird:",
             #[cfg(feature = "odbc")]
             Self::Odbc => "odbc:",
+            #[cfg(feature = "oci")]
+            Self::Oci => "oci:",
             Self::Mysql => "mysql:",
             Self::Pgsql => "pgsql:",
             Self::Sqlite => "sqlite:",
@@ -83,22 +91,17 @@ mod tests {
     #[test]
     fn available_driver_order_is_stable() {
         let names: Vec<_> = AVAILABLE.iter().map(|driver| driver.name()).collect();
-        #[cfg(not(any(feature = "dblib", feature = "firebird", feature = "odbc")))]
-        assert_eq!(names, ["mysql", "pgsql", "sqlite"]);
-        #[cfg(all(feature = "dblib", not(feature = "firebird"), not(feature = "odbc")))]
-        assert_eq!(names, ["dblib", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(not(feature = "dblib"), feature = "firebird", not(feature = "odbc")))]
-        assert_eq!(names, ["firebird", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(feature = "dblib", feature = "firebird", not(feature = "odbc")))]
-        assert_eq!(names, ["dblib", "firebird", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(not(feature = "dblib"), not(feature = "firebird"), feature = "odbc"))]
-        assert_eq!(names, ["odbc", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(feature = "dblib", not(feature = "firebird"), feature = "odbc"))]
-        assert_eq!(names, ["dblib", "odbc", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(not(feature = "dblib"), feature = "firebird", feature = "odbc"))]
-        assert_eq!(names, ["firebird", "odbc", "mysql", "pgsql", "sqlite"]);
-        #[cfg(all(feature = "dblib", feature = "firebird", feature = "odbc"))]
-        assert_eq!(names, ["dblib", "firebird", "odbc", "mysql", "pgsql", "sqlite"]);
+        let mut expected = Vec::new();
+        #[cfg(feature = "dblib")]
+        expected.push("dblib");
+        #[cfg(feature = "firebird")]
+        expected.push("firebird");
+        #[cfg(feature = "odbc")]
+        expected.push("odbc");
+        #[cfg(feature = "oci")]
+        expected.push("oci");
+        expected.extend(["mysql", "pgsql", "sqlite"]);
+        assert_eq!(names, expected);
     }
 
     /// Dispatches only exact lowercase PDO prefixes followed by a colon.
@@ -113,6 +116,8 @@ mod tests {
         assert_eq!(DriverKind::from_dsn("firebird:dbname=test.fdb"), Some(DriverKind::Firebird));
         #[cfg(feature = "odbc")]
         assert_eq!(DriverKind::from_dsn("odbc:example"), Some(DriverKind::Odbc));
+        #[cfg(feature = "oci")]
+        assert_eq!(DriverKind::from_dsn("oci:dbname=example"), Some(DriverKind::Oci));
         assert_eq!(DriverKind::from_dsn("SQLite::memory:"), None);
         assert_eq!(DriverKind::from_dsn("sqlite"), None);
     }

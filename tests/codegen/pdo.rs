@@ -3335,7 +3335,7 @@ echo "|" . $next["name"];
 
 /// P1-6: the common legacy `bindParam($p, $v, PDO::PARAM_STR, $maxLength[, $driverOptions])`
 /// 4- and 5-arg idioms compile and run; the extra length/driver-option hints are
-/// accepted and ignored.
+/// accepted by every driver (PDO_OCI consumes `$maxLength` for output buffers).
 #[test]
 fn test_pdo_bind_param_extended_arity() {
     let out = compile_and_run(

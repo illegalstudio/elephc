@@ -56,3 +56,13 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'test(pdo_odbc)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# PDO_OCI loads the full PDO surface and the cold optional ODPI-C archive build
+# is appreciably slower on GitHub's shared runners.
+[[profile.default.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }

@@ -72,6 +72,9 @@ extern "elephc_pdo" {
     //   therefore distinct pooled entries, which is the whole point of the key.
     function elephc_pdo_open_persistent(string $dsn, int $persistent, int $sqlite_flags, string $my_init_command, string $my_ssl_config, int $my_found_rows, string $persistent_key, string $my_driver_config): int;
     function elephc_pdo_last_open_error(): string;
+    // v54: driver-native constructor diagnostics, currently populated by PDO_OCI.
+    function elephc_pdo_last_open_sqlstate(): string;
+    function elephc_pdo_last_open_native_code(): int;
     function elephc_pdo_close(int $conn): void;
     function elephc_pdo_release(int $conn, int $resetPgsqlSession): void;
     // v35: unregisters every SQLite native callback before PHP descriptor roots
@@ -98,6 +101,10 @@ extern "elephc_pdo" {
     function elephc_pdo_bind_text_national(int $stmt, int $idx, string $val, int $len): int;
     function elephc_pdo_bind_blob(int $stmt, int $idx, string $data, int $len): int;
     function elephc_pdo_bind_null(int $stmt, int $idx): int;
+    // v53: PDO_OCI dynamic input/output binds and their length-counted result bytes.
+    function elephc_pdo_bind_output(int $stmt, int $idx, int $type, int $maxLength): int;
+    function elephc_pdo_output_data(int $stmt, int $idx): int;
+    function elephc_pdo_output_is_lob(int $stmt, int $idx): int;
     function elephc_pdo_reset(int $stmt): int;
     function elephc_pdo_clear_bindings(int $stmt): int;
     function elephc_pdo_step(int $stmt): int;
@@ -161,6 +168,13 @@ extern "elephc_pdo" {
     function elephc_pdo_odbc_stmt_cursor_name(int $stmt): string;
     function elephc_pdo_odbc_stmt_set_assume_utf8(int $stmt, int $enabled): int;
     function elephc_pdo_odbc_stmt_assume_utf8(int $stmt): int;
+    // v52: optional PDO_OCI attributes and column metadata.
+    function elephc_pdo_oci_set_attribute_int(int $conn, int $attribute, int $value): int;
+    function elephc_pdo_oci_set_attribute_text(int $conn, int $attribute, string $value): int;
+    function elephc_pdo_oci_attribute_int(int $conn, int $attribute): int;
+    function elephc_pdo_oci_column_pdo_type(int $stmt, int $column): int;
+    function elephc_pdo_oci_column_scale(int $stmt, int $column): int;
+    function elephc_pdo_oci_column_flags(int $stmt, int $column): int;
     function elephc_pdo_server_version(int $conn): string;
     // ABI v36: the remaining generic PDO connection-information attributes.
     function elephc_pdo_client_version(int $conn): string;
@@ -1167,6 +1181,13 @@ class PDO {
     const ODBC_SQL_USE_ODBC = 1;
     const ODBC_SQL_USE_DRIVER = 2;
     // -- elephc optional PDO_ODBC aliases end --
+    // -- elephc optional PDO_OCI aliases begin --
+    const OCI_ATTR_ACTION = 1000;
+    const OCI_ATTR_CLIENT_INFO = 1001;
+    const OCI_ATTR_CLIENT_IDENTIFIER = 1002;
+    const OCI_ATTR_MODULE = 1003;
+    const OCI_ATTR_CALL_TIMEOUT = 1004;
+    // -- elephc optional PDO_OCI aliases end --
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
 
@@ -1377,6 +1398,12 @@ class PDO {
             $_dsnDriver = "odbc";
             $_dsnClass = "Pdo\\Odbc";
         }
+        // -- elephc optional PDO_OCI subclass guard begin --
+        elseif (str_starts_with($dsn, "oci:")) {
+            $_dsnDriver = "oci";
+            $_dsnClass = "PDO";
+        }
+        // -- elephc optional PDO_OCI subclass guard end --
         if ($_dsnDriver === "") {
             return;
         }
@@ -1623,15 +1650,17 @@ class PDO {
         // '=' only. This leaves the ';'-splitter itself, and every non-credential value
         // (host, dbname with '\' or '%', etc.), byte-identical; a credential with no
         // special characters round-trips unchanged too.
-        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:")) {
+        if (str_starts_with($_dsn, "pgsql:") || str_starts_with($_dsn, "mysql:") || str_starts_with($_dsn, "dblib:") || str_starts_with($_dsn, "firebird:") || str_starts_with($_dsn, "odbc:") || str_starts_with($_dsn, "oci:")) {
             $_dsnIsMysql = str_starts_with($_dsn, "mysql:");
             $_dsnIsDblib = str_starts_with($_dsn, "dblib:");
             $_dsnIsFirebird = str_starts_with($_dsn, "firebird:");
-            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || !str_contains($_dsn, "user="))) {
+            $_dsnIsOdbc = str_starts_with($_dsn, "odbc:");
+            $_dsnIsOci = str_starts_with($_dsn, "oci:");
+            if ($username !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || !str_contains($_dsn, "user="))) {
                 $_encUser = str_replace(";", "%3B", str_replace("%", "%25", $username));
                 $_dsn = $_dsn . ";user=" . $_encUser;
             }
-            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || !str_contains($_dsn, "password="))) {
+            if ($password !== null && ($_dsnIsMysql || $_dsnIsDblib || $_dsnIsFirebird || $_dsnIsOci || !str_contains($_dsn, "password="))) {
                 $_encPass = str_replace(";", "%3B", str_replace("%", "%25", $password));
                 $_dsn = $_dsn . ";password=" . $_encPass;
             }
@@ -1673,11 +1702,15 @@ class PDO {
                     $_dsn = $_dsn . ";datetime_convert=" . ($this->attrBoolValue($this->attributes[1006]) ? "1" : "0");
                 }
             }
-            $_odbcCursorLibrary = isset($this->attributes[1000]) ? $this->attrIntValue($this->attributes[1000]) : 0;
-            $_odbcAssumeUtf8 = isset($this->attributes[1001]) && $this->attrBoolValue($this->attributes[1001]);
-            $_dsn = $_dsn . ";elephc_odbc_cursor_library=" . $_odbcCursorLibrary
-                . ";elephc_odbc_assume_utf8=" . ($_odbcAssumeUtf8 ? "1" : "0")
-                . ";elephc_odbc_autocommit=" . ($this->autoCommit ? "1" : "0");
+            if ($_dsnIsOdbc) {
+                $_odbcCursorLibrary = isset($this->attributes[1000]) ? $this->attrIntValue($this->attributes[1000]) : 0;
+                $_odbcAssumeUtf8 = isset($this->attributes[1001]) && $this->attrBoolValue($this->attributes[1001]);
+                $_dsn = $_dsn . ";elephc_odbc_cursor_library=" . $_odbcCursorLibrary
+                    . ";elephc_odbc_assume_utf8=" . ($_odbcAssumeUtf8 ? "1" : "0")
+                    . ";elephc_odbc_autocommit=" . ($this->autoCommit ? "1" : "0");
+            } elseif ($_dsnIsOci) {
+                $_dsn = $_dsn . ";elephc_oci_autocommit=" . ($this->autoCommit ? "1" : "0");
+            }
         }
         // Serialize the collected Pdo\Mysql::ATTR_SSL_* options into the packed
         // string the bridge parses (only the keys that were actually set are
@@ -1729,8 +1762,13 @@ class PDO {
             // left null) before the bridge was ever called. So every failure here is a
             // genuine connect failure of a known driver and always carries a SQLSTATE;
             // the old prefix re-test and its bare-message fallback are gone with it.
-            $_sqlstate = str_starts_with($_dsn, "sqlite:") ? "HY000" : "08006";
-            throw PDOException::__elephcFromErrorInfo("SQLSTATE[" . $_sqlstate . "]: " . $_openMsg, [$_sqlstate, null, $_openMsg]);
+            $_sqlstate = elephc_pdo_last_open_sqlstate();
+            $_nativeCode = elephc_pdo_last_open_native_code();
+            if ($_sqlstate === "") {
+                $_sqlstate = (str_starts_with($_dsn, "sqlite:") || str_starts_with($_dsn, "oci:")) ? "HY000" : "08006";
+            }
+            $_nativeInfo = $_nativeCode == 0 ? null : $_nativeCode;
+            throw PDOException::__elephcFromErrorInfo("SQLSTATE[" . $_sqlstate . "]: " . $_openMsg, [$_sqlstate, $_nativeInfo, $_openMsg]);
         }
         // Reset pooled MySQL sessions as well as new ones: a prior persistent
         // borrower may have disabled autocommit. Other drivers reject this
@@ -1766,6 +1804,20 @@ class PDO {
             foreach ([1000, 1001, 1002] as $_firebirdTextAttribute) {
                 if (isset($this->attributes[$_firebirdTextAttribute])) {
                     elephc_pdo_firebird_set_attribute_text($this->conn, $_firebirdTextAttribute, (string) $this->attributes[$_firebirdTextAttribute]);
+                }
+            }
+        } elseif (str_starts_with($_dsn, "oci:")) {
+            foreach ([0, 1, 1004] as $_ociIntAttribute) {
+                if (isset($this->attributes[$_ociIntAttribute])) {
+                    $_ociValue = $_ociIntAttribute == 0
+                        ? ($this->attrBoolValue($this->attributes[$_ociIntAttribute]) ? 1 : 0)
+                        : $this->attrIntValue($this->attributes[$_ociIntAttribute]);
+                    elephc_pdo_oci_set_attribute_int($this->conn, $_ociIntAttribute, $_ociValue);
+                }
+            }
+            foreach ([1000, 1001, 1002, 1003] as $_ociTextAttribute) {
+                if (isset($this->attributes[$_ociTextAttribute])) {
+                    elephc_pdo_oci_set_attribute_text($this->conn, $_ociTextAttribute, (string) $this->attributes[$_ociTextAttribute]);
                 }
             }
         }
@@ -2038,7 +2090,7 @@ class PDO {
 
     public function setAttribute(int $attribute, $value): bool {
         $_driver = elephc_pdo_driver_name($this->conn);
-        if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc")) {
+        if ($attribute == 0 && ($_driver === "mysql" || $_driver === "odbc" || $_driver === "oci")) {
             $_autocommit = $this->attrBoolValue($value);
             if (elephc_pdo_set_autocommit($this->conn, $_autocommit ? 1 : 0) !== 1) {
                 $this->fail(elephc_pdo_errmsg($this->conn));
@@ -2086,6 +2138,8 @@ class PDO {
             return elephc_pdo_set_buffered_query($this->conn, $this->attrBoolValue($value) ? 1 : 0) === 1;
         } elseif ($attribute == 1 && $_driver === "pgsql") {
             return elephc_pdo_set_prefetch($this->conn, $this->attrBoolValue($value) ? 1 : 0) === 1;
+        } elseif ($attribute == 1 && $_driver === "oci") {
+            return elephc_pdo_oci_set_attribute_int($this->conn, 1, $this->attrIntValue($value)) === 1;
         } elseif ($attribute == 20) {
             if ($_driver === "dblib") {
                 // php-src exposes emulation as read-only true: DB-Library has no
@@ -2144,6 +2198,10 @@ class PDO {
                 ? ($this->attrBoolValue($value) ? 1 : 0)
                 : $this->attrIntValue($value);
             return elephc_pdo_firebird_set_attribute_int($this->conn, $attribute, $_firebirdValue) === 1;
+        } elseif (($attribute == 1000 || $attribute == 1001 || $attribute == 1002 || $attribute == 1003) && $_driver === "oci") {
+            return elephc_pdo_oci_set_attribute_text($this->conn, $attribute, (string) $value) === 1;
+        } elseif ($attribute == 1004 && $_driver === "oci") {
+            return elephc_pdo_oci_set_attribute_int($this->conn, 1004, $this->attrIntValue($value)) === 1;
         } else {
             // F-CORE-04 (CORRECTED — the finalization spec was WRONG about this, and an
             // earlier pass implemented the spec's version): an UNKNOWN attribute number
@@ -2184,6 +2242,12 @@ class PDO {
     protected function __elephcDrainPgsqlNotices(): void {}
 
     public function getAttribute(int $attribute): mixed {
+        if (($attribute == 0 || $attribute == 1 || $attribute == 1004) && elephc_pdo_driver_name($this->conn) === "oci") {
+            $_ociValue = elephc_pdo_oci_attribute_int($this->conn, $attribute);
+            if ($_ociValue >= 0) {
+                return $attribute == 0 ? ($_ociValue === 1) : $_ociValue;
+            }
+        }
         if ((($attribute == 0 || $attribute == 1001) && elephc_pdo_driver_name($this->conn) === "odbc") || (($attribute == 0 || $attribute == 14 || $attribute == 1003 || $attribute == 1007) && elephc_pdo_driver_name($this->conn) === "firebird")) {
             if (elephc_pdo_driver_name($this->conn) === "odbc") {
                 $_odbcValue = elephc_pdo_odbc_attribute($this->conn, $attribute);
@@ -2199,7 +2263,7 @@ class PDO {
         if (($attribute == 1000 || $attribute == 1001 || $attribute == 1002) && elephc_pdo_driver_name($this->conn) === "firebird") {
             return elephc_pdo_firebird_attribute_text($this->conn, $attribute);
         }
-        if ($attribute == 0 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "odbc")) {
+        if ($attribute == 0 && (elephc_pdo_driver_name($this->conn) === "mysql" || elephc_pdo_driver_name($this->conn) === "odbc" || elephc_pdo_driver_name($this->conn) === "oci")) {
             return elephc_pdo_autocommit($this->conn) === 1;
         }
         if ($attribute == 14 && elephc_pdo_driver_name($this->conn) === "mysql") {
@@ -2279,7 +2343,7 @@ class PDO {
             }
             return $serverInfo;
         }
-        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib" && elephc_pdo_driver_name($this->conn) !== "odbc") {
+        if ($attribute == 7 && elephc_pdo_driver_name($this->conn) !== "sqlite" && elephc_pdo_driver_name($this->conn) !== "dblib" && elephc_pdo_driver_name($this->conn) !== "odbc" && elephc_pdo_driver_name($this->conn) !== "oci") {
             return elephc_pdo_connection_status($this->conn);
         }
         // Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES is write-only. Its get hook returns
@@ -2339,13 +2403,13 @@ class PDO {
         $_emulated = $this->emulatePrepares;
         $_disable = $this->disablePrepares;
         $_scrollable = false;
-        $_prefetchOverride = -1;
+        $_prefetchOverride = -2;
         if (array_key_exists(10, $options)) {
             $_cursorMode = (int) $options[10];
             if ($_driver === "sqlite" && $_cursorMode !== 0) {
                 return false;
             }
-            if (($_driver === "pgsql" || $_driver === "odbc") && $_cursorMode === 1) {
+            if (($_driver === "pgsql" || $_driver === "odbc" || $_driver === "oci") && $_cursorMode === 1) {
                 $_scrollable = true;
             }
         }
@@ -2354,6 +2418,8 @@ class PDO {
         }
         if ($_driver === "pgsql" && array_key_exists(1, $options)) {
             $_prefetchOverride = $this->attrBoolValue($options[1]) ? 1 : 0;
+        } elseif ($_driver === "oci" && array_key_exists(1, $options)) {
+            $_prefetchOverride = $this->attrIntValue($options[1]);
         }
         if ($_driver === "pgsql" && isset($options[1000])) {
             $_disable = $this->attrBoolValue($options[1000]);
@@ -2372,7 +2438,7 @@ class PDO {
             $this->fail(elephc_pdo_errmsg($this->conn));
             return false;
         }
-        if ($_prefetchOverride != -1) {
+        if ($_prefetchOverride != -2) {
             elephc_pdo_stmt_set_prefetch($_handle, $_prefetchOverride);
         }
         // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --
@@ -2605,6 +2671,13 @@ class PDO {
             $_driverStatus = 6;
         }
         // -- elephc optional PDO_ODBC connect dispatch end --
+        // -- elephc optional PDO_OCI connect dispatch begin --
+        elseif (str_starts_with($_dsn, "oci:")) {
+            $_driver = "oci";
+            $_driverClass = "PDO";
+            $_driverStatus = 0;
+        }
+        // -- elephc optional PDO_OCI connect dispatch end --
         if ($_driver === "") {
             if ($calledStatus === 0) {
                 throw new PDOException("could not find driver");
@@ -2637,8 +2710,11 @@ class PDO {
         }
         // -- elephc optional PDO_FIREBIRD connect construction end --
         // -- elephc optional PDO_ODBC connect construction begin --
-        return new \Pdo\Odbc($_dsn, $username, $password, $options);
+        if ($_driverStatus === 6) {
+            return new \Pdo\Odbc($_dsn, $username, $password, $options);
+        }
         // -- elephc optional PDO_ODBC connect construction end --
+        return new \PDO($_dsn, $username, $password, $options);
     }
     // -- elephc PHP >= 8.4 PDO::connect end --
 
@@ -3103,6 +3179,8 @@ class PDOStatement implements IteratorAggregate {
     // bindParam() reference getters, keyed by the append index in boundValues.
     private array $boundParamRefIndexes;
     private array $boundParamRefGetters;
+    private array $boundParamRefSetters;
+    private array $boundParamMaxLengths;
     // bindColumn() keeps its destination alive through a by-reference closure capture.
     // Parallel indexed arrays avoid heterogeneous records. Later duplicate keys shadow
     // earlier registrations during fetch, matching php-src's replacement semantics.
@@ -3215,6 +3293,8 @@ class PDOStatement implements IteratorAggregate {
         $this->boundNormalizedIndexes = [];
         $this->boundParamRefIndexes = [];
         $this->boundParamRefGetters = [];
+        $this->boundParamRefSetters = [];
+        $this->boundParamMaxLengths = [];
         $this->boundColumnKinds = [];
         $this->boundColumnIndexes = [];
         $this->boundColumnNames = [];
@@ -3606,7 +3686,7 @@ class PDOStatement implements IteratorAggregate {
         return true;
     }
 
-    public function bindParam($parameter, string|int|float|bool|null &$variable, int $type = 2, int $maxLength = 0, mixed $driverOptions = null): bool {
+    public function bindParam($parameter, mixed &$variable, int $type = 2, int $maxLength = 0, mixed $driverOptions = null): bool {
         // F-STMT-05: php-src validates bindParam()'s own Argument #1 exactly as it
         // validates bindValue()'s, so the guard is repeated here rather than left to
         // the bindValue() delegation below — otherwise the ValueError would name the
@@ -3626,14 +3706,15 @@ class PDOStatement implements IteratorAggregate {
         $_getter = function() use (&$variable): mixed {
             return $variable;
         };
+        $_setter = function(mixed $_value) use (&$variable): void {
+            $variable = $_value;
+        };
         $this->boundParamRefIndexes[] = $_boundIndex;
         $this->boundParamRefGetters[] = $_getter;
-        // $maxLength (the LOB/output-buffer length hint) and $driverOptions are accepted
-        // for signature compatibility with the common
-        // `bindParam($p, $v, PDO::PARAM_STR, 4000)` idiom but not applied — the
-        // bind loop in execute() has no by-reference length cap or driver-option
-        // channel to feed them into.
-        $_unusedMaxLength = $maxLength;
+        $this->boundParamRefSetters[] = $_setter;
+        $this->boundParamMaxLengths[] = $maxLength;
+        // Driver options remain driver-specific. PDO_OCI consumes the standard
+        // maxLength argument through the output-bind ABI above.
         $_unusedDriverOptions = $driverOptions;
         return $_ok;
     }
@@ -3679,6 +3760,41 @@ class PDOStatement implements IteratorAggregate {
         return true;
     }
 
+    // Copies completed PDO_OCI input/output buffers back into the durable reference
+    // cells captured by bindParam(). Scalar OCI outputs intentionally remain strings,
+    // even when PARAM_INT was requested, matching pdo_oci's SQLT_CHR output callback.
+    private function syncOutputParameters(): void {
+        $_refCount = count($this->boundParamRefIndexes);
+        for ($_ri = 0; $_ri < $_refCount; $_ri++) {
+            $_boundIndex = (int) $this->boundParamRefIndexes[$_ri];
+            $_slot = (int) $this->boundParams[$_boundIndex];
+            $_length = elephc_pdo_output_data($this->stmt, $_slot);
+            if ($_length == -3) {
+                continue;
+            }
+            $_setter = $this->boundParamRefSetters[$_ri];
+            if (is_callable($_setter)) {
+                callable $_typedSetter = $_setter;
+                if ($_length == -2) {
+                    call_user_func_array($_typedSetter, [null]);
+                } else {
+                    $_bytes = "";
+                    if ($_length > 0) {
+                        $_bytes = ptr_read_string(elephc_pdo_blob_data_ptr(), $_length);
+                    }
+                    if (elephc_pdo_output_is_lob($this->stmt, $_slot) != 0) {
+                        $_stream = fopen("php://memory", "r+");
+                        fwrite($_stream, $_bytes);
+                        rewind($_stream);
+                        call_user_func_array($_typedSetter, [$_stream]);
+                    } else {
+                        call_user_func_array($_typedSetter, [$_bytes]);
+                    }
+                }
+            }
+        }
+    }
+
     public function execute(?array $params = null): bool {
         $this->executed = true;
         $this->hasOperation = true;
@@ -3711,9 +3827,13 @@ class PDOStatement implements IteratorAggregate {
             for ($_i = 0; $_i < $_count; $_i++) {
                 $_slot = (int) $this->boundParams[$_i];
                 $_value = $this->boundValues[$_i];
+                $_isRefBind = false;
+                $_refMaxLength = 0;
                 $_refCount = count($this->boundParamRefIndexes);
                 for ($_ri = 0; $_ri < $_refCount; $_ri++) {
                     if ($this->boundParamRefIndexes[$_ri] == $_i) {
+                        $_isRefBind = true;
+                        $_refMaxLength = (int) $this->boundParamMaxLengths[$_ri];
                         $_getter = $this->boundParamRefGetters[$_ri];
                         if (is_callable($_getter)) {
                             callable $_typedGetter = $_getter;
@@ -3760,7 +3880,11 @@ class PDOStatement implements IteratorAggregate {
                 } elseif ($_btype == 3) {
                     // PDO::PARAM_LOB: route through bind_blob (raw bytes, embedded
                     // NUL preserved) rather than bind_text.
-                    $_s = (string) $_value;
+                    if (is_resource($_value)) {
+                        $_s = (string) stream_get_contents($_value);
+                    } else {
+                        $_s = (string) $_value;
+                    }
                     $_brc = elephc_pdo_bind_blob($this->stmt, $_slot, $_s, strlen($_s));
                 } elseif ($_btype == 100) {
                     // P2 (not a real PDO::PARAM_* value): an internal marker
@@ -3788,6 +3912,15 @@ class PDOStatement implements IteratorAggregate {
                     $_bindError = "__elephc_pdo_no_detail";
                     break;
                 }
+                $_isInputOutput = ($_rawBindType & PDO::PARAM_INPUT_OUTPUT) != 0;
+                $_isNullLobOutput = $_isRefBind && $_btype == PDO::PARAM_LOB && is_null($_value);
+                if ($_isInputOutput || $_isNullLobOutput) {
+                    $_brc = elephc_pdo_bind_output($this->stmt, $_slot, $_btype, $_refMaxLength);
+                    if ($_brc == 0) {
+                        $_bindError = "__elephc_pdo_no_detail";
+                        break;
+                    }
+                }
                 $this->boundNormalizedIndexes[] = $_i;
             }
         } else {
@@ -3808,6 +3941,8 @@ class PDOStatement implements IteratorAggregate {
             $this->boundNormalizedIndexes = [];
             $this->boundParamRefIndexes = [];
             $this->boundParamRefGetters = [];
+            $this->boundParamRefSetters = [];
+            $this->boundParamMaxLengths = [];
             // Apply this call's parameter array (positional ? and named :name).
             foreach ($params as $_key => $_pv) {
                 if (is_int($_key)) {
@@ -3934,6 +4069,7 @@ class PDOStatement implements IteratorAggregate {
                 return false;
             }
         }
+        $this->syncOutputParameters();
         // Snapshot the affected-row count now, so rowCount() reports this
         // statement's result even if another statement runs on the same
         // connection afterward. The bridge's changes() is connection-wide, so
@@ -4012,7 +4148,7 @@ class PDOStatement implements IteratorAggregate {
         if ($_oracleNulls == 1 && $_out === "") {
             return null;
         }
-        if ($_type == 4 && elephc_pdo_driver_name($this->conn) === "pgsql") {
+        if ($_type == 4 && (elephc_pdo_driver_name($this->conn) === "pgsql" || elephc_pdo_driver_name($this->conn) === "oci")) {
             $_stream = fopen("php://memory", "r+");
             fwrite($_stream, $_out);
             rewind($_stream);
@@ -5088,6 +5224,26 @@ class PDOStatement implements IteratorAggregate {
         }
         if ($_driver === "odbc") {
             return ["pdo_type" => 2];
+        }
+        if ($_driver === "oci") {
+            $_ociFlags = [];
+            $_ociFlagBits = elephc_pdo_oci_column_flags($this->stmt, $column);
+            if (($_ociFlagBits & 1) !== 0) {
+                $_ociFlags[] = "nullable";
+            } else {
+                $_ociFlags[] = "not_null";
+            }
+            if (($_ociFlagBits & 4) !== 0) {
+                $_ociFlags[] = "blob";
+            }
+            $_ociType = elephc_pdo_column_native_type($this->stmt, $column);
+            return [
+                "oci:decl_type" => $_ociType,
+                "native_type" => $_ociType,
+                "pdo_type" => elephc_pdo_oci_column_pdo_type($this->stmt, $column),
+                "scale" => elephc_pdo_oci_column_scale($this->stmt, $column),
+                "flags" => $_ociFlags,
+            ];
         }
         if ($_driver === "dblib") {
             $_dblibNativeId = elephc_pdo_dblib_column_native_type_id($this->stmt, $column);
@@ -6192,6 +6348,28 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
             );
         }
     }
+
+    let oci_enabled = cfg!(feature = "pdo-oci")
+        || std::env::var_os("ELEPHC_PDO_OCI").is_some();
+    if !oci_enabled {
+        remove_version_block(
+            source,
+            "    // -- elephc optional PDO_OCI aliases begin --",
+            "    // -- elephc optional PDO_OCI aliases end --",
+        );
+        remove_version_block(
+            source,
+            "        // -- elephc optional PDO_OCI subclass guard begin --",
+            "        // -- elephc optional PDO_OCI subclass guard end --",
+        );
+        if php_version >= PhpVersion::Php84 {
+            remove_version_block(
+                source,
+                "        // -- elephc optional PDO_OCI connect dispatch begin --",
+                "        // -- elephc optional PDO_OCI connect dispatch end --",
+            );
+        }
+    }
 }
 
 /// Removes one inclusive source fragment delimited by stable version-gate comments.
@@ -6372,6 +6550,24 @@ mod version_tests {
         ));
         let tokens = crate::lexer::tokenize(php85.as_ref()).expect("tokenize PHP 8.5 ODBC prelude");
         crate::parser::parse(&tokens).expect("parse PHP 8.5 ODBC prelude");
+    }
+
+    /// PDO_OCI keeps its legacy PDO constants and never defines a `Pdo\Oci` subclass.
+    #[cfg(feature = "pdo-oci")]
+    #[test]
+    fn oci_surface_follows_bundled_and_pecl_versions() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            assert!(source.contains("const OCI_ATTR_ACTION = 1000;"));
+            assert!(source.contains("const OCI_ATTR_CALL_TIMEOUT = 1004;"));
+            assert!(!source.contains("class Oci extends \\PDO"));
+        }
+        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        assert!(!php83.contains("optional PDO_OCI connect dispatch"));
+        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        assert!(php84.contains("optional PDO_OCI connect dispatch"));
+        let tokens = crate::lexer::tokenize(php84.as_ref()).expect("tokenize PHP 8.4 OCI prelude");
+        crate::parser::parse(&tokens).expect("parse PHP 8.4 OCI prelude");
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while

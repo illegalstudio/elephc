@@ -32,6 +32,11 @@ fn pdo_odbc_enabled() -> bool {
     cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
 }
 
+/// Reports whether the optional Oracle Instant Client PDO profile is selected.
+fn pdo_oci_enabled() -> bool {
+    cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
+}
+
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
 /// wrapper or PDO). Each entry in [`BRIDGES`] fully describes how to locate and
@@ -194,7 +199,8 @@ impl BridgeStaticlib {
             && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
                 || pdo_dblib_enabled()
                 || pdo_firebird_enabled()
-                || pdo_odbc_enabled())
+                || pdo_odbc_enabled()
+                || pdo_oci_enabled())
         {
             if let Some(workspace) = self.find_workspace() {
                 if !self.build_staticlib(&workspace) {
@@ -270,6 +276,9 @@ impl BridgeStaticlib {
             }
             if pdo_odbc_enabled() {
                 features.push("odbc");
+            }
+            if pdo_oci_enabled() {
+                features.push("oci");
             }
             if !features.is_empty() {
                 cmd.args(["--features", &features.join(",")]);

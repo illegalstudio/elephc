@@ -1,13 +1,14 @@
 ---
 title: "PDO (Databases)"
-description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, and PDO_ODBC: connections, prepared statements, fetch modes, transactions, and php-src divergences."
+description: "PDO database access with SQLite, PostgreSQL, MySQL/MariaDB, optional PDO_DBLIB, PDO_FIREBIRD, PDO_ODBC, and PDO_OCI: connections, prepared statements, fetch modes, transactions, and php-src divergences."
 sidebar:
   order: 17
 ---
 
 elephc implements PDO for the PHP 8.0 through 8.6 compatibility targets, with the
 **SQLite**, **PostgreSQL**, **MySQL / MariaDB**, optional **FreeTDS
-PDO_DBLIB**, optional **PDO_FIREBIRD**, and optional **PDO_ODBC** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
+PDO_DBLIB**, optional **PDO_FIREBIRD**, optional **PDO_ODBC**, and optional
+**Oracle PDO_OCI** drivers. `PDO`, `PDOStatement`, and `PDOException` behave like their
 PHP counterparts for everyday use: connect, execute, prepare/bind, fetch, and run
 transactions. The DSN prefix selects the driver.
 
@@ -18,6 +19,8 @@ and links the target platform's FreeTDS `libsybdb`; the resulting binary therefo
 needs a compatible system client at build and runtime. PDO_ODBC likewise links
 unixODBC and delegates database protocols to installed ODBC drivers. The Firebird
 profile uses the pure-Rust wire protocol and adds no client-library runtime dependency.
+PDO_OCI loads Oracle Instant Client dynamically through ODPI-C, preserving the official
+extension's external Oracle-client boundary without requiring proprietary headers at build time.
 
 The surface is deliberately honest: where a feature is not implemented, it fails
 loudly (a `PDOException`, a `ValueError`, a `TypeError`) rather than silently
@@ -68,10 +71,13 @@ $firebird = new PDO("firebird:dbname=localhost/3050:/data/app.fdb;charset=UTF8",
 
 // Any installed unixODBC driver through the optional PDO_ODBC profile.
 $odbc = new PDO("odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Database=app", "me", "secret");
+
+// Oracle through the optional PDO_OCI / Instant Client profile.
+$oracle = new PDO("oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8", "me", "secret");
 ```
 
 The DSN normally starts with `sqlite:`, `pgsql:`, `mysql:`, or (when enabled)
-`dblib:`, `firebird:`, or `odbc:`. A colonless value may
+`dblib:`, `firebird:`, `odbc:`, or `oci:`. A colonless value may
 instead name a runtime PHP configuration alias such as
 `pdo.dsn.app = "pgsql:host=db;dbname=app"`; `new PDO("app")` then uses the resolved
 DSN. The standalone binary loads an explicit `PHPRC` file (or `php.ini` inside an
@@ -184,7 +190,9 @@ $stmt->execute();
 
 `bindParam()` retains a durable reference to the caller variable and reads its current
 value on every `execute()`, including when a concrete scalar local must be promoted to
-the compiler's boxed `Mixed` reference-cell representation.
+the compiler's boxed `Mixed` reference-cell representation. PDO_OCI also writes native
+`PARAM_INPUT_OUTPUT` results back through that reference, honors `$maxLength`, and turns
+output LOB locators into PHP streams.
 
 **`execute($params)` REPLACES the recorded bindings**, it does not layer on top of
 them — php-src rebuilds its bound-parameter table from the array, so a slot bound
@@ -649,6 +657,41 @@ constants.
   The selected database driver must exist for that target and be registered with the
   driver manager.
 
+## PDO_OCI notes
+
+PDO_OCI is optional because, like PHP's extension, it needs an Oracle client at runtime:
+
+```bash
+cargo run --features pdo-oci -- app.php
+```
+
+Install Oracle Instant Client for the target and expose its directory through the
+platform loader (`LD_LIBRARY_PATH` on Linux or the corresponding macOS loader path).
+The bridge uses Oracle's ODPI-C layer, which resolves `libclntsh` dynamically; compiling
+elephc and the bridge itself therefore needs neither Oracle headers nor a client install.
+
+- **Version surface.** PHP bundled PDO_OCI through 8.3 and moved it to PECL in PHP 8.4.
+  The current PECL 1.2.0 surface keeps `PDO::OCI_ATTR_ACTION`, `CLIENT_INFO`,
+  `CLIENT_IDENTIFIER`, `MODULE`, and `CALL_TIMEOUT`; it does not define `Pdo\Oci`.
+  elephc follows that split on every compatibility target.
+- **DSN and encoding.** `dbname`, `user`, `password`, and `charset` follow PDO_OCI;
+  constructor credentials override DSN credentials. Compiled PHP strings cross ODPI-C as
+  UTF-8, so `AL32UTF8` and `UTF8` are accepted explicitly and another client character set
+  fails at connection setup rather than being ignored.
+- **Execution.** Oracle native placeholders, repeated named binds, scroll orientations,
+  prefetch rows, autocommit, tracked transactions, affected-row counts, ping-based
+  persistent checkout, and Oracle SQLSTATE/native diagnostics are wired to the client.
+  Constructor failures preserve PDO_OCI's native code and special SQLSTATE mappings.
+  Scalar Oracle values and scalar input/output results remain strings like PDO_OCI.
+  Input `PARAM_LOB` strings/streams use temporary Oracle BLOBs; null LOB output binds and
+  fetched BLOB/CLOB/NCLOB/BFILE values are exposed as PHP streams.
+- **Attributes and metadata.** Session action/module/client fields and millisecond call
+  timeout are live. `getColumnMeta()` reports PDO_OCI's `oci:decl_type`, `native_type`,
+  `pdo_type`, `scale`, and nullable/not-null/blob flags.
+- **Unsupported official hooks.** PDO_OCI itself has no last-insert-id hook, connection-
+  status attribute, or driver subclass. `PDO::quote()` uses the driver's single-quote
+  doubling implementation.
+
 ## TLS / encrypted connections
 
 PostgreSQL and MySQL connect over TLS with [rustls](https://github.com/rustls/rustls).
@@ -998,8 +1041,8 @@ preserve source SQL evaluation order, and retain the rendered text for
 ### Driver matrix boundary
 
 - **Compiled drivers.** SQLite, PostgreSQL, and MySQL / MariaDB are in the default
-  profile; DBLIB, Firebird, and ODBC are available through their optional profiles.
-  php-src's OCI driver is not compiled yet. The central registry intentionally reports
+  profile; DBLIB, Firebird, ODBC, and OCI are available through their optional profiles.
+  The central registry intentionally reports
   only drivers present in the selected archive rather than advertising inert names.
 
 ### Driver-specific client options
@@ -1021,6 +1064,8 @@ preserve source SQL evaluation order, and retain the rendered text for
   boolean value options are readable and writable, matching the driver's php-src hook.
 - PDO_FIREBIRD's format, isolation, writable-transaction, autocommit, and
   fetch-table-name attributes are implemented, including their PHP-version aliases.
+- PDO_OCI's autocommit, prefetch, call-timeout, action, module, client-info, and
+  client-identifier attributes are implemented through Oracle Instant Client.
 - `ATTR_MAX_COLUMN_LEN`, `ATTR_FETCH_CATALOG_NAMES`, and `ATTR_CURSOR_NAME` are rejected
   when the active driver has no corresponding php-src hook/capability.
 

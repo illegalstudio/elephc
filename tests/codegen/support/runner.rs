@@ -31,6 +31,11 @@ fn pdo_odbc_enabled() -> bool {
     cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
 }
 
+/// Reports whether codegen fixtures should build the Oracle Instant Client profile.
+fn pdo_oci_enabled() -> bool {
+    cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
+}
+
 /// Describes a Rust bridge staticlib needed by codegen integration fixtures.
 struct TestBridgeStaticlib {
     /// Linker library name requested by the compiled program.
@@ -191,10 +196,14 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         let requires_odbc_profile = bridge.lib_name == "elephc_pdo"
             && pdo_odbc_enabled()
             && ODBC_BRIDGE_BUILT.get().is_none();
+        let requires_oci_profile = bridge.lib_name == "elephc_pdo"
+            && pdo_oci_enabled()
+            && OCI_BRIDGE_BUILT.get().is_none();
         if !requires_libpq_profile
             && !requires_dblib_profile
             && !requires_firebird_profile
             && !requires_odbc_profile
+            && !requires_oci_profile
             && !bridge_staticlib_needs_build(&archive_path, bridge.package)
         {
             continue;
@@ -215,6 +224,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             }
             if pdo_odbc_enabled() {
                 features.push("odbc");
+            }
+            if pdo_oci_enabled() {
+                features.push("oci");
             }
             if !features.is_empty() {
                 command.args(["--features", &features.join(",")]);
@@ -251,6 +263,9 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
         }
         if requires_odbc_profile {
             let _ = ODBC_BRIDGE_BUILT.set(());
+        }
+        if requires_oci_profile {
+            let _ = OCI_BRIDGE_BUILT.set(());
         }
     }
 }

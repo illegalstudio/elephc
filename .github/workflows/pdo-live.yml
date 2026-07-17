@@ -31,9 +31,9 @@ env:
 
 jobs:
   pdo-live:
-    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC)
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + ODBC + Oracle 23ai)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     services:
       postgres:
@@ -92,6 +92,20 @@ jobs:
           --health-timeout 10s
           --health-retries 30
 
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: Elephc_Oracle!2026_Test
+          APP_USER: test
+          APP_USER_PASSWORD: test
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
     env:
       # ONE family of variables now drives BOTH live suites. The codegen suites
       # (tests/codegen/pdo_pgsql.rs, tests/codegen/pdo_mysql.rs) read these names
@@ -106,6 +120,7 @@ jobs:
       ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
       ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
       ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
+      ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
       # Turns "no DSN in the environment" into a panic instead of a silent early
       # return in the in-crate live tests. Without it, a variable that gets renamed
       # or dropped from this job would make a live test that executed NOTHING look
@@ -114,6 +129,22 @@ jobs:
       ELEPHC_PDO_LIVE_REQUIRED: '1'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Expose Oracle client libraries from the service image
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libaio1t64
+          oracle_container="$(docker ps --filter ancestor=gvenzl/oracle-free:23-slim-faststart --format '{{.ID}}' | head -n 1)"
+          test -n "$oracle_container"
+          oracle_libdir="$(docker exec "$oracle_container" sh -lc 'dirname "$(find /opt/oracle/product -name libclntsh.so -print -quit)"')"
+          test -n "$oracle_libdir"
+          mkdir -p "$RUNNER_TEMP/oracle-client"
+          for library in $(docker exec "$oracle_container" sh -lc "find '$oracle_libdir' -maxdepth 1 \\( -name 'libclntsh.so*' -o -name 'libclntshcore.so*' -o -name 'libnnz*.so' -o -name 'libons.so' -o -name 'libipc1.so' -o -name 'libmql1.so' -o -name 'libociei.so' -o -name 'libociicus.so' \\) -print"); do
+            docker cp "$oracle_container:$library" "$RUNNER_TEMP/oracle-client/"
+          done
+          test -e "$RUNNER_TEMP/oracle-client/libclntsh.so"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/oracle-client" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -342,3 +373,17 @@ jobs:
         env:
           ELEPHC_PDO_ODBC: '1'
         run: cargo test --features pdo-odbc --test codegen_tests -- --ignored pdo_odbc --test-threads=1
+
+      - name: Build the Oracle Instant Client PDO_OCI bridge staticlib
+        run: cargo build -p elephc-pdo --features oci
+
+      - name: PDO_OCI bridge unit tests
+        run: 'cargo test -p elephc-pdo --features oci oci::tests:: -- --skip live_oci_round_trip'
+
+      - name: Live Oracle bridge tests (in-crate)
+        run: 'cargo test -p elephc-pdo --features oci oci::tests::live_oci_round_trip -- --ignored --test-threads=1'
+
+      - name: Live Oracle codegen tests (PDO_OCI)
+        env:
+          ELEPHC_PDO_OCI: '1'
+        run: cargo test --features pdo-oci --test codegen_tests -- --ignored pdo_oci --test-threads=1
