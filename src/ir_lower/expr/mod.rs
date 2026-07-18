@@ -8775,9 +8775,25 @@ fn lower_nullable_array_access(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
+/// Lowers a subscript read whose receiver has already been evaluated,
+/// including the nullable-receiver guard. Used by the nested-assign parent
+/// lowering when a receiver produced by a for-write chain turns out not to be
+/// a boxed Mixed cell (e.g. ArrayAccess object intermediates, issue #555).
+pub(crate) fn lower_array_access_from_lowered_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_array_access(ctx, receiver, index, expr, true);
+    }
+    lower_array_access_from_value(ctx, receiver, index, expr, true)
+}
+
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
 }

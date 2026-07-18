@@ -33,7 +33,7 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, RuntimeId,
- PassOrigin,};
+ PassOrigin, RUNTIME_CALL_FETCH_FOR_WRITE,};
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
     Module, PackedLayoutTable, TraitMethodInfo,
