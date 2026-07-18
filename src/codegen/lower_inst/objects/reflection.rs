@@ -1394,6 +1394,7 @@ fn reflection_function_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
@@ -1429,6 +1430,7 @@ fn reflection_builtin_function_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
@@ -1716,6 +1718,7 @@ fn reflection_function_parameter_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
@@ -3232,6 +3235,16 @@ fn reflection_class_method_member(
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
     };
+    let source_defaults = declaring_class_name
+        .as_deref()
+        .and_then(|declaring_class| {
+            reflection_source_method_defaults(
+                ctx,
+                declaring_class,
+                &method_key,
+                flags.is_static,
+            )
+        });
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
@@ -3240,6 +3253,7 @@ fn reflection_class_method_member(
         declaring_class_name.as_deref(),
         Some(declaring_function),
         &reflection_promoted_constructor_parameter_names(info, &method_key),
+        source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key.clone(),
@@ -3316,6 +3330,12 @@ fn reflection_interface_method_member(
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
     };
+    let source_defaults = reflection_source_method_defaults(
+        ctx,
+        declaring_class_name.as_str(),
+        &method_key,
+        is_static,
+    );
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
@@ -3324,6 +3344,7 @@ fn reflection_interface_method_member(
         Some(declaring_class_name.as_str()),
         Some(declaring_function),
         &[],
+        source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key,
@@ -3404,6 +3425,7 @@ fn reflection_trait_method_member(
         Some(trait_name),
         Some(declaring_function),
         &[],
+        None,
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key,
@@ -3926,6 +3948,39 @@ fn reflection_promoted_constructor_parameter_names(
     }
 }
 
+/// Returns lexical parameter defaults from the method's declaring class or interface.
+/// Semantic signatures may canonicalize relative receivers for runtime materialization, while
+/// ReflectionParameter must preserve source-visible names such as `self::X` and `parent::Y`.
+fn reflection_source_method_defaults(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> Option<Vec<Option<Expr>>> {
+    let declaring_class_name = declaring_class_name.trim_start_matches('\\');
+    let declarations = ctx
+        .module
+        .class_infos
+        .get(declaring_class_name)
+        .map(|info| info.method_decls.as_slice())
+        .or_else(|| {
+            ctx.module
+                .interface_infos
+                .get(declaring_class_name)
+                .map(|info| info.method_decls.as_slice())
+        })?;
+    let method = declarations.iter().find(|method| {
+        method.is_static == is_static && php_symbol_key(&method.name) == method_key
+    })?;
+    Some(
+        method
+            .params
+            .iter()
+            .map(|(_, _, default, _)| default.clone())
+            .collect(),
+    )
+}
+
 /// Builds reflected parameter metadata and attaches declaring class metadata when present.
 fn reflection_parameter_members_with_declaring_class(
     ctx: &FunctionContext<'_>,
@@ -3935,6 +3990,7 @@ fn reflection_parameter_members_with_declaring_class(
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
     promoted_parameter_names: &[String],
+    source_defaults: Option<&[Option<Expr>]>,
 ) -> Result<Vec<ReflectionParameterMember>> {
     reflection_parameter_members_with_declaring_function(
         ctx,
@@ -3944,6 +4000,7 @@ fn reflection_parameter_members_with_declaring_class(
         declaring_class_name,
         declaring_function,
         promoted_parameter_names,
+        source_defaults,
     )
 }
 
@@ -3956,6 +4013,7 @@ fn reflection_parameter_members_with_declaring_function(
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
     promoted_parameter_names: &[String],
+    source_defaults: Option<&[Option<Expr>]>,
 ) -> Result<Vec<ReflectionParameterMember>> {
     let mut parameters = Vec::new();
     for (index, (name, ty)) in sig.params.iter().enumerate() {
@@ -3986,8 +4044,12 @@ fn reflection_parameter_members_with_declaring_function(
             })
             .transpose()?
             .flatten();
-        let default_value_constant_name =
-            default_expr.and_then(reflection_parameter_default_constant_name);
+        let source_default_expr = source_defaults
+            .and_then(|defaults| defaults.get(index))
+            .and_then(Option::as_ref);
+        let default_value_constant_name = source_default_expr
+            .or(default_expr)
+            .and_then(reflection_parameter_default_constant_name);
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");

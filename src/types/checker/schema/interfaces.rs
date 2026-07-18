@@ -378,6 +378,7 @@ pub(crate) fn build_interface_info_recursive(
             parents: interface.extends.clone(),
             properties,
             property_order,
+            method_decls: interface.methods.clone(),
             methods,
             method_declaring_interfaces,
             method_order,
