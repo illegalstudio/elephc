@@ -115,9 +115,10 @@ pub(in crate::parser::stmt) fn parse_global(
     Ok(Stmt::new(StmtKind::Global { vars }, span))
 }
 
-/// Parses a `static $var = expr;` declaration statement.
-/// Consumes the `static` keyword, then expects a single variable name followed by `=` and an
-/// initializer expression. Returns a `StmtKind::StaticVar` node.
+/// Parses a `static $var = expr;` or `static $var;` declaration statement.
+/// Consumes the `static` keyword, then expects a single variable name optionally followed by
+/// `=` and an initializer expression; a missing initializer desugars to `= null` (PHP treats
+/// both forms identically). Returns a `StmtKind::StaticVar` node.
 pub(in crate::parser::stmt) fn parse_static_var(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -131,14 +132,12 @@ pub(in crate::parser::stmt) fn parse_static_var(
     };
     *pos += 1;
 
-    expect_token(
-        tokens,
-        pos,
-        &Token::Assign,
-        "Expected '=' after static variable",
-    )?;
-
-    let init = parse_assignment_value_expr(tokens, pos)?;
+    let init = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Assign)) {
+        *pos += 1;
+        parse_assignment_value_expr(tokens, pos)?
+    } else {
+        Expr::new(ExprKind::Null, span)
+    };
     expect_semicolon(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))

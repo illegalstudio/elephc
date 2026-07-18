@@ -10033,6 +10033,29 @@ eval('static $n = 0; $n++; echo $n;');
     assert_eq!(out, "1:1");
 }
 
+/// Verifies a top-level eval static declared without an initializer defaults to null.
+#[test]
+fn test_eval_top_level_static_var_without_initializer_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+eval('static $x; var_dump($x);');
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Verifies a dynamic (interpreter-path) eval static declared without an initializer defaults to null.
+#[test]
+fn test_eval_dynamic_static_var_without_initializer_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+$prefix = 'static $x; ';
+eval($prefix . 'var_dump($x);');
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
 /// Verifies eval inside a closure can mutate the closure's by-value capture without touching the outer variable.
 #[test]
 fn test_eval_inside_closure_updates_by_value_capture_copy() {
