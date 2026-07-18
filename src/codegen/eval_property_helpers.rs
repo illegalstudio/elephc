@@ -208,6 +208,9 @@ fn property_visibility_supported(visibility: &Visibility) -> bool {
 }
 
 /// Returns true for property storage shapes the bridge can box and update.
+/// `Void` slots (untyped properties never assigned by AOT code) are read-only:
+/// they box as PHP null and report initialized, while writes fail in the store
+/// bodies because the slot has no value storage.
 fn property_type_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
@@ -221,6 +224,7 @@ fn property_type_supported(ty: &PhpType) -> bool {
             | PhpType::Object(_)
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Void
     )
 }
 
@@ -1083,6 +1087,9 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // store the retained Mixed cell into the property slot
             emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); // clear the unused property high word
         }
+        PhpType::Void => {
+            emitter.instruction(&format!("b {}", fail_label)); // Void slots have no value storage; report the eval write as unsupported
+        }
         _ => {}
     }
 }
@@ -1135,6 +1142,9 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the retained Mixed cell into the property slot
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the unused property high word
+        }
+        PhpType::Void => {
+            emitter.instruction(&format!("jmp {}", fail_label)); // Void slots have no value storage; report the eval write as unsupported
         }
         _ => {}
     }
