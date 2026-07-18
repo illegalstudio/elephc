@@ -46,6 +46,15 @@ fn test_error_undefined_method() {
     );
 }
 
+/// Verifies `::class` rejects a receiver whose static type is not an object.
+#[test]
+fn test_error_object_class_name_requires_object() {
+    expect_error(
+        "<?php $value = 1; echo $value::class;",
+        "Cannot use \"::class\" on int",
+    );
+}
+
 /// Verifies that a method call on an object union (`A|B`) is rejected when the
 /// method is absent from one of the member classes: every object member must
 /// provide the method for the runtime class-id dispatch to be sound.

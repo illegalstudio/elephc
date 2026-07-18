@@ -215,6 +215,12 @@ pub enum ExprKind {
     ClassConstant {
         receiver: StaticReceiver,
     },
+    /// `$object::class` or another object-valued expression followed by `::class`.
+    /// Unlike `ClassConstant`, this resolves the concrete runtime class of the
+    /// evaluated object instead of naming a compile-time static receiver.
+    ObjectClassName {
+        object: Box<Expr>,
+    },
     /// Access to a user-declared class constant: `MyClass::FOO`,
     /// `self::FOO`, `parent::FOO`, `static::FOO`. Resolved at type-check
     /// time by looking up the constant in the receiver's class info.

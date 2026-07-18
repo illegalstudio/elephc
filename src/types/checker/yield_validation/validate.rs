@@ -390,6 +390,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => visit_expr(object, st),
+        ExprKind::ObjectClassName { object } => visit_expr(object, st),
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             visit_expr(object, st);

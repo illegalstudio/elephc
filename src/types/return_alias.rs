@@ -547,6 +547,7 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         | ExprKind::BitNot(_)
         | ExprKind::PtrCast { .. }
         | ExprKind::ClassConstant { .. }
+        | ExprKind::ObjectClassName { .. }
         | ExprKind::MagicConstant(_) => ReturnArgAlias::None,
         _ => ReturnArgAlias::Unknown,
     }
@@ -708,6 +709,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         }
         ExprKind::NamedArg { value, .. } => apply_expr_effects(value, state),
         ExprKind::BufferNew { len, .. } => apply_expr_effects(len, state),
+        ExprKind::ObjectClassName { object } => apply_expr_effects(object, state),
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {
                 apply_expr_effects(key, state);

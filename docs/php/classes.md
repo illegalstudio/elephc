@@ -539,7 +539,9 @@ Called with `::`, no `$this`.
 
 ## Class name reflection (`::class`)
 
-`::class` returns the fully-qualified class name as a string at compile time.
+`::class` returns a fully-qualified class name as a string. Named and scoped
+receivers are resolved without constructing an object; an object-valued receiver
+reads the concrete class from the object at runtime.
 
 ```php
 <?php
@@ -551,11 +553,18 @@ class Logger {
 }
 echo Logger::class;                  // "App\Logger"
 echo \App\Logger::class;             // "App\Logger"
+
+$logger = new Logger("audit");
+echo $logger::class;                 // "App\Logger"
 ```
 
-Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`, `parent::class`, `static::class`.
+Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`,
+`parent::class`, `static::class`, and statically known object-valued expressions
+such as `$object::class` or `make_object()::class`.
 
 `static::class` follows PHP late static binding and resolves to the called class.
+`$object::class` follows the object's concrete runtime class, including when its
+static type is a parent class. The receiver expression is evaluated exactly once.
 For named receivers, elephc preserves PHP's written/imported spelling for the
 `::class` string while still using case-insensitive class lookup for executable
 operations such as `new`, `instanceof`, static method calls, and static property

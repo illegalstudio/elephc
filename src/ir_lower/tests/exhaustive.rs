@@ -343,6 +343,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Self_ }),
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Static }),
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Parent }),
+        expr(ExprKind::ObjectClassName { object: Box::new(object.clone()) }),
         expr(ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(name("C")), name: "K".to_string() }),
         expr(ExprKind::NewScopedObject { receiver: StaticReceiver::Named(name("C")), args: Vec::new() }),
         expr(ExprKind::MagicConstant(MagicConstant::File)),

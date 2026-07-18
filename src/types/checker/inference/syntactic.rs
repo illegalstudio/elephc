@@ -366,7 +366,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             PhpType::Object(fallback_class.as_str().to_string())
         }
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
+        ExprKind::ClassConstant { .. }
+        | ExprKind::ObjectClassName { .. }
+        | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

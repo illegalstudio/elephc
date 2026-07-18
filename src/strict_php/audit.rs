@@ -509,6 +509,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::Clone(inner)
+        | ExprKind::ObjectClassName { object: inner }
         | ExprKind::YieldFrom(inner) => audit_expr(inner, errors),
         ExprKind::NullCoalesce { value, default } => {
             audit_expr(value, errors);

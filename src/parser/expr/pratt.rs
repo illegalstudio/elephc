@@ -99,6 +99,17 @@ fn parse_expr_bp_inner(
                 // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
                 let span = tokens[*pos].1;
                 *pos += 1; // consume '::'
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Class)) {
+                    *pos += 1;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    lhs = Expr::new(
+                        ExprKind::ObjectClassName {
+                            object: Box::new(lhs),
+                        },
+                        span,
+                    );
+                    continue;
+                }
                 let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
                     Some((Token::Identifier(name), name_span)) => {
                         *pos += 1;

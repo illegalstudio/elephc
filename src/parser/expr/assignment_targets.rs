@@ -350,7 +350,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => collect_assignment_target_dependencies(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value } => {
+            collect_assignment_target_dependencies(value, dependencies)
+        }
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
@@ -483,7 +486,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => expr_may_write_dependency(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value } => {
+            expr_may_write_dependency(value, dependencies)
+        }
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
@@ -695,6 +701,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value }
         | ExprKind::YieldFrom(value) => expr_contains_equivalent(value, needle),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_contains_equivalent(value, needle) || expr_contains_equivalent(default, needle)

@@ -468,6 +468,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             is_regex_builtin_name(name.as_str())
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { .. }) => false,
+        ExprKind::ObjectClassName { object } => expr_has_regex_call(object),
         ExprKind::StaticPropertyAccess { receiver, .. }
         | ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => {
@@ -794,6 +795,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
             expr_needs_descriptor_invoker(object)
         }
         ExprKind::FirstClassCallable(_) => false,
+        ExprKind::ObjectClassName { object } => expr_needs_descriptor_invoker(object),
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,

@@ -264,6 +264,9 @@ pub(super) fn resolve_expr(
                 _ => receiver.clone(),
             },
         },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(

@@ -204,6 +204,7 @@ pub(super) fn collect_expr_reads(
         }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
+        ExprKind::ObjectClassName { object } => collect_expr_reads(object, scope, warnings),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}
         ExprKind::NewScopedObject { args, .. } => {
             for arg in args {

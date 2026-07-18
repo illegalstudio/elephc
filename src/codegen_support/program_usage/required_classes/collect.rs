@@ -462,6 +462,9 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 names.insert(name.as_str().to_string());
             }
         }
+        ExprKind::ObjectClassName { object } => {
+            collect_required_class_names_in_expr(object, names);
+        }
         ExprKind::ScopedConstantAccess { receiver, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());

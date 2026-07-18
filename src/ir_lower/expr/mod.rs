@@ -166,6 +166,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::PtrCast { target_type, expr: inner } => lower_ptr_cast(ctx, target_type, inner, expr),
         ExprKind::BufferNew { element_type, len } => lower_buffer_new(ctx, element_type, len, expr),
         ExprKind::ClassConstant { receiver } => lower_class_constant(ctx, receiver, expr),
+        ExprKind::ObjectClassName { object } => lower_object_class_name(ctx, object, expr),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             lower_scoped_constant(ctx, receiver, name, expr)
         }
@@ -713,7 +714,10 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::BufferNew { len: inner, .. } => expr_can_reset_concat_storage(inner),
+        | ExprKind::BufferNew { len: inner, .. }
+        | ExprKind::ObjectClassName { object: inner } => {
+            expr_can_reset_concat_storage(inner)
+        }
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_can_reset_concat_storage(value) || expr_can_reset_concat_storage(default)
@@ -9421,6 +9425,7 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::BufferNew { len: expr, .. }
+        | ExprKind::ObjectClassName { object: expr }
         | ExprKind::YieldFrom(expr) => expr_contains_eval_call(expr),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default }
@@ -14430,6 +14435,23 @@ fn lower_class_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRece
         PhpType::Str,
         Op::ConstClassName.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Lowers an object-valued `::class` receiver through the runtime class-name lookup.
+fn lower_object_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object);
+    emit_builtin_call_value(
+        ctx,
+        "get_class",
+        vec![object.value],
+        PhpType::Str,
+        expr.span,
+        None,
     )
 }
 

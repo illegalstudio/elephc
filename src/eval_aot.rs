@@ -1440,6 +1440,7 @@ fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason> {
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ClassConstant { .. }
+        | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::This => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::Spread(_) => {
@@ -2566,6 +2567,7 @@ fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAccess) {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::ObjectClassName { object } => collect_expr_scope_access(object, access),
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)

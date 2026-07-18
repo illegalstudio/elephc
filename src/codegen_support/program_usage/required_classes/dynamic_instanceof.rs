@@ -163,7 +163,8 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::NamedArg { value: expr, .. }
-        | ExprKind::BufferNew { len: expr, .. } => expr_has_dynamic_instanceof(expr),
+        | ExprKind::BufferNew { len: expr, .. }
+        | ExprKind::ObjectClassName { object: expr } => expr_has_dynamic_instanceof(expr),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(default)

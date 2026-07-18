@@ -614,6 +614,24 @@ impl Checker {
                 self.validate_class_constant_receiver(receiver, expr.span)?;
                 Ok(PhpType::Str)
             }
+            ExprKind::ObjectClassName { object } => {
+                let object_type = self.infer_type(object, env)?;
+                let object_only = match &object_type {
+                    PhpType::Object(_) => true,
+                    PhpType::Union(members) => {
+                        !members.is_empty()
+                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                    }
+                    _ => false,
+                };
+                if !object_only {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot use \"::class\" on {}", object_type),
+                    ));
+                }
+                Ok(PhpType::Str)
+            }
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, expr)
             }

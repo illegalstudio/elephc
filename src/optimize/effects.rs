@@ -346,6 +346,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
+        ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

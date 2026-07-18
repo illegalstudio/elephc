@@ -351,6 +351,7 @@ fn collect_arrow_expr_captures(
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::ObjectClassName { object: inner }
         | ExprKind::YieldFrom(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
