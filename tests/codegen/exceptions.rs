@@ -649,3 +649,26 @@ try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
     );
     assert_eq!(out, "err");
 }
+
+/// An object-returning function whose only implicit fall-through is unreachable must still
+/// materialize a value of the object return type for the (unreachable) structural join. Here the
+/// `try` body returns a `Conn` and the `catch` throws, so the join is dead — yet the backend
+/// rejected its placeholder ("runtime_call with 0 operands returning PHP type Object(<x>)"). The
+/// implicit object return now lowers to the null-object sentinel via const_null rather than the
+/// un-lowerable 0-operand `Op::RuntimeCall`.
+#[test]
+fn test_object_return_unreachable_fallthrough_placeholder() {
+    let out = compile_and_run(
+        r#"<?php
+final class Conn { public function __construct(public string $dsn) {} }
+final class Factory {
+    public function create(string $dsn): Conn {
+        try { return new Conn($dsn); }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    }
+}
+echo (new Factory())->create('pg')->dsn;
+"#,
+    );
+    assert_eq!(out, "pg");
+}

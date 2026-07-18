@@ -1096,6 +1096,25 @@ fn emit_default_return_value(ctx: &mut LoweringContext<'_, '_>) -> crate::ir::Va
             )
             .value
         }
+        IrType::Heap(_) if matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_)) => {
+            // An object-returning body whose only fall-through is unreachable — a `try` that
+            // returns and whose every `catch` throws (`create(): Conn`) — still needs a value
+            // of the object return type for the structural join's terminator. Emit the
+            // null-object sentinel via `Op::ConstNull` (const_null loads the null sentinel for a
+            // non-tagged result) rather than the un-lowerable 0-operand `Op::RuntimeCall` the
+            // `Heap` catch-all below produces ("runtime_call with 0 operands returning PHP type
+            // Object(<x>)"). The join is unreachable, so the placeholder is never materialized at
+            // runtime; it only needs a representation codegen can lower.
+            ctx.emit_value(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                ctx.return_php_type.clone(),
+                Op::ConstNull.default_effects(),
+                None,
+            )
+            .value
+        }
         IrType::Heap(_) => {
             let lowered = ctx.emit_value(
                 Op::RuntimeCall,
