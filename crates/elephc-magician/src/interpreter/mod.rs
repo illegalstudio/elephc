@@ -28,6 +28,7 @@ mod return_values;
 mod runtime_ops;
 mod scope_cells;
 mod statements;
+#[cfg(not(test))]
 mod output_handlers;
 mod throwables;
 
@@ -72,6 +73,7 @@ use runtime_ops::*;
 use scope_cells::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
 use statements::*;
 use throwables::*;
