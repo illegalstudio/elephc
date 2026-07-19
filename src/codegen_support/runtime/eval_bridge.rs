@@ -1551,6 +1551,68 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("b __rt_mixed_write_stdout");                           // echo one boxed mixed value and return to Rust
 
+    // -- output-buffering (ob_*) bridge: expose the runtime buffer stack to the
+    //    eval interpreter so static and eval'd code share one ob state. --
+    label_c_global(emitter, "__elephc_eval_ob_start");
+    emitter.instruction("b __rt_ob_start");                                     // push a new output buffer; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_level");
+    emitter.instruction("b __rt_ob_level");                                     // return the buffer-stack depth in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_length");
+    emitter.instruction("b __rt_ob_length");                                    // return the top buffer length (or -1) in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_clean");
+    emitter.instruction("b __rt_ob_clean");                                     // truncate the top buffer; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_flush");
+    emitter.instruction("b __rt_ob_flush");                                     // flush the top buffer to the parent sink; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_end");
+    emitter.instruction("cbz x0, __elephc_eval_ob_end_clean_path");             // a zero flush flag discards instead of flushing
+    emitter.instruction("b __rt_ob_end_flush");                                 // flush, pop, and free the top buffer
+    emitter.label("__elephc_eval_ob_end_clean_path");
+    emitter.instruction("b __rt_ob_end_clean");                                 // discard, pop, and free the top buffer
+
+    label_c_global(emitter, "__elephc_eval_ob_contents");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cbz x10, __elephc_eval_ob_contents_none");             // no active buffer — report failure to Rust
+    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");       // materialize the buffer-pointer slot array
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer base pointer
+    emitter.instruction("str x12, [x0]");                                       // store the buffer pointer through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer's used byte count
+    emitter.instruction("str x12, [x1]");                                       // store the byte count through the caller's out_len
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust (bytes are copied immediately)
+    emitter.label("__elephc_eval_ob_contents_none");
+    emitter.instruction("mov x0, #0");                                          // report "no active buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_stats");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+    emitter.instruction("b.hs __elephc_eval_ob_stats_none");                    // out-of-range (or negative) index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's used byte count
+    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_used
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_caps");       // materialize the capacity slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's capacity
+    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_size
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_stats_none");
+    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_implicit_flush");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_implicit_flush"); // materialize the stored implicit-flush flag address
+    emitter.instruction("str x0, [x9]");                                        // store the (inert) implicit-flush flag
+    emitter.instruction("ret");                                                 // return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for output pointers
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across string casting
@@ -3207,6 +3269,70 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed echo input
     emitter.instruction("jmp __rt_mixed_write_stdout");                         // echo one boxed mixed value and return to Rust
+
+    // -- output-buffering (ob_*) bridge: expose the runtime buffer stack to the
+    //    eval interpreter so static and eval'd code share one ob state. --
+    label_c_global(emitter, "__elephc_eval_ob_start");
+    emitter.instruction("jmp __rt_ob_start");                                   // push a new output buffer; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_level");
+    emitter.instruction("jmp __rt_ob_level");                                   // return the buffer-stack depth in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_length");
+    emitter.instruction("jmp __rt_ob_length");                                  // return the top buffer length (or -1) in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_clean");
+    emitter.instruction("jmp __rt_ob_clean");                                   // truncate the top buffer; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_flush");
+    emitter.instruction("jmp __rt_ob_flush");                                   // flush the top buffer to the parent sink; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_end");
+    emitter.instruction("test rdi, rdi");                                       // a zero flush flag discards instead of flushing
+    emitter.instruction("jz __elephc_eval_ob_end_clean_path_x86");              // route the discard variant to end_clean
+    emitter.instruction("jmp __rt_ob_end_flush");                               // flush, pop, and free the top buffer
+    emitter.label("__elephc_eval_ob_end_clean_path_x86");
+    emitter.instruction("jmp __rt_ob_end_clean");                               // discard, pop, and free the top buffer
+
+    label_c_global(emitter, "__elephc_eval_ob_contents");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("test r10, r10");                                       // is any buffer active?
+    emitter.instruction("jz __elephc_eval_ob_contents_none_x86");               // no active buffer — report failure to Rust
+    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");       // materialize the buffer-pointer slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer base pointer
+    emitter.instruction("mov QWORD PTR [rdi], rax");                            // store the buffer pointer through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store the byte count through the caller's out_len
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust (bytes are copied immediately)
+    emitter.label("__elephc_eval_ob_contents_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no active buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_stats");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+    emitter.instruction("jae __elephc_eval_ob_stats_none_x86");                 // out-of-range (or negative) index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's used byte count
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_used
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_caps");       // materialize the capacity slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's capacity
+    emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_size
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_stats_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_implicit_flush");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_implicit_flush"); // materialize the stored implicit-flush flag address
+    emitter.instruction("mov QWORD PTR [r9], rdi");                             // store the (inert) implicit-flush flag
+    emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting

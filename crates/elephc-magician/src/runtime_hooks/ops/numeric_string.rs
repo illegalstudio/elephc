@@ -199,6 +199,71 @@ macro_rules! impl_numeric_string_ops {
         Ok(unsafe { __elephc_eval_value_truthy(value.as_ptr()) != 0 })
     }
 
+    /// Pushes a new runtime output buffer through the generated ob bridge.
+    fn ob_start(&mut self) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_ob_start() } != 0)
+    }
+
+    /// Reads the runtime output-buffer nesting depth through the generated ob bridge.
+    fn ob_level(&mut self) -> Result<i64, EvalStatus> {
+        Ok(unsafe { __elephc_eval_ob_level() })
+    }
+
+    /// Reads the top runtime output buffer's byte count (-1 bridge sentinel → None).
+    fn ob_length(&mut self) -> Result<Option<i64>, EvalStatus> {
+        let length = unsafe { __elephc_eval_ob_length() };
+        Ok((length >= 0).then_some(length))
+    }
+
+    /// Copies the top runtime output buffer's bytes into Rust memory.
+    fn ob_contents(&mut self) -> Result<Option<Vec<u8>>, EvalStatus> {
+        let mut ptr = std::ptr::null();
+        let mut len = 0i64;
+        let ok = unsafe { __elephc_eval_ob_contents(&mut ptr, &mut len) };
+        if ok == 0 {
+            return Ok(None);
+        }
+        if len > 0 && ptr.is_null() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let bytes = if len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        Ok(Some(bytes.to_vec()))
+    }
+
+    /// Truncates the top runtime output buffer through the generated ob bridge.
+    fn ob_clean(&mut self) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_ob_clean() } != 0)
+    }
+
+    /// Flushes the top runtime output buffer to its parent sink through the ob bridge.
+    fn ob_flush(&mut self) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_ob_flush() } != 0)
+    }
+
+    /// Pops (and optionally flushes) the top runtime output buffer through the ob bridge.
+    fn ob_end(&mut self, flush: bool) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_ob_end(i64::from(flush)) } != 0)
+    }
+
+    /// Reads one buffer's `(used, size)` stats through the generated ob bridge.
+    fn ob_stats(&mut self, index: i64) -> Result<Option<(i64, i64)>, EvalStatus> {
+        let mut used = 0i64;
+        let mut size = 0i64;
+        let ok = unsafe { __elephc_eval_ob_stats(index, &mut used, &mut size) };
+        Ok((ok != 0).then_some((used, size)))
+    }
+
+    /// Stores the (inert) implicit-flush flag through the generated ob bridge.
+    fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_ob_implicit_flush(i64::from(enable)) };
+        Ok(())
+    }
+
     };
 }
 

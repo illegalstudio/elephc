@@ -577,6 +577,33 @@ pub trait RuntimeValueOps {
 
     /// Converts one runtime cell to PHP boolean truthiness.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
+
+    /// Pushes a new output buffer onto the ob_* stack; false when the nesting limit is hit.
+    fn ob_start(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Returns the current output-buffer nesting depth (0 = no buffering).
+    fn ob_level(&mut self) -> Result<i64, EvalStatus>;
+
+    /// Returns the top output buffer's byte count, or None when no buffer is active.
+    fn ob_length(&mut self) -> Result<Option<i64>, EvalStatus>;
+
+    /// Returns a copy of the top output buffer's bytes, or None when no buffer is active.
+    fn ob_contents(&mut self) -> Result<Option<Vec<u8>>, EvalStatus>;
+
+    /// Truncates the top output buffer in place; false when no buffer is active.
+    fn ob_clean(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Flushes the top output buffer to the parent sink without popping it.
+    fn ob_flush(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Pops the top output buffer, flushing it to the parent sink when `flush` is true.
+    fn ob_end(&mut self, flush: bool) -> Result<bool, EvalStatus>;
+
+    /// Returns `(buffer_used, buffer_size)` for the 0-based buffer index, if it exists.
+    fn ob_stats(&mut self, index: i64) -> Result<Option<(i64, i64)>, EvalStatus>;
+
+    /// Stores the (semantically inert) implicit-flush flag.
+    fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus>;
 }
 
 pub(super) const EVAL_TAG_INT: u64 = 0;

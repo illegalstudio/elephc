@@ -17,6 +17,7 @@ mod builtins_arrays_sets;
 mod builtins_class_metadata;
 mod builtins_debug_output;
 mod builtins_directory_streams;
+mod builtins_output_buffering;
 mod builtins_file_streams;
 mod builtins_filesystem_metadata;
 mod builtins_filesystem_ops;

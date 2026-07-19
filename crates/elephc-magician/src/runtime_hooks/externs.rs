@@ -377,6 +377,16 @@ unsafe extern "C" {
         out_len: *mut u64,
     ) -> u64;
     pub(super) fn __elephc_eval_value_truthy(value: *mut RuntimeCell) -> u64;
+    pub(super) fn __elephc_eval_ob_start() -> i64;
+    pub(super) fn __elephc_eval_ob_level() -> i64;
+    pub(super) fn __elephc_eval_ob_length() -> i64;
+    pub(super) fn __elephc_eval_ob_clean() -> i64;
+    pub(super) fn __elephc_eval_ob_flush() -> i64;
+    pub(super) fn __elephc_eval_ob_end(flush: i64) -> i64;
+    pub(super) fn __elephc_eval_ob_contents(out_ptr: *mut *const u8, out_len: *mut i64) -> i64;
+    pub(super) fn __elephc_eval_ob_stats(index: i64, out_used: *mut i64, out_size: *mut i64)
+        -> i64;
+    pub(super) fn __elephc_eval_ob_implicit_flush(enable: i64);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;

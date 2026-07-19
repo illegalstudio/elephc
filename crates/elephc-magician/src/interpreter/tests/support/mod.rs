@@ -60,6 +60,8 @@ pub(super) struct FakeOps {
     pub(super) warnings: Vec<String>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
+    pub(super) ob_stack: Vec<String>,
+    pub(super) ob_implicit_flush: bool,
 }
 
 impl FakeOps {
