@@ -1058,6 +1058,7 @@ fn ensure_static_property_default_type_supported(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Mixed
+        | PhpType::Object(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Union(_) => Ok(()),

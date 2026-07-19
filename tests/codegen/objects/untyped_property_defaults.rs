@@ -168,6 +168,32 @@ var_dump(Car::$spn);
     assert_eq!(out, "NULL\nstring(2) \"hi\"\n");
 }
 
+/// Verifies an object passed through an untyped static-method parameter can be stored in and
+/// returned from an inferred object static-property slot without an EIR storage mismatch.
+#[test]
+fn test_untyped_static_property_assignment_expression_from_dynamic_parameter_returns_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    protected static $instance;
+
+    public static function set($container) {
+        return static::$instance = $container;
+    }
+
+    public static function get() {
+        return static::$instance;
+    }
+}
+
+$container = new Container();
+var_dump(Container::set($container) === $container);
+var_dump(Container::get() === $container);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
 /// Verifies heterogeneous assignments to an untyped `= null` property follow last-write-wins like PHP.
 #[test]
 fn test_untyped_property_heterogeneous_assignments_last_value_wins() {

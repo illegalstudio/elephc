@@ -2683,7 +2683,7 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
-    if static_property_store_boxes_value(ctx, receiver, property, value) {
+    if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
         if ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
@@ -2698,17 +2698,13 @@ fn lower_static_property_assign(
     store_static_property(ctx, receiver, property, value.value, span);
 }
 
-/// Returns true when the codegen static-property store boxes `value` into a
-/// Mixed/Union slot with its own retained reference.
+/// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This mirrors `box_static_property_value_if_needed` in the EIR backend: a
-/// non-Mixed value assigned to a Mixed/Union slot is boxed with
-/// `__rt_mixed_from_value`, which retains the refcounted child. In that case the
-/// slot holds a reference independent of the source, so `lower_static_property_assign`
-/// releases an owning-temporary source instead of moving it in. When the declaring
-/// class/property metadata is unavailable, this conservatively reports `false` so the
-/// moving-store discipline (acquire-if-borrowed) is used.
-fn static_property_store_boxes_value(
+/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
+/// unboxed into object slots. Both backend paths retain the stored child independently,
+/// so borrowed sources need no `Acquire` and owning temporary sources are released after
+/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
@@ -2718,8 +2714,13 @@ fn static_property_store_boxes_value(
         return false;
     };
     let value_ty = ctx.builder.value_php_type(value.value);
-    matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    let slot_ty = slot_ty.codegen_repr();
+    let value_ty = value_ty.codegen_repr();
+    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
+        && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    boxes_into_mixed || unboxes_into_object
 }
 
 /// Lowers `Class::$prop[] = value`.

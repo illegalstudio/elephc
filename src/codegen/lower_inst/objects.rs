@@ -35,7 +35,7 @@ use super::{
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    store_if_result, store_method_call_result,
+    property_values, store_if_result, store_method_call_result,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -5036,7 +5036,7 @@ fn ensure_property_value_supported(
     if can_coerce_mixed_to_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
-    if can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
+    if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -5047,14 +5047,6 @@ fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
-}
-
-/// Returns true when a boxed Mixed value can be unboxed into an object-typed
-/// property slot. Untyped parameters widen to the boxed Mixed ABI while the
-/// checker still infers the slot as a concrete object type.
-fn can_unbox_mixed_to_object_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
-    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(slot_ty.codegen_repr(), PhpType::Object(_))
 }
 
 /// Returns true when a concrete object value is assignable to an object-typed property.
@@ -5854,7 +5846,7 @@ fn load_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
-            PhpType::Object(_) => emit_mixed_object_for_property_store(ctx),
+            PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
             _ => {}
         }
         return Ok(());
@@ -6101,41 +6093,6 @@ fn emit_normalized_dynamic_instanceof_value(
         }
     }
     Ok(())
-}
-
-/// Unboxes a Mixed/Union tested value and leaves only object payloads as matchable.
-/// Unboxes a Mixed store value into the object pointer expected by an
-/// object-typed property slot. Non-object payloads store the null sentinel
-/// (matching the other lossy Mixed property coercions rather than raising a
-/// TypeError). The property store retains the object, so the unboxed pointer
-/// is increfed here.
-fn emit_mixed_object_for_property_store(ctx: &mut FunctionContext<'_>) {
-    let object_label = ctx.next_label("prop_store_mixed_value_object");
-    let done = ctx.next_label("prop_store_mixed_value_done");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the boxed payload is an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // object payloads store their unboxed pointer
-            ctx.emitter.instruction("mov x0, #0"); // non-object payloads fall back to the null sentinel
-            ctx.emitter.instruction(&format!("b {}", done)); // skip pointer promotion for non-object payloads
-            ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov x0, x1"); // promote the unboxed object pointer into the result register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the boxed payload is an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // object payloads store their unboxed pointer
-            ctx.emitter.instruction("xor eax, eax"); // non-object payloads fall back to the null sentinel
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip pointer promotion for non-object payloads
-            ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov rax, rdi"); // promote the unboxed object pointer into the result register
-        }
-    }
-    ctx.emitter.label(&done);
-    abi::emit_incref_if_refcounted(
-        ctx.emitter,
-        &PhpType::Object(String::new()), // property stores retain the transferred object
-    );
 }
 
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
