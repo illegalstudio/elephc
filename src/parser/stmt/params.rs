@@ -253,6 +253,10 @@ fn parse_atomic_type_expr(
             *pos += 1;
             Ok(TypeExpr::Named(crate::names::Name::unqualified("callable")))
         }
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("object") => {
+            *pos += 1;
+            Ok(TypeExpr::Named(crate::names::Name::unqualified("object")))
+        }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
