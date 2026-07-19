@@ -10,23 +10,25 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_start.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_start.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:34](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L34) (`lower_ob_start`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:44](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L44) (`lower_ob_start`)
 - **Function symbol**: `lower_ob_start()`
 
 
 ### Lowering notes
 
-- Lowers `ob_start([$callback[, $chunk_size[, $flags]]])` to `__rt_ob_start`.
-- The operands were already evaluated as separate EIR instructions (preserving
-- side effects) and are intentionally unused: the checker only admits a `null`
-- callback, and chunk size/flags are inert in elephc's buffer model.
+- Lowers `ob_start([$callback[, $chunk_size[, $flags]]])` to `__rt_ob_start_ex`.
+- Resolves the handler triple (invocation stub, env word, display name) from
+- the callback operand: `null` selects the default handler; a `Callable`
+- descriptor is retained and invoked through `__rt_ob_invoke_descriptor`; a
+- runtime string dispatches through the shared callable descriptor cases (a
+- miss raises PHP's invalid-callback warning and returns `false`); a boxed
+- `Mixed` value unboxes to one of those shapes at run time.
 
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_ob_contents`
-- `__rt_ob_end_clean`
-- `__rt_ob_start`
+- `__rt_ob_invoke_descriptor`
+- `__rt_ob_start_ex`
 
 ## Signature summary
 

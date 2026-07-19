@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_end_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_end_clean.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:124](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L124) (`lower_ob_end_clean`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:440](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L440) (`lower_ob_end_clean`)
 - **Function symbol**: `lower_ob_end_clean()`
 
 

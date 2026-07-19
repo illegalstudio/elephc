@@ -10,21 +10,21 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_clean.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:53](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L53) (`lower_ob_get_clean`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:390](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L390) (`lower_ob_get_clean`)
 - **Function symbol**: `lower_ob_get_clean()`
 
 
 ### Lowering notes
 
-- Lowers `ob_get_clean()`: capture the top buffer's contents, then discard the
-- buffer, returning the captured string (or `false` when no buffer is active).
+- Lowers `ob_get_clean()` through the composite runtime helper: REMOVABLE
+- gating, handler CLEAN|FINAL phase, pop, and the raw contents (or `false`).
 
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_ob_contents`
-- `__rt_ob_end_clean`
-- `__rt_ob_end_flush`
+- `__rt_ob_get_clean_pop`
+- `__rt_ob_get_flush_pop`
+- `__rt_ob_length`
 
 ## Signature summary
 

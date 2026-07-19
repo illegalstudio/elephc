@@ -10,20 +10,21 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_flush.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:62](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L62) (`lower_ob_get_flush`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:402](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L402) (`lower_ob_get_flush`)
 - **Function symbol**: `lower_ob_get_flush()`
 
 
 ### Lowering notes
 
-- Lowers `ob_get_flush()`: capture the top buffer's contents, then flush the
-- buffer to the parent sink and pop it, returning the captured string.
+- Lowers `ob_get_flush()` through the composite runtime helper: REMOVABLE
+- gating, handler FINAL phase, parent-sink flush, pop, and the raw contents.
 
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_ob_contents`
-- `__rt_ob_end_flush`
+- `__rt_ob_get_flush_pop`
+- `__rt_ob_length`
+- `__rt_ob_level`
 
 ## Signature summary
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_contents.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:41](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L41) (`lower_ob_get_contents`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:378](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L378) (`lower_ob_get_contents`)
 - **Function symbol**: `lower_ob_get_contents()`
 
 
@@ -22,8 +22,8 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_ob_contents`
-- `__rt_ob_end_clean`
-- `__rt_ob_end_flush`
+- `__rt_ob_get_clean_pop`
+- `__rt_ob_get_flush_pop`
 
 ## Signature summary
 

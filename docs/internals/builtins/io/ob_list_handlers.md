@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_list_handlers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_list_handlers.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:196](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L196) (`lower_ob_list_handlers`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:512](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L512) (`lower_ob_list_handlers`)
 - **Function symbol**: `lower_ob_list_handlers()`
 
 

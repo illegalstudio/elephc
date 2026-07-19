@@ -382,7 +382,7 @@ matching PHP.
 
 | Function | Signature | Description |
 |---|---|---|
-| `ob_start()` | `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = 112): bool` | Start a new output buffer (nesting supported, up to 64 levels). Only the default `null` handler is supported — passing an output-handler callback is a compile-time error; `$chunk_size` and `$flags` are accepted for signature parity but have no effect (buffers are unchunked and always cleanable/flushable/removable) |
+| `ob_start()` | `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = 112): bool` | Start a new output buffer (nesting supported, up to 64 levels). Output-handler callbacks are supported: closures, first-class callables, function-name strings, and boxed callables run on flush/clean with PHP's phase bits (`WRITE`/`CLEAN`/`FLUSH`/`FINAL`, plus `START` on the first run); returning `false` passes the raw contents through, any other return is cast to a string. A non-zero `$chunk_size` auto-flushes the buffer whenever it reaches that many bytes, and `$flags` gate cleanability/flushability/removability exactly like PHP (refusals raise PHP's notices). An unknown function name raises PHP's warning and returns `false`; array-pair callables (`[$obj, 'method']`) are rejected at compile time |
 | `ob_get_contents()` | `ob_get_contents(): string\|false` | Return the active buffer's contents without consuming them; `false` when no buffer is active |
 | `ob_get_clean()` | `ob_get_clean(): string\|false` | Return the active buffer's contents, then discard the buffer and pop it |
 | `ob_get_flush()` | `ob_get_flush(): string\|false` | Return the active buffer's contents, then flush them to the parent sink and pop the buffer |
@@ -413,7 +413,11 @@ echo ob_get_clean(), "\n";    // outer:inner
 
 Output buffering state is shared between statically compiled code and
 `eval()`'d code: a buffer started inside `eval()` captures static echoes and
-vice versa. `fwrite(STDOUT, ...)` writes to the real file descriptor and
-bypasses output buffers, matching PHP. Current limitations: user output-handler
-callbacks are not supported (`ob_start()` accepts only `null`), and buffered
-output is never chunked.
+vice versa, and handlers registered inside `eval()` run on flushes triggered
+from static code or at script end. Output produced inside a handler is
+discarded and calling `ob_start()` from inside a handler is a fatal error,
+matching PHP. `fwrite(STDOUT, ...)` writes to the real file descriptor and
+bypasses output buffers, matching PHP. Known divergences: the first-class
+callable of a named function reports that function's name (PHP reports
+`Closure::__invoke`), and `ob_get_status()` omits PHP's internal 0x2000
+disabled bit.

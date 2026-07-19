@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_length.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_length.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:98](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L98) (`lower_ob_get_length`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:414](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L414) (`lower_ob_get_length`)
 - **Function symbol**: `lower_ob_get_length()`
 
 
