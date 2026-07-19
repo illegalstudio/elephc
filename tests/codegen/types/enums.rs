@@ -233,7 +233,10 @@ fn test_enum_from_string_failure_throws_value_error() {
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
-    assert_eq!(out, "1\n2\n3\nRed=1 Green=2 Blue=3 \nDESC");
+    assert_eq!(
+        out,
+        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC"
+    );
 }
 
 /// Verifies `Color::tryFrom(2)` returns a non-null value and `Color::tryFrom(99)` returns `null`,
