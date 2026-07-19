@@ -97,7 +97,8 @@ var_dump($len);
     assert_eq!(out, "bool(false)\nint(5)\n");
 }
 
-/// Verifies the no-buffer failure modes return false.
+/// Verifies the no-buffer failure modes return false with PHP's notices
+/// (`ob_get_contents`/`ob_get_clean` stay silent, the rest raise E_NOTICE).
 #[test]
 fn test_no_buffer_operations_return_false() {
     let out = compile_and_run(
@@ -108,11 +109,25 @@ var_dump(ob_end_clean());
 var_dump(ob_end_flush());
 var_dump(ob_flush());
 var_dump(ob_clean());
+var_dump(ob_get_flush());
 "#,
     );
     assert_eq!(
         out,
-        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+        concat!(
+            "bool(false)\n",
+            "bool(false)\n",
+            "Notice: ob_end_clean(): Failed to delete buffer. No buffer to delete\n",
+            "bool(false)\n",
+            "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n",
+            "bool(false)\n",
+            "Notice: ob_flush(): Failed to flush buffer. No buffer to flush\n",
+            "bool(false)\n",
+            "Notice: ob_clean(): Failed to delete buffer. No buffer to delete\n",
+            "bool(false)\n",
+            "Notice: ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n",
+            "bool(false)\n",
+        )
     );
 }
 
@@ -322,7 +337,7 @@ echo $st["name"], "|", $st["type"], "|", $st["flags"], "|", $st["level"], "|";
 echo $st["chunk_size"], "|", $st["buffer_size"], "|", $st["buffer_used"];
 "#,
     );
-    assert_eq!(out, "default output handler|0|112|0|0|1024|5");
+    assert_eq!(out, "default output handler|0|112|0|0|16384|5");
 }
 
 /// Verifies ob_get_status(true) returns one entry per nesting level.
@@ -454,4 +469,282 @@ eval('
 "#,
     );
     assert_eq!(out, "4|1|4|1|default output handler");
+}
+
+/// Verifies a closure output handler transforms the flushed contents with
+/// PHP's phase bits (START|FINAL on a single flush).
+#[test]
+fn test_ob_start_closure_handler_transforms_output() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function (string $b, int $p): string { return "<" . $b . ":" . $p . ">"; });
+echo "body";
+ob_end_flush();
+"#,
+    );
+    assert_eq!(out, "<body:9>");
+}
+
+/// Verifies a function-name string handler resolves and transforms output.
+#[test]
+fn test_ob_start_named_handler_transforms_output() {
+    let out = compile_and_run(
+        r#"<?php
+function shout(string $buffer, int $phase): string {
+    return strtoupper($buffer);
+}
+ob_start('shout');
+echo "loud";
+ob_end_flush();
+"#,
+    );
+    assert_eq!(out, "LOUD");
+}
+
+/// Verifies a first-class-callable handler works. elephc materializes the
+/// first-class callable of a named function as that function's descriptor, so
+/// the reported handler name is the function name (PHP reports
+/// "Closure::__invoke" here); anonymous closures report Closure::__invoke.
+#[test]
+fn test_ob_start_first_class_callable_handler() {
+    let out = compile_and_run(
+        r#"<?php
+function wrap(string $b, int $p): string { return "[" . $b . "]"; }
+ob_start(wrap(...));
+echo "fcc";
+$name = ob_list_handlers()[0];
+ob_end_flush();
+echo "|", $name, "|";
+ob_start(function ($b, $p) { return $b; });
+echo ob_list_handlers()[0];
+$anon = ob_get_clean();
+echo $anon;
+"#,
+    );
+    assert_eq!(out, "[fcc]|wrap|Closure::__invoke");
+}
+
+/// Verifies a handler returning false passes the raw contents through, and a
+/// handler returning a non-string is cast to a string like PHP.
+#[test]
+fn test_ob_handler_return_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function ($b, $p) { return false; });
+echo "raw";
+ob_end_flush();
+echo "|";
+ob_start(function ($b, $p) { return 42; });
+echo "gone";
+ob_end_flush();
+"#,
+    );
+    assert_eq!(out, "raw|42");
+}
+
+/// Verifies ob_get_clean returns the RAW contents while the handler result is
+/// discarded (CLEAN|FINAL phases), matching PHP.
+#[test]
+fn test_ob_get_clean_returns_raw_with_handler() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function ($b, $p) { return "SHOULD-NOT-APPEAR"; });
+echo "raw-contents";
+var_dump(ob_get_clean());
+"#,
+    );
+    assert_eq!(out, "string(12) \"raw-contents\"\n");
+}
+
+/// Verifies ob_get_flush flushes the TRANSFORMED bytes but returns the RAW
+/// contents, matching PHP.
+#[test]
+fn test_ob_get_flush_flushes_transformed_returns_raw() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function ($b, $p) { return strtoupper($b); });
+echo "mixed";
+$raw = ob_get_flush();
+echo "|", $raw;
+"#,
+    );
+    assert_eq!(out, "MIXED|mixed");
+}
+
+/// Verifies the chunk-size threshold auto-flushes with the WRITE phase and the
+/// remainder flushes on end with FINAL, exactly like PHP.
+#[test]
+fn test_chunk_size_auto_flush_with_handler() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function ($b, $p) { return "{" . $b . ":" . $p . "}"; }, 5);
+echo "123";
+echo "456";
+echo "78";
+ob_end_flush();
+"#,
+    );
+    assert_eq!(out, "{123456:1}{78:8}");
+}
+
+/// Verifies chunked default-handler buffers auto-flush raw output at the
+/// threshold and report PHP's page-aligned buffer_size.
+#[test]
+fn test_chunk_size_default_handler_and_buffer_size() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(null, 5);
+echo "123456";
+echo "[mid]";
+$size = ob_get_status()["buffer_size"];
+var_dump(ob_get_clean());
+echo $size;
+"#,
+    );
+    assert_eq!(out, "123456[mid]string(0) \"\"\n4096");
+}
+
+/// Verifies PHP's flags gating: a flags=0 buffer refuses clean/flush/end with
+/// the named notices, and everything still flushes at script end.
+#[test]
+fn test_flags_gate_operations_with_notices() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(null, 0, 0);
+echo "locked;";
+var_dump(ob_clean());
+var_dump(ob_end_flush());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "locked;",
+            "Notice: ob_clean(): Failed to delete buffer of default output handler (0)\n",
+            "bool(false)\n",
+            "Notice: ob_end_flush(): Failed to send buffer of default output handler (0)\n",
+            "bool(false)\n",
+        )
+    );
+}
+
+/// Verifies partial flags: CLEANABLE admits ob_clean, REMOVABLE alone admits
+/// every end/get variant, matching PHP.
+#[test]
+fn test_partial_flags_admit_matching_operations() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(null, 0, 16);
+echo "a";
+var_dump(ob_clean());
+ob_start(null, 0, 64);
+echo "b";
+var_dump(ob_get_clean());
+"#,
+    );
+    assert_eq!(out, "bool(true)\nstring(1) \"b\"\n");
+}
+
+/// Verifies an unknown function-name callback raises PHP's warning + notice and
+/// leaves the stack unchanged.
+#[test]
+fn test_ob_start_unknown_function_name_rejected() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ob_start('no_such_handler_fn');
+echo $r === false ? "rejected" : "started";
+echo "|", ob_get_level();
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Warning: ob_start(): function \"no_such_handler_fn\" not found or invalid function name\n",
+            "Notice: ob_start(): Failed to create buffer\n",
+            "rejected|0",
+        )
+    );
+}
+
+/// Verifies output produced inside a handler is discarded like PHP.
+#[test]
+fn test_output_inside_handler_is_discarded() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start();
+ob_start(function ($b, $p) { echo "[leak]"; return "{" . $b . "}"; });
+echo "x";
+ob_end_flush();
+var_dump(ob_get_clean());
+"#,
+    );
+    assert_eq!(out, "string(3) \"{x}\"\n");
+}
+
+/// Verifies ob_get_status reports the user handler's name, type, and flags
+/// (user bit before the first run; started/processed bits after).
+#[test]
+fn test_ob_get_status_user_handler_fields() {
+    let out = compile_and_run(
+        r#"<?php
+function h(string $b, int $p): string { return $b; }
+ob_start('h');
+echo "xy";
+$before = ob_get_status();
+ob_flush();
+$after = ob_get_status();
+ob_end_clean();
+echo $before["name"], "|", $before["type"], "|", $before["flags"], "|", $after["flags"];
+"#,
+    );
+    assert_eq!(out, "xyh|1|113|20593");
+}
+
+/// Verifies handlers cascade across nested buffers: the inner transformed
+/// output folds into the outer buffer and is transformed again.
+#[test]
+fn test_nested_handlers_cascade() {
+    let out = compile_and_run(
+        r#"<?php
+function outer($b, $p) { return "<" . $b . ">"; }
+function inner($b, $p) { return "[" . $b . "]"; }
+ob_start('outer');
+echo "a";
+ob_start('inner');
+echo "b";
+ob_end_flush();
+ob_end_flush();
+"#,
+    );
+    assert_eq!(out, "<a[b]>");
+}
+
+/// Verifies a still-active handler buffer is transformed at script end.
+#[test]
+fn test_handler_applies_at_script_end() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start(function ($b, $p) { return "END<" . $b . ":" . $p . ">"; });
+echo "tail";
+"#,
+    );
+    assert_eq!(out, "END<tail:9>");
+}
+
+/// Verifies eval-registered handlers run from eval flushes, static flushes of
+/// eval-started buffers, and the script-end drain: one shared handler registry.
+#[test]
+fn test_eval_handlers_across_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+eval('ob_start(function ($b, $p) { return "<" . $b . ":" . $p . ">"; }); echo "ev"; ob_end_flush();');
+echo "|";
+eval('function xh($b, $p) { return strtoupper($b); } ob_start("xh"); echo "cross";');
+echo "-static";
+ob_end_flush();
+echo "|";
+eval('ob_start(function ($b, $p) { return "END[" . $b . "]"; }); echo "tail";');
+"#,
+    );
+    assert_eq!(out, "<ev:9>|CROSS-STATIC|END[tail]");
 }

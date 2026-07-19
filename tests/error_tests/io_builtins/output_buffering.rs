@@ -7,8 +7,8 @@
 //!
 //! Key details:
 //! - Invalid PHP snippets are checked through shared diagnostic helpers for messages.
-//! - `ob_start()` only admits a `null` handler: elephc has no user output-handler
-//!   support, so a non-null callback is a compile-time error.
+//! - `ob_start()` admits null, closure, first-class-callable, and string-name
+//!   handlers; array-pair callables are a compile-time error.
 
 use super::*;
 
@@ -48,21 +48,12 @@ fn test_error_ob_start_too_many_args() {
     );
 }
 
-/// Verifies `ob_start()` rejects a string output-handler callback.
+/// Verifies `ob_start()` rejects an array-pair output-handler callback.
 #[test]
-fn test_error_ob_start_string_callback_unsupported() {
+fn test_error_ob_start_array_callback_unsupported() {
     expect_error(
-        r#"<?php ob_start("strtoupper");"#,
-        "ob_start() output handler callbacks are not supported; pass null",
-    );
-}
-
-/// Verifies `ob_start()` rejects a closure output-handler callback.
-#[test]
-fn test_error_ob_start_closure_callback_unsupported() {
-    expect_error(
-        r#"<?php ob_start(function (string $buffer): string { return $buffer; });"#,
-        "ob_start() output handler callbacks are not supported; pass null",
+        r#"<?php class C { public function m($b, $p) { return $b; } } ob_start([new C(), "m"]);"#,
+        "ob_start() array output-handler callbacks are not supported; use a closure or function name",
     );
 }
 

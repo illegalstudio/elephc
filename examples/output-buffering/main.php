@@ -45,3 +45,18 @@ ob_start();
 var_dump(["noisy" => "debug output"]);
 ob_end_clean();
 echo "debug output was discarded\n";
+
+// 6) Output handlers: transform everything a buffer captured on flush.
+ob_start(function (string $buffer, int $phase): string {
+    return strtoupper($buffer);
+});
+echo "handlers rewrite the flushed bytes";
+ob_end_flush();
+echo "\n";
+
+// 7) Chunked buffers auto-flush once they reach the chunk size.
+ob_start(function (string $b, int $p): string { return "{" . $b . "}"; }, 8);
+echo "12345678";
+echo "tail";
+ob_end_flush();
+echo "\n";
