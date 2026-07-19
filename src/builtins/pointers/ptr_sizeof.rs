@@ -11,8 +11,8 @@
 //! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_sizeof` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -26,6 +26,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns the byte size of the named pointer target type.",
+    extension: true,
 }
 
 /// Validates that the argument is a known string literal type name and returns `PhpType::Int`.
@@ -55,5 +56,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `ptr_sizeof` call by dispatching to the shared pointer emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::pointers::lower_ptr_sizeof(ctx, inst)
+    crate::codegen::lower_inst::builtins::pointers::lower_ptr_sizeof(ctx, inst)
 }

@@ -5,7 +5,7 @@
 //! `module.functions` table and `normalized_function_key` (php_symbol_key).
 //!
 //! Called from:
-//! - `crate::codegen_ir::function_variants` (for emission/dispatch)
+//! - `crate::codegen::function_variants` (for emission/dispatch)
 //! - `crate::ir_passes::inline` for FVC inlining decisions (via the variant resolvers).
 //!
 //! Key details:

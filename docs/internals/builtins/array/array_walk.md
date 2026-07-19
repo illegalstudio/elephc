@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:783](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L783) (`lower_array_walk`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:779](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L779) (`lower_array_walk`)
 - **Function symbol**: `lower_array_walk()`
 
 
@@ -32,6 +32,12 @@ function array_walk(array $array, callable $callback): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+- **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 
 ## Cross-references

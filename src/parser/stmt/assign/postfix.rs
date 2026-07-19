@@ -9,7 +9,7 @@
 //! - Complex target lowering must not duplicate side effects while preserving PHP source evaluation order.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -24,7 +24,7 @@ use super::compound::{assignment_operator, assignment_value, AssignmentOperator}
 /// be replayed safely.
 /// Returns `Ok(None)` if the token range does not contain a postfix assignment pattern.
 pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -220,7 +220,7 @@ fn assignment_target_store_stmt(
 /// Handles `A::$x++`, `static::$x--`, `parent::$y++`, etc. Returns `Ok(None)` when no
 /// postfix `++`/`--` is found at the top level of the statement.
 pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -255,7 +255,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
 /// can be lowered to the same read-modify-write shape as `$a[0] += 1`.
 /// Simple local `$x++` is left to the existing local-variable parser.
 pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -294,7 +294,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
 /// to a temporary-variable sequence via `lower_effectful_static_assignment`.
 /// Returns `Ok(None)` when no scoped assignment pattern is found.
 pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -369,7 +369,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
 /// and returns the position and operator of the first top-level assignment at nesting depth 0.
 /// Returns `None` if no assignment operator is found before a semicolon at depth 0.
 fn find_top_level_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     start: usize,
 ) -> Option<(usize, AssignmentOperator)> {
     let mut paren_depth = 0usize;
@@ -405,7 +405,7 @@ fn find_top_level_assignment(
 ///
 /// Nested occurrences inside indexes or call arguments are ignored so expressions
 /// such as `$items[$i++] = 1` remain assignment statements with an effectful index.
-fn find_top_level_postfix_incdec(tokens: &[(Token, Span)], start: usize) -> Option<(usize, bool)> {
+fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;

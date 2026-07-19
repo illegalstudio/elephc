@@ -11,8 +11,8 @@
 //! - `lower` dispatches to `io::lower_stream_socket_server` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -30,10 +30,10 @@ builtin! {
 
 /// Returns `Union(stream_resource, Bool)` reflecting PHP's false-on-failure return.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::False]))
 }
 
 /// Lowers a `stream_socket_server` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_stream_socket_server(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_stream_socket_server(ctx, inst)
 }

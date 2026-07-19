@@ -10,8 +10,8 @@
 //!   and any combination of 0–3 arguments is accepted. Returns `true` always.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -30,7 +30,7 @@ builtin! {
 
 /// Lowers `spl_autoload_register` by evaluating arguments for side effects and returning true.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_autoload_bool(
+    crate::codegen::lower_inst::builtins::spl::lower_spl_autoload_bool(
         ctx,
         inst,
         "spl_autoload_register",

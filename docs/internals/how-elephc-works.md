@@ -291,9 +291,16 @@ The exact textual IR contains value ids, types, ownership, spans, and terminator
 
 ## Phase 16: Code generation
 
-**Files:** `src/codegen_ir/`, plus shared `src/codegen/abi/`, `src/codegen/runtime/`, and target helpers — See [The Code Generator](the-codegen.md) for details.
+**Files:** `src/codegen/`, plus shared `src/codegen_support/abi/`,
+`src/codegen_support/runtime/`, and target helpers — See
+[The Code Generator](the-codegen.md) for details.
 
-The EIR backend emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. The legacy AST backend remains available only through `--ast-backend`; new PHP-visible behavior is expected to go through EIR. By this point our running example has already lost the `if` shell, so the AArch64 form is simpler than the original source (simplified, with comments):
+The EIR backend emits assembly for the selected target. For ordinary control
+flow this is mostly straight-line branches and labels; for `try` / `catch` /
+`finally`, the compiler additionally emits handler records and resume labels
+around `_setjmp` / `_longjmp`-based exception unwinding. By this point our
+running example has already lost the `if` shell, so the AArch64 form is simpler
+than the original source (simplified, with comments):
 
 ```asm
 .global _main
@@ -348,7 +355,8 @@ In normal compile mode, the toolchain flow is:
 2. Write the program assembly to `file.s`
 3. Optionally write `file.map`
 4. Assemble `file.s` into `file.o`
-5. Link `file.o` together with the cached runtime object into the final executable
+5. Link `file.o` together with the cached runtime object, any required optional
+   bridge archives, and system libraries into the final executable
 
 If `--timings` is enabled, elephc prints the duration of each major phase to stderr so you can see where time is being spent.
 
@@ -364,7 +372,7 @@ ld -arch arm64 -e _main -o file file.o -lSystem -syslibroot /path/to/sdk
 On Linux, elephc invokes the native assembler/linker for the requested target.
 
 - **`as`** (assembler) converts the user assembly text mnemonics into binary machine code, producing an object file (`.o`)
-- **`ld`** (linker) resolves label addresses, links the user object together with the cached runtime object and any requested system libraries, and produces the final native executable (Mach-O on macOS, ELF on Linux)
+- **`ld`** (linker) resolves label addresses, links the user object together with the cached runtime object, required bridge staticlibs, and requested system libraries, and produces the final native executable (Mach-O on macOS, ELF on Linux)
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
@@ -377,7 +385,7 @@ With `--emit cdylib` the same flow produces a shared library instead: codegen em
 big
 ```
 
-The binary runs directly on the CPU. There is no PHP interpreter or VM at runtime. The kernel loads the executable for the target platform into memory, jumps to the entry point, and the CPU executes the instructions we generated. The binary still contains elephc's emitted helper routines and links the platform's system libraries for OS/libc services.
+The binary runs directly on the CPU and has no PHP, Zend Engine, or external VM dependency. The kernel loads the executable for the target platform into memory, jumps to the entry point, and the CPU executes the instructions we generated. The binary still contains elephc's emitted helper routines and links the platform's system libraries for OS/libc services. If experimental dynamic `eval()` is required, the optional Magician interpreter is statically embedded and handles only those fragments; eligible literal eval stays in native EIR.
 
 ## The complete flow
 
@@ -434,7 +442,7 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
     file.o (machine code bytes for user program)
                     │
                     ▼ ld (linker)
-    file (user object + cached runtime object)
+    file (user object + cached runtime object + optional bridge staticlibs)
                     │
                     ▼ CPU
     "big\n"

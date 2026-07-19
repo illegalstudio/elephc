@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_push.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:61](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L61) (`lower_array_push`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:60](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L60) (`lower_array_push`)
 - **Function symbol**: `lower_array_push()`
 
 
@@ -31,6 +31,13 @@ function array_push(array $array, ...$values): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **By-reference parameters**: `$array`.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_push.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 - **Variadic**: collects excess arguments into `$values`.
 

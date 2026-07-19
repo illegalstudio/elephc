@@ -23,6 +23,67 @@ fn test_const_decl_int() {
     }
 }
 
+/// Verifies `declare(strict_types=1);` (statement form) parses to an empty
+/// `Synthetic` block — a no-op, since elephc is always strict.
+#[test]
+fn test_declare_strict_types_parses_to_empty_synthetic() {
+    let stmts = parse_source("<?php declare(strict_types=1);");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert!(body.is_empty()),
+        other => panic!("Expected empty Synthetic, got {:?}", other),
+    }
+}
+
+/// Verifies `declare(ticks=1) { ... }` (block form) parses to a `Synthetic`
+/// wrapper around its body statements.
+#[test]
+fn test_declare_block_parses_to_synthetic_body() {
+    let stmts = parse_source("<?php declare(ticks=1) { echo 1; }");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert_eq!(body.len(), 1),
+        other => panic!("Expected Synthetic body, got {:?}", other),
+    }
+}
+
+/// Verifies PHP's alternative `declare: ... enddeclare;` syntax preserves its body.
+#[test]
+fn test_declare_alternative_syntax_parses_to_synthetic_body() {
+    let stmts = parse_source("<?php declare(ticks=1): echo 1; enddeclare;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert_eq!(body.len(), 1),
+        other => panic!("Expected Synthetic body, got {:?}", other),
+    }
+}
+
+/// Verifies PHP's single-statement `declare(...) statement` form wraps that statement.
+#[test]
+fn test_declare_single_statement_parses_to_synthetic_body() {
+    let stmts = parse_source("<?php declare(ticks=1) echo 1;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(body) => assert_eq!(body.len(), 1),
+        other => panic!("Expected Synthetic body, got {:?}", other),
+    }
+}
+
+/// Verifies declare values accept PHP literal float and string forms.
+#[test]
+fn test_declare_accepts_php_literal_value_kinds() {
+    let stmts = parse_source("<?php declare(ticks=1.5, encoding=\"UTF-8\"); echo 1;");
+    assert_eq!(stmts.len(), 2);
+    assert!(matches!(stmts[0].kind, StmtKind::Synthetic(ref body) if body.is_empty()));
+}
+
+/// Verifies directive matching is case-insensitive like PHP keyword handling.
+#[test]
+fn test_declare_strict_types_name_is_case_insensitive() {
+    let stmts = parse_source("<?php declare(STRICT_TYPES=1); echo 1;");
+    assert_eq!(stmts.len(), 2);
+}
+
 /// Verifies that `<?php const NAME = "hello";` parses to a `ConstDecl` with name "NAME" and a `StringLiteral` value.
 #[test]
 fn test_const_decl_string() {
@@ -80,6 +141,25 @@ fn test_parse_backed_enum_decl() {
         }
         other => panic!("Expected EnumDecl, got {:?}", other),
     }
+}
+
+/// Verifies keyword-named enum cases retain source spelling, including two names that differ
+/// only by case; PHP enum-case identity and `->name` use these exact case-sensitive names.
+#[test]
+fn test_parse_keyword_named_enum_cases_preserve_spelling() {
+    let stmts = parse_source(
+        "<?php enum KeywordCase { case Default; case DEFAULT; case Match; case MATCH; case Print; }",
+    );
+    let StmtKind::EnumDecl { cases, .. } = &stmts[0].kind else {
+        panic!("Expected EnumDecl");
+    };
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Default", "DEFAULT", "Match", "MATCH", "Print"]
+    );
 }
 
 /// Verifies that `<?php echo Color::Red;` parses to an `Echo` containing a `ScopedConstantAccess`

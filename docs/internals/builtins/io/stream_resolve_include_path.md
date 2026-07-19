@@ -2,7 +2,7 @@
 title: "stream_resolve_include_path() — internals"
 description: "Compiler internals for stream_resolve_include_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 213
 ---
 
 ## `stream_resolve_include_path()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_resolve_include_path.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_resolve_include_path.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2361](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2361) (`lower_stream_resolve_include_path`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2361](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2361) (`lower_stream_resolve_include_path`)
 - **Function symbol**: `lower_stream_resolve_include_path()`
 
 
@@ -33,6 +33,11 @@ function stream_resolve_include_path(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_resolve_include_path.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_resolve_include_path.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

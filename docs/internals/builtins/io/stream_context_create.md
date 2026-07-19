@@ -2,7 +2,7 @@
 title: "stream_context_create() — internals"
 description: "Compiler internals for stream_context_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 191
+  order: 195
 ---
 
 ## `stream_context_create()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_create.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1064) (`lower_stream_context_create`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1064) (`lower_stream_context_create`)
 - **Function symbol**: `lower_stream_context_create()`
 
 
@@ -31,6 +31,11 @@ function stream_context_create(array $options = null, array $params = null): mix
 ## What the type checker enforces
 
 - **Arity**: takes 0–2 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -11,8 +11,8 @@
 //! - `lower` is a thin wrapper over the shared `lower_str_pad` emitter.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -32,5 +32,5 @@ builtin! {
 
 /// Lowers a `str_pad` call by dispatching to the shared str-pad emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_str_pad(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_str_pad(ctx, inst)
 }

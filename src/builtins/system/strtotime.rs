@@ -11,8 +11,8 @@
 //! - `lower` is a thin wrapper over the shared `system::lower_strtotime` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -31,10 +31,10 @@ builtin! {
 ///
 /// The registry pre-infers arguments before calling this hook.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `strtotime` call by dispatching to the shared system emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::system::lower_strtotime(ctx, inst)
+    crate::codegen::lower_inst::builtins::system::lower_strtotime(ctx, inst)
 }

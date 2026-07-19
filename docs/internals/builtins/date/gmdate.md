@@ -2,7 +2,7 @@
 title: "gmdate() — internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 90
+  order: 94
 ---
 
 ## `gmdate()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gmdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmdate.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L33) (`lower_gmdate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L33) (`lower_gmdate`)
 - **Function symbol**: `lower_gmdate()`
 
 
@@ -35,6 +35,11 @@ function gmdate(string $format, int $timestamp = null): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/gmdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/gmdate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

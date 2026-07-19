@@ -50,6 +50,9 @@ def _check_links(path: Path, errors: list[str]) -> None:
     for label, target in LINK_RE.findall(text):
         if target.startswith(("http://", "https://", "#", "mailto:")):
             continue
+        # Drop the in-page anchor before checking the filesystem target
+        # ([text](page.md#section) links to a heading inside page.md).
+        target = target.split("#", 1)[0]
         if target.startswith("/"):
             # Absolute path from site root — verify under the repo's docs/.
             abs_target = (REPO / "docs" / target.lstrip("/")).resolve()

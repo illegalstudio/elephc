@@ -9,6 +9,9 @@
 //! Key details:
 //! - `check` returns `Union(Str, Bool)` reflecting PHP behaviour where the read
 //!   returns the file contents or `false` on failure.
+//! - `returns_fresh_storage` marks both result branches as caller-owned: successful
+//!   reads return an owned string in a fresh Mixed box, while failures return a fresh
+//!   boxed `false`.
 //! - The `check` hook has a library-linking side effect: a literal `https://` /
 //!   `ftps://` URL links `elephc_tls`; a non-literal path conservatively links
 //!   `elephc_tls`, `elephc_phar`, `z`, and `bz2` because the scheme and PHAR entry
@@ -16,8 +19,8 @@
 //! - `lower` is a thin wrapper over `io::lower_file_get_contents` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -28,6 +31,7 @@ builtin! {
     area: Io,
     params: [filename: Str],
     returns: Mixed,
+    returns_fresh_storage: true,
     check: check,
     lower: lower,
     summary: "Reads an entire file into a string.",
@@ -52,10 +56,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.checker.require_builtin_library("bz2");
     }
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `file_get_contents` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_file_get_contents(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_file_get_contents(ctx, inst)
 }

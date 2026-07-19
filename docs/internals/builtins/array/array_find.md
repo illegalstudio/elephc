@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_find.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_find.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1526](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1526) (`lower_array_find`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1568](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1568) (`lower_array_find`)
 - **Function symbol**: `lower_array_find()`
 
 
@@ -32,6 +32,10 @@ function array_find(mixed $array, mixed $callback): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

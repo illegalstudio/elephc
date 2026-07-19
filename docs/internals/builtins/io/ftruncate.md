@@ -2,7 +2,7 @@
 title: "ftruncate() — internals"
 description: "Compiler internals for ftruncate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 175
+  order: 179
 ---
 
 ## `ftruncate()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftruncate.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3210) (`lower_ftruncate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3210) (`lower_ftruncate`)
 - **Function symbol**: `lower_ftruncate()`
 
 
@@ -31,6 +31,11 @@ function ftruncate(resource $stream, int $size): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

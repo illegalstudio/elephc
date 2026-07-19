@@ -8,8 +8,8 @@
 //! Key details:
 //! - No `check` hook is needed: `random_int` is a pure-data builtin returning `Int`.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `random_int` call by dispatching to the shared cryptographic-random emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_random_int(ctx, inst)
+    crate::codegen::lower_inst::builtins::math::lower_random_int(ctx, inst)
 }

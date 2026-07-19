@@ -9,32 +9,31 @@
 //! - No `check` hook is needed: `htmlentities` is a pure-data builtin whose return
 //!   type (`Str`) is fully determined by its declaration. The registry derives the
 //!   return type from the `returns:` field without calling a check hook.
-//! - `lower` is a thin wrapper over the shared `lower_unary_string_runtime` emitter.
-//!   Like the legacy arm, it reuses the `__rt_htmlspecialchars` runtime helper.
+//! - `lower` is a thin wrapper over the shared `lower_html_escape` emitter,
+//!   passing the builtin name for diagnostics. It reuses the
+//!   `__rt_htmlspecialchars` runtime helper.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::builtins::spec::DefaultSpec;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
     name: "htmlentities",
     area: String,
-    params: [string: Str],
+    params: [string: Str, flags: Int = DefaultSpec::Int(11), encoding: Str = DefaultSpec::Str("UTF-8")],
     returns: Str,
+    returns_independent_storage: true,
     lower: lower,
     summary: "Converts all applicable characters in a string into their HTML entities.",
     php_manual: "https://www.php.net/manual/en/function.htmlentities.php",
 }
 
-/// Lowers a `htmlentities` call by dispatching to the shared per-arch unary string runtime.
+/// Lowers a `htmlentities` call. The optional flags/encoding arguments are accepted but not yet
+/// applied (reuses the ENT_QUOTES-behaviour `__rt_htmlspecialchars` runtime).
 fn lower(
     ctx: &mut FunctionContext,
     inst: &Instruction,
 ) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_unary_string_runtime(
-        ctx,
-        inst,
-        "htmlentities",
-        "__rt_htmlspecialchars",
-    )
+    crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
 }

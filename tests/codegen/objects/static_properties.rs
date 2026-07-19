@@ -409,3 +409,36 @@ echo A::$x;
     );
     assert_eq!(out, "2");
 }
+
+/// Regression: storing a *borrowed* object (an interface-typed parameter) into a
+/// `static` class property, then reading it back in a different scope and
+/// dispatching methods on it must work. The store consumes (moves) its operand,
+/// so a borrowed value must be acquired first; without the acquire the property
+/// dangled once the caller released the borrow, and the later dispatch crashed
+/// with a fatal "Call to a member function ... on null". Also exercises multiple
+/// method calls plus a cross-interface `instanceof` downcast to confirm the
+/// class tag survives every load (not just the first).
+#[test]
+fn test_static_property_holds_borrowed_object_for_later_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface Store { public function get(): string; }
+interface Named { public function name(): string; }
+class Holder { public static ?Store $s = null; }
+class Impl implements Store, Named {
+    public function get(): string { return "V"; }
+    public function name(): string { return "N"; }
+}
+function register(?Store $x): void { Holder::$s = $x; }
+register(new Impl());
+$o = Holder::$s;
+if ($o !== null) {
+    echo $o->get();
+    echo $o->get();
+    if ($o instanceof Named) { echo $o->name(); }
+    echo $o->get();
+}
+"#,
+    );
+    assert_eq!(out, "VVNV");
+}

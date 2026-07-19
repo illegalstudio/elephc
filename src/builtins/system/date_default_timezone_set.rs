@@ -9,8 +9,8 @@
 //! - No `check` hook is needed: `date_default_timezone_set` is a pure-data builtin
 //!   whose return type (`Bool`) is fully determined by its declaration.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `date_default_timezone_set` call by dispatching to the shared system emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::system::lower_date_default_timezone_set(ctx, inst)
+    crate::codegen::lower_inst::builtins::system::lower_date_default_timezone_set(ctx, inst)
 }

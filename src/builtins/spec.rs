@@ -1,10 +1,10 @@
 //! Purpose:
 //! Defines the `BuiltinSpec` type that describes a single PHP builtin function:
-//! its name, arity, type signature, purity, and codegen lowering hook.
+//! its name, arity, type signature, result-storage ownership, and codegen lowering hook.
 //!
 //! Called from:
 //! - `crate::builtins::registry` (collected via `inventory`).
-//! - `crate::types::checker::builtins` and `crate::codegen_ir::lower_inst::builtins`
+//! - `crate::types::checker::builtins` and `crate::codegen::lower_inst::builtins`
 //!   (consumed during type-check and codegen dispatch).
 //!
 //! Key details:
@@ -141,9 +141,9 @@ pub type CheckFn = for<'ctx, 'a> fn(
 /// and emits the required assembly. Returns a `CodegenIrError` if the lowering path
 /// is not yet implemented for this target.
 pub type LowerFn = for<'ctx, 'f, 'i> fn(
-    &'ctx mut crate::codegen_ir::context::FunctionContext<'f>,
+    &'ctx mut crate::codegen::context::FunctionContext<'f>,
     &'i crate::ir::Instruction,
-) -> Result<(), crate::codegen_ir::CodegenIrError>;
+) -> Result<(), crate::codegen::CodegenIrError>;
 
 /// Complete static descriptor for one PHP builtin function.
 ///
@@ -193,6 +193,20 @@ pub struct BuiltinSpec {
     /// matching EIR return-type arm, or the checker and EIR will disagree on the
     /// value's type at the use site.
     pub returns: TypeSpec,
+    /// Whether every refcounted result variant is freshly allocated for the caller.
+    ///
+    /// EIR ownership lowering uses this contract to release a builtin result after a
+    /// retaining consumer has copied or retained it. Leave this `false` for borrowed
+    /// results that can alias argument or runtime storage; releasing those would corrupt
+    /// their original owner. Non-refcounted result variants are unaffected.
+    pub returns_fresh_storage: bool,
+    /// Whether a non-fresh result is guaranteed not to reuse any argument's storage.
+    ///
+    /// Fresh heap ownership implies independence without this flag; this field
+    /// covers scratch-backed independent results. EIR uses the effective contract
+    /// to release owning argument temporaries after the call and to derive
+    /// return/argument alias summaries for source wrappers.
+    pub returns_independent_storage: bool,
     /// Whether the function returns by reference.
     pub by_ref_return: bool,
     /// An optional type-checking hook for builtins whose return type depends
@@ -221,6 +235,13 @@ pub struct BuiltinSpec {
     pub php_manual: Option<&'static str>,
     /// A deprecation message, or `None` if the builtin is not deprecated.
     pub deprecation: Option<&'static str>,
+    /// When `true`, the builtin is an elephc extension with no PHP equivalent
+    /// (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`, …). `--strict-php`
+    /// hides extension builtins from user programs: they stop resolving as
+    /// builtins, and user code may declare functions with these names, exactly
+    /// as under the PHP interpreter. The set is pinned by
+    /// `parity_tests::extension_builtin_set_is_pinned`.
+    pub extension: bool,
     /// When `true`, the builtin is not PHP-visible and is not emitted in catalogs
     /// or documentation; it is only used internally by the compiler.
     pub internal: bool,
@@ -232,14 +253,48 @@ inventory::collect!(BuiltinSpec);
 mod macro_tests {
     use crate::builtins::spec::*;
     /// No-op `LowerFn` used to satisfy the `builtin!` macro in this test module.
-    fn lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
+    fn lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
+        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
     builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
+    builtin! { name: "__macro_owned_probe", area: Internal, params: [], returns: Mixed, returns_fresh_storage: true, lower: lower, summary: "owned probe", internal: true }
+    builtin! { name: "__macro_independent_probe", area: Internal, params: [value: Str], returns: Str, returns_independent_storage: true, lower: lower, summary: "independent probe", internal: true }
+    builtin! { name: "__macro_ext_probe", area: Internal, params: [], returns: Null, lower: lower, summary: "extension probe", extension: true, internal: true }
 
-    /// Verifies a builtin! declaration is collected by inventory.
+    /// Verifies macro registration and the fresh/independent storage metadata defaults.
     #[test]
     fn macro_registers_builtin() {
-        assert!(inventory::iter::<BuiltinSpec>.into_iter().any(|s| s.name == "__macro_probe"));
+        let default_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_probe")
+            .expect("macro probe must be registered");
+        let owned_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_owned_probe")
+            .expect("owned macro probe must be registered");
+        let independent_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_independent_probe")
+            .expect("independent macro probe must be registered");
+        assert!(!default_spec.returns_fresh_storage);
+        assert!(!default_spec.returns_independent_storage);
+        assert!(owned_spec.returns_fresh_storage);
+        assert!(independent_spec.returns_independent_storage);
+    }
+
+    /// Verifies the `extension` flag defaults to false and is set by the macro arm,
+    /// so `--strict-php` classification is opt-in per builtin declaration.
+    #[test]
+    fn macro_registers_extension_flag() {
+        let default_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_probe")
+            .expect("macro probe must be registered");
+        let ext_spec = inventory::iter::<BuiltinSpec>
+            .into_iter()
+            .find(|s| s.name == "__macro_ext_probe")
+            .expect("extension probe must be registered");
+        assert!(!default_spec.extension);
+        assert!(ext_spec.extension);
     }
 }
 
@@ -254,14 +309,18 @@ mod tests {
         const S: BuiltinSpec = BuiltinSpec {
             name: "strlen", area: Area::String, params: P, variadic: None,
             max_args: None, min_args: None, arity_error: None,
-            returns: TypeSpec::Int, by_ref_return: false, check: None, lazy_check: false,
+            returns: TypeSpec::Int, returns_fresh_storage: false,
+            returns_independent_storage: false,
+            by_ref_return: false, check: None, lazy_check: false,
             lower: noop_lower, summary: "len", examples: &[], php_manual: None,
-            deprecation: None, internal: false,
+            deprecation: None, extension: false, internal: false,
         };
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);
+        assert!(!S.returns_fresh_storage);
+        assert!(!S.returns_independent_storage);
     }
     /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
-    fn noop_lower(_c: &mut crate::codegen_ir::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen_ir::CodegenIrError> { Ok(()) }
+    fn noop_lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
+        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
 }

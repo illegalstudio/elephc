@@ -2,7 +2,7 @@
 title: "pathinfo()"
 description: "Returns information about a file path."
 sidebar:
-  order: 135
+  order: 139
 ---
 
 ## pathinfo()
@@ -18,6 +18,11 @@ Returns information about a file path.
 - `$flags` (`int`), default `15`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

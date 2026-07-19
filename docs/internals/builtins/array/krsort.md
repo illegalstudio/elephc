@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/krsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/krsort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1101](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1101) (`lower_krsort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1104](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1104) (`lower_krsort`)
 - **Function symbol**: `lower_krsort()`
 
 
 ### Lowering notes
 
-- Lowers `krsort()` through the legacy reverse key-sort helper surface.
+- Lowers `krsort()` through the reverse key-sort helper surface.
 
 ## Runtime helpers
 
@@ -34,6 +34,12 @@ function krsort(array $array): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/krsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/krsort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 
 ## Cross-references

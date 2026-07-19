@@ -2,7 +2,7 @@
 title: "ctype_digit()"
 description: "Checks if all characters in the string are digits."
 sidebar:
-  order: 408
+  order: 418
 ---
 
 ## ctype_digit()
@@ -17,6 +17,11 @@ Checks if all characters in the string are digits.
 - `$text` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -9,7 +9,7 @@
 //! - Escape and interpolation behavior must preserve PHP-compatible text and source spans.
 
 use super::super::cursor::Cursor;
-use super::super::token::Token;
+use super::super::token::{spanned, SpannedToken, Token};
 use super::identifiers::is_ident_continue;
 use crate::errors::CompileError;
 use crate::span::Span;
@@ -72,7 +72,7 @@ impl EscapeInput for CharsEscapeInput<'_, '_> {
 /// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
 pub(in crate::lexer) fn scan_double_string_interpolated(
     cursor: &mut Cursor,
-) -> Result<Vec<(Token, Span)>, CompileError> {
+) -> Result<Vec<SpannedToken>, CompileError> {
     let span = cursor.span();
     cursor.advance(); // opening "
     interpolate(cursor, span, Some('"'), MissingEscape::Error)
@@ -85,20 +85,26 @@ pub(in crate::lexer) fn scan_double_string_interpolated(
 /// the resulting `.` chain is always string-typed, matching PHP's rule that a
 /// double-quoted/heredoc string is always a string.
 fn push_interp_part(
-    tokens: &mut Vec<(Token, Span)>,
+    tokens: &mut Vec<SpannedToken>,
     current: &mut String,
-    part: Vec<Token>,
+    part: Vec<SpannedToken>,
     span: Span,
 ) {
     if tokens.is_empty() {
-        tokens.push((Token::StringLiteral(std::mem::take(current)), span));
+        tokens.push(spanned(
+            Token::StringLiteral(std::mem::take(current)),
+            span,
+        ));
     } else if !current.is_empty() {
-        tokens.push((Token::Dot, span));
-        tokens.push((Token::StringLiteral(std::mem::take(current)), span));
+        tokens.push(spanned(Token::Dot, span));
+        tokens.push(spanned(
+            Token::StringLiteral(std::mem::take(current)),
+            span,
+        ));
     }
-    tokens.push((Token::Dot, span));
+    tokens.push(spanned(Token::Dot, span));
     for token in part {
-        tokens.push((token, span));
+        tokens.push(token);
     }
 }
 
@@ -114,8 +120,8 @@ fn interpolate(
     span: Span,
     terminator: Option<char>,
     missing_escape: MissingEscape,
-) -> Result<Vec<(Token, Span)>, CompileError> {
-    let mut tokens: Vec<(Token, Span)> = Vec::new();
+) -> Result<Vec<SpannedToken>, CompileError> {
+    let mut tokens: Vec<SpannedToken> = Vec::new();
     let mut current = String::new();
     let mut has_interpolation = false;
 
@@ -142,12 +148,29 @@ fn interpolate(
                 let inner = capture_braced_expr(input, span)?;
                 let fragment = tokenize_fragment(&inner, span)?;
                 has_interpolation = true;
-                let mut part = vec![Token::LParen];
-                part.extend(fragment.into_iter().map(|(token, _)| token));
-                part.push(Token::RParen);
+                let mut part = vec![spanned(Token::LParen, span)];
+                part.extend(fragment);
+                part.push(spanned(Token::RParen, span));
                 push_interp_part(&mut tokens, &mut current, part, span);
             }
             Some('$') => {
+                // Deprecated ${expr} form: dollar followed by brace. PHP 8.2+ deprecates
+                // this in favor of {$expr} but still supports it. We capture the braced
+                // expression (without the leading $) and interpolate it.
+                if input.peek_nth(1) == Some('{') {
+                    input.advance_escape(); // consume '$'
+                    input.advance_escape(); // consume '{'
+                    let inner_raw = capture_braced_expr(input, span)?;
+                    // Re-prepend the $ so the expression is valid PHP ($a['x'] not a['x'])
+                    let inner = format!("${}", inner_raw);
+                    let fragment = tokenize_fragment(&inner, span)?;
+                    has_interpolation = true;
+                    let mut part = vec![spanned(Token::LParen, span)];
+                    part.extend(fragment);
+                    part.push(spanned(Token::RParen, span));
+                    push_interp_part(&mut tokens, &mut current, part, span);
+                    continue;
+                }
                 input.advance_escape(); // consume '$'
                 let mut name = String::new();
                 while let Some(ch) = input.peek_escape() {
@@ -162,7 +185,7 @@ fn interpolate(
                     current.push('$');
                 } else {
                     has_interpolation = true;
-                    let mut part = vec![Token::Variable(name)];
+                    let mut part = vec![spanned(Token::Variable(name), span)];
                     append_simple_access(input, &mut part, span)?;
                     push_interp_part(&mut tokens, &mut current, part, span);
                 }
@@ -175,17 +198,17 @@ fn interpolate(
     }
 
     if !has_interpolation {
-        return Ok(vec![(Token::StringLiteral(current), span)]);
+        return Ok(vec![spanned(Token::StringLiteral(current), span)]);
     }
 
     if !current.is_empty() {
-        tokens.push((Token::Dot, span));
-        tokens.push((Token::StringLiteral(current), span));
+        tokens.push(spanned(Token::Dot, span));
+        tokens.push(spanned(Token::StringLiteral(current), span));
     }
 
-    let mut result = vec![(Token::LParen, span)];
+    let mut result = vec![spanned(Token::LParen, span)];
     result.extend(tokens);
-    result.push((Token::RParen, span));
+    result.push(spanned(Token::RParen, span));
     Ok(result)
 }
 
@@ -195,12 +218,12 @@ fn interpolate(
 /// after the consumed access (or unchanged if none applies).
 fn append_simple_access(
     input: &mut impl EscapeInput,
-    part: &mut Vec<Token>,
+    part: &mut Vec<SpannedToken>,
     span: Span,
 ) -> Result<(), CompileError> {
     if input.peek_escape() == Some('[') {
         input.advance_escape(); // consume '['
-        append_simple_offset_key(input, part);
+        append_simple_offset_key(input, part, span);
         if input.peek_escape() == Some(']') {
             input.advance_escape();
         } else {
@@ -224,8 +247,8 @@ fn append_simple_access(
                 break;
             }
         }
-        part.push(Token::Arrow);
-        part.push(Token::Identifier(prop));
+        part.push(spanned(Token::Arrow, span));
+        part.push(spanned(Token::Identifier(prop), span));
     }
     Ok(())
 }
@@ -233,8 +256,12 @@ fn append_simple_access(
 /// Reads the offset key for a simple `$name[offset]` interpolation and appends the
 /// `[ key ]` tokens to `part`. PHP simple syntax keys are a `$var`, an optionally-negative
 /// integer, or a bareword treated as a string key (never quoted).
-fn append_simple_offset_key(input: &mut impl EscapeInput, part: &mut Vec<Token>) {
-    part.push(Token::LBracket);
+fn append_simple_offset_key(
+    input: &mut impl EscapeInput,
+    part: &mut Vec<SpannedToken>,
+    span: Span,
+) {
+    part.push(spanned(Token::LBracket, span));
     match input.peek_escape() {
         Some('$') => {
             input.advance_escape();
@@ -247,7 +274,7 @@ fn append_simple_offset_key(input: &mut impl EscapeInput, part: &mut Vec<Token>)
                     break;
                 }
             }
-            part.push(Token::Variable(name));
+            part.push(spanned(Token::Variable(name), span));
         }
         Some(c) if c == '-' || c.is_ascii_digit() => {
             let mut digits = String::new();
@@ -263,7 +290,10 @@ fn append_simple_offset_key(input: &mut impl EscapeInput, part: &mut Vec<Token>)
                     break;
                 }
             }
-            part.push(Token::IntLiteral(digits.parse().unwrap_or(0)));
+            part.push(spanned(
+                Token::IntLiteral(digits.parse().unwrap_or(0)),
+                span,
+            ));
         }
         _ => {
             let mut key = String::new();
@@ -275,10 +305,10 @@ fn append_simple_offset_key(input: &mut impl EscapeInput, part: &mut Vec<Token>)
                     break;
                 }
             }
-            part.push(Token::StringLiteral(key));
+            part.push(spanned(Token::StringLiteral(key), span));
         }
     }
-    part.push(Token::RBracket);
+    part.push(spanned(Token::RBracket, span));
 }
 
 /// Captures the source text of a complex `{$expr}` interpolation up to its matching `}`.
@@ -345,13 +375,13 @@ fn capture_braced_expr(
 /// a synthetic `<?php` tag, then dropping the open tag and EOF and re-spanning the tokens
 /// to the enclosing string's span. Reuses the full lexer so nested strings, calls, and
 /// array/property access inside the braces are handled like any other expression.
-fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<(Token, Span)>, CompileError> {
+fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<SpannedToken>, CompileError> {
     let source = format!("<?php {}", inner);
     let tokens = crate::lexer::tokenize(&source)?;
     Ok(tokens
         .into_iter()
         .filter(|(token, _)| !matches!(token, Token::OpenTag | Token::Eof))
-        .map(|(token, _)| (token, span))
+        .map(|(token, metadata)| (token, metadata.with_span(span)))
         .collect())
 }
 
@@ -390,7 +420,7 @@ pub(in crate::lexer) fn scan_single_string(cursor: &mut Cursor) -> Result<Token,
 /// Nowdoc: `<<<'LABEL'` — no interpolation (like single-quoted strings)
 pub(in crate::lexer) fn scan_heredoc(
     cursor: &mut Cursor,
-) -> Result<Vec<(Token, Span)>, CompileError> {
+) -> Result<Vec<SpannedToken>, CompileError> {
     let span = cursor.span();
 
     while cursor.peek() == Some(' ') || cursor.peek() == Some('\t') {
@@ -481,7 +511,7 @@ pub(in crate::lexer) fn scan_heredoc(
                     let content = strip_heredoc_indentation(&content, ws_count, span)?;
 
                     if is_nowdoc {
-                        return Ok(vec![(Token::StringLiteral(content), span)]);
+                        return Ok(vec![spanned(Token::StringLiteral(content), span)]);
                     }
 
                     let mut chars = content.chars().peekable();

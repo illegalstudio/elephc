@@ -2,7 +2,7 @@
 title: "stream_context_set_option() — internals"
 description: "Compiler internals for stream_context_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 196
+  order: 200
 ---
 
 ## `stream_context_set_option()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_option.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_option.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1098](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1098) (`lower_stream_context_set_option`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1098](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1098) (`lower_stream_context_set_option`)
 - **Function symbol**: `lower_stream_context_set_option()`
 
 
@@ -31,6 +31,11 @@ function stream_context_set_option(resource $context, string $wrapper_or_options
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

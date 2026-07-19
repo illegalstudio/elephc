@@ -2,7 +2,7 @@
 title: "iterator_count()"
 description: "Count the elements in an iterator."
 sidebar:
-  order: 317
+  order: 326
 ---
 
 ## iterator_count()
@@ -17,6 +17,11 @@ Count the elements in an iterator.
 - `$iterator` (`traversable`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/iterator_count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_count.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -2,7 +2,7 @@
 title: "stream_is_local() — internals"
 description: "Compiler internals for stream_is_local(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 207
+  order: 211
 ---
 
 ## `stream_is_local()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_is_local.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_is_local.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2103](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2103) (`lower_stream_is_local`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2103](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2103) (`lower_stream_is_local`)
 - **Function symbol**: `lower_stream_is_local()`
 
 
@@ -31,6 +31,11 @@ function stream_is_local(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/stream_is_local.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_is_local.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

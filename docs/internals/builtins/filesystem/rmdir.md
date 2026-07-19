@@ -2,7 +2,7 @@
 title: "rmdir() — internals"
 description: "Compiler internals for rmdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 143
+  order: 147
 ---
 
 ## `rmdir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rmdir.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4433](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4433) (`lower_rmdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4433](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4433) (`lower_rmdir`)
 - **Function symbol**: `lower_rmdir()`
 
 
@@ -36,6 +36,11 @@ function rmdir(string $directory): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/rmdir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

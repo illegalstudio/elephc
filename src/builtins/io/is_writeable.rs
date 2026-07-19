@@ -12,8 +12,8 @@
 //! - `is_writeable` is an alias for `is_writable`; both share the same lowering.
 //! - `lower` is a thin wrapper over `io::lower_is_writeable` in the EIR backend.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -28,5 +28,5 @@ builtin! {
 
 /// Lowers an `is_writeable` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_is_writeable(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_is_writeable(ctx, inst)
 }

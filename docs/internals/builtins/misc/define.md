@@ -2,7 +2,7 @@
 title: "define() — internals"
 description: "Compiler internals for define(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 272
+  order: 276
 ---
 
 ## `define()` — internals
@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/define.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/define.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:83](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L83) (`lower_define`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:370](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L370) (`lower_define`)
 - **Function symbol**: `lower_define()`
 
 
 ### Lowering notes
 
-- Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
+- Lowers `define("NAME", value)` with the duplicate-name runtime guard.
 
 ## Runtime helpers
 
@@ -31,6 +31,11 @@ function define(string $constant_name, mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/define.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/define.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

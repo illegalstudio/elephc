@@ -2,7 +2,7 @@
 title: "fclose() — internals"
 description: "Compiler internals for fclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 158
 ---
 
 ## `fclose()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fclose.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2707](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2707) (`lower_fclose`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2707](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2707) (`lower_fclose`)
 - **Function symbol**: `lower_fclose()`
 
 
@@ -31,6 +31,11 @@ function fclose(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

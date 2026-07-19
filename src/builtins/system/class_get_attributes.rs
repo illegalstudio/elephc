@@ -15,8 +15,8 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::attr_support::{class_get_attributes_unsupported, resolve_class_name};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -30,6 +30,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns an array of ReflectionAttribute objects for all attributes of a class.",
+    extension: true,
 }
 
 /// Validates that the argument is a string literal class name, resolves the class,
@@ -74,5 +75,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `class_get_attributes` call by delegating to the shared attributes emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::attributes::lower_class_get_attributes(ctx, inst)
+    crate::codegen::lower_inst::builtins::attributes::lower_class_get_attributes(ctx, inst)
 }

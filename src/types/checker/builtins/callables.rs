@@ -127,7 +127,7 @@ pub(crate) fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::spa
     match elem_ty {
         PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
         PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
-        PhpType::Bool => Expr::new(ExprKind::BoolLiteral(false), span),
+        PhpType::Bool | PhpType::False => Expr::new(ExprKind::BoolLiteral(false), span),
         _ => Expr::new(ExprKind::IntLiteral(0), span),
     }
 }
@@ -165,7 +165,9 @@ pub(crate) fn comparator_dummy_arg_for_elem(
     match elem_ty {
         PhpType::Str => (Expr::new(ExprKind::StringLiteral(String::new()), span), None),
         PhpType::Float => (Expr::new(ExprKind::FloatLiteral(0.0), span), None),
-        PhpType::Bool => (Expr::new(ExprKind::BoolLiteral(false), span), None),
+        PhpType::Bool | PhpType::False => {
+            (Expr::new(ExprKind::BoolLiteral(false), span), None)
+        }
         PhpType::Object(_) => (
             Expr::new(ExprKind::Variable(COMPARATOR_ELEM_PLACEHOLDER.to_string()), span),
             Some((COMPARATOR_ELEM_PLACEHOLDER.to_string(), elem_ty.clone())),
@@ -645,6 +647,7 @@ fn callback_descriptor_env_ownership(callback: &Expr) -> CallbackDescriptorEnvOw
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. } => CallbackDescriptorEnvOwnership::Owned,
         ExprKind::Ternary {
             then_expr,
@@ -962,6 +965,16 @@ pub(crate) fn check_call_user_func_array(
             let ret_ty = checker.check_function_call(&cb_name, &spread_args, span, env)?;
             return Ok(ret_ty);
         }
+        let arg_array_ty = checker.infer_type(&args[1], env)?;
+        if checker.eval_barrier_active && !cb_name.contains("::") {
+            if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
+                return Err(CompileError::new(
+                    args[1].span,
+                    "call_user_func_array() second argument must be an array",
+                ));
+            }
+            return Ok(PhpType::Mixed);
+        }
         // A string-literal callback that matched no extern, builtin, user function,
         // or fn_decl is an undefined function. Reject plain function-name callbacks
         // here instead of falling through to the generic `Str` acceptance below
@@ -1026,9 +1039,11 @@ pub(crate) fn check_call_user_func_array(
     {
         return Ok(PhpType::Mixed);
     }
-    if callback_ty == PhpType::Callable
+    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
         && call_user_func_array_arg_container_is_supported(&arg_array_ty)
     {
+        // A Mixed/Union callback is validated and dispatched at runtime by tag
+        // (string name, closure, or array), matching PHP's runtime callable check.
         return Ok(PhpType::Mixed);
     }
     Err(CompileError::new(
@@ -1143,7 +1158,12 @@ pub(crate) fn check_call_user_func(
         }
         return Ok(PhpType::Mixed);
     }
-    if callback_ty == PhpType::Callable {
+    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
+        // A Mixed/Union callback — e.g. a callable stored in an untyped property
+        // and read back boxed — is validated at runtime: the `Op::ExprCall`
+        // lowering unboxes it and dispatches by tag (string name, closure, or
+        // array), matching PHP's runtime callable check. The concrete callee
+        // return type is not statically known, so the call yields Mixed.
         for arg in &args[1..] {
             checker.infer_type(arg, env)?;
         }

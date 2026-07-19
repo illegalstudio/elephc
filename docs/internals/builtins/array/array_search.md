@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_search.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1710](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1710) (`lower_array_search`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1761](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1761) (`lower_array_search`)
 - **Function symbol**: `lower_array_search()`
 
 
@@ -31,6 +31,11 @@ function array_search(mixed $needle, array $haystack, bool $strict = false): mix
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_search.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "header() — internals"
 description: "Compiler internals for header(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 275
+  order: 279
 ---
 
 ## `header()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/header.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/header.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L289) (`lower_header`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:289](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L289) (`lower_header`)
 - **Function symbol**: `lower_header()`
 
 
@@ -37,6 +37,11 @@ function header(string $header, bool $replace = true, int $response_code = 0): v
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/header.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

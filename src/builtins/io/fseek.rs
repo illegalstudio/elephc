@@ -13,8 +13,8 @@
 //! - `lower` is a thin wrapper over `io::lower_fseek` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -38,10 +38,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers an `fseek` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_fseek(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_fseek(ctx, inst)
 }

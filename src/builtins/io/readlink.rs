@@ -13,8 +13,8 @@
 //! - `lower` is a thin wrapper over `io::lower_readlink` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -33,10 +33,10 @@ builtin! {
 /// Returns `Union(Str, Bool)` reflecting the link target on success or `false` on failure.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `readlink` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_readlink(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_readlink(ctx, inst)
 }

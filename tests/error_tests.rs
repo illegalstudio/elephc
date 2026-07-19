@@ -181,6 +181,8 @@ mod exceptions_enums_magic;
 mod classes_traits;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
+#[path = "error_tests/strict_php.rs"]
+mod strict_php;
 #[path = "error_tests/math_builtins.rs"]
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
@@ -197,6 +199,8 @@ mod never;
 mod spl_builtins;
 #[path = "error_tests/misc.rs"]
 mod misc;
+#[path = "error_tests/narrowing.rs"]
+mod narrowing;
 #[path = "error_tests/image.rs"]
 mod image;
 

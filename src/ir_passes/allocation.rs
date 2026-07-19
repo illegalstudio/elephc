@@ -4,7 +4,7 @@
 //! function must preserve.
 //!
 //! Called from:
-//! - `crate::ir_passes::regalloc` produces it; the `codegen_ir` backend
+//! - `crate::ir_passes::regalloc` produces it; the `codegen` backend
 //!   consumes it through the value-access chokepoints and frame layout.
 //!
 //! Key details:

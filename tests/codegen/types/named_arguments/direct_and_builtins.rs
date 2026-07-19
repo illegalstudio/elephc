@@ -25,6 +25,20 @@ fn test_named_arguments_reorder_function_call() {
     assert_eq!(out, "Alice:30");
 }
 
+/// Verifies keyword-spelled named arguments use their exact case-sensitive parameter spelling.
+#[test]
+fn test_keyword_named_argument_preserves_spelling() {
+    let out = compile_and_run(
+        "<?php
+        function choose($Match, $Default) {
+            echo $Match, ':', $Default;
+        }
+        choose(Default: 2, Match: 1);
+        ",
+    );
+    assert_eq!(out, "1:2");
+}
+
 /// Verifies named arguments use parameter defaults for omitted arguments; `greet(suffix: "?")` outputs "world?".
 #[test]
 fn test_named_arguments_use_defaults_for_missing_params() {
@@ -268,4 +282,3 @@ echo ":" . str_repeat(...args(), times: times_arg());
     );
     assert_eq!(out, "xt:hahaha");
 }
-

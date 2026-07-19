@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_fill_keys.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:138](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L138) (`lower_array_fill_keys`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L139) (`lower_array_fill_keys`)
 - **Function symbol**: `lower_array_fill_keys()`
 
 
 ### Lowering notes
 
-- Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+- Lowers `array_fill_keys()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 
@@ -31,6 +31,11 @@ function array_fill_keys(array $keys, mixed $value): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

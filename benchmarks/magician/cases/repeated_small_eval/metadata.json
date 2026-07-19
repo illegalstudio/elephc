@@ -1,0 +1,12 @@
+{
+  "description": "Repeated identical small dynamic eval fragments that should hit the parse cache after the first invocation.",
+  "eval_fragments": [
+    {
+      "label": "increment",
+      "source": "$sum += 3;",
+      "invocations": 5000,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

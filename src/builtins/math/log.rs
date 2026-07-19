@@ -12,8 +12,8 @@
 //!   PHP's `log(num, base = M_E)` signature. The registry enforces 1-2 args.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -28,5 +28,5 @@ builtin! {
 
 /// Lowers a `log` call by dispatching to the shared logarithm emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_log(ctx, inst)
+    crate::codegen::lower_inst::builtins::math::lower_log(ctx, inst)
 }

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unshift.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays/unshift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays/unshift.rs#L23) (`lower_array_unshift`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/unshift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/unshift.rs#L23) (`lower_array_unshift`)
 - **Function symbol**: `lower_array_unshift()`
 
 
@@ -31,6 +31,13 @@ function array_unshift(array $array, ...$values): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **By-reference parameters**: `$array`.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 - **Variadic**: collects excess arguments into `$values`.
 

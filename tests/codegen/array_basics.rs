@@ -964,3 +964,53 @@ echo (in_array("hello", $a) ? "y" : "n"),
     );
     assert_eq!(out, "yyn");
 }
+
+/// EC-2 (#485): verifies `in_array()` accepts the optional 3rd `strict` argument
+/// and preserves exact membership for same-typed string and int arrays.
+#[test]
+fn test_in_array_strict_flag() {
+    let out = compile_and_run(
+        "<?php echo in_array('b', ['a','b','c'], true) ? '1' : '0'; echo in_array('x', ['a','b'], true) ? '1' : '0'; echo in_array(2, [1,2,3], true) ? '1' : '0'; echo in_array(9, [1,2], true) ? '1' : '0';",
+    );
+    assert_eq!(out, "1010");
+}
+
+/// Verifies loose `in_array()` parses a string needle as a PHP numeric string when
+/// searching an integer array, while `strict=true` rejects the cross-type match.
+#[test]
+fn test_in_array_loose_numeric_string_needle_matches_int_array() {
+    let out = compile_and_run(
+        "<?php echo in_array('2', [1,2,3]) ? '1' : '0'; echo in_array('2', [1,2,3], true) ? '1' : '0'; echo in_array('2.0', [1,2,3]) ? '1' : '0'; echo in_array('2.5', [1,2,3]) ? '1' : '0'; echo in_array('foo', [0]) ? '1' : '0';",
+    );
+    assert_eq!(out, "10100");
+}
+
+/// Verifies loose `in_array()` parses string array elements as PHP numeric strings
+/// when the needle is an integer, and keeps `strict=true` type-identical.
+#[test]
+fn test_in_array_loose_int_needle_matches_numeric_string_array() {
+    let out = compile_and_run(
+        "<?php echo in_array(2, ['1','02','3']) ? '1' : '0'; echo in_array(2, ['2.0']) ? '1' : '0'; echo in_array(2, ['2.5']) ? '1' : '0'; echo in_array(0, ['foo']) ? '1' : '0'; echo in_array(2, ['02'], true) ? '1' : '0';",
+    );
+    assert_eq!(out, "11000");
+}
+
+/// Verifies loose string-array membership uses PHP string `==` semantics, where
+/// numeric strings compare by numeric value and non-numeric strings compare by bytes.
+#[test]
+fn test_in_array_loose_string_array_uses_string_loose_equality() {
+    let out = compile_and_run(
+        "<?php echo in_array('2', ['02']) ? '1' : '0'; echo in_array('2', ['02'], true) ? '1' : '0'; echo in_array('2a', ['2']) ? '1' : '0'; echo in_array('foo', ['foo']) ? '1' : '0';",
+    );
+    assert_eq!(out, "1001");
+}
+
+/// Verifies loose bool/int membership compares PHP truthiness, while `strict=true`
+/// distinguishes booleans from integers.
+#[test]
+fn test_in_array_strict_distinguishes_bool_int_membership() {
+    let out = compile_and_run(
+        "<?php echo in_array(true, [2]) ? '1' : '0'; echo in_array(true, [2], true) ? '1' : '0'; echo in_array(false, [0]) ? '1' : '0'; echo in_array(false, [0], true) ? '1' : '0'; echo in_array(2, [true]) ? '1' : '0'; echo in_array(2, [true], true) ? '1' : '0';",
+    );
+    assert_eq!(out, "101010");
+}

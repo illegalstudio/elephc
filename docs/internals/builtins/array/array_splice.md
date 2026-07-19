@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_splice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_splice.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:949](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L949) (`lower_array_splice`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:956](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L956) (`lower_array_splice`)
 - **Function symbol**: `lower_array_splice()`
 
 
@@ -31,6 +31,12 @@ function array_splice(array $array, int $offset, int $length = null): array
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+- **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_splice.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_splice.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 
 ## Cross-references

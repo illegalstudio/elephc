@@ -10,8 +10,8 @@
 //!   returns `Int`. The registry common path enforces arity before falling back
 //!   to `returns`.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers a `json_last_error` call by dispatching to the shared JSON emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::json::lower_json_last_error(ctx, inst)
+    crate::codegen::lower_inst::builtins::json::lower_json_last_error(ctx, inst)
 }

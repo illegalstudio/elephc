@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_all.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1536](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1536) (`lower_array_all`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1578](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1578) (`lower_array_all`)
 - **Function symbol**: `lower_array_all()`
 
 
@@ -33,6 +33,10 @@ function array_all(mixed $array, mixed $callback): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

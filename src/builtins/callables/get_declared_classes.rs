@@ -10,8 +10,8 @@
 //! - `lower` is a thin wrapper over `types::lower_get_declared_names` parameterized
 //!   with this builtin's name.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -27,7 +27,7 @@ builtin! {
 
 /// Lowers a `get_declared_classes` call by dispatching to the shared declared-names emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::types::lower_get_declared_names(
+    crate::codegen::lower_inst::builtins::types::lower_get_declared_names(
         ctx,
         inst,
         "get_declared_classes",

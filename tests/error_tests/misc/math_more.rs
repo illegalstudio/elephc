@@ -148,10 +148,10 @@ fn test_error_static_missing_var() {
     expect_error("<?php static ;", "Expected variable after 'static'");
 }
 
-/// Tests that `static $x;` without an initializer produces an error.
+/// Tests that `static $x` followed by a stray token (no `=` or `;`) produces an error.
 #[test]
-fn test_error_static_missing_init() {
-    expect_error("<?php static $x;", "Expected '=' after static variable");
+fn test_error_static_malformed_declaration() {
+    expect_error("<?php static $x 5;", "Expected ';'");
 }
 
 // --- Variadic / Spread errors ---

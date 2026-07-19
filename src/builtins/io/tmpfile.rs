@@ -19,8 +19,8 @@
 //! - `lower` is a thin wrapper over `io::lower_tmpfile` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -69,5 +69,5 @@ fn is_empty_static_array_spread(args: &[crate::parser::ast::Expr]) -> bool {
 
 /// Lowers a `tmpfile` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_tmpfile(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_tmpfile(ctx, inst)
 }

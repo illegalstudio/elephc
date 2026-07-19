@@ -2,7 +2,7 @@
 title: "fsockopen()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 328
+  order: 337
 ---
 
 ## fsockopen()
@@ -21,6 +21,11 @@ Open Internet or Unix domain socket connection.
 - `$timeout` (`float`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fsockopen.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -5,7 +5,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker` (seeding), `crate::ir_lower::context` (global
-//!   storage), `crate::codegen_ir::web` (per-request reset).
+//!   storage), `crate::codegen::web` (per-request reset).
 //!
 //! Key details:
 //! - These names use `_eir_global_*` symbol storage in EVERY scope (true
@@ -15,7 +15,7 @@ use crate::types::PhpType;
 
 /// PHP request superglobals visible in every scope under `--web`.
 pub const SUPERGLOBALS: &[&str] =
-    &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES"];
+    &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES", "_SESSION"];
 
 /// Returns true when `name` (without leading `$`) is a request superglobal.
 pub fn is_superglobal(name: &str) -> bool {

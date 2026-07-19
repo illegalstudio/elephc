@@ -2,7 +2,7 @@
 title: "closedir()"
 description: "Closes directory handle."
 sidebar:
-  order: 153
+  order: 157
 ---
 
 ## closedir()
@@ -17,6 +17,11 @@ Closes directory handle.
 - `$dir_handle` (`resource`)
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

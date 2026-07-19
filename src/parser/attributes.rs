@@ -19,18 +19,17 @@
 //! ```
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Attribute, AttributeGroup};
 use crate::parser::expr::parse_args;
-use crate::span::Span;
 
 /// Parse zero or more `#[...]` attribute groups starting at `*pos`.
 ///
 /// Each call walks any number of stacked groups (`#[A] #[B]`); each group
 /// may contain several attributes separated by commas.
 pub(crate) fn parse_attribute_lists(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Vec<AttributeGroup>, CompileError> {
     let mut groups = Vec::new();
@@ -43,7 +42,7 @@ pub(crate) fn parse_attribute_lists(
 /// Parse and discard attribute groups — used at sites where the AST does
 /// not yet carry an `attributes` field (parameters, closure params).
 pub(crate) fn consume_attribute_lists(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<(), CompileError> {
     parse_attribute_lists(tokens, pos).map(|_| ())
@@ -54,10 +53,10 @@ pub(crate) fn consume_attribute_lists(
 /// `AttributeGroup`. Handles trailing commas. Returns an error on
 /// unterminated or empty groups.
 fn parse_one_group(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<AttributeGroup, CompileError> {
-    let open_span = tokens[*pos].1;
+    let open_span = tokens[*pos].1.span;
     *pos += 1; // consume `#[`
 
     let mut attributes = Vec::new();
@@ -85,7 +84,7 @@ fn parse_one_group(
         if !first {
             if !matches!(tokens[*pos].0, Token::Comma) {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Expected ',' or ']' between attributes",
                 ));
             }
@@ -108,10 +107,10 @@ fn parse_one_group(
 /// parenthesized arguments. Sets `fully_qualified` if the name started
 /// with `\`. Returns the `Attribute` with its name, parsed arguments, and span.
 fn parse_one_attribute(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Attribute, CompileError> {
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     let mut parts: Vec<String> = Vec::new();
     let mut fully_qualified = false;
     if matches!(tokens[*pos].0, Token::Backslash) {
@@ -139,7 +138,10 @@ fn parse_one_attribute(
             }
             _ => {
                 return Err(CompileError::new(
-                    tokens.get(*pos).map(|(_, s)| *s).unwrap_or(span),
+                    tokens
+                        .get(*pos)
+                        .map(|(_, metadata)| metadata.span)
+                        .unwrap_or(span),
                     "Expected identifier after '\\' in attribute name",
                 ));
             }
@@ -157,7 +159,7 @@ fn parse_one_attribute(
 
     let mut args = Vec::new();
     if *pos < tokens.len() && matches!(tokens[*pos].0, Token::LParen) {
-        let arg_span = tokens[*pos].1;
+        let arg_span = tokens[*pos].1.span;
         *pos += 1;
         args = parse_args(tokens, pos, arg_span)?;
     }

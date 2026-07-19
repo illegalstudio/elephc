@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace_recursive.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1333](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1333) (`lower_array_replace_recursive`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1345](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1345) (`lower_array_replace_recursive`)
 - **Function symbol**: `lower_array_replace_recursive()`
 
 
@@ -33,6 +33,10 @@ function array_replace_recursive(array $array, array $replacements): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

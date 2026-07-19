@@ -9,6 +9,22 @@
 
 use super::*;
 
+/// Verifies PHP's generic `object` parameter type accepts concrete objects and
+/// preserves object-shaped ABI lowering.
+#[test]
+fn test_generic_object_parameter_type_accepts_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+class GenericObjectParam {}
+function accepts_object(object $value): string {
+    return is_object($value) ? "object" : "bad";
+}
+echo accepts_object(new GenericObjectParam());
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.

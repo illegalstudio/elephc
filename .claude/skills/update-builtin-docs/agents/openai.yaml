@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Builtin Docs"
+  short_description: "Regenerate generated builtin docs"
+  default_prompt: "Update the generated builtin documentation and run the CI-equivalent audits."

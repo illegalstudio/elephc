@@ -2,7 +2,7 @@
 title: "pi() — internals"
 description: "Compiler internals for pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 260
+  order: 264
 ---
 
 ## `pi()` — internals
@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pi.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:240](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L240) (`lower_pi`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:240](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L240) (`lower_pi`)
 - **Function symbol**: `lower_pi()`
 
 
 ### Lowering notes
 
-- Lowers `pi()` as the same data-section float constant used by the legacy backend.
+- Lowers `pi()` as a data-section float constant.
 
 ## Runtime helpers
 
@@ -31,6 +31,11 @@ function pi(): float
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pi.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

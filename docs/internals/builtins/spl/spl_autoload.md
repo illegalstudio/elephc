@@ -2,7 +2,7 @@
 title: "spl_autoload() — internals"
 description: "Compiler internals for spl_autoload(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 319
+  order: 328
 ---
 
 ## `spl_autoload()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_autoload.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/spl.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/spl.rs#L151) (`lower_spl_autoload_void`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/spl.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/spl.rs#L151) (`lower_spl_autoload_void`)
 - **Function symbol**: `lower_spl_autoload_void()`
 
 
@@ -31,6 +31,11 @@ function spl_autoload(string $class, string $file_extensions = null): void
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

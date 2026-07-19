@@ -2,7 +2,7 @@
 title: "strtotime()"
 description: "Parses an English textual datetime description into a Unix timestamp."
 sidebar:
-  order: 96
+  order: 100
 ---
 
 ## strtotime()
@@ -18,6 +18,11 @@ Parses an English textual datetime description into a Unix timestamp.
 - `$baseTimestamp` (`int`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

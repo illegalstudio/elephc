@@ -1,0 +1,12 @@
+{
+  "description": "Array appends and indexed reads inside one literal eval fragment.",
+  "eval_fragments": [
+    {
+      "label": "array-loop",
+      "source": "$data = []; $i = 0; while ($i < 100) { $data[] = $i % 31; $i += 1; } $sum = 0; $i = 0; while ($i < count($data)) { $sum += $data[$i]; $i += 1; }",
+      "invocations": 1,
+      "source_kind": "literal",
+      "parse_cache_should_hit": false
+    }
+  ]
+}

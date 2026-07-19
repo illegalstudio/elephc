@@ -6,7 +6,9 @@
 //! - `crate::optimize::propagate`
 //!
 //! Key details:
-//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+//! - Simulation reuses `propagate_stmt` for environment updates, so scalar and
+//!   array facts, targeted invalidation, and volatility behave identically on
+//!   simulated loop paths and on the real propagation walk.
 
 use super::*;
 
@@ -193,10 +195,10 @@ fn simulate_loop_if_constant_paths(
     env: ConstantEnv,
 ) -> ConstantLoopPathSummary {
     let condition = propagate_expr(condition.clone(), &env);
-    let base_env = if expr_effect(&condition).has_side_effects {
-        HashMap::new()
-    } else {
-        env
+    let base_env = {
+        let mut base_env = env;
+        expr_invalidation(&condition).apply(&mut base_env);
+        base_env
     };
 
     match scalar_value(&condition) {
@@ -228,10 +230,10 @@ fn simulate_loop_elseif_constant_paths(
 ) -> ConstantLoopPathSummary {
     if let Some((condition, body)) = elseif_clauses.first() {
         let condition = propagate_expr(condition.clone(), &base_env);
-        let branch_env = if expr_effect(&condition).has_side_effects {
-            HashMap::new()
-        } else {
-            base_env.clone()
+        let branch_env = {
+            let mut branch_env = base_env.clone();
+            expr_invalidation(&condition).apply(&mut branch_env);
+            branch_env
         };
 
         match scalar_value(&condition) {

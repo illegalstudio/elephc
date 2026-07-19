@@ -38,7 +38,7 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
         // string key (never an integer key), and forces associative storage.
         ExprKind::Null => PhpType::Str,
         _ => match raw_ty {
-            PhpType::Int | PhpType::Bool | PhpType::Float => PhpType::Int,
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
             PhpType::Str => PhpType::Mixed,
             other => other,
         },
@@ -91,7 +91,7 @@ pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
 /// Returns the key type for an array element when the key expression is absent.
 pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     match raw_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float => PhpType::Int,
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
         PhpType::Str => PhpType::Mixed,
         other => other,
     }

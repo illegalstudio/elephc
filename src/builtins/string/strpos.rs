@@ -17,8 +17,8 @@
 //!   the `__rt_strpos` runtime helper.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -41,12 +41,12 @@ builtin! {
 /// type inline. Argument types are inferred by the common registry dispatch path before
 /// this hook fires; arity (capped to 2 via `max_args`) is validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `strpos` call by dispatching to the shared string-position emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_string_position(
+    crate::codegen::lower_inst::builtins::strings::lower_string_position(
         ctx,
         inst,
         "strpos",

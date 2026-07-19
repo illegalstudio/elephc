@@ -2,7 +2,7 @@
 title: "realpath_cache_size() — internals"
 description: "Compiler internals for realpath_cache_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 141
+  order: 145
 ---
 
 ## `realpath_cache_size()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/realpath_cache_size.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath_cache_size.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3710](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3710) (`lower_realpath_cache_size`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3710](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3710) (`lower_realpath_cache_size`)
 - **Function symbol**: `lower_realpath_cache_size()`
 
 
@@ -31,6 +31,11 @@ function realpath_cache_size(): int
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

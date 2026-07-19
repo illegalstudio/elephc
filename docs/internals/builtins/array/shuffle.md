@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/shuffle.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1116](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1116) (`lower_shuffle`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1119](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1119) (`lower_shuffle`)
 - **Function symbol**: `lower_shuffle()`
 
 
@@ -32,6 +32,12 @@ function shuffle(array $array): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/shuffle.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 
 ## Cross-references

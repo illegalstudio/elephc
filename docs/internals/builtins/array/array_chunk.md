@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_chunk.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:81](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L81) (`lower_array_chunk`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:80](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L80) (`lower_array_chunk`)
 - **Function symbol**: `lower_array_chunk()`
 
 
@@ -31,6 +31,11 @@ function array_chunk(array $array, int $length): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

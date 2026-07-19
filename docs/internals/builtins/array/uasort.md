@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uasort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1131](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1131) (`lower_uasort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1134](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1134) (`lower_uasort`)
 - **Function symbol**: `lower_uasort()`
 
 
 ### Lowering notes
 
-- Lowers `uasort()` through the legacy user-sort helper for static comparators.
+- Lowers `uasort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 
@@ -32,6 +32,12 @@ function uasort(array $array, callable $callback): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+- **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uasort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 
 ## Cross-references

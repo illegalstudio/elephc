@@ -2,7 +2,7 @@
 title: "date()"
 description: "Formats a local time/date."
 sidebar:
-  order: 86
+  order: 90
 ---
 
 ## date()
@@ -18,6 +18,11 @@ Formats a local time/date.
 - `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/date.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

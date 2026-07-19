@@ -42,6 +42,7 @@ pub(crate) fn inject_builtin_stdclass(
         "stdClass".to_string(),
         FlattenedClass {
             name: "stdClass".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -52,6 +53,7 @@ pub(crate) fn inject_builtin_stdclass(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 

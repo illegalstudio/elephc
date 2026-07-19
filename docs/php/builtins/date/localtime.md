@@ -2,7 +2,7 @@
 title: "localtime()"
 description: "Returns the local time."
 sidebar:
-  order: 93
+  order: 97
 ---
 
 ## localtime()
@@ -18,6 +18,11 @@ Returns the local time.
 - `$associative` (`bool`), default `false`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/localtime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

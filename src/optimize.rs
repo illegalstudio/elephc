@@ -46,7 +46,24 @@ pub fn fold_constants(program: Program) -> Program {
 /// Propagates scalar constants across statements and control flow.
 pub fn propagate_constants(program: Program) -> Program {
     reset_reference_volatile();
-    propagate_block(program, HashMap::new()).0
+    // Request superglobals are writable from any scope under `--web`, so they
+    // can never carry propagated facts.
+    for name in crate::superglobals::SUPERGLOBALS {
+        mark_reference_volatile(name);
+    }
+    // Install the callable effect summaries and by-ref signatures so calls to
+    // known-pure user callables stop clearing the environment. Substitution
+    // into by-ref argument positions is masked by `propagate_args`, which
+    // keeps those arguments lvalues.
+    let (function_effects, static_method_effects, private_instance_method_effects) =
+        compute_program_callable_effects(&program);
+    let signatures = collect_by_ref_signatures(&program);
+    with_callable_effects(
+        function_effects,
+        static_method_effects,
+        private_instance_method_effects,
+        || with_by_ref_signatures(signatures, || propagate_block(program, HashMap::new()).0),
+    )
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
@@ -73,8 +90,30 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
     )
 }
 
-/// Eliminates code with no observable side effects.
-type ConstantEnv = HashMap<String, ScalarValue>;
+/// A fact the propagation environment records for a local variable.
+#[derive(Debug, Clone, PartialEq)]
+enum PropagatedValue {
+    /// An immutable scalar constant, substitutable at variable reads.
+    Scalar(ScalarValue),
+    /// A qualifying array literal (all keys and values scalar literals, size
+    /// capped). Never substituted at plain variable reads — only consumed by
+    /// array-access folding. Sound to copy on `$b = $a` because PHP array
+    /// assignment has value semantics (COW).
+    ArrayLit(Expr),
+}
+
+impl PropagatedValue {
+    /// Returns the scalar payload, if this fact is a scalar constant.
+    fn as_scalar(&self) -> Option<&ScalarValue> {
+        match self {
+            PropagatedValue::Scalar(value) => Some(value),
+            PropagatedValue::ArrayLit(_) => None,
+        }
+    }
+}
+
+/// Maps local names to propagated facts during constant propagation.
+type ConstantEnv = HashMap<String, PropagatedValue>;
 /// Eliminates dead code for this module.
 pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
@@ -87,11 +126,27 @@ pub fn eliminate_dead_code(program: Program) -> Program {
     )
 }
 
+/// Returns true when the named builtin can invoke user code through a callback
+/// argument (registry convention: every callback parameter is named
+/// `callback`). Such builtins inherit the callback's powers: they can write
+/// globals and mutate any argument reachable through the callback's by-ref
+/// parameters.
+fn builtin_invokes_callbacks(name: &str) -> bool {
+    crate::builtins::registry::lookup(name).is_some_and(|def| {
+        def.params.iter().any(|(param, _)| param == "callback")
+    })
+}
+
 /// Effect describes whether a callable or expression has observable runtime behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Effect {
     has_side_effects: bool,
     may_throw: bool,
+    /// True when the callable/expression can write PHP global storage
+    /// (`global`-bound variables). Consumed by constant propagation to decide
+    /// whether a call can rewrite top-level locals; deliberately excluded from
+    /// `is_observable` so DCE and pruning decisions are unchanged.
+    writes_globals: bool,
 }
 
 impl Effect {
@@ -99,6 +154,7 @@ impl Effect {
     const PURE: Self = Self {
         has_side_effects: false,
         may_throw: false,
+        writes_globals: false,
     };
 
     /// Marks this effect as having side effects.
@@ -113,11 +169,18 @@ impl Effect {
         self
     }
 
+    /// Marks this effect as possibly writing PHP global storage.
+    fn with_writes_globals(mut self) -> Self {
+        self.writes_globals = true;
+        self
+    }
+
     /// Combines two effects. The result is observable if either operand is observable.
     fn combine(self, other: Self) -> Self {
         Self {
             has_side_effects: self.has_side_effects || other.has_side_effects,
             may_throw: self.may_throw || other.may_throw,
+            writes_globals: self.writes_globals || other.writes_globals,
         }
     }
 

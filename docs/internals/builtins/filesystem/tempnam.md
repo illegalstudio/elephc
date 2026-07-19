@@ -2,7 +2,7 @@
 title: "tempnam() — internals"
 description: "Compiler internals for tempnam(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 148
+  order: 152
 ---
 
 ## `tempnam()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tempnam.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4453](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4453) (`lower_tempnam`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4453](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4453) (`lower_tempnam`)
 - **Function symbol**: `lower_tempnam()`
 
 
@@ -34,6 +34,11 @@ function tempnam(string $directory, string $prefix): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

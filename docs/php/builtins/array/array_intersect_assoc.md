@@ -19,6 +19,11 @@ Computes the intersection of arrays with additional index check.
 
 **Returns**: `mixed`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

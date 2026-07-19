@@ -2,7 +2,7 @@
 title: "log()"
 description: "Natural logarithm."
 sidebar:
-  order: 254
+  order: 258
 ---
 
 ## log()
@@ -18,6 +18,11 @@ Natural logarithm.
 - `$base` (`float`), default `2.718281828459045`, optional
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/log.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/log.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

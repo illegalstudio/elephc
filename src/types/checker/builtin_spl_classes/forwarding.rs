@@ -15,6 +15,7 @@ use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
+use super::recursive_array::assume_recursive_iterator_expr;
 
 /// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
@@ -22,6 +23,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "IteratorIterator".to_string(),
         FlattenedClass {
             name: "IteratorIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["OuterIterator".to_string()],
             is_abstract: false,
@@ -32,6 +34,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -39,6 +42,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "LimitIterator".to_string(),
         FlattenedClass {
             name: "LimitIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -49,6 +53,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -56,6 +61,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "NoRewindIterator".to_string(),
         FlattenedClass {
             name: "NoRewindIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -66,6 +72,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -73,6 +80,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "InfiniteIterator".to_string(),
         FlattenedClass {
             name: "InfiniteIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -83,6 +91,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }
@@ -210,7 +219,11 @@ pub(super) fn inner_void_body(method: &str) -> Vec<Stmt> {
 
 /// Builds the synthetic method body for recursive inner return.
 pub(super) fn recursive_inner_return_body(method: &str) -> Vec<Stmt> {
-    return_body(method_call(inner_expr(), method, Vec::new()))
+    return_body(method_call(
+        assume_recursive_iterator_expr(inner_expr()),
+        method,
+        Vec::new(),
+    ))
 }
 
 /// Builds the AST expression for limit position.

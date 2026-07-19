@@ -26,6 +26,51 @@ fn test_self_return_type_chains() {
     assert_eq!(out, "ok");
 }
 
+/// Regression: a `self`-typed VARIADIC parameter (`self ...$items`) must have its `self`
+/// rewritten to the enclosing class like every other member type annotation. Previously the
+/// variadic-param type was skipped, so `self` survived and was rejected with
+/// "Cannot use 'self' as a type outside of a class".
+#[test]
+fn test_self_typed_variadic_param() {
+    let out = compile_and_run(
+        "<?php
+        final class Bag {
+            public function __construct(public string $x) {}
+            public static function concat(self ...$items): self {
+                $buf = '';
+                foreach ($items as $i) { $buf .= $i->x; }
+                return new self($buf);
+            }
+        }
+        echo Bag::concat(new Bag('a'), new Bag('b'), new Bag('c'))->x;
+        ",
+    );
+    assert_eq!(out, "abc");
+}
+
+/// Regression: a `self`-typed VARIADIC parameter on an ENUM method must be rewritten to the
+/// enum name like regular parameters and return types. The enum schema path uses its own
+/// relative-type substitution, which previously skipped the variadic-param type.
+#[test]
+fn test_enum_self_typed_variadic_param() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit: string {
+            case Hearts = 'H';
+            case Spades = 'S';
+            case Clubs = 'C';
+            public static function join(self ...$suits): string {
+                $buf = '';
+                foreach ($suits as $s) { $buf .= $s->value; }
+                return $buf;
+            }
+        }
+        echo Suit::join(Suit::Hearts, Suit::Spades, Suit::Clubs);
+        ",
+    );
+    assert_eq!(out, "HSC");
+}
+
 /// Verifies that a `static` return type returns a late-bound instance via `new static()`.
 #[test]
 fn test_static_return_type() {

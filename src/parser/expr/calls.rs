@@ -9,7 +9,7 @@
 //! - Callable and cast disambiguation depends on PHP token spelling and case-insensitive type names.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{CallableTarget, CastType, Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 
@@ -22,7 +22,7 @@ use super::parse_args;
 /// property access if a variable follows, a class constant if `class` follows, or a scoped
 /// constant access otherwise.
 pub(super) fn parse_scoped_static_call(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     receiver: StaticReceiver,
@@ -48,19 +48,14 @@ pub(super) fn parse_scoped_static_call(
             *pos += 1;
             return Ok(Expr::new(ExprKind::ClassConstant { receiver }, span));
         }
-        Some(Token::Identifier(method)) => {
-            let method = method.clone();
-            *pos += 1;
-            method
-        }
-        Some(Token::Match) => {
-            *pos += 1;
-            "MATCH".to_string()
-        }
         // PHP 8 allows semi-reserved keywords as static method / class-constant names
         // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
-        Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
-            let name = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
+        Some(t)
+            if crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1)
+                .is_some() =>
+        {
+            let name =
+                crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1).unwrap();
             *pos += 1;
             name
         }
@@ -90,6 +85,7 @@ pub(super) fn parse_scoped_static_call(
         ))
     } else {
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         Ok(Expr::new(
             ExprKind::StaticMethodCall {
                 receiver,
@@ -106,7 +102,7 @@ pub(super) fn parse_scoped_static_call(
 /// found; returns `false` and advances nothing otherwise. Called after the initial `(` of a
 /// method-call-like form has already been consumed by the caller.
 pub(super) fn parse_first_class_callable_parens(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<bool, CompileError> {
     if *pos + 1 < tokens.len()
@@ -122,7 +118,7 @@ pub(super) fn parse_first_class_callable_parens(
 /// Peeks ahead to detect a PHP cast expression `(type)` where the middle token is an
 /// identifier matching a valid cast type name. Does not consume any tokens. Returns the
 /// matching `CastType` variant or `None` if the three-token window does not form a cast.
-pub(super) fn peek_cast(tokens: &[(Token, Span)], pos: usize) -> Option<CastType> {
+pub(super) fn peek_cast(tokens: &[SpannedToken], pos: usize) -> Option<CastType> {
     if pos + 2 >= tokens.len() {
         return None;
     }

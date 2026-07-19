@@ -14,7 +14,7 @@ use crate::ir::instr::{InstId, Instruction};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
 use crate::parser::ast::Stmt;
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{AttrArgEntry, FunctionSig, PhpType};
 
 /// Module-local identifier for an EIR function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -63,6 +63,8 @@ pub struct Function {
     pub entry: BlockId,
     pub source_signature: Option<String>,
     pub signature: Option<FunctionSig>,
+    pub attribute_names: Vec<String>,
+    pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     pub generator_source: Option<GeneratorSource>,
     pub flags: FunctionFlags,
 }
@@ -83,6 +85,8 @@ impl Function {
             entry: BlockId::from_raw(0),
             source_signature: None,
             signature: None,
+            attribute_names: Vec::new(),
+            attribute_args: Vec::new(),
             generator_source: None,
             flags: FunctionFlags::default(),
         }
@@ -126,6 +130,12 @@ impl Function {
         self.values.get(id.as_raw() as usize)
     }
 
+    /// Returns a mutable value by identifier, used by IR passes that narrow a
+    /// value's type (e.g. constant folding a checked op into a scalar constant).
+    pub fn value_mut(&mut self, id: ValueId) -> Option<&mut Value> {
+        self.values.get_mut(id.as_raw() as usize)
+    }
+
     /// Assigns the module-local function identifier.
     pub fn set_id(&mut self, id: FunctionId) {
         self.id = id;
@@ -167,12 +177,17 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    /// Non-owning slot introduced by an EIR transform, excluded from epilogue cleanup.
+    BorrowedTemp,
     OwnedTemp,
     TryHandler,
     ClosureCapture,
     NamedArgTemp,
     IteratorState,
     GeneratorState,
+    EvalContext,
+    EvalScope,
+    EvalGlobalScope,
 }
 
 /// Function-level shape flags used by lowering and later codegen.
@@ -188,4 +203,8 @@ pub struct FunctionFlags {
     pub is_static: bool,
     /// `true` when the function/closure returns by reference (`function &f()` / `fn &()`).
     pub by_ref_return: bool,
+    /// `true` for compiler-generated bodies that have no user-written PHP source:
+    /// property-default init thunks and builtin class methods (Reflection, SPL,
+    /// DateTime) lowered into the module. Consumed by source-map emission.
+    pub is_synthetic: bool,
 }

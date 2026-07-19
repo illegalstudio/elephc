@@ -215,10 +215,14 @@ instanceof
 
 ## String interpolation
 
-Double-quoted strings can contain variables:
+Double-quoted strings can contain simple variables, complex `{$expr}`
+interpolation, and PHP 8.x's deprecated-but-accepted `${var}` / `${expr}` forms:
 
 ```php
 "Hello, $name!"
+"Hello, {$name}!"
+"Hello, ${name}!"
+"Three: ${1 + 2}"
 ```
 
 The lexer doesn't produce a single string token for this. Instead, it emits a sequence that the parser can assemble:
@@ -231,7 +235,10 @@ Dot
 StringLiteral("!")
 ```
 
-This is handled by `literals::scan_double_string_interpolated()`, which walks through the string character by character, splitting it whenever it encounters a `$` followed by a valid identifier.
+This is handled by `literals::scan_double_string_interpolated()`, which walks
+through the string character by character and emits the expression fragments
+needed by the parser. The `${...}` spellings are retained for PHP compatibility
+even though PHP 8.2 deprecates them.
 
 ## Escape sequences
 
