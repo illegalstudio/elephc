@@ -97,6 +97,40 @@ fn test_materialize_outgoing_args_for_linux_x86_64_uses_sysv_registers() {
     assert!(out.contains("    add rsp, 128\n"));
 }
 
+/// Verifies that consecutive SysV C overflow scalars occupy adjacent 8-byte words
+/// while the complete outgoing area remains aligned to 16 bytes.
+#[test]
+fn test_materialize_outgoing_c_abi_args_for_linux_x86_64_packs_stack_words() {
+    let mut emitter = test_emitter_x86();
+    let assignments = build_outgoing_arg_assignments_for_target(
+        Target::new(Platform::Linux, Arch::X86_64),
+        &[
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
+        0,
+    );
+
+    let overflow_bytes = materialize_outgoing_c_abi_args(&mut emitter, &assignments);
+    let out = emitter.output();
+
+    assert_eq!(overflow_bytes, 16);
+    assert!(out.contains("    sub rsp, 32\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp + 48]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp], r10\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp + 32]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 8], r10\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 144], r10\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 152], r10\n"));
+    assert!(out.contains("    add rsp, 144\n"));
+}
+
 /// Verifies that Linux x86_64 outgoing string args preserve register temps while staging overflow.
 #[test]
 fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
@@ -125,8 +159,9 @@ fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
 }
 
 /// Verifies that emit_frame_prologue emits push rbp / mov rbp, rsp / sub rsp, N
-/// for the x86_64 frame setup; emit_frame_restore emits add rsp, N / pop rbp;
-/// and emit_return emits the standard epilogue with ret. The test confirms the
+/// for the x86_64 frame setup; emit_frame_restore emits the `leave` idiom (restores
+/// rsp from rbp and pops rbp in one step, immune to mid-body rsp drift); and
+/// emit_return emits the standard epilogue with ret. The test confirms the
 /// 16-byte stack alignment requirement is respected.
 #[test]
 fn test_emit_frame_helpers_linux_x86_64() {
@@ -142,8 +177,7 @@ fn test_emit_frame_helpers_linux_x86_64() {
             "    push rbp\n",
             "    mov rbp, rsp\n",
             "    sub rsp, 32\n",
-            "    add rsp, 32\n",
-            "    pop rbp\n",
+            "    leave\n",
             "    ret\n",
         )
     );
@@ -304,7 +338,7 @@ fn test_emit_store_and_load_result_to_symbol_for_string_linux_x86_64() {
 /// emit_store_process_args_to_globals stores argc (rdi) and argv (rsi) to
 /// global symbols; emit_enable_heap_debug_flag sets the heap debug flag;
 /// emit_copy_frame_pointer copies rbp to a destination register; and
-/// emit_exit emits the exit syscall (syscall with eax=60, edi=exit_code).
+/// emit_exit emits the process-wide exit syscall (syscall with eax=231, edi=exit_code).
 #[test]
 fn test_process_entry_helpers_linux_x86_64() {
     let mut emitter = test_emitter_x86();
@@ -322,7 +356,7 @@ fn test_process_entry_helpers_linux_x86_64() {
     assert!(out.contains("    mov QWORD PTR [rip + _heap_debug_enabled], r10\n"));
     assert!(out.contains("    mov r10, rbp\n"));
     assert!(out.contains("    mov edi, 7\n"));
-    assert!(out.contains("    mov eax, 60\n"));
+    assert!(out.contains("    mov eax, 231\n"));
     assert!(out.contains("    syscall\n"));
 }
 

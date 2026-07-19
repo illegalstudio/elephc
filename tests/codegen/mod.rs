@@ -37,6 +37,22 @@ mod magic_constants;
 mod strings;
 mod io;
 mod pdo;
+#[cfg(feature = "pdo-dblib")]
+mod pdo_dblib;
+#[cfg(feature = "pdo-firebird")]
+mod pdo_firebird;
+#[cfg(feature = "pdo-odbc")]
+mod pdo_odbc;
+#[cfg(feature = "pdo-informix")]
+mod pdo_informix;
+#[cfg(feature = "pdo-ibm")]
+mod pdo_ibm;
+#[cfg(feature = "pdo-sqlsrv")]
+mod pdo_sqlsrv;
+#[cfg(feature = "pdo-oci")]
+mod pdo_oci;
+#[cfg(feature = "pdo-cubrid")]
+mod pdo_cubrid;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;

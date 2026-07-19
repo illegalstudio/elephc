@@ -173,18 +173,20 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
-    // -- derive property count from the object payload size --
-    emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
-    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
-    emitter.instruction("lsr x9, x9, #4");                                      // divide by 16 to get the number of property slots
-    emitter.instruction("str x9, [sp, #16]");                                   // save the property count for the cleanup loop
-
-    // -- resolve the per-class property tag descriptor --
+    // -- resolve the per-class layout and property tag descriptor --
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x10, x11");                                        // is class_id within the descriptor table?
-    emitter.instruction("b.hs __rt_object_free_deep_struct");                   // invalid class ids fall back to a shallow free
+    emitter.instruction("b.hs __rt_object_free_deep_no_dyn_props");             // invalid class ids fall back to a shallow free without table indexing
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x9, [x11, x10, lsl #3]");                          // load the class-declared payload size instead of reused block capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load whether this class reserves a dynamic-property tail
+    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field from the declared layout
+    emitter.instruction("sub x9, x9, x11, lsl #3");                             // exclude the optional eight-byte dynamic-property tail
+    emitter.instruction("lsr x9, x9, #4");                                      // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("str x9, [sp, #16]");                                   // save the authoritative property count for the cleanup loop
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x10, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // load the tag descriptor pointer for this class
@@ -241,18 +243,16 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.label("__rt_object_free_deep_struct");
 
     // -- if the object carries a #[\AllowDynamicProperties] hashtable, free it --
-    // The presence of the dyn_props slot is encoded in the payload size: the
-    // base layout is `8 + num_props * 16` (always a multiple of 16 plus 8 for
-    // the class_id field), so an extra 8-byte tail signals an ADP slot at
-    // offset `size - 16` from the object payload start.
+    // Reused whole heap blocks can exceed the class layout, so the class tables
+    // are the only authoritative source for the tail's presence and offset.
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the dyn_props check
-    emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
-    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
-    emitter.instruction("and x10, x9, #15");                                    // isolate the low 4 bits of the property region size
-    emitter.instruction("cmp x10, #8");                                         // 8 leftover bytes signal a dyn_props pointer slot
-    emitter.instruction("b.ne __rt_object_free_deep_no_dyn_props");             // no dyn_props tail → skip hashtable cleanup
-    emitter.instruction("sub x9, x9, #8");                                      // back out the dyn_props slot from the property region size
-    emitter.instruction("add x9, x9, #8");                                      // re-add the leading class_id offset to land on the dyn_props slot
+    emitter.instruction("ldr x10, [x0]");                                       // reload the runtime class_id for the layout tables
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load the class-declared dynamic-property-tail flag
+    emitter.instruction("cbz x11, __rt_object_free_deep_no_dyn_props");         // classes without the tail own no dynamic-property hashtable
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x9, [x11, x10, lsl #3]");                          // load the exact class-declared object payload size
+    emitter.instruction("sub x9, x9, #8");                                      // the dynamic-property pointer occupies the final eight bytes
     emitter.instruction("ldr x11, [x0, x9]");                                   // load the dyn_props hashtable pointer from the slot
     emitter.instruction("cbz x11, __rt_object_free_deep_no_dyn_props");         // null hashtables (lazy init never happened) need no cleanup
     emitter.instruction("mov x0, x11");                                         // pass the hashtable pointer to the uniform decref helper
@@ -404,13 +404,18 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
-    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the uniform heap header
-    emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field from the payload size to isolate property storage
-    emitter.instruction("shr r10, 4");                                          // divide by 16 because every property slot occupies two qwords
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the total property count for the deep-free loop
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the runtime class id from the object payload
     abi::emit_cmp_reg_to_symbol(emitter, "r10", "_class_gc_desc_count");        // is the runtime class id within the emitted descriptor table?
-    emitter.instruction("jae __rt_object_free_deep_struct");                    // invalid class ids fall back to a shallow object free on x86_64
+    emitter.instruction("jae __rt_object_free_deep_no_dyn_props");              // invalid class ids fall back to a shallow free without table indexing
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");    // materialize the class-declared payload-size table
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // load the declared layout size instead of reused block capacity
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // materialize the dynamic-property-tail flag table
+    emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");                   // load whether this class reserves a dynamic-property tail
+    emitter.instruction("sub rcx, 8");                                          // subtract the leading class_id field from the declared layout
+    emitter.instruction("shl r8, 3");                                           // convert the boolean tail flag into its eight-byte size
+    emitter.instruction("sub rcx, r8");                                         // exclude the optional tail from the fixed property region
+    emitter.instruction("shr rcx, 4");                                          // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the authoritative property count for the deep-free loop
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");            // materialize the base address of the class property-tag descriptor table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the property-tag descriptor pointer for this object class
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the descriptor pointer for the object-property cleanup loop
@@ -456,14 +461,14 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     // -- if the object carries a #[\AllowDynamicProperties] hashtable, free it --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer for the dyn_props check
-    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the heap header
-    emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field
-    emitter.instruction("mov r11, r10");                                        // copy the property region size before isolating the low nibble
-    emitter.instruction("and r11, 15");                                         // isolate the low 4 bits of the property region size
-    emitter.instruction("cmp r11, 8");                                          // 8 leftover bytes signal a dyn_props pointer slot
-    emitter.instruction("jne __rt_object_free_deep_no_dyn_props");              // no dyn_props tail → skip hashtable cleanup
-    emitter.instruction("sub r10, 8");                                          // back out the dyn_props slot from the property region size
-    emitter.instruction("add r10, 8");                                          // re-add the leading class_id offset to land on the dyn_props slot
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the runtime class id for the authoritative layout tables
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // materialize the dynamic-property-tail flag table
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load whether this class owns a dynamic-property tail
+    emitter.instruction("test r11, r11");                                       // does this exact class layout reserve the tail slot?
+    emitter.instruction("jz __rt_object_free_deep_no_dyn_props");               // classes without the tail own no dynamic-property hashtable
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");    // materialize the exact class payload-size table
+    emitter.instruction("mov r10, QWORD PTR [r11 + r10 * 8]");                  // load the exact class-declared payload size
+    emitter.instruction("sub r10, 8");                                          // the dynamic-property pointer occupies the final eight bytes
     emitter.instruction("mov r11, QWORD PTR [rax + r10]");                      // load the dyn_props hashtable pointer from the slot
     emitter.instruction("test r11, r11");                                       // null hashtables (lazy init never happened) need no cleanup
     emitter.instruction("jz __rt_object_free_deep_no_dyn_props");               // skip cleanup for null dyn_props slot

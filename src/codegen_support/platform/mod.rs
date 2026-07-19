@@ -79,9 +79,9 @@ mod tests {
     }
 
     #[test]
-    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 93, 64, 56, 38, 79.
+    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 94, 64, 56, 38, 79.
     fn test_map_syscall() {
-        assert_eq!(map_syscall(1), 93);
+        assert_eq!(map_syscall(1), 94);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
         assert_eq!(map_syscall(29), 207);
@@ -150,7 +150,7 @@ _main:
         assert!(linux_asm.contains("mov x8, #64\n"));
         assert!(linux_asm.contains("svc #0\n"));
         assert!(linux_asm.contains("bl snprintf\n"));
-        assert!(linux_asm.contains("mov x8, #93\n"));
+        assert!(linux_asm.contains("mov x8, #94\n"));
         assert!(!linux_asm.contains("x16"));
         assert!(!linux_asm.contains("@PAGE"));
     }

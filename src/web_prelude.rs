@@ -20,45 +20,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::parser::ast::{Program, StmtKind};
+use crate::php_version::PhpVersion;
 
 mod usage;
-
-/// Maintained PHP minor selected for version-dependent compatibility behavior.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PhpVersion {
-    /// PHP 8.2 compatibility.
-    Php82,
-    /// PHP 8.3 compatibility.
-    Php83,
-    /// PHP 8.4 compatibility.
-    Php84,
-    /// PHP 8.5 compatibility, the default and newest maintained profile.
-    #[default]
-    Php85,
-}
-
-impl PhpVersion {
-    /// Parses one of the maintained `major.minor` spellings.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "8.2" => Some(Self::Php82),
-            "8.3" => Some(Self::Php83),
-            "8.4" => Some(Self::Php84),
-            "8.5" => Some(Self::Php85),
-            _ => None,
-        }
-    }
-
-    /// Returns PHP's numeric `PHP_VERSION_ID` representation for this profile.
-    pub const fn version_id(self) -> u32 {
-        match self {
-            Self::Php82 => 80200,
-            Self::Php83 => 80300,
-            Self::Php84 => 80400,
-            Self::Php85 => 80500,
-        }
-    }
-}
 
 /// The PHP source prepended under `--web`. Phase 2 Task 2: extern declarations;
 /// Task 5: $_SERVER; Task 6: $_GET parsed from the query string; Task 7: $_POST
@@ -605,43 +569,44 @@ function session_start(mixed $options = []): bool {
             }
             continue;
         }
+        $__elephc_ok_string = (string)$__elephc_ok;
         if (!is_string($__elephc_ov) && !is_int($__elephc_ov) && !is_bool($__elephc_ov)) {
-            throw new TypeError('session_start(): Option "' . $__elephc_ok . '" must be of type string|int|bool');
+            throw new TypeError('session_start(): Option "' . $__elephc_ok_string . '" must be of type string|int|bool');
         }
-        if (!__elephc_session_start_option_known($__elephc_ok)) {
-            trigger_error('session_start(): Setting option "' . $__elephc_ok . '" failed', E_WARNING);
+        if (!__elephc_session_start_option_known($__elephc_ok_string)) {
+            trigger_error('session_start(): Setting option "' . $__elephc_ok_string . '" failed', E_WARNING);
             continue;
         }
-        if (__elephc_php_version_id() >= 80500 && $__elephc_ok === 'read_and_close'
+        if (__elephc_php_version_id() >= 80500 && $__elephc_ok_string === 'read_and_close'
             && is_string($__elephc_ov) && !is_numeric($__elephc_ov)) {
             throw new TypeError('session_start(): Option "read_and_close" value must be of type compatible with int');
         }
-        if ($__elephc_ok === 'name') { $__elephc_opt_name = $__elephc_ov; }
-        if ($__elephc_ok === 'save_path') { $__elephc_opt_save_path = $__elephc_ov; }
-        if ($__elephc_ok === 'read_and_close') { $__elephc_opt_read_and_close = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_lifetime') { $__elephc_opt_cl = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_path') { $__elephc_opt_cp = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_domain') { $__elephc_opt_cd = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_secure') { $__elephc_opt_cs = $__elephc_ov; }
-        if (__elephc_php_version_id() >= 80500 && $__elephc_ok === 'cookie_partitioned') { $__elephc_opt_cpart = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_httponly') { $__elephc_opt_ch = $__elephc_ov; }
-        if ($__elephc_ok === 'cookie_samesite') { $__elephc_opt_css = $__elephc_ov; }
-        if ($__elephc_ok === 'cache_limiter') { $__elephc_opt_cachelim = $__elephc_ov; }
-        if ($__elephc_ok === 'cache_expire') { $__elephc_opt_cacheexp = $__elephc_ov; }
-        if ($__elephc_ok === 'use_strict_mode') { $__elephc_opt_strict = $__elephc_ov; }
-        if ($__elephc_ok === 'serialize_handler') { $__elephc_opt_serialize = $__elephc_ov; }
-        if ($__elephc_ok === 'gc_probability') { $__elephc_opt_gcprob = $__elephc_ov; }
-        if ($__elephc_ok === 'gc_divisor') { $__elephc_opt_gcdiv = $__elephc_ov; }
-        if ($__elephc_ok === 'gc_maxlifetime') { $__elephc_opt_gcmax = $__elephc_ov; }
-        if ($__elephc_ok === 'sid_length') { $__elephc_opt_sidlen = $__elephc_ov; }
-        if ($__elephc_ok === 'sid_bits_per_character') { $__elephc_opt_sidbits = $__elephc_ov; }
-        if ($__elephc_ok === 'referer_check') { $__elephc_opt_referer = $__elephc_ov; }
-        if ($__elephc_ok === 'use_cookies') { $__elephc_opt_usecookies = $__elephc_ov; }
-        if ($__elephc_ok === 'use_only_cookies') { $__elephc_opt_useonly = $__elephc_ov; }
-        if ($__elephc_ok === 'lazy_write') { $__elephc_opt_lazy = $__elephc_ov; }
-        if ($__elephc_ok === 'use_trans_sid') { $__elephc_opt_transsid = $__elephc_ov; }
-        if ($__elephc_ok === 'trans_sid_tags') { $__elephc_opt_transtags = $__elephc_ov; }
-        if ($__elephc_ok === 'trans_sid_hosts') { $__elephc_opt_transhosts = $__elephc_ov; }
+        if ($__elephc_ok_string === 'name') { $__elephc_opt_name = $__elephc_ov; }
+        if ($__elephc_ok_string === 'save_path') { $__elephc_opt_save_path = $__elephc_ov; }
+        if ($__elephc_ok_string === 'read_and_close') { $__elephc_opt_read_and_close = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_lifetime') { $__elephc_opt_cl = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_path') { $__elephc_opt_cp = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_domain') { $__elephc_opt_cd = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_secure') { $__elephc_opt_cs = $__elephc_ov; }
+        if (__elephc_php_version_id() >= 80500 && $__elephc_ok_string === 'cookie_partitioned') { $__elephc_opt_cpart = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_httponly') { $__elephc_opt_ch = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cookie_samesite') { $__elephc_opt_css = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cache_limiter') { $__elephc_opt_cachelim = $__elephc_ov; }
+        if ($__elephc_ok_string === 'cache_expire') { $__elephc_opt_cacheexp = $__elephc_ov; }
+        if ($__elephc_ok_string === 'use_strict_mode') { $__elephc_opt_strict = $__elephc_ov; }
+        if ($__elephc_ok_string === 'serialize_handler') { $__elephc_opt_serialize = $__elephc_ov; }
+        if ($__elephc_ok_string === 'gc_probability') { $__elephc_opt_gcprob = $__elephc_ov; }
+        if ($__elephc_ok_string === 'gc_divisor') { $__elephc_opt_gcdiv = $__elephc_ov; }
+        if ($__elephc_ok_string === 'gc_maxlifetime') { $__elephc_opt_gcmax = $__elephc_ov; }
+        if ($__elephc_ok_string === 'sid_length') { $__elephc_opt_sidlen = $__elephc_ov; }
+        if ($__elephc_ok_string === 'sid_bits_per_character') { $__elephc_opt_sidbits = $__elephc_ov; }
+        if ($__elephc_ok_string === 'referer_check') { $__elephc_opt_referer = $__elephc_ov; }
+        if ($__elephc_ok_string === 'use_cookies') { $__elephc_opt_usecookies = $__elephc_ov; }
+        if ($__elephc_ok_string === 'use_only_cookies') { $__elephc_opt_useonly = $__elephc_ov; }
+        if ($__elephc_ok_string === 'lazy_write') { $__elephc_opt_lazy = $__elephc_ov; }
+        if ($__elephc_ok_string === 'use_trans_sid') { $__elephc_opt_transsid = $__elephc_ov; }
+        if ($__elephc_ok_string === 'trans_sid_tags') { $__elephc_opt_transtags = $__elephc_ov; }
+        if ($__elephc_ok_string === 'trans_sid_hosts') { $__elephc_opt_transhosts = $__elephc_ov; }
     }
     if ($__elephc_opt_name !== null) {
         if (__elephc_session_name_valid((string)$__elephc_opt_name)) {

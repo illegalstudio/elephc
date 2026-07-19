@@ -128,6 +128,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrToF => conversions::lower_str_to_float(ctx, &inst),
         Op::Cast => conversions::lower_cast(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
+        Op::MixedClone => lower_mixed_clone(ctx, &inst),
+        Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
@@ -137,11 +139,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
-        Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
-        Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
+        Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true, false),
+        Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false, false),
+        Op::ArrayGetForWrite => arrays::lower_array_get(ctx, &inst, true, true),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
         Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
+        Op::SlotDetach => arrays::lower_slot_detach(ctx, &inst),
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
         Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
         Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),
@@ -152,8 +156,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
-        Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
-        Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
+        Op::HashGet => hashes::lower_hash_get(ctx, &inst, true, false),
+        Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false, false),
+        Op::HashGetForWrite => hashes::lower_hash_get(ctx, &inst, true, true),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
@@ -249,6 +254,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true),
         Op::GeneratorYield => lower_generator_yield(ctx, &inst),
         Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),
@@ -2375,7 +2381,9 @@ fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         (PhpType::Mixed | PhpType::Union(_), PhpType::Void) => {
             lower_mixed_cell_runtime_assign(ctx, inst)
         }
-        (PhpType::Mixed | PhpType::Union(_), _) => lower_mixed_array_runtime_get(ctx, inst),
+        (PhpType::Mixed | PhpType::Union(_), _) => {
+            lower_mixed_array_runtime_get(ctx, inst, false)
+        }
         (PhpType::AssocArray { .. }, PhpType::Void) => hashes::lower_hash_append(ctx, inst),
         (other, _) => Err(CodegenIrError::unsupported(format!(
             "runtime_call with receiver PHP type {:?} returning PHP type {:?}",
@@ -2385,7 +2393,11 @@ fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `$mixed[$key]` through the shared boxed Mixed array/hash/stdClass reader.
-fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+fn lower_mixed_array_runtime_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    for_write: bool,
+) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     match ctx.emitter.target.arch {
@@ -2398,7 +2410,14 @@ fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.load_value_to_reg(receiver, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get");
+    abi::emit_call_label(
+        ctx.emitter,
+        if for_write {
+            "__rt_mixed_array_get_for_write"
+        } else {
+            "__rt_mixed_array_get"
+        },
+    );
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
@@ -3759,12 +3778,33 @@ fn generator_intrinsic_return_type(intrinsic: IntrinsicCall) -> PhpType {
 }
 
 /// Returns true when a direct method call can be satisfied from the compact Throwable payload.
+/// PDOException and its subclasses keep getCode/getPrevious on their PHP implementations because
+/// those values live outside the compiler-owned base payload.
 fn is_throwable_standard_method_call(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     method_name: &str,
 ) -> bool {
-    is_throwable_standard_method_key(&php_symbol_key(method_name))
+    let method_key = php_symbol_key(method_name);
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    let mut pdo_exception_receiver = false;
+    while let Some(name) = current {
+        if name == "PDOException" {
+            pdo_exception_receiver = true;
+            break;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(name)
+            .and_then(|info| info.parent.as_deref());
+    }
+    if pdo_exception_receiver
+        && matches!(method_key.as_str(), "getcode" | "getprevious")
+    {
+        return false;
+    }
+    is_throwable_standard_method_key(&method_key)
         && is_throwable_like_class(ctx, class_name)
 }
 
@@ -5993,6 +6033,19 @@ fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, re
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
 }
 
+/// Unboxes a guarded Mixed value into an owned concrete heap representation.
+///
+/// Flow-sensitive checking proves the value has the requested type before this op is emitted;
+/// the runtime helper extracts its payload and this result takes its own reference so retaining
+/// stores and later cleanup have a balanced ownership ledger.
+fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    let result_ty = inst.result_php_type.codegen_repr();
+    emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    store_if_result(ctx, inst)
+}
+
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.
 fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,
@@ -7009,6 +7062,14 @@ fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         source_ty
     };
     emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    store_if_result(ctx, inst)
+}
+
+/// Clones a boxed Mixed zval cell so later mutation cannot rewrite an aliased source cell.
+fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     store_if_result(ctx, inst)
 }
 

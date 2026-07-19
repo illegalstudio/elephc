@@ -177,15 +177,19 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
-    emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
-    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
-    emitter.instruction("lsr x9, x9, #4");                                      // divide by 16 to get the property count
-    emitter.instruction("str x9, [sp, #16]");                                   // save the property count for the loop bound
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x10, x11");                                        // is the class_id within range?
     emitter.instruction("b.hs __rt_gc_mark_reachable_return");                  // invalid class ids contribute no traversable edges
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x9, [x11, x10, lsl #3]");                          // load the class-declared payload size, not reused heap capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load whether the layout includes a dynamic-property tail
+    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
+    emitter.instruction("sub x9, x9, x11, lsl #3");                             // exclude the optional eight-byte dynamic-property tail
+    emitter.instruction("lsr x9, x9, #4");                                      // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("str x9, [sp, #16]");                                   // save the authoritative property count for the loop bound
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x10, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // load the property-tag descriptor pointer
@@ -378,15 +382,20 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the current object pointer before computing its property count
-    emitter.instruction("mov ecx, DWORD PTR [rdx - 16]");                       // load the object payload size from the uniform heap header
-    emitter.instruction("sub rcx, 8");                                          // subtract the leading class_id field from the object payload size
-    emitter.instruction("shr rcx, 4");                                          // divide by 16 to get the number of property slots in this object layout
-    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the property count for the object traversal loop bound
     emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the runtime class_id stored at the start of the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_gc_desc_count");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the number of emitted class GC descriptors
     emitter.instruction("cmp rcx, r8");                                         // is the runtime class_id within the emitted descriptor table range?
     emitter.instruction("jae __rt_gc_mark_reachable_return");                   // invalid class ids contribute no traversable property metadata
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_payload_sizes");
+    emitter.instruction("mov rax, QWORD PTR [r8 + rcx * 8]");                   // load the class-declared payload size, not reused heap capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r9, QWORD PTR [r8 + rcx * 8]");                    // load whether the layout includes a dynamic-property tail
+    emitter.instruction("sub rax, 8");                                          // subtract the leading class_id field
+    emitter.instruction("shl r9, 3");                                           // convert the tail flag into its eight-byte storage size
+    emitter.instruction("sub rax, r9");                                         // exclude the optional tail from the fixed property region
+    emitter.instruction("shr rax, 4");                                          // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the authoritative property count for the loop bound
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_class_gc_desc_ptrs");
     emitter.instruction("mov r9, QWORD PTR [r8 + rcx * 8]");                    // load the per-class property-tag descriptor pointer for this object instance
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the descriptor pointer across recursive property traversals

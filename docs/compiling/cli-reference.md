@@ -31,7 +31,7 @@ binary is written next to it, named after the source without its extension.
 | `--strict-php` | — | off | Reject every elephc extension; accept only PHP-compatible constructs. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
-| `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
+| `--php-version VERSION` | `8.0`, `8.1`, `8.2`, `8.3`, `8.4`, `8.5`, `8.6` | `8.5` | Select the PHP compatibility profile for version-dependent behavior. PDO supports the full range; sessions currently use PHP 8.2 through 8.5 semantics. |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
@@ -75,6 +75,16 @@ status and headers with `http_response_code()` and `header()`. See
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
+
+## PHP compatibility surface
+
+| Flag | Values | Default | Env override | Description |
+|---|---|---|---|---|
+| `--php-version VERSION` / `--php-version=VERSION` | `8.0`, `8.1`, `8.2`, `8.3`, `8.4`, `8.5`, `8.6` | `8.5` | `ELEPHC_PHP_VERSION` | Select version-gated PHP surfaces. PDO currently uses this for public properties, driver subclasses/constants, deprecations, SQLSRV availability, and PHP 8.6 PostgreSQL session reset behavior. The explicit CLI flag overrides the environment. Patch versions and values outside the listed range are errors. |
+
+This selector does not claim that every unrelated language or standard-library change
+between PHP releases is gated. Each feature page documents the surfaces that currently
+consult it; see [PDO](../php/pdo.md#php-compatibility-version) for the complete PDO matrix.
 
 ## Optimization and code generation
 
@@ -160,12 +170,13 @@ See [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Environment variables
 
-Three environment variables provide defaults that the matching flag overrides.
+Four environment variables provide defaults that the matching flag overrides.
 They exist mainly so a whole test run or benchmark can flip a default without
 changing every invocation:
 
 | Variable | Values | Equivalent flag |
 |---|---|---|
+| `ELEPHC_PHP_VERSION` | `8.0` through `8.6` | `--php-version=` |
 | `ELEPHC_IR_OPT` | `on`, `off` | `--ir-opt=` |
 | `ELEPHC_REGALLOC` | `linear`, `stack` | `--regalloc=` |
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |

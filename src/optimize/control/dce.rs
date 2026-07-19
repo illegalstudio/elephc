@@ -38,16 +38,15 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// tracks guard state, handles tail-sinking for if/switch/try, and breaks early on terminal control flow.
 fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
-    let mut stmts = body.into_iter().peekable();
+    let mut stmts = body.into_iter();
     while let Some(stmt) = stmts.next() {
-        let has_tail = stmts.peek().is_some();
+        let has_tail = !stmts.as_slice().is_empty();
         let mut use_tail_sink = has_tail
             && matches!(
                 stmt.kind,
                 StmtKind::If { .. } | StmtKind::IfDef { .. } | StmtKind::Switch { .. } | StmtKind::Try { .. }
             );
         let dce_stmt = if use_tail_sink {
-            let tail: Vec<Stmt> = stmts.clone().collect();
             // Tail-sinking copies the tail into each branch of the if/switch/try.
             // Declarations (functions, classes, interfaces, enums, traits, externs)
             // are hoisted and must stay singular — sinking one into multiple
@@ -56,10 +55,13 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             // sinking them duplicates nested control flow and produces exponential
             // AST growth (each successive if duplicates the remaining tail).
             // Fall back to plain per-statement DCE when the tail contains either.
-            if stmts_contain_declaration(&tail) || stmts_contain_control_flow(&tail) {
+            if stmts_contain_declaration(stmts.as_slice())
+                || stmts_contain_control_flow(stmts.as_slice())
+            {
                 use_tail_sink = false;
                 dce_stmt_with_guards(stmt, &guards)
             } else {
+                let tail = stmts.by_ref().collect();
                 dce_stmt_with_tail(stmt, tail, &guards)
             }
         } else {
@@ -133,6 +135,26 @@ mod tests {
 
         assert!(matches!(statements[0].kind, StmtKind::Synthetic(_)));
         assert!(stmt_contains_control_flow(&statements[0]));
+    }
+
+    /// Keeps large control-flow-heavy bodies linear by inspecting the remaining tail by reference.
+    #[test]
+    fn large_control_flow_tail_is_processed_without_ast_cloning() {
+        let mut source = String::from("<?php function stress(int $argc): void {");
+        for value in 0..512 {
+            source.push_str(&format!("if ($argc > {value}) {{ echo {value}; }}"));
+        }
+        source.push_str("echo 'done'; }");
+        let tokens = crate::lexer::tokenize(&source).expect("tokenize large DCE fixture");
+        let mut statements = crate::parser::parse(&tokens).expect("parse large DCE fixture");
+        let StmtKind::FunctionDecl { body, .. } = statements.remove(0).kind else {
+            panic!("expected function declaration fixture");
+        };
+
+        let eliminated = dce_block(body);
+        // The final echo is legally tail-sunk into the last if, while the preceding 511 ifs stay
+        // singular because their remaining tail still contains control flow.
+        assert_eq!(eliminated.len(), 512);
     }
 }
 

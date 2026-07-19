@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Associative keys are collected in insertion order through `__rt_hash_iter_next`.
-//! - String keys are persisted before storing them in the result indexed array.
+//! - String keys are copied out of hash-owned storage before entering the result array.
 //! - Mixed key arrays box each normalized int/string key into an owned Mixed cell.
 
 use crate::codegen::abi;
@@ -389,8 +389,8 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             emit_append_word_key_aarch64(ctx, "x0");
         }
         PhpType::Str => {
-            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             emit_append_word_key_aarch64(ctx, "x0");
         }
         PhpType::Mixed => {
@@ -403,8 +403,8 @@ fn emit_assoc_mixed_key_append_aarch64(ctx: &mut FunctionContext<'_>, key_ty: &P
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("b {}", key_boxed));               // skip string-key boxing after producing an integer mixed key
             ctx.emitter.label(&key_string);
-            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.label(&key_boxed);
             emit_append_word_key_aarch64(ctx, "x0");
         }
@@ -428,9 +428,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             emit_append_word_key_x86_64(ctx, "rax");
         }
         PhpType::Str => {
-            ctx.emitter.instruction("mov rsi, rdx");                            // move the string key length into the mixed helper high-word register
-            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             emit_append_word_key_x86_64(ctx, "rax");
         }
         PhpType::Mixed => {
@@ -443,9 +443,9 @@ fn emit_assoc_mixed_key_append_x86_64(ctx: &mut FunctionContext<'_>, key_ty: &Ph
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", key_boxed));             // skip string-key boxing after producing an integer mixed key
             ctx.emitter.label(&key_string);
-            ctx.emitter.instruction("mov rsi, rdx");                            // move the string key length into the mixed helper high-word register
-            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string mixed key
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the borrowed hash key pointer to the persistence helper
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
             ctx.emitter.label(&key_boxed);
             emit_append_word_key_x86_64(ctx, "rax");
         }

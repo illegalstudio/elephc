@@ -102,8 +102,8 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility)
-                        && !self
-                            .can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -218,6 +218,13 @@ impl Checker {
         class_name == "InternalIterator"
             && self.current_class.as_deref() == Some("SplFixedArray")
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
+    }
+
+    /// Allows PDOStatement::fetch() to allocate the private internal PDORow view.
+    fn can_construct_pdo_row_from_prelude_fetch(&self, class_name: &str) -> bool {
+        class_name == "PDORow"
+            && self.current_class.as_deref() == Some("PDOStatement")
+            && self.current_method.as_deref() == Some(php_symbol_key("fetch").as_str())
     }
 
     /// Validates constructor arguments for reflection owner classes.

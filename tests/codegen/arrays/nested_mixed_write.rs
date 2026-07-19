@@ -15,12 +15,12 @@
 //!   the write mutated a temporary and was silently lost, leaking the
 //!   replacement payload. When the slot WAS a boxed cell the write landed, but
 //!   the retained cell returned by the read was never released (leak).
-//! - The fix writes through the parent cell instead (three-operand
-//!   `Op::RuntimeCall` → `__rt_mixed_array_set` for Mixed parents,
-//!   `offsetSet` for `ArrayAccess` object parents), which mutates the aliased
-//!   container for every slot representation.
+//! - The fix recursively fetches parent cells in write mode, COW-normalizes and
+//!   stores back root containers, detaches selected zvals from outer aliases,
+//!   then writes through the parent (`Op::RuntimeCall` →
+//!   `__rt_mixed_array_set`, or `offsetSet` for `ArrayAccess` objects).
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug};
 
 /// Issue #529 repro: the inner arrays are homogeneous `array<string>` (16-byte
 /// string slots), the outer heterogeneous literal is `array<mixed>`. The write
@@ -104,6 +104,219 @@ echo $a[0]['new'] . "\n";
     );
 }
 
+/// An associative outer container must expose its stored Mixed cell to the nested writer without
+/// changing ordinary hash-read value semantics.
+#[test]
+fn test_nested_write_through_assoc_outer_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$outer = ['row' => ['key' => 'old'], 'guard' => 7];
+$outer['row']['key'] = 'patched';
+echo $outer['row']['key'] . "\n";
+echo $outer['guard'] . "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "patched\n7\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The write-only hash fetch must not make an ordinary Mixed hash read alias its stored zval.
+#[test]
+fn test_ordinary_assoc_read_remains_detached() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$outer = ['row' => ['key' => 'old'], 'guard' => 7];
+$copy = $outer['row'];
+$copy['key'] = 'copy';
+echo $outer['row']['key'] . "\n";
+echo $copy['key'] . "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "old\ncopy\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Resource values keep PHP's shared resource identity across detached Mixed
+/// reads, so releasing a temporary read cannot close storage still owned by the
+/// source array before a later read consumes it.
+#[test]
+fn test_repeated_mixed_resource_reads_retain_the_stream() {
+    let out = compile_and_run(
+        r#"<?php
+function resourceRow(): array {
+    $stream = fopen("php://memory", "r+");
+    fwrite($stream, "A" . chr(0) . "B");
+    rewind($stream);
+    return ['stream' => $stream, 'guard' => 7];
+}
+$values = resourceRow();
+echo is_resource($values['stream'])
+    ? bin2hex(stream_get_contents($values['stream']))
+    : 'not-resource';
+fclose($values['stream']);
+"#,
+    );
+    assert_eq!(out, "410042");
+}
+
+/// A dynamically typed outer receiver uses the same fetch-for-write contract as statically known
+/// indexed and associative containers.
+#[test]
+fn test_nested_write_through_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function patchNested(mixed $outer): mixed {
+    $outer[1][0] = 99;
+    return $outer;
+}
+$result = patchNested([[1, 2], [3, 4], 'guard']);
+echo $result[1][0] . "\n";
+echo $result[0][1] . "\n";
+"#,
+    );
+    assert_eq!(out, "99\n2\n");
+}
+
+/// An ordinary read through a dynamically typed receiver returns a detached zval even when the
+/// runtime container already stores boxed Mixed cells for heterogeneous values.
+#[test]
+fn test_ordinary_mixed_receiver_read_remains_detached() {
+    let out = compile_and_run(
+        r#"<?php
+function inspectCopy(mixed $outer): void {
+    $copy = $outer[0];
+    $copy['key'] = 'copy';
+    echo $outer[0]['key'] . "\n";
+    echo $copy['key'] . "\n";
+}
+inspectCopy([['key' => 'old'], 'guard']);
+"#,
+    );
+    assert_eq!(out, "old\ncopy\n");
+}
+
+/// Dynamically typed associative storage applies the same split contract: ordinary reads detach,
+/// while a later nested write aliases the COW-normalized owning hash entry.
+#[test]
+fn test_mixed_receiver_assoc_read_and_write_modes() {
+    let out = compile_and_run(
+        r#"<?php
+function inspectAssoc(mixed $outer): void {
+    $copy = $outer['row'];
+    $copy['key'] = 'copy';
+    echo $outer['row']['key'] . "\n";
+    $outer['row']['key'] = 'patched';
+    echo $outer['row']['key'] . "\n";
+}
+inspectAssoc(['row' => ['key' => 'old'], 'guard' => 7]);
+"#,
+    );
+    assert_eq!(out, "old\npatched\n");
+}
+
+/// Fetch-for-write is an outer-container mutation for COW purposes: aliases must keep their old
+/// nested value for both indexed and associative outer storage.
+#[test]
+fn test_nested_write_splits_outer_container_aliases() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$indexed = [['key' => 'old'], 'guard'];
+$indexedAlias = $indexed;
+$indexed[0]['key'] = 'patched';
+echo $indexed[0]['key'] . "\n";
+echo $indexedAlias[0]['key'] . "\n";
+
+$assoc = ['row' => ['key' => 'old'], 'guard' => 7];
+$assocAlias = $assoc;
+$assoc['row']['key'] = 'patched';
+echo $assoc['row']['key'] . "\n";
+echo $assocAlias['row']['key'] . "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "patched\nold\npatched\nold\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same outer COW split applies when the local's static type is Mixed and its runtime payload
+/// is an indexed or associative array.
+#[test]
+fn test_nested_write_splits_mixed_outer_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+function inspectMixedCow(mixed $indexed, mixed $assoc): void {
+    $indexedAlias = $indexed;
+    $indexed[0]['key'] = 'patched';
+    echo $indexed[0]['key'] . "\n";
+    echo $indexedAlias[0]['key'] . "\n";
+
+    $assocAlias = $assoc;
+    $assoc['row']['key'] = 'patched';
+    echo $assoc['row']['key'] . "\n";
+    echo $assocAlias['row']['key'] . "\n";
+}
+inspectMixedCow(
+    [['key' => 'old'], 'guard'],
+    ['row' => ['key' => 'old'], 'guard' => 7],
+);
+"#,
+    );
+    assert_eq!(out, "patched\nold\npatched\nold\n");
+}
+
+/// Runtime-produced containers whose outer storage already consists entirely of boxed Mixed cells
+/// still detach the selected cell after COW; `json_decode()` exercises that representation.
+#[test]
+fn test_nested_write_splits_json_mixed_outer_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+function inspectJsonCow(mixed $indexed, mixed $assoc): void {
+    $indexedAlias = $indexed;
+    $indexed[0]['key'] = 'patched';
+    echo $indexed[0]['key'] . "\n";
+    echo $indexedAlias[0]['key'] . "\n";
+
+    $assocAlias = $assoc;
+    $assoc['row']['key'] = 'patched';
+    echo $assoc['row']['key'] . "\n";
+    echo $assocAlias['row']['key'] . "\n";
+}
+inspectJsonCow(
+    json_decode('[{"key":"old"},"guard"]', true),
+    json_decode('{"row":{"key":"old"},"guard":7}', true),
+);
+"#,
+    );
+    assert_eq!(out, "patched\nold\npatched\nold\n");
+}
+
+/// A nullable receiver that is non-null at runtime must preserve the same nested-write alias as a
+/// non-nullable receiver after the null guard has selected the read path.
+#[test]
+fn test_nested_write_through_nullable_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function patchNullable(?array $outer): void {
+    $outer[0]['key'] = 'patched';
+    echo $outer[0]['key'] . "\n";
+}
+patchNullable([['key' => 'old']]);
+"#,
+    );
+    assert_eq!(out, "patched\n");
+}
+
 /// Compound nested assignment reads the stale element and writes the combined
 /// result back through the same nested-write path.
 #[test]
@@ -124,16 +337,9 @@ echo $a[0][1] . "\n";
 }
 
 /// Three-level chain through boxed-cell intermediates: the middle read
-/// returns the STORED cell (retained), so the leaf array stays uniquely
-/// owned and `__rt_mixed_array_set` mutates it in place.
-///
-/// Known residual limitation (pre-existing): when an INTERMEDIATE level is a
-/// concrete homogeneous array (raw-pointer slots, e.g. `[[['x', 1]], 7]`),
-/// the intermediate read boxes a fresh retained cell; the retain makes the
-/// leaf look shared, so the write path's `__rt_array_to_mixed` splits it and
-/// the write lands in the split copy. Fixing that shape needs a
-/// fetch-for-write read helper that promotes intermediate slots to boxed
-/// cells in place.
+/// recursively uses fetch-for-write. Concrete homogeneous intermediates are
+/// promoted into the owning slot before the leaf write, so no detached COW
+/// generation can absorb and lose the update.
 #[test]
 fn test_nested_write_three_levels() {
     let out = compile_and_run_with_heap_debug(

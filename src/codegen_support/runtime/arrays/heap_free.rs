@@ -130,7 +130,11 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
     emitter.label("__rt_heap_free_cache_small_scan");
     emitter.instruction("cbz x12, __rt_heap_free_cache_small_insert");          // a null next pointer means the block is not already cached
@@ -403,8 +407,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
-    emitter.instruction("test r8, r8");                                         // is duplicate detection enabled for the small-bin cache?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
+    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
+    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
     emitter.label("__rt_heap_free_cache_small_scan");
     emitter.instruction("test rdx, rdx");                                       // did the cached small-bin scan reach the tail?

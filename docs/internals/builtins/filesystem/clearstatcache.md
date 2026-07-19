@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/clearstatcache.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5578](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5578) (`lower_clearstatcache`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5579](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5579) (`lower_clearstatcache`)
 - **Function symbol**: `lower_clearstatcache()`
 
 

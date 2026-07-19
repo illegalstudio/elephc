@@ -472,7 +472,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // pass the boxed key to the eval key normalizer
     emitter.instruction("bl __elephc_eval_key_normalize");                      // normalize eval array key to key_lo/key_hi
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver
-    emitter.instruction("bl __rt_mixed_array_get");                             // read the boxed Mixed element or Mixed(null)
+    emitter.instruction("bl __rt_mixed_array_get_shared");                      // retain the stored eval cell so by-reference calls can write back
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
     emitter.instruction("ret");                                                 // return the boxed element to Rust
@@ -2048,7 +2048,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __elephc_eval_key_normalize");                    // normalize eval array key to key_lo/key_hi
     emitter.instruction("mov rsi, rax");                                        // pass normalized key_lo to the reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver
-    emitter.instruction("call __rt_mixed_array_get");                           // read the boxed Mixed element or Mixed(null)
+    emitter.instruction("call __rt_mixed_array_get_shared");                    // retain the stored eval cell so by-reference calls can write back
     emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed element to Rust

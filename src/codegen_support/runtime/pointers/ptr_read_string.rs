@@ -146,6 +146,6 @@ fn emit_ptr_read_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall number 1 = write
     emitter.instruction("syscall");                                             // emit the fatal negative-length message before terminating the process
     emitter.instruction("mov edi, 1");                                          // return process exit code 1 for the fatal abort path
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall number 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting the fatal length error
 }

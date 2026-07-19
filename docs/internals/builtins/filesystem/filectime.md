@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filectime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filectime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5476](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5476) (`lower_filectime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5477](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5477) (`lower_filectime`)
 - **Function symbol**: `lower_filectime()`
 
 

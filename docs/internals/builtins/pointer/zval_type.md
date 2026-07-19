@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_type.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:589](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L589) (`lower_zval_type`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:780](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L780) (`lower_zval_type`)
 - **Function symbol**: `lower_zval_type()`
 
 

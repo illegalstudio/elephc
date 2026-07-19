@@ -94,6 +94,7 @@ pub(super) fn lower_hash_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     warn_on_missing: bool,
+    for_write: bool,
 ) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -102,10 +103,28 @@ pub(super) fn lower_hash_get(
     let result_ty = inst.result_php_type.codegen_repr();
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_hash_get_aarch64(ctx, inst, hash, key, &value_ty, &result_ty, warn_on_missing)
+            lower_hash_get_aarch64(
+                ctx,
+                inst,
+                hash,
+                key,
+                &value_ty,
+                &result_ty,
+                warn_on_missing,
+                for_write,
+            )
         }
         Arch::X86_64 => {
-            lower_hash_get_x86_64(ctx, inst, hash, key, &value_ty, &result_ty, warn_on_missing)
+            lower_hash_get_x86_64(
+                ctx,
+                inst,
+                hash,
+                key,
+                &value_ty,
+                &result_ty,
+                warn_on_missing,
+                for_write,
+            )
         }
     }
 }
@@ -284,6 +303,7 @@ fn lower_hash_get_aarch64(
     value_ty: &PhpType,
     result_ty: &PhpType,
     warn_on_missing: bool,
+    for_write: bool,
 ) -> Result<()> {
     materialize_hash_key_aarch64(ctx, key)?;
     ctx.load_value_to_reg(hash, "x0")?;
@@ -299,7 +319,11 @@ fn lower_hash_get_aarch64(
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x0, {}", miss));                      // branch to the null fallback when the associative lookup misses
-    emit_hash_get_success_aarch64(ctx, value_ty, result_ty)?;
+    if for_write && matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_mixed_for_write_aarch64(ctx, hash, key)?;
+    } else {
+        emit_hash_get_success_aarch64(ctx, value_ty, result_ty, false)?;
+    }
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
@@ -325,6 +349,7 @@ fn lower_hash_get_x86_64(
     value_ty: &PhpType,
     result_ty: &PhpType,
     warn_on_missing: bool,
+    for_write: bool,
 ) -> Result<()> {
     materialize_hash_key_x86_64(ctx, key)?;
     ctx.load_value_to_reg(hash, "rdi")?;
@@ -341,7 +366,11 @@ fn lower_hash_get_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction("test rax, rax");                                   // check whether the associative lookup found a matching key
     ctx.emitter.instruction(&format!("jz {}", miss));                           // branch to the null fallback when the associative lookup misses
-    emit_hash_get_success_x86_64(ctx, value_ty, result_ty)?;
+    if for_write && matches!(value_ty, PhpType::Mixed) {
+        emit_hash_get_mixed_for_write_x86_64(ctx, hash, key)?;
+    } else {
+        emit_hash_get_success_x86_64(ctx, value_ty, result_ty, false)?;
+    }
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
     if warn_on_missing {
@@ -635,6 +664,7 @@ fn materialize_mixed_hash_key_aarch64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "x0")?;
@@ -647,7 +677,13 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("cmp x0, #2");                                      // float mixed keys truncate toward zero, exactly like PHP
+    ctx.emitter.instruction(&format!("b.eq {}", float_key));                    // route float keys through the truncating conversion
     ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
+    ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
+    ctx.emitter.instruction("fcvtzs x1, d0");                                   // truncate toward zero: PHP casts a float array key to int
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -667,6 +703,7 @@ fn materialize_mixed_hash_key_x86_64(
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
+    let float_key = ctx.next_label("mixed_hash_key_float");
     let scalar_key = ctx.next_label("mixed_hash_key_scalar");
     let done = ctx.next_label("mixed_hash_key_done");
     ctx.load_value_to_reg(key, "rax")?;
@@ -679,9 +716,16 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("cmp rax, 2");                                      // float mixed keys truncate toward zero, exactly like PHP
+    ctx.emitter.instruction(&format!("je {}", float_key));                      // route float keys through the truncating conversion
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    ctx.emitter.label(&float_key);
+    ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
+    ctx.emitter.instruction("cvttsd2si rsi, xmm0");                             // truncate toward zero: PHP casts a float array key to int
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);
     emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
@@ -732,9 +776,15 @@ fn materialize_hash_value_aarch64(
         return materialize_hash_mixed_value_for_concrete_storage_aarch64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the owned callable descriptor as the hash value low word
+            ctx.emitter.instruction("mov x4, xzr");                             // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
@@ -772,9 +822,15 @@ fn materialize_hash_value_x86_64(
         return materialize_hash_mixed_value_for_concrete_storage_x86_64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the owned callable descriptor as the hash value low word
+            ctx.emitter.instruction("xor r8, r8");                              // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
@@ -1069,11 +1125,33 @@ fn materialize_hash_concrete_value_x86_64(
     Ok(())
 }
 
+/// Reports whether a successful hash lookup can materialize a value of this PHP type.
+///
+/// Mirrors the arms of [`emit_hash_get_success_aarch64`] and its x86_64 twin. Hash storage has no
+/// representation for the types this rejects, and `hash_set` has no arm for them either — so no
+/// value of such a type can be inside a hash to begin with. Callers that emit a promoted-storage
+/// read *speculatively* — an `Array(_)`-typed local may be hash-backed at runtime, so the read is
+/// emitted behind a storage-kind branch — must gate on this: for an unrepresentable element type
+/// the branch is not merely unreachable, it fails the whole compilation. `?int` (`TaggedScalar`)
+/// is the case that exposed this.
+pub(super) fn hash_get_supports_value_type(value_ty: &PhpType) -> bool {
+    matches!(
+        value_ty,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+    ) || value_ty.is_refcounted()
+}
+
 /// Moves a successful AArch64 hash lookup payload into the canonical result registers.
-fn emit_hash_get_success_aarch64(
+pub(super) fn emit_hash_get_success_aarch64(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
     result_ty: &PhpType,
+    for_write: bool,
 ) -> Result<()> {
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -1090,7 +1168,7 @@ fn emit_hash_get_success_aarch64(
         }
         PhpType::Str => {}
         PhpType::Mixed => {
-            emit_hash_get_mixed_success_aarch64(ctx);
+            emit_hash_get_mixed_success_aarch64(ctx, for_write);
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov x0, x1");                              // return the borrowed pointer-backed hash payload
@@ -1107,10 +1185,11 @@ fn emit_hash_get_success_aarch64(
 }
 
 /// Moves a successful x86_64 hash lookup payload into the canonical result registers.
-fn emit_hash_get_success_x86_64(
+pub(super) fn emit_hash_get_success_x86_64(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
     result_ty: &PhpType,
+    for_write: bool,
 ) -> Result<()> {
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
@@ -1130,7 +1209,7 @@ fn emit_hash_get_success_x86_64(
             ctx.emitter.instruction("mov rdx, rsi");                            // move the borrowed hash string length into the paired string result
         }
         PhpType::Mixed => {
-            emit_hash_get_mixed_success_x86_64(ctx);
+            emit_hash_get_mixed_success_x86_64(ctx, for_write);
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov rax, rdi");                            // return the borrowed pointer-backed hash payload
@@ -1147,13 +1226,17 @@ fn emit_hash_get_success_x86_64(
 }
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
-fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
+fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write: bool) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.instruction("mov x0, x1");                                      // load the boxed Mixed pointer stored in the hash entry
+    if for_write {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+    }
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
@@ -1162,18 +1245,88 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Materializes a successful x86_64 Mixed hash lookup as a boxed Mixed result.
-fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
+fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: bool) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.instruction("mov rax, rdi");                                    // load the boxed Mixed pointer stored in the hash entry
+    if for_write {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+    }
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     ctx.emitter.label(&done_label);
+}
+
+/// Returns an owned boxed hash entry for a nested write, promoting a typed entry in place first.
+fn emit_hash_get_mixed_for_write_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    let boxed = ctx.next_label("hash_get_write_boxed");
+    let done = ctx.next_label("hash_get_write_done");
+    ctx.emitter.instruction("cmp x3, #7");                                      // does the hash already store a boxed Mixed cell?
+    ctx.emitter.instruction(&format!("b.eq {}", boxed));                        // retain the existing cell without changing its identity
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the typed runtime tag to the Mixed boxing helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_push_reg(ctx.emitter, "x0");
+    materialize_hash_key_aarch64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_pop_reg(ctx.emitter, "x3");
+    ctx.emitter.instruction("mov x4, xzr");                                     // boxed Mixed entries do not use a high payload word
+    ctx.emitter.instruction("mov x5, #7");                                      // runtime value tag 7 stores the promoted boxed cell
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the already-boxed retain path
+    ctx.emitter.label(&boxed);
+    ctx.emitter.instruction("mov x0, x1");                                      // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns an owned boxed hash entry for a nested write on x86_64, promoting typed storage first.
+fn emit_hash_get_mixed_for_write_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    let boxed = ctx.next_label("hash_get_write_boxed");
+    let done = ctx.next_label("hash_get_write_done");
+    ctx.emitter.instruction("cmp rcx, 7");                                      // does the hash already store a boxed Mixed cell?
+    ctx.emitter.instruction(&format!("je {}", boxed));                          // retain the existing cell without changing its identity
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the typed runtime tag to the Mixed boxing helper
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_push_reg(ctx.emitter, "rax");
+    materialize_hash_key_x86_64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_pop_reg(ctx.emitter, "rcx");
+    ctx.emitter.instruction("xor r8, r8");                                      // boxed Mixed entries do not use a high payload word
+    ctx.emitter.instruction("mov r9, 7");                                       // runtime value tag 7 stores the promoted boxed cell
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the already-boxed retain path
+    ctx.emitter.label(&boxed);
+    ctx.emitter.instruction("mov rax, rdi");                                    // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits the miss fallback in the result shape expected by the associative-array value type.
@@ -1401,7 +1554,14 @@ fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<O
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op == Op::LoadLocal {
+    // `Op::LoadRefCell` must be recognized alongside `Op::LoadLocal`, exactly as the
+    // indexed-array twin of this helper does (`lower_inst::arrays::source_load_local_slot`).
+    // Without it, a hash write through a reference-bound local (`$r = &$a; $r["k"] = 1;`)
+    // finds no destination slot, so the table pointer `__rt_hash_set` returns is thrown
+    // away. That pointer changes whenever the table rehashes past its load factor or is
+    // COW-split, and the stale one keeps being read: a 41-key hash built through a ref
+    // reported a garbage count instead of 41.
+    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }

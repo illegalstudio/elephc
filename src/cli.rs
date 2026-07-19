@@ -13,9 +13,10 @@ use std::process;
 
 pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
+use crate::php_version::PhpVersion;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.0|8.1|8.2|8.3|8.4|8.5|8.6] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -35,9 +36,7 @@ pub(crate) struct CliConfig {
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
-    /// PHP compatibility profile used by version-dependent language/runtime
-    /// surfaces. Session behavior under `--web` currently consumes it.
-    pub(crate) php_version: crate::web_prelude::PhpVersion,
+    pub(crate) php_version: PhpVersion,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
     pub(crate) extra_frameworks: Vec<String>,
@@ -73,7 +72,13 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut emit_debug_info = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
-    let mut php_version = crate::web_prelude::PhpVersion::default();
+    // Compatibility defaults to the newest maintained PHP minor. Automation may select the same
+    // supported range through the environment; an explicit CLI flag parsed below
+    // wins because it overwrites this initial value.
+    let mut php_version = match std::env::var("ELEPHC_PHP_VERSION") {
+        Ok(value) => parse_php_version(&value),
+        Err(_) => PhpVersion::default(),
+    };
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
@@ -113,7 +118,11 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             target = parse_target(value);
         } else if arg == "--php-version" {
             i += 1;
-            php_version = parse_required_php_version(args, i);
+            php_version = parse_php_version(&required_value(
+                args,
+                i,
+                "Missing value after --php-version",
+            ));
         } else if let Some(value) = arg.strip_prefix("--php-version=") {
             php_version = parse_php_version(value);
         } else if arg == "--gc-stats" {
@@ -260,26 +269,12 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     }
 }
 
-/// Parses the required PHP compatibility version after `--php-version`.
-fn parse_required_php_version(
-    args: &[String],
-    index: usize,
-) -> crate::web_prelude::PhpVersion {
-    if index < args.len() {
-        parse_php_version(&args[index])
-    } else {
-        fail("Missing version after --php-version (expected 8.2, 8.3, 8.4, or 8.5)")
+/// Parses a PHP compatibility version or exits with the normalized parser diagnostic.
+fn parse_php_version(value: &str) -> PhpVersion {
+    match value.parse() {
+        Ok(version) => version,
+        Err(message) => fail(&message),
     }
-}
-
-/// Parses a supported PHP compatibility version or exits with a focused diagnostic.
-fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
-    crate::web_prelude::PhpVersion::parse(value).unwrap_or_else(|| {
-        fail(&format!(
-            "Unsupported PHP version '{}': expected 8.2, 8.3, 8.4, or 8.5",
-            value
-        ))
-    })
 }
 
 /// Validates that `--strict-php` is not combined with `--define` symbols.
@@ -462,14 +457,16 @@ mod tests {
         assert!(!config.web);
     }
 
-    /// Verifies every maintained PHP minor maps to its exact compatibility profile.
+    /// Verifies the maintained and historical PHP targets map to exact compatibility profiles.
     #[test]
     fn maintained_php_versions_parse() {
+        assert_eq!(parse_php_version("8.0").version_id(), 80000);
+        assert_eq!(parse_php_version("8.1").version_id(), 80100);
         assert_eq!(parse_php_version("8.2").version_id(), 80200);
         assert_eq!(parse_php_version("8.3").version_id(), 80300);
         assert_eq!(parse_php_version("8.4").version_id(), 80400);
         assert_eq!(parse_php_version("8.5").version_id(), 80500);
-        assert!(crate::web_prelude::PhpVersion::parse("8.1").is_none());
+        assert_eq!(parse_php_version("8.6").version_id(), 80600);
     }
 
     /// Verifies both CLI spellings store the selected PHP compatibility profile.
@@ -486,8 +483,8 @@ mod tests {
             "--php-version=8.4".into(),
             "app.php".into(),
         ];
-        assert_eq!(parse_args(&split).php_version, crate::web_prelude::PhpVersion::Php83);
-        assert_eq!(parse_args(&equals).php_version, crate::web_prelude::PhpVersion::Php84);
+        assert_eq!(parse_args(&split).php_version, PhpVersion::Php83);
+        assert_eq!(parse_args(&equals).php_version, PhpVersion::Php84);
     }
 
     /// Verifies the compatibility profile defaults to the newest maintained PHP minor.
@@ -495,7 +492,7 @@ mod tests {
     fn php_version_defaults_to_85() {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
-        assert_eq!(config.php_version, crate::web_prelude::PhpVersion::Php85);
+        assert_eq!(config.php_version, PhpVersion::Php85);
     }
 
     /// Verifies `--with-pdo` records the crate for force-link/prelude forcing
@@ -538,6 +535,24 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(config.with_crates.is_empty());
+    }
+
+    /// Verifies both accepted CLI spellings select the requested PHP version.
+    #[test]
+    fn php_version_flag_selects_version() {
+        let equals = vec![
+            "elephc".into(),
+            "--php-version=8.5".into(),
+            "app.php".into(),
+        ];
+        let separate = vec![
+            "elephc".into(),
+            "--php-version".into(),
+            "8.6".into(),
+            "app.php".into(),
+        ];
+        assert_eq!(parse_args(&equals).php_version, PhpVersion::Php85);
+        assert_eq!(parse_args(&separate).php_version, PhpVersion::Php86);
     }
 
     /// Verifies `--strict-php` sets the strict-PHP flag on the parsed config.

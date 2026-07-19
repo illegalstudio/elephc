@@ -8,7 +8,11 @@
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - Unsupported payloads and missing keys return boxed `Mixed(null)` for PHP-like quiet access.
-//! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
+//! - Ordinary reads clone stored boxed cells to preserve zval value semantics. Fetch-for-write
+//!   calls first COW-normalize typed array/hash storage and then retain the owning cell identity.
+//! - The eval bridge has a distinct shared-cell read mode so its runtime variable handles remain
+//!   valid writeback targets while the caller receives an owned reference.
+//! - Every successful return is an owned `Mixed*`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -47,7 +51,17 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
+    emitter.label_global("__rt_mixed_array_get_shared");
+    emitter.instruction("mov x3, #2");                                          // retain the stored cell identity for eval writeback
+    emitter.instruction("b __rt_mixed_array_get_entry");                        // share the lookup implementation with PHP reads
+    emitter.label_global("__rt_mixed_array_get_for_write");
+    emitter.instruction("mov x3, #1");                                          // select COW-normalizing fetch-for-write behavior
+    emitter.instruction("b __rt_mixed_array_get_entry");                        // share the lookup implementation with ordinary reads
     emitter.label_global("__rt_mixed_array_get");
+    emitter.instruction("mov x3, xzr");                                         // ordinary reads do not rewrite the receiver storage
+    // The read/write/eval entry wrappers live in distinct Mach-O atoms. Keep the
+    // shared implementation addressable when the runtime object is dead-stripped.
+    emitter.label_shared("__rt_mixed_array_get_entry");
 
     // Stack:
     //   [sp, #0]  = mixed_ptr
@@ -61,6 +75,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save mixed_ptr
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
+    emitter.instruction("str x3, [sp, #40]");                                   // save whether this lookup feeds a nested write
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // null Mixed → Mixed(null)
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
@@ -87,6 +102,18 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_mixed_array_get_indexed_missing");           // warn and return null for an out-of-bounds indexed-array key
     emitter.instruction("ldr x13, [x10, #-8]");                                 // load packed indexed-array kind metadata
     emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the ordinary/write lookup mode
+    emitter.instruction("cmp x9, #1");                                          // only nested writes COW-normalize the receiver storage
+    emitter.instruction("b.ne __rt_mixed_array_get_indexed_storage_ready");     // ordinary and eval-shared reads leave typed storage unchanged
+    emitter.instruction("mov x0, x10");                                         // pass the indexed storage to its COW conversion helper
+    emitter.instruction("mov x1, x13");                                         // pass the current homogeneous slot tag
+    emitter.instruction("bl __rt_array_to_mixed");                              // make storage unique and box every slot for stable write aliases
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
+    emitter.instruction("str x0, [x9, #8]");                                    // publish a possibly cloned array back into that owner
+    emitter.instruction("mov x10, x0");                                         // continue the lookup through normalized storage
+    emitter.instruction("mov x13, #7");                                         // normalized indexed slots hold boxed Mixed cells
+    emitter.instruction("ldr x12, [sp, #8]");                                   // restore the requested index after conversion calls
+    emitter.label("__rt_mixed_array_get_indexed_storage_ready");
     emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed");             // boxed slots must be retained before returning
@@ -104,7 +131,30 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // empty slot → null Mixed
-    emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether the caller requested a write alias
+    emitter.instruction("cmp x9, #2");                                          // does the eval bridge require the stored cell identity?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed_shared");      // retain the exact stored cell for interpreter writeback
+    emitter.instruction("cbnz x9, __rt_mixed_array_get_indexed_boxed_detach");  // nested writes detach the selected zval after outer COW
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach values while preserving shared PHP resource identity
+    emitter.instruction("b __rt_mixed_array_get_indexed_boxed_done");           // skip the write-only retain path
+    emitter.label("__rt_mixed_array_get_indexed_boxed_shared");
+    emitter.instruction("bl __rt_incref");                                      // return one owned reference to the stored eval cell
+    emitter.instruction("b __rt_mixed_array_get_indexed_boxed_done");           // skip PHP value detachment for eval runtime handles
+    emitter.label("__rt_mixed_array_get_indexed_boxed_detach");
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell through the stable frame pointer
+    emitter.instruction("ldr x9, [x9, #8]");                                    // load its COW-normalized indexed-array payload
+    emitter.instruction("ldr x10, [x29, #-16]");                                // reload the selected integer index
+    emitter.instruction("add x9, x9, #24");                                     // address the boxed Mixed payload base
+    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // publish the detached zval in the unique outer array
+    emitter.instruction("ldr x0, [sp, #16]");                                   // drop the replaced array-owner reference to the shared cell
+    emitter.instruction("bl __rt_decref_mixed");                                // preserve aliases that still own the old cell
+    emitter.instruction("ldr x0, [sp]");                                        // reload the detached cell now owned by the array
+    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference for the nested writer
+    emitter.instruction("add sp, sp, #32");                                     // release the old/new cell spill slots
+    emitter.label("__rt_mixed_array_get_indexed_boxed_done");
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
@@ -135,6 +185,15 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
     emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the ordinary/write lookup mode
+    emitter.instruction("cmp x9, #1");                                          // only nested writes COW-normalize associative storage
+    emitter.instruction("b.ne __rt_mixed_array_get_assoc_storage_ready");       // ordinary and eval-shared reads leave the hash unchanged
+    emitter.instruction("mov x0, x10");                                         // pass associative storage to the COW conversion helper
+    emitter.instruction("bl __rt_hash_to_mixed");                               // make the table unique and box entries for stable write aliases
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
+    emitter.instruction("str x0, [x9, #8]");                                    // publish a possibly cloned hash back into that owner
+    emitter.instruction("mov x10, x0");                                         // continue the lookup through normalized storage
+    emitter.label("__rt_mixed_array_get_assoc_storage_ready");
     emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
@@ -148,7 +207,32 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, #7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("b.ne __rt_mixed_array_get_assoc_box");                 // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov x0, x1");                                          // yes → move the stored Mixed cell into the return register
-    emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether the caller requested a write alias
+    emitter.instruction("cmp x9, #2");                                          // does the eval bridge require the stored cell identity?
+    emitter.instruction("b.eq __rt_mixed_array_get_assoc_shared");              // retain the exact stored cell for interpreter writeback
+    emitter.instruction("cbnz x9, __rt_mixed_array_get_assoc_detach");          // nested writes detach the selected zval after outer COW
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach values while preserving shared PHP resource identity
+    emitter.instruction("b __rt_mixed_array_get_assoc_done");                   // skip the write-only retain path
+    emitter.label("__rt_mixed_array_get_assoc_shared");
+    emitter.instruction("bl __rt_incref");                                      // return one owned reference to the stored eval cell
+    emitter.instruction("b __rt_mixed_array_get_assoc_done");                   // skip PHP value detachment for eval runtime handles
+    emitter.label("__rt_mixed_array_get_assoc_detach");
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
+    abi::emit_push_reg(emitter, "x0");
+    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell through the stable frame pointer
+    emitter.instruction("ldr x0, [x9, #8]");                                    // pass its COW-normalized associative payload to hash_set
+    emitter.instruction("ldr x1, [x29, #-16]");                                 // reload the normalized key low word
+    emitter.instruction("ldr x2, [x29, #-8]");                                  // reload the normalized key high word
+    emitter.instruction("ldr x3, [sp]");                                        // pass the detached boxed Mixed cell as the replacement value
+    emitter.instruction("mov x4, xzr");                                         // boxed Mixed entries do not use a high payload word
+    emitter.instruction("mov x5, #7");                                          // runtime tag 7 stores a boxed Mixed cell
+    emitter.instruction("bl __rt_hash_set");                                    // replace the shared selected cell in the unique outer hash
+    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell after hash mutation
+    emitter.instruction("str x0, [x9, #8]");                                    // publish the returned hash pointer defensively
+    emitter.instruction("ldr x0, [sp]");                                        // reload the detached cell now owned by the hash
+    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference for the nested writer
+    emitter.instruction("add sp, sp, #16");                                     // release the detached-cell spill slot
+    emitter.label("__rt_mixed_array_get_assoc_done");
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
@@ -264,15 +348,26 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
+    emitter.label_global("__rt_mixed_array_get_shared");
+    emitter.instruction("mov rcx, 2");                                          // retain the stored cell identity for eval writeback
+    emitter.instruction("jmp __rt_mixed_array_get_entry");                      // share the lookup implementation with PHP reads
+    emitter.label_global("__rt_mixed_array_get_for_write");
+    emitter.instruction("mov rcx, 1");                                          // select COW-normalizing fetch-for-write behavior
+    emitter.instruction("jmp __rt_mixed_array_get_entry");                      // share the lookup implementation with ordinary reads
     emitter.label_global("__rt_mixed_array_get");
+    emitter.instruction("xor ecx, ecx");                                        // ordinary reads do not rewrite the receiver storage
+    // The read/write/eval entry wrappers live in distinct Mach-O atoms. Keep the
+    // shared implementation addressable when the runtime object is dead-stripped.
+    emitter.label_shared("__rt_mixed_array_get_entry");
 
     // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 32");                                         // reserve slots for the 3 saved inputs (16-byte aligned)
+    emitter.instruction("sub rsp, 48");                                         // reserve inputs, mode flag, and write-detach spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save mixed_ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether this lookup feeds a nested write
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
@@ -301,6 +396,17 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                         // load packed indexed-array kind metadata
     emitter.instruction("shr r9, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag from the extracted tag
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // only nested writes COW-normalize the receiver storage
+    emitter.instruction("jne __rt_mixed_array_get_indexed_storage_ready");      // ordinary and eval-shared reads leave typed storage unchanged
+    emitter.instruction("mov rdi, r10");                                        // pass the indexed storage to its COW conversion helper
+    emitter.instruction("mov rsi, r9");                                         // pass the current homogeneous slot tag
+    emitter.instruction("call __rt_array_to_mixed");                            // make storage unique and box every slot for stable write aliases
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish a possibly cloned array back into that owner
+    emitter.instruction("mov r10, rax");                                        // continue the lookup through normalized storage
+    emitter.instruction("mov r9, 7");                                           // normalized indexed slots hold boxed Mixed cells
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // restore the requested index after conversion calls
+    emitter.label("__rt_mixed_array_get_indexed_storage_ready");
     emitter.instruction("lea r10, [r10 + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp r9, 7");                                           // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_mixed_array_get_indexed_boxed");               // boxed slots must be retained before returning
@@ -319,9 +425,30 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the eval bridge require the stored cell identity?
+    emitter.instruction("je __rt_mixed_array_get_indexed_boxed_shared");        // retain the exact stored cell for interpreter writeback
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did the caller request a write alias?
+    emitter.instruction("jne __rt_mixed_array_get_indexed_boxed_detach");       // nested writes detach the selected zval after outer COW
+    emitter.instruction("call __rt_mixed_clone");                               // detach values while preserving shared PHP resource identity
+    emitter.instruction("jmp __rt_mixed_array_get_indexed_boxed_done");         // skip the write-only retain path
+    emitter.label("__rt_mixed_array_get_indexed_boxed_shared");
+    emitter.instruction("call __rt_incref");                                    // return one owned reference to the stored eval cell
+    emitter.instruction("jmp __rt_mixed_array_get_indexed_boxed_done");         // skip PHP value detachment for eval runtime handles
+    emitter.label("__rt_mixed_array_get_indexed_boxed_detach");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the shared cell whose array-owner reference is replaced
+    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the detached cell across old-cell cleanup
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load its COW-normalized indexed-array payload
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the selected integer index
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], rax");              // publish the detached zval in the unique outer array
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // drop the replaced array-owner reference to the shared cell
+    emitter.instruction("call __rt_decref_mixed");                              // preserve aliases that still own the old cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the detached cell now owned by the array
     abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference for the nested writer
     abi::emit_pop_reg(emitter, "rax");
+    emitter.label("__rt_mixed_array_get_indexed_boxed_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
@@ -352,6 +479,14 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
     emitter.instruction("test r10, r10");                                       // defensive null guard
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // only nested writes COW-normalize associative storage
+    emitter.instruction("jne __rt_mixed_array_get_assoc_storage_ready");        // ordinary and eval-shared reads leave the hash unchanged
+    emitter.instruction("mov rdi, r10");                                        // pass associative storage to the COW conversion helper
+    emitter.instruction("call __rt_hash_to_mixed");                             // make the table unique and box entries for stable write aliases
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish a possibly cloned hash back into that owner
+    emitter.instruction("mov r10, rax");                                        // continue the lookup through normalized storage
+    emitter.label("__rt_mixed_array_get_assoc_storage_ready");
     emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
@@ -365,9 +500,33 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_mixed_array_get_assoc_box");                  // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov rax, rdi");                                        // yes → move the stored Mixed cell into the return register
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the eval bridge require the stored cell identity?
+    emitter.instruction("je __rt_mixed_array_get_assoc_shared");                // retain the exact stored cell for interpreter writeback
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did the caller request a write alias?
+    emitter.instruction("jne __rt_mixed_array_get_assoc_detach");               // nested writes detach the selected zval after outer COW
+    emitter.instruction("call __rt_mixed_clone");                               // detach values while preserving shared PHP resource identity
+    emitter.instruction("jmp __rt_mixed_array_get_assoc_done");                 // skip the write-only retain path
+    emitter.label("__rt_mixed_array_get_assoc_shared");
+    emitter.instruction("call __rt_incref");                                    // return one owned reference to the stored eval cell
+    emitter.instruction("jmp __rt_mixed_array_get_assoc_done");                 // skip PHP value detachment for eval runtime handles
+    emitter.label("__rt_mixed_array_get_assoc_detach");
+    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the detached cell across hash replacement
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // pass its COW-normalized associative payload to hash_set
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
+    emitter.instruction("mov rcx, rax");                                        // pass the detached boxed Mixed cell as the replacement value
+    emitter.instruction("xor r8, r8");                                          // boxed Mixed entries do not use a high payload word
+    emitter.instruction("mov r9, 7");                                           // runtime tag 7 stores a boxed Mixed cell
+    emitter.instruction("call __rt_hash_set");                                  // replace the shared selected cell in the unique outer hash
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell after hash mutation
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the returned hash pointer defensively
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the detached cell now owned by the hash
     abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
+    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference for the nested writer
     abi::emit_pop_reg(emitter, "rax");
+    emitter.label("__rt_mixed_array_get_assoc_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax

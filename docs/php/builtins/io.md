@@ -32,7 +32,7 @@ sidebar:
 | [`fsync()`](./io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data): int` | `int` | ✓ | ✓ |
+| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |

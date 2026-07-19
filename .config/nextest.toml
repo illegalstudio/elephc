@@ -50,6 +50,26 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
+# also rebuild the optional system-client archive on a cold local cache.
+[[profile.default.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# PDO_OCI loads the full PDO surface and the cold optional ODPI-C archive build
+# is appreciably slower on GitHub's shared runners.
+[[profile.default.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # `lowers_examples_corpus` type-checks and lowers every program under examples/;
 # ~40s alone and past the global 60s cap on loaded runners.
 [[profile.default.overrides]]

@@ -304,7 +304,19 @@ impl Checker {
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
-        let required = sig.defaults.iter().filter(|d| d.is_none()).count();
+        let regular_param_count = if sig.variadic.is_some() {
+            sig.params.len().saturating_sub(1)
+        } else {
+            sig.params.len()
+        };
+        // The variadic collector is represented as the signature's final param
+        // with no default expression, but it never contributes to minimum arity.
+        let required = sig
+            .defaults
+            .iter()
+            .take(regular_param_count)
+            .filter(|default| default.is_none())
+            .count();
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(
@@ -340,11 +352,6 @@ impl Checker {
             }
         }
 
-        let regular_param_count = if sig.variadic.is_some() {
-            sig.params.len().saturating_sub(1)
-        } else {
-            sig.params.len()
-        };
         let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
             sig.params.last().and_then(|(_, ty)| match ty {
                 PhpType::Array(elem) => Some((**elem).clone()),

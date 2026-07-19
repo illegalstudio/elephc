@@ -39,6 +39,34 @@ pub struct FunctionSig {
     pub deprecation: Option<String>,
 }
 
+impl FunctionSig {
+    /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
+    ///
+    /// True exactly when the parameter is by-value and its CODEGEN REPR is an array or an
+    /// associative array — which is precisely the set `privatize_container_param` re-binds to an
+    /// owning shadow slot on function entry, giving PHP its by-value array semantics.
+    ///
+    /// The repr matters, not the surface type: `iterable` keeps its own runtime shape (a raw heap
+    /// pointer dispatched on the heap-kind tag), so an `iterable` parameter is NOT privatized and
+    /// the callee can still hand its argument's payload straight back. The caller must keep its
+    /// pass-through alias guard for those, or it frees a value the result still points at.
+    ///
+    /// Deliberately a pure function of the signature, so the callee (which privatizes) and the
+    /// caller (which must then release its owning-temporary argument instead of suppressing it)
+    /// can never disagree.
+    pub fn param_is_callee_owned(&self, index: usize) -> bool {
+        if self.ref_params.get(index).copied().unwrap_or(false) {
+            return false;
+        }
+        self.params.get(index).is_some_and(|(_, php_type)| {
+            matches!(
+                php_type.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        })
+    }
+}
+
 /// Upgrades a variadic signature for use as a first-class callable.
 ///
 /// If the variadic parameter is not already typed as `Array`, upgrades it to

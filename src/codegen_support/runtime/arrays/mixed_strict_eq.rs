@@ -43,10 +43,23 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right mixed pointer into the helper argument register
     emitter.instruction("bl __rt_mixed_unbox");                                 // right mixed pointer -> x0=tag, x1=value_lo, x2=value_hi
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the saved left runtime tag
-    emitter.instruction("cmp x9, x0");                                          // strict equality first requires matching runtime tags
-    emitter.instruction("b.ne __rt_mixed_strict_eq_false");                     // different payload tags are never strictly equal
+
+    // -- array/hash payloads (tags 4 and 5) compare by deep structure, not pointer identity, and
+    //    a packed indexed array (tag 4) may be structurally equal to a hash (tag 5) --
+    emitter.instruction("sub x10, x9, #4");                                     // is the left tag an array-ish tag (4 or 5)?
+    emitter.instruction("cmp x10, #1");                                         // fold tags 4 and 5 into the range 0..1
+    emitter.instruction("b.hi __rt_mixed_strict_eq_tag_gate");                  // non-array left payloads take the strict-tag path
+    emitter.instruction("sub x11, x0, #4");                                     // is the right tag also array-ish (4 or 5)?
+    emitter.instruction("cmp x11, #1");                                         // fold the right tag into the range 0..1
+    emitter.instruction("b.hi __rt_mixed_strict_eq_false");                     // an array is never strictly equal to a non-array
+    emitter.instruction("ldr x0, [sp, #24]");                                   // left array/hash pointer (x1 already holds the right one)
+    emitter.instruction("bl __rt_array_strict_eq");                             // deep structural comparison of the two arrays
+    emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the structural-equality result
 
     // -- dispatch on the shared concrete runtime tag --
+    emitter.label("__rt_mixed_strict_eq_tag_gate");
+    emitter.instruction("cmp x9, x0");                                          // strict equality first requires matching runtime tags
+    emitter.instruction("b.ne __rt_mixed_strict_eq_false");                     // different payload tags are never strictly equal
     emitter.instruction("cmp x0, #8");                                          // do both payloads represent PHP null?
     emitter.instruction("b.eq __rt_mixed_strict_eq_true");                      // null identity depends only on the matching runtime tag
     emitter.instruction("cmp x0, #1");                                          // do both payloads hold strings?
@@ -90,6 +103,7 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: mixed_strict_eq ---");
     emitter.label_global("__rt_mixed_strict_eq");
 
+    emitter.instruction("push rbp");                                            // preserve rbp and realign rsp so every helper call is 16-byte aligned
     emitter.instruction("sub rsp, 64");                                         // allocate stack space for both operands, payloads, and the saved comparison state
     emitter.instruction("mov QWORD PTR [rsp], rdi");                            // save the incoming left mixed pointer for the later comparison and cleanup path
     emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                        // save the incoming right mixed pointer for the later comparison and cleanup path
@@ -103,9 +117,25 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // reload the right mixed pointer into the x86_64 mixed-unbox input register
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // right mixed pointer -> rax=tag, rdi=value_lo, rdx=value_hi
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // reload the saved left runtime tag
+
+    // -- array/hash payloads (tags 4 and 5) compare by deep structure, not pointer identity, and
+    //    a packed indexed array (tag 4) may be structurally equal to a hash (tag 5) --
+    emitter.instruction("mov r11, r10");                                        // copy the left tag to test the array-ish range
+    emitter.instruction("sub r11, 4");                                          // is the left tag an array-ish tag (4 or 5)?
+    emitter.instruction("cmp r11, 1");                                          // fold tags 4 and 5 into the range 0..1
+    emitter.instruction("ja __rt_mixed_strict_eq_tag_gate");                    // non-array left payloads take the strict-tag path
+    emitter.instruction("mov r11, rax");                                        // copy the right tag to test the array-ish range
+    emitter.instruction("sub r11, 4");                                          // is the right tag also array-ish (4 or 5)?
+    emitter.instruction("cmp r11, 1");                                          // fold the right tag into the range 0..1
+    emitter.instruction("ja __rt_mixed_strict_eq_false");                       // an array is never strictly equal to a non-array
+    emitter.instruction("mov rsi, rdi");                                        // right array/hash pointer into the second argument
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");                       // left array/hash pointer into the first argument
+    emitter.instruction("call __rt_array_strict_eq");                           // deep structural comparison of the two arrays
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the structural-equality result
+
+    emitter.label("__rt_mixed_strict_eq_tag_gate");
     emitter.instruction("cmp r10, rax");                                        // strict equality first requires matching runtime tags
     emitter.instruction("jne __rt_mixed_strict_eq_false");                      // different payload tags are never strictly equal
-
     emitter.instruction("cmp rax, 8");                                          // do both payloads represent PHP null?
     emitter.instruction("je __rt_mixed_strict_eq_true");                        // null identity depends only on the matching runtime tag
     emitter.instruction("cmp rax, 1");                                          // do both payloads hold strings?
@@ -132,5 +162,6 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_strict_eq_done");
     emitter.instruction("add rsp, 64");                                         // release the helper stack frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer saved for stack alignment
     emitter.instruction("ret");                                                 // return the strict-equality boolean in rax
 }

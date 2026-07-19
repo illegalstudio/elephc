@@ -27,3 +27,12 @@ pub use oop::{
 };
 pub use stmt::{CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
 pub use types::TypeExpr;
+
+/// Name prefix of the temporary a nested append (`$a[$k][] = $v`) reads its bucket into.
+///
+/// The parser mints it in `stmt::assign::postfix::lower_nested_append_assignment`; IR lowering
+/// matches on it to recognize a nested-append `StmtKind::Synthetic` group and fuse it (see
+/// `crate::ir_lower::stmt::nested_append`). It lives here, on the AST, because it is the shared
+/// contract between those two — and it must not be reused by any other desugar, or that
+/// recognizer would claim statements it does not own.
+pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";

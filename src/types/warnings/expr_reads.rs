@@ -12,7 +12,8 @@ use crate::errors::CompileWarning;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 
 use super::scope_usage::{
-    ScopeUsage, analyze_function_like_scope, analyze_method_scope, collect_free_reads_in_function_like,
+    ScopeUsage, analyze_closure_scope, analyze_function_like_scope, analyze_method_scope,
+    collect_free_reads_in_function_like,
 };
 
 /// Recursively collects variable read warnings by scanning an expression tree.
@@ -179,6 +180,7 @@ pub(super) fn collect_expr_reads(
             variadic,
             body,
             captures,
+            capture_refs,
             is_arrow,
             ..
         } => {
@@ -190,7 +192,14 @@ pub(super) fn collect_expr_reads(
             for name in captures {
                 scope.read(name);
             }
-            analyze_function_like_scope(params, variadic.as_ref(), body, expr.span, warnings);
+            analyze_closure_scope(
+                params,
+                variadic.as_ref(),
+                body,
+                expr.span,
+                capture_refs,
+                warnings,
+            );
         }
         ExprKind::NamedArg { value, .. } => collect_expr_reads(value, scope, warnings),
         ExprKind::PropertyAccess { object, .. }

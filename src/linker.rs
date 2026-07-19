@@ -17,6 +17,46 @@ use std::process::{self, Command};
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 
+/// Reports whether the optional official CUBRID CCI PDO profile is selected.
+fn pdo_cubrid_enabled() -> bool {
+    cfg!(feature = "pdo-cubrid") || std::env::var_os("ELEPHC_PDO_CUBRID").is_some()
+}
+
+/// Reports whether the optional FreeTDS PDO archive/link profile is selected.
+fn pdo_dblib_enabled() -> bool {
+    cfg!(feature = "pdo-dblib") || std::env::var_os("ELEPHC_PDO_DBLIB").is_some()
+}
+
+/// Reports whether the optional pure-Rust Firebird PDO profile is selected.
+fn pdo_firebird_enabled() -> bool {
+    cfg!(feature = "pdo-firebird") || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some()
+}
+
+/// Reports whether the optional system ODBC driver-manager profile is selected.
+fn pdo_odbc_enabled() -> bool {
+    cfg!(feature = "pdo-odbc") || std::env::var_os("ELEPHC_PDO_ODBC").is_some()
+}
+
+/// Reports whether the optional Informix CLI/ODBC PDO profile is selected.
+fn pdo_informix_enabled() -> bool {
+    cfg!(feature = "pdo-informix") || std::env::var_os("ELEPHC_PDO_INFORMIX").is_some()
+}
+
+/// Reports whether the optional IBM Db2 CLI/ODBC PDO profile is selected.
+fn pdo_ibm_enabled() -> bool {
+    cfg!(feature = "pdo-ibm") || std::env::var_os("ELEPHC_PDO_IBM").is_some()
+}
+
+/// Reports whether the optional Microsoft PDO_SQLSRV ODBC profile is selected.
+fn pdo_sqlsrv_enabled() -> bool {
+    cfg!(feature = "pdo-sqlsrv") || std::env::var_os("ELEPHC_PDO_SQLSRV").is_some()
+}
+
+/// Reports whether the optional Oracle Instant Client PDO profile is selected.
+fn pdo_oci_enabled() -> bool {
+    cfg!(feature = "pdo-oci") || std::env::var_os("ELEPHC_PDO_OCI").is_some()
+}
+
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
 /// wrapper or PDO). Each entry in [`BRIDGES`] fully describes how to locate and
@@ -181,6 +221,26 @@ impl BridgeStaticlib {
                 return Some(env_dir);
             }
         }
+        // In a source checkout the libpq marker selects both the final `-lpq`
+        // link and the PDO archive profile. Cargo's no-op rebuild is cheap and
+        // prevents a previously built default archive from being reused by mistake.
+        if self.lib_name == "elephc_pdo"
+            && (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+                || pdo_dblib_enabled()
+                || pdo_firebird_enabled()
+                || pdo_odbc_enabled()
+                || pdo_informix_enabled()
+                || pdo_ibm_enabled()
+                || pdo_sqlsrv_enabled()
+                || pdo_oci_enabled()
+                || pdo_cubrid_enabled())
+        {
+            if let Some(workspace) = self.find_workspace() {
+                if !self.build_staticlib(&workspace) {
+                    return None;
+                }
+            }
+        }
         if let Some(dir) = self.find_lib_dir() {
             return Some(dir);
         }
@@ -228,19 +288,53 @@ impl BridgeStaticlib {
     }
 
     /// Builds this bridge's staticlib in the current binary's debug/release
-    /// profile (best-effort; failures are ignored so callers fall back to other
-    /// discovery candidates).
-    fn build_staticlib(&self, workspace: &Path) {
+    /// profile and reports whether Cargo completed successfully.
+    fn build_staticlib(&self, workspace: &Path) -> bool {
         let release = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .is_some_and(|dir| dir.file_name().is_some_and(|name| name == "release"));
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "-p", self.crate_name]);
+        if self.lib_name == "elephc_pdo" {
+            let mut features = Vec::new();
+            if std::env::var_os("ELEPHC_PDO_LIBPQ").is_some() {
+                features.push("libpq-gss");
+            }
+            if pdo_dblib_enabled() {
+                features.push("dblib");
+            }
+            if pdo_firebird_enabled() {
+                features.push("firebird");
+            }
+            if pdo_odbc_enabled() {
+                features.push("odbc");
+            }
+            if pdo_informix_enabled() {
+                features.push("informix");
+            }
+            if pdo_ibm_enabled() {
+                features.push("ibm");
+            }
+            if pdo_sqlsrv_enabled() {
+                features.push("sqlsrv");
+            }
+            if pdo_oci_enabled() {
+                features.push("oci");
+            }
+            if pdo_cubrid_enabled() {
+                features.push("cubrid");
+            }
+            if !features.is_empty() {
+                cmd.args(["--features", &features.join(",")]);
+            }
+        }
         if release {
             cmd.arg("--release");
         }
-        let _ = cmd.current_dir(workspace).status();
+        cmd.current_dir(workspace)
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
 
@@ -316,6 +410,10 @@ pub(crate) fn link(
     // `--with-<crate>` (`forced_whole_archive`), which guarantees the staticlib
     // is retained even when no program symbol references it.
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
+    let needs_dblib =
+        extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled();
+    let needs_odbc = extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled() || pdo_sqlsrv_enabled());
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -349,6 +447,24 @@ pub(crate) fn link(
             cmd.arg(bin_path);
             cmd.arg(obj_path);
             cmd.arg(runtime_object_path);
+            // FreeTDS and libSystem both export `dbopen`; resolve the DB-Library
+            // symbol first or macOS binds PDO_DBLIB to Berkeley DB's incompatible ABI.
+            if needs_dblib {
+                for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                    if Path::new(path).exists() {
+                        cmd.arg(format!("-L{path}"));
+                    }
+                }
+                cmd.arg("-lsybdb");
+            }
+            if needs_odbc {
+                for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
+                    if Path::new(path).exists() {
+                        cmd.arg(format!("-L{path}"));
+                    }
+                }
+                cmd.arg("-lodbc");
+            }
             cmd.args(["-lSystem", "-syslibroot"]);
             cmd.arg(&sdk_path);
             cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
@@ -500,6 +616,41 @@ pub(crate) fn link(
             None => {
                 ld_cmd.arg(format!("-l{}", lib));
             }
+        }
+    }
+    // A PDO archive built with `libpq-gss` intentionally delegates PostgreSQL to
+    // the same system libpq as php-src. Static archives cannot encode this dynamic
+    // dependency, so the build/export environment marks that archive explicitly.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
+    {
+        ld_cmd.arg("-lpq");
+    }
+    // PDO_DBLIB delegates to FreeTDS's DB-Library exactly like php-src.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo") && pdo_dblib_enabled() {
+        if target.platform == Platform::MacOS {
+            for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
+                if Path::new(path).exists() {
+                    ld_cmd.arg(format!("-L{path}"));
+                }
+            }
+        }
+        if target.platform != Platform::MacOS {
+            ld_cmd.arg("-lsybdb");
+        }
+    }
+    // PDO_ODBC, PDO_INFORMIX, PDO_IBM, and PDO_SQLSRV delegate to the ODBC driver manager.
+    if extra_link_libs.iter().any(|lib| lib == "elephc_pdo")
+        && (pdo_odbc_enabled() || pdo_informix_enabled() || pdo_ibm_enabled() || pdo_sqlsrv_enabled())
+    {
+        if target.platform == Platform::MacOS {
+            for path in ["/opt/homebrew/opt/unixodbc/lib", "/usr/local/opt/unixodbc/lib"] {
+                if Path::new(path).exists() {
+                    ld_cmd.arg(format!("-L{path}"));
+                }
+            }
+        } else {
+            ld_cmd.arg("-lodbc");
         }
     }
     if target.platform == Platform::Linux && !extra_link_libs.is_empty() {
@@ -701,7 +852,12 @@ fn validate_macos_sdk_path(resolved: &str) -> Result<String, String> {
 
 /// Returns common Homebrew library directories used for optional native deps on macOS.
 fn default_macos_library_paths() -> Vec<&'static str> {
-    ["/opt/homebrew/lib", "/usr/local/lib"]
+    [
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+        "/opt/homebrew/opt/libpq/lib",
+        "/usr/local/opt/libpq/lib",
+    ]
         .into_iter()
         .filter(|path| Path::new(path).exists())
         .collect()

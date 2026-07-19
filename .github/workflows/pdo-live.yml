@@ -1,0 +1,485 @@
+name: PDO Live Databases
+
+# F-QUAL-06. The PDO live-server tests are all `#[ignore]`, so the main CI
+# (`ci.yml`) has NEVER executed a single one of them: nextest skips ignored tests
+# by default, and `ci.yml` is macOS-aarch64 + Linux runners with no database
+# services. Every live regression so far (the `CALL` stored-procedure row-drop,
+# a live test that did not even compile) slipped through the per-phase gates and
+# was only caught by a hand-rolled Docker run. This workflow is that Docker run,
+# automated.
+#
+# The live suites are a required part of the PR/push loop. They also remain
+# runnable by hand and nightly so database-image or dependency drift is caught
+# even when the PDO sources have not changed recently.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *' # daily at 03:00 UTC, off the main CI's peak
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref. Each GitHub-hosted runner owns its
+# Docker daemon and databases, so different refs remain safely isolated.
+concurrency:
+  group: pdo-live-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pdo-live:
+    name: PDO live suites (PostgreSQL 16 + MySQL 8.4 + SQL Server 2022 + Firebird 5 + CUBRID 11.4 + ODBC + Informix/IBM profiles + Oracle 23ai)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: test
+          MYSQL_PASSWORD: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -ptest --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Elephc_Pdo!2026_Test
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Elephc_Pdo!2026_Test' -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      firebird:
+        image: firebirdsql/firebird:5.0.4-trixie
+        env:
+          FIREBIRD_ROOT_PASSWORD: Elephc_Firebird!2026_Test
+          FIREBIRD_DATABASE: elephc.fdb
+          FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+        ports:
+          - 3050:3050
+        options: >-
+          --health-cmd "bash -c '</dev/tcp/127.0.0.1/3050'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      cubrid:
+        image: cubrid/cubrid:11.4
+        env:
+          CUBRID_DB: cubdb
+          CUBRID_LOCALE: en_US
+        ports:
+          - 33000:33000
+        options: >-
+          --health-cmd "bash -lc 'gosu cubrid csql -u dba -C cubdb -c \"SELECT 1;\"'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: Elephc_Oracle!2026_Test
+          APP_USER: test
+          APP_USER_PASSWORD: test
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # ONE family of variables now drives BOTH live suites. The codegen suites
+      # (tests/codegen/pdo_pgsql.rs, tests/codegen/pdo_mysql.rs) read these names
+      # from the compiled PHP via getenv(); the in-crate live tests
+      # (crates/elephc-pdo/src/lib.rs) prefer their legacy ELEPHC_*_TEST_DSN names
+      # but fall back to these, which is exactly the F-QUAL-06 fallback this job
+      # exercises. Do NOT also export ELEPHC_PG_TEST_DSN / ELEPHC_MY_TEST_DSN here:
+      # leaving them unset is what keeps the fallback under test.
+      ELEPHC_PG_DSN: 'pgsql:host=127.0.0.1;port=5432;dbname=testdb;user=test;password=test;sslmode=disable'
+      ELEPHC_MY_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+      ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
+      ELEPHC_DBLIB_DSN: 'dblib:host=127.0.0.1;port=1433;user=sa;password=Elephc_Pdo!2026_Test;charset=UTF-8'
+      ELEPHC_FIREBIRD_DSN: 'firebird:dbname=127.0.0.1/3050:/var/lib/firebird/data/elephc.fdb;charset=UTF8;user=SYSDBA;password=Elephc_Firebird!2026_Test'
+      ELEPHC_ODBC_DSN: 'odbc:Driver={PostgreSQL Unicode};Servername=127.0.0.1;Port=5432;Database=testdb;UID=test;PWD=test'
+      ELEPHC_SQLSRV_DSN: 'sqlsrv:Server=127.0.0.1,1433;Database=master;Encrypt=no;TrustServerCertificate=yes;user=sa;password=Elephc_Pdo!2026_Test'
+      ELEPHC_OCI_DSN: 'oci:dbname=//127.0.0.1:1521/FREEPDB1;charset=AL32UTF8;user=test;password=test'
+      ELEPHC_CUBRID_DSN: 'cubrid:host=127.0.0.1;port=33000;dbname=cubdb'
+      # Turns "no DSN in the environment" into a panic instead of a silent early
+      # return in the in-crate live tests. Without it, a variable that gets renamed
+      # or dropped from this job would make a live test that executed NOTHING look
+      # exactly like a live test that passed — the precise failure mode F-QUAL-06 is
+      # about.
+      ELEPHC_PDO_LIVE_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Oracle Instant Client 23.26 Basic Light
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libaio1t64 unzip
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/instantclient-basiclite.zip" \
+            https://download.oracle.com/otn_software/linux/instantclient/2326200v2/instantclient-basiclite-linux.x64-23.26.2.0.0.zip
+          test "$(cksum "$RUNNER_TEMP/instantclient-basiclite.zip" | awk '{print $1 " " $2}')" = '149323083 75797020'
+          unzip -q "$RUNNER_TEMP/instantclient-basiclite.zip" -d "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/oracle-client"
+          cp -a "$RUNNER_TEMP/instantclient_23_26/." "$RUNNER_TEMP/oracle-client/"
+          test -e "$RUNNER_TEMP/oracle-client/libclntsh.so"
+          libaio_path="$(find /usr/lib -name 'libaio.so.1t64' -print -quit)"
+          test -n "$libaio_path"
+          ln -s "$libaio_path" "$RUNNER_TEMP/oracle-client/libaio.so.1"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/oracle-client" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-pdo-live-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-pdo-live-
+
+      - name: Install native test dependencies
+        # Same set the linux jobs in ci.yml install: the codegen runner links and
+        # executes real native binaries.
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            freetds-dev \
+            krb5-user \
+            libbz2-dev \
+            libpcre2-dev \
+            libpq-dev \
+            libssl-dev \
+            pkg-config \
+            odbc-postgresql \
+            tzdata \
+            unixodbc-dev \
+            zlib1g-dev
+
+      - name: Configure the MySQL live-test server
+        # The live suite CREATEs and CALLs stored procedures
+        # (`mysql_call_stored_procedure_returns_rows`,
+        # `mysql_call_behind_leading_comment_returns_rows` — the P0-C row-drop
+        # regression), and exercises LOCAL INFILE. Configure both explicitly via
+        # `docker exec` so the runner does not need a MySQL client package.
+        run: |
+          docker exec ${{ job.services.mysql.id }} \
+            mysql -uroot -proot -e "
+              SET GLOBAL local_infile = ON;
+              GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%';
+              GRANT CREATE ROUTINE, ALTER ROUTINE, EXECUTE ON testdb.* TO 'test'@'%';
+              FLUSH PRIVILEGES;"
+
+      - name: Install Microsoft ODBC Driver 18 for SQL Server
+        shell: bash
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/packages-microsoft-prod.deb" https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+          sudo dpkg -i "$RUNNER_TEMP/packages-microsoft-prod.deb"
+          sudo apt-get update
+          sudo env ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
+
+      # Keep SQLSRV first: this profile exercises the system ODBC driver and
+      # should fail before the longer cross-driver codegen suites when its ABI,
+      # cursor, or binding behavior regresses.
+      - name: Build the PDO_SQLSRV 5.13.1 profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
+      - name: PDO_SQLSRV bridge unit tests
+        run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests:: -- --skip live_odbc_round_trip --skip live_sqlsrv_round_trip'
+
+      - name: Live PDO_SQLSRV bridge test
+        run: 'cargo test -p elephc-pdo --features sqlsrv odbc::tests::live_sqlsrv_round_trip -- --ignored --test-threads=1'
+
+      - name: Live PDO_SQLSRV tests
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: cargo test --features pdo-sqlsrv --test codegen_tests -- --ignored pdo_sqlsrv --test-threads=1
+
+      - name: PDO_SQLSRV compiled surface tests
+        env:
+          ELEPHC_PDO_SQLSRV: '1'
+        run: cargo test --features pdo-sqlsrv --test codegen_tests pdo_sqlsrv -- --test-threads=1
+
+      # Keep every system-client profile ahead of the long PostgreSQL/MySQL
+      # suites so missing loader compatibility or driver ABI behavior fails fast.
+      - name: Build the Oracle Instant Client PDO_OCI bridge staticlib
+        run: cargo build -p elephc-pdo --features oci
+
+      - name: PDO_OCI bridge unit tests
+        run: 'cargo test -p elephc-pdo --features oci oci::tests:: -- --skip live_oci_round_trip'
+
+      - name: Live Oracle bridge tests (in-crate)
+        run: 'cargo test -p elephc-pdo --features oci oci::tests::live_oci_round_trip -- --ignored --test-threads=1'
+
+      - name: Live Oracle codegen tests (PDO_OCI)
+        env:
+          ELEPHC_PDO_OCI: '1'
+        run: cargo test --features pdo-oci --test codegen_tests -- --ignored pdo_oci --test-threads=1
+
+      - name: Install the CUBRID CCI client from the service image
+        run: |
+          docker cp '${{ job.services.cubrid.id }}:/home/cubrid/CUBRID/cci/lib/libcascci.so.11.2' "$RUNNER_TEMP/libcascci.so.11.2"
+          ln -s libcascci.so.11.2 "$RUNNER_TEMP/libcascci.so"
+
+      - name: PDO_CUBRID bridge unit tests
+        run: 'cargo test -p elephc-pdo --features cubrid cubrid::tests::'
+
+      - name: PDO_CUBRID compiled surface tests
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+        run: cargo test --features pdo-cubrid --test codegen_tests pdo_cubrid_surface -- --test-threads=1
+
+      - name: Live CUBRID CCI codegen test
+        env:
+          ELEPHC_PDO_CUBRID: '1'
+          CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
+        run: cargo test --features pdo-cubrid --test codegen_tests -- --ignored pdo_cubrid --test-threads=1
+
+      - name: Configure TLS on both live-test servers
+        # Generate short-lived CA-signed certificates for both servers. The
+        # explicit SAN and serverAuth usage satisfy rustls verification. MySQL can
+        # reload its TLS context live; PostgreSQL needs a restart because `ssl` is
+        # a postmaster setting.
+        run: |
+          docker exec ${{ job.services.mysql.id }} sh -ec '
+            openssl req -new -x509 -nodes -days 1 \
+              -subj "/CN=elephc-pdo-mysql-test-ca" \
+              -addext "basicConstraints=critical,CA:TRUE" \
+              -addext "keyUsage=critical,keyCertSign,cRLSign" \
+              -keyout /var/lib/mysql/ca-key.pem \
+              -out /var/lib/mysql/ca.pem
+            openssl req -new -nodes \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+              -keyout /var/lib/mysql/server-key.pem \
+              -out /var/lib/mysql/server.csr
+            printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n" \
+              > /var/lib/mysql/server.ext
+            openssl x509 -req -days 1 -sha256 \
+              -in /var/lib/mysql/server.csr \
+              -CA /var/lib/mysql/ca.pem \
+              -CAkey /var/lib/mysql/ca-key.pem \
+              -CAcreateserial \
+              -extfile /var/lib/mysql/server.ext \
+              -out /var/lib/mysql/server-cert.pem
+            chown mysql:mysql \
+              /var/lib/mysql/ca-key.pem \
+              /var/lib/mysql/ca.pem \
+              /var/lib/mysql/server-key.pem \
+              /var/lib/mysql/server-cert.pem
+            chmod 600 /var/lib/mysql/ca-key.pem /var/lib/mysql/server-key.pem'
+          docker exec ${{ job.services.mysql.id }} \
+            mysql -uroot -proot -e "ALTER INSTANCE RELOAD TLS;"
+          docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
+          docker cp ${{ job.services.mysql.id }}:/var/lib/mysql/public_key.pem "$RUNNER_TEMP/mysql-public-key.pem"
+          echo "ELEPHC_MY_TLS_CA=$RUNNER_TEMP/mysql-ca.pem" >> "$GITHUB_ENV"
+          echo "ELEPHC_MY_SERVER_PUBLIC_KEY=$RUNNER_TEMP/mysql-public-key.pem" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/mysql-ca-dir"
+          cp "$RUNNER_TEMP/mysql-ca.pem" "$RUNNER_TEMP/mysql-ca-dir/ca.pem"
+          echo "ELEPHC_MY_TLS_CAPATH=$RUNNER_TEMP/mysql-ca-dir" >> "$GITHUB_ENV"
+
+          docker exec ${{ job.services.postgres.id }} sh -ec '
+            openssl req -new -x509 -nodes -days 1 \
+              -subj "/CN=elephc-pdo-test-ca" \
+              -addext "basicConstraints=critical,CA:TRUE" \
+              -addext "keyUsage=critical,keyCertSign,cRLSign" \
+              -keyout /var/lib/postgresql/data/root.key \
+              -out /var/lib/postgresql/data/root.crt
+            openssl req -new -nodes \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+              -keyout /var/lib/postgresql/data/server.key \
+              -out /var/lib/postgresql/data/server.csr
+            printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n" \
+              > /var/lib/postgresql/data/server.ext
+            openssl x509 -req -days 1 -sha256 \
+              -in /var/lib/postgresql/data/server.csr \
+              -CA /var/lib/postgresql/data/root.crt \
+              -CAkey /var/lib/postgresql/data/root.key \
+              -CAcreateserial \
+              -extfile /var/lib/postgresql/data/server.ext \
+              -out /var/lib/postgresql/data/server.crt
+            chown postgres:postgres \
+              /var/lib/postgresql/data/server.crt \
+              /var/lib/postgresql/data/server.key
+            chmod 600 /var/lib/postgresql/data/server.key'
+          docker cp ${{ job.services.postgres.id }}:/var/lib/postgresql/data/root.crt \
+            "$RUNNER_TEMP/postgres-ca.pem"
+          echo "ELEPHC_PG_TLS_DSN=pgsql:host=localhost;port=5432;dbname=testdb;user=test;password=test;sslmode=verify-full;sslrootcert=$RUNNER_TEMP/postgres-ca.pem" \
+            >> "$GITHUB_ENV"
+          docker exec ${{ job.services.postgres.id }} \
+            psql -U test -d testdb -c "ALTER SYSTEM SET ssl = 'on';"
+          docker restart ${{ job.services.postgres.id }}
+          for attempt in $(seq 1 30); do
+            if docker exec ${{ job.services.postgres.id }} pg_isready -U test -d testdb; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs ${{ job.services.postgres.id }}
+          exit 1
+
+      - name: Build the native PDO bridge staticlib
+        # The codegen runner links compiled PHP programs against libelephc_pdo.a and
+        # will shell out to `cargo build -p elephc-pdo` itself if the archive is
+        # missing; building it up front keeps that out of the (bounded-parallelism)
+        # test run.
+        run: cargo build -p elephc-pdo
+
+      - name: Live native bridge tests (in-crate, elephc-pdo)
+        # pg_round_trip + my_round_trip. These read ELEPHC_PG_TEST_DSN /
+        # ELEPHC_MY_TEST_DSN first and fall back to the ELEPHC_*_DSN names exported
+        # above; ELEPHC_PDO_LIVE_REQUIRED=1 makes a missing DSN fail loudly.
+        run: cargo test -p elephc-pdo -- --ignored
+
+      - name: Live native codegen tests (pgsql)
+        # Every #[ignore] test under tests/codegen/pdo_pgsql.rs. `--test-threads=4`
+        # is a hard requirement, not a tuning knob: the codegen suite compiles and
+        # links a native binary per test and melts the runner at higher concurrency.
+        # The TLS fixture is enabled on the same service container above, so the
+        # filter intentionally includes pgsql_tls_round_trip as well.
+        run: cargo test --test codegen_tests -- --ignored pgsql --test-threads=4
+
+      - name: Build the libpq PDO bridge staticlib
+        # The libpq profile is a complete PostgreSQL backend, matching php-src's
+        # delegation for GSSAPI and libpq-only connection options.
+        run: cargo build -p elephc-pdo --features mysql-tls,libpq-gss
+
+      - name: Libpq bridge unit tests
+        # Includes option-forwarding and C-parameter ABI regressions that do not
+        # require a Kerberos realm or a live database.
+        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss --lib
+
+      - name: Live libpq bridge tests (in-crate, elephc-pdo)
+        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss -- --ignored
+
+      - name: Live libpq codegen tests (pgsql)
+        # The root feature prevents Cargo from replacing the feature-built archive
+        # with the default one; the environment marker adds libpq to final PHP links.
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored pgsql --test-threads=4
+
+      - name: Live libpq GSSAPI handshake
+        # Provisions an isolated MIT Kerberos realm, keytabs, credential cache,
+        # and PostgreSQL hostgssenc rule. The focused tests require both GSS auth
+        # and GSS transport encryption and also prove a missing cache fails closed.
+        run: ./scripts/test-pdo-gss.sh
+
+      - name: Live codegen tests (mysql)
+        # Every #[ignore] test under tests/codegen/pdo_mysql.rs, same parallelism
+        # bound.
+        # MySQL's generated CA is exported through ELEPHC_MY_TLS_CA and the bridge
+        # archive includes mysql-tls, so this covers both MySQL TLS round-trips.
+        env:
+          ELEPHC_PDO_LIBPQ: '1'
+        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored mysql --test-threads=4
+
+      - name: Build the FreeTDS PDO_DBLIB bridge staticlib
+        # PDO_DBLIB follows php-src and delegates the TDS protocol to libsybdb.
+        # The system-client profile is optional so ordinary PDO binaries retain
+        # their standalone pure-Rust/embedded-driver contract.
+        run: cargo build -p elephc-pdo --features dblib
+
+      - name: Live FreeTDS bridge tests (in-crate, elephc-pdo)
+        run: 'cargo test -p elephc-pdo --features dblib dblib::tests:: -- --ignored --test-threads=1'
+
+      - name: Live FreeTDS codegen tests (PDO_DBLIB)
+        env:
+          ELEPHC_PDO_DBLIB: '1'
+        run: cargo test --features pdo-dblib --test codegen_tests -- --ignored pdo_dblib --test-threads=1
+
+      - name: Build the pure-Rust PDO_FIREBIRD bridge staticlib
+        run: cargo build -p elephc-pdo --features firebird
+
+      - name: Live Firebird bridge tests (in-crate, elephc-pdo)
+        run: 'cargo test -p elephc-pdo --features firebird firebird::tests:: -- --ignored --test-threads=1'
+
+      - name: Live Firebird codegen tests (PDO_FIREBIRD)
+        env:
+          ELEPHC_PDO_FIREBIRD: '1'
+        run: cargo test --features pdo-firebird --test codegen_tests -- --ignored pdo_firebird --test-threads=1
+
+      - name: Build the unixODBC PDO_ODBC bridge staticlib
+        run: cargo build -p elephc-pdo --features odbc
+
+      - name: PDO_ODBC bridge unit tests
+        run: 'cargo test -p elephc-pdo --features odbc odbc::tests::'
+
+      - name: Live unixODBC bridge tests (in-crate, PostgreSQL driver)
+        run: 'cargo test -p elephc-pdo --features odbc odbc::tests::live_odbc_round_trip -- --ignored --test-threads=1'
+
+      - name: Live unixODBC codegen tests (PDO_ODBC over PostgreSQL)
+        env:
+          ELEPHC_PDO_ODBC: '1'
+        run: cargo test --features pdo-odbc --test codegen_tests -- --ignored pdo_odbc --test-threads=1
+
+      - name: Build the PDO_INFORMIX Client SDK profile
+        # The public Informix server images do not redistribute Client SDK's
+        # ODBC library. This gate still validates the exact CLI ABI profile;
+        # the ignored live test is runnable wherever IBM/HCL Client SDK is installed.
+        run: cargo build -p elephc-pdo --features informix
+
+      - name: PDO_INFORMIX bridge unit tests
+        run: 'cargo test -p elephc-pdo --features informix odbc::tests::'
+
+      - name: PDO_INFORMIX compiled surface tests
+        env:
+          ELEPHC_PDO_INFORMIX: '1'
+        run: cargo test --features pdo-informix --test codegen_tests pdo_informix -- --test-threads=1
+
+      - name: Build the PDO_IBM 1.7.0 CLI profile
+        # IBM's proprietary CLI driver is not redistributed by hosted runners.
+        # This validates the shared ODBC ABI and compiled PHP version surface;
+        # the ignored live fixture is runnable where the IBM driver is installed.
+        run: cargo build -p elephc-pdo --features ibm
+
+      - name: PDO_IBM bridge unit tests
+        run: 'cargo test -p elephc-pdo --features ibm odbc::tests::'
+
+      - name: PDO_IBM compiled surface tests
+        env:
+          ELEPHC_PDO_IBM: '1'
+        run: cargo test --features pdo-ibm --test codegen_tests pdo_ibm -- --test-threads=1

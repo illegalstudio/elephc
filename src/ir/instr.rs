@@ -274,6 +274,8 @@ pub enum Op {
     ResourceToStr,
     Cast,
     MixedBox,
+    /// Copies a boxed Mixed zval cell while retaining its nested payload for value semantics.
+    MixedClone,
     InvokerRefArg,
     MixedUnbox,
     MixedTagOf,
@@ -296,14 +298,32 @@ pub enum Op {
     HashLen,
     ArrayGet,
     ArrayGetSilent,
+    /// Reads a boxed Mixed element for an imminent nested write, retaining the stored cell so the
+    /// writer can publish copy-on-write replacements back into the owning array slot.
+    ArrayGetForWrite,
     HashGet,
     HashGetSilent,
+    /// Reads a boxed Mixed value for an imminent nested write, retaining the stored cell so the
+    /// writer can publish replacements back into the owning hash entry.
+    HashGetForWrite,
     ArrayIsset,
     HashIsset,
     ArrayElemAddr,
     ArraySet,
     HashSet,
     HashUnset,
+    /// Writes PHP null into `container[key]`, releasing whatever was there.
+    ///
+    /// Used by the nested-append lowering to hand a bucket's *only other* reference over to
+    /// the temporary that is about to be appended to: after the read the bucket is owned by
+    /// both the slot and the temp (refcount 2), which would make the append copy-on-write
+    /// clone it — O(length) on every push, hence O(n^2) over a growing bucket. Nulling the
+    /// slot drops it back to 1, so the append mutates in place, and the write-back then
+    /// re-publishes the bucket into the very same slot.
+    ///
+    /// It can never free the bucket: it only ever runs *after* the read has taken its
+    /// reference, so the refcount it decrements is at least 2.
+    SlotDetach,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -393,6 +413,8 @@ pub enum Op {
     EvalConstantExists,
     EvalConstantFetch,
     RuntimeCall,
+    /// Reads through a boxed Mixed/ArrayAccess receiver for an imminent nested write.
+    MixedArrayGetForWrite,
     ExternCall,
     ClosureNew,
     ClosureCapture,
@@ -541,7 +563,7 @@ impl Op {
             ConcatReset => E::WRITES_GLOBAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
-            MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
@@ -552,6 +574,9 @@ impl Op {
                 E::READS_HEAP | E::MAY_FATAL
             }
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGetForWrite | HashGetForWrite => {
+                E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
+            }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
@@ -566,6 +591,10 @@ impl Op {
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
+            // checks its load factor and may grow/rehash the table before it even knows whether
+            // the key is already present.
+            SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr | ArraySetMixedKey => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
@@ -604,6 +633,7 @@ impl Op {
             | EvalObjectNew
             | EvalStaticMethodCall
             | RuntimeCall
+            | MixedArrayGetForWrite
             | ClosureCall
             | ExprCall
             | CallableDescriptorInvoke
@@ -736,6 +766,7 @@ impl Op {
             ResourceToStr => "resource_to_str",
             Cast => "cast",
             MixedBox => "mixed_box",
+            MixedClone => "mixed_clone",
             InvokerRefArg => "invoker_ref_arg",
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
@@ -758,14 +789,17 @@ impl Op {
             HashLen => "hash_len",
             ArrayGet => "array_get",
             ArrayGetSilent => "array_get_silent",
+            ArrayGetForWrite => "array_get_for_write",
             HashGet => "hash_get",
             HashGetSilent => "hash_get_silent",
+            HashGetForWrite => "hash_get_for_write",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",
+            SlotDetach => "slot_detach",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",
@@ -837,6 +871,7 @@ impl Op {
             EvalConstantExists => "eval_constant_exists",
             EvalConstantFetch => "eval_constant_fetch",
             RuntimeCall => "runtime_call",
+            MixedArrayGetForWrite => "mixed_array_get_for_write",
             ExternCall => "extern_call",
             ClosureNew => "closure_new",
             ClosureCapture => "closure_capture",

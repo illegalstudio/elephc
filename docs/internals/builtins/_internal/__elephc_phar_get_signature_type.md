@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_signature_type() — internals"
 description: "Compiler internals for __elephc_phar_get_signature_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 445
+  order: 454
 ---
 
 ## `__elephc_phar_get_signature_type()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_signature_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_signature_type.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4206](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4206) (`lower_elephc_phar_get_signature_type`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4207](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4207) (`lower_elephc_phar_get_signature_type`)
 - **Function symbol**: `lower_elephc_phar_get_signature_type()`
 
 

@@ -6,7 +6,8 @@
 //!   backend (lower hook), all via `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the second argument is an array and returns `Bool`.
+//! - `check` accepts concrete arrays plus boxed `Mixed`/union containers used after runtime
+//!   `is_array()` guards, and returns `Bool`.
 //! - `lower` is a thin wrapper over the shared `arrays::lower_array_key_exists` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -27,14 +28,18 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-key-exists.php",
 }
 
-/// Validates that the second argument is an array and returns `Bool`.
+/// Validates that the second argument can carry an array and returns `Bool`.
 ///
 /// The registry's `check_arity` handles arity enforcement (exactly 2 arguments).
-/// This hook validates that `array` is an array and returns the `Bool` return type.
+/// Boxed `Mixed` and union values are accepted because guarded arrays retain their dynamic packed
+/// versus associative representation; lowering dispatches their runtime tags to the correct probe.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !matches!(
+        arr_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.span,
             "array_key_exists() second argument must be array",

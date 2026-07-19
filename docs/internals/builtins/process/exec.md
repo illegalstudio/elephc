@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/exec.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:690](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L690) (`lower_exec`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:744](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L744) (`lower_exec`)
 - **Function symbol**: `lower_exec()`
 
 

@@ -100,6 +100,165 @@ pub(crate) fn lower_ptr_offset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `__elephc_callable_ptr($cb)` — the runtime value of a closure or
+/// first-class callable already IS the raw pointer to its 64-byte descriptor, so
+/// this is a bare identity load into the pointer result register.
+///
+/// Dynamic PHP callable forms are normalized into the same descriptor ABI: strings
+/// select a static function/method descriptor, arrays select a static or receiver-
+/// bound method descriptor, invokable objects bind `__invoke`, and boxed callable
+/// descriptors preserve their existing payload.
+pub(crate) fn lower_elephc_callable_ptr(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_callable_ptr", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+                ctx,
+                value,
+                "__elephc_callable_ptr",
+                false,
+            )?;
+        }
+        PhpType::Str => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                value,
+                &result_reg,
+                "__elephc_callable_ptr",
+            )?;
+        }
+        PhpType::Array(element)
+            if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str) =>
+        {
+            super::super::callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                value,
+                "__elephc_callable_ptr",
+            )?;
+        }
+        PhpType::Object(class_name) => {
+            super::super::callables::emit_invokable_object_descriptor_value(
+                ctx,
+                value,
+                &class_name,
+                "__elephc_callable_ptr",
+            )?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "__elephc_callable_ptr requires a PHP callable value, got {:?}",
+                other
+            )));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_normalize_callable($cb)` into an owned callable descriptor.
+///
+/// Static descriptors tolerate retains as persistent values, while runtime descriptors
+/// selected from an existing `Callable` or boxed callable need one additional owner for
+/// the returned value. Fresh receiver-bound descriptors already start with one owner.
+pub(crate) fn lower_elephc_normalize_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+                ctx,
+                value,
+                "__elephc_normalize_callable",
+                true,
+            )?;
+        }
+        PhpType::Str => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                value,
+                &result_reg,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        PhpType::Array(element)
+            if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str) =>
+        {
+            super::super::callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                value,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        PhpType::Object(class_name) => {
+            super::super::callables::emit_invokable_object_descriptor_value(
+                ctx,
+                value,
+                &class_name,
+                "__elephc_normalize_callable",
+            )?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "__elephc_normalize_callable requires a PHP callable value, got {:?}",
+                other
+            )));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_pdo_adapter_addr($kind)` — materializes the GOT address of the
+/// shared codegen PDO callback adapter selected by the constant `$kind`
+/// (0 = collation, 1 = scalar user function, 2 = aggregate step, 3 = aggregate
+/// finalize). The bridge stores this address per registration and calls it back with
+/// the database-provided arguments, so no bridge extern references a `__rt_*` symbol
+/// directly.
+///
+/// The adapter is an external runtime symbol (emitted in the runtime `.text`
+/// section, gated by `RuntimeFeatures::pdo_udf`), so its address is taken through
+/// the GOT rather than a same-section page relocation.
+pub(crate) fn lower_elephc_pdo_adapter_addr(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "__elephc_pdo_adapter_addr", 1)?;
+    let kind = const_i64_operand(ctx, expect_operand(inst, 0)?)?;
+    let symbol = match kind {
+        0 => "__rt_pdo_call_collation",
+        1 => "__rt_pdo_call_scalar",
+        2 => "__rt_pdo_call_agg_step",
+        3 => "__rt_pdo_call_agg_final",
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "__elephc_pdo_adapter_addr has no adapter for kind {}",
+                kind
+            )));
+        }
+    };
+    // `__rt_pdo_call_collation` is a raw runtime assembly label emitted verbatim by
+    // `label_global` (like every other `__rt_*` helper), NOT a C symbol — so it must
+    // be referenced without the platform's leading-underscore mangling that
+    // `Target::extern_symbol` would add on Mach-O. Take its address through the GOT
+    // (the helper lives in the separately-assembled runtime object).
+    abi::emit_extern_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), symbol);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ptr_get(pointer)` by reading one machine word through a checked pointer.
 pub(crate) fn lower_ptr_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_pointer_read(ctx, inst, "ptr_get", PointerWidth::Word64)
@@ -214,6 +373,38 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+}
+
+/// Returns the literal `i64` payload for a required `ConstI64` operand.
+///
+/// Used by `__elephc_pdo_adapter_addr` to select the adapter symbol at compile
+/// time; a non-constant kind is a malformed-module error because the prelude always
+/// passes a literal.
+fn const_i64_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<i64> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::invalid_module(
+            "__elephc_pdo_adapter_addr kind must be a constant integer literal",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstI64 {
+        return Err(CodegenIrError::invalid_module(
+            "__elephc_pdo_adapter_addr kind must be a constant integer literal",
+        ));
+    }
+    match inst_ref.immediate {
+        Some(Immediate::I64(literal)) => Ok(literal),
+        _ => Err(CodegenIrError::invalid_module(
+            "__elephc_pdo_adapter_addr kind literal has no i64 immediate",
+        )),
+    }
 }
 
 /// Addressable storage source accepted by the `ptr()` builtin.

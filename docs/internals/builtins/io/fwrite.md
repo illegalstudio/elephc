@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `fwrite(stream, data)` and returns the number of bytes written.
+- Lowers `fwrite(stream, data)` and boxes a byte count or PHP `false` on error.
 
 ## Runtime helpers
 
@@ -26,7 +26,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fwrite(resource $stream, string $data): int
+function fwrite(resource $stream, string $data): mixed
 ```
 
 ## What the type checker enforces

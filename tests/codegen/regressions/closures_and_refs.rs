@@ -227,3 +227,43 @@ echo $a["n"];
     );
     assert_eq!(out, "2");
 }
+
+/// Verifies a hash write through a *reference-bound* local survives a table reallocation.
+///
+/// `lower_inst::hashes::source_load_local_slot` recognized only `Op::LoadLocal`, while its
+/// indexed-array twin (`lower_inst::arrays::source_load_local_slot`) also recognizes
+/// `Op::LoadRefCell`. So `$r = &$a; $r[$k] = $v;` found no destination slot and silently
+/// discarded the table pointer `__rt_hash_set` hands back — which is a *new* pointer whenever
+/// the table rehashes past its load factor or is COW-split. The stale pointer then kept being
+/// read: building a 41-key hash through a ref reported a garbage count (a wild read), and the
+/// same shape on an object property lost 37 of the 41 entries.
+///
+/// Three or four keys are not enough to trigger it — the hash must actually grow — so this
+/// test deliberately crosses the rehash threshold.
+#[test]
+fn test_hash_write_through_ref_bound_local_survives_rehash() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Holder {
+    public array $v = [];
+}
+$a = ["seed" => 0];
+$r = &$a;
+for ($i = 0; $i < 40; $i++) {
+    $r["k" . $i] = $i;
+}
+echo count($a), "\n";
+
+$o = new Holder();
+$o->v["seed"] = 0;
+$p = &$o->v;
+for ($i = 0; $i < 40; $i++) {
+    $p["k" . $i] = $i;
+}
+echo count($o->v), "\n";
+echo $o->v["k39"], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "41\n41\n39\n");
+}

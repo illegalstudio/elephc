@@ -91,6 +91,18 @@ impl Checker {
                     return self.resolve_type_expr(&type_expr, expr.span);
                 }
                 if let Some(value_expr) = info.constants.get(name).cloned() {
+                    if let Some(reason) = info.constant_deprecations.get(name).cloned() {
+                        let message = if reason.is_empty() {
+                            format!("Use of deprecated class constant: {}::{}", cn, name)
+                        } else {
+                            format!(
+                                "Use of deprecated class constant: {}::{} — {}",
+                                cn, name, reason
+                            )
+                        };
+                        self.warnings
+                            .push(crate::errors::CompileWarning::new(expr.span, &message));
+                    }
                     return self.infer_type(&value_expr, &TypeEnv::default());
                 }
             }

@@ -9,6 +9,23 @@
 
 use crate::support::*;
 
+/// Verifies a Throwable owns a dynamically concatenated message after the source
+/// temporary is released and unrelated catch-block strings reuse scratch storage.
+#[test]
+fn test_dynamic_exception_message_is_persisted() {
+    let out = compile_and_run(
+        r#"<?php
+$suffix = "payload";
+try {
+    throw new Error("dynamic:" . $suffix);
+} catch (Throwable $e) {
+    echo get_class($e) . "|" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Error|dynamic:payload");
+}
+
 /// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {

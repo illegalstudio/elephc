@@ -489,6 +489,7 @@ preserves PHP exponentiation result rules.
 | `ResourceToStr` | `I64` resource | `Str` | may allocate, may warn |
 | `Cast(to_php_type)` | typed value | matching IR type | PHP cast effects |
 | `MixedBox` | non-mixed value | `Heap(Mixed)` | `alloc_heap`, maybe `refcount_op` |
+| `MixedClone` | `Heap(Mixed)` | owned `Heap(Mixed)` value read | `reads_heap`, `alloc_heap`, `refcount_op` |
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
@@ -519,6 +520,8 @@ across a reset point.
 | `ArrayLen`, `HashLen` | container | `I64` | `reads_heap` |
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
+| `ArrayGetForWrite` | array, index | aliased boxed `Mixed` | `reads_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
+| `HashGetForWrite` | hash, key | aliased boxed `Mixed` | `reads_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayPush`, `HashAppend` | container, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
@@ -529,6 +532,18 @@ across a reset point.
 | `ArrayKeyExists`, `OffsetExists` | container, key | `I64` bool | `reads_heap` |
 | `OffsetUnset` | container, key | `Void` | `writes_heap`, `refcount_op` |
 | `ListUnpack` | array value, slot list | `Void` | `reads_heap`, `writes_local` |
+
+Ordinary `ArrayGet`/`HashGet` reads of boxed `Mixed` values materialize an independent zval cell,
+preserving PHP value semantics. Resource payloads are the intentional exception: the read retains
+the existing resource cell so aliases share the cursor and close/destructor lifetime, as PHP
+resources do. Nested assignments use the explicit `*GetForWrite` operations for
+their parent read instead: the root container is COW-normalized and stored back first, then the
+selected cell is detached into that unique owner when an outer alias still shares it. Typed entries
+are promoted to boxed storage in place. The following `RuntimeCall` writer can therefore publish
+copy-on-write replacements back into the owning slot without making ordinary reads alias.
+The dynamic `MixedArrayGetForWrite` equivalent additionally COW-normalizes a runtime indexed array
+or associative hash, republishes a possibly split container in its cloned owning Mixed cell, and
+detaches the selected zval; the ordinary dynamic read clones that cell without mutating storage.
 
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
@@ -1423,7 +1438,7 @@ that is fully lowered to native EIR leaves both eval runtime features disabled.
 
 EIR does not choose physical registers, spill slots, callee-saved preservation,
 stack alignment, syscall numbers, object file directives, or symbol decoration.
-Those remain in `src/codegen/abi/` and platform helpers.
+Those remain in `src/codegen_support/abi/` and platform helpers.
 
 The EIR backend consumes:
 

@@ -19,6 +19,7 @@ use super::fibers;
 use super::generators;
 use super::io;
 use super::objects;
+use super::pdo;
 use super::pointers;
 use super::spl;
 use super::strings;
@@ -231,6 +232,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);
     arrays::emit_array_key_exists(emitter);
+    arrays::emit_array_key_exists_mixed_key(emitter);
     arrays::emit_undefined_array_key_warning(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_array_reverse(emitter);
@@ -306,6 +308,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
@@ -321,6 +324,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_int_checked_binops(emitter);
     arrays::emit_mixed_strict_eq(emitter);
+    arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
@@ -544,6 +548,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     zval::emit_zval_free_array(emitter);
     zval::emit_zval_free(emitter);
 
+    // PDO Tier-D callback adapters. Emitted only when a PDO callback registration
+    // is reachable; placed after arrays/heap/mixed and zval so the adapters can
+    // call __rt_array_new / __rt_mixed_from_value / __rt_mixed_cast_int / __rt_decref_*.
+    if features.pdo_udf {
+        pdo::emit_pdo_call_collation(emitter);
+        pdo::emit_pdo_call_scalar(emitter);
+        pdo::emit_pdo_call_agg_step(emitter);
+        pdo::emit_pdo_call_agg_final(emitter);
+    }
+
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);
     fibers::emit_fiber_free_stack(emitter);
@@ -647,6 +661,49 @@ mod tests {
                 sym
             );
         }
+    }
+
+    /// Verifies the PDO Tier-D callback adapter is emitted under `pdo_udf` on both
+    /// targets, so the `__elephc_pdo_adapter_addr` address-of reference resolves.
+    #[test]
+    fn test_runtime_emits_pdo_call_collation_when_pdo_udf() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_runtime(&mut emitter, RuntimeFeatures::all());
+            let asm = emitter.output();
+            for sym in [
+                "__rt_pdo_call_collation",
+                "__rt_pdo_call_scalar",
+                "__rt_pdo_call_agg_step",
+                "__rt_pdo_call_agg_final",
+            ] {
+                assert!(
+                    asm.contains(&format!(".globl {}\n", sym)),
+                    "pdo_udf runtime missing {} for {:?}/{:?}",
+                    sym,
+                    platform,
+                    arch
+                );
+            }
+        }
+    }
+
+    /// Verifies the PDO Tier-D adapters are omitted when `pdo_udf` is not requested,
+    /// so non-PDO programs never carry the callback adapters.
+    #[test]
+    fn test_runtime_omits_pdo_call_collation_without_pdo_udf() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_runtime(&mut emitter, RuntimeFeatures::none());
+        let asm = emitter.output();
+        assert!(!asm.contains("__rt_pdo_call_collation:"));
+        assert!(!asm.contains(".globl __rt_pdo_call_collation\n"));
+        assert!(!asm.contains("__rt_pdo_call_scalar:"));
+        assert!(!asm.contains(".globl __rt_pdo_call_scalar\n"));
+        assert!(!asm.contains(".globl __rt_pdo_call_agg_step\n"));
+        assert!(!asm.contains(".globl __rt_pdo_call_agg_final\n"));
     }
 
     /// Verifies the full macOS AArch64 runtime still assembles once per-symbol

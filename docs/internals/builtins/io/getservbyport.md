@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/getservbyport.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getservbyport.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3517](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3517) (`lower_getservbyport`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3518](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3518) (`lower_getservbyport`)
 - **Function symbol**: `lower_getservbyport()`
 
 

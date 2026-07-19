@@ -180,6 +180,6 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux syscall 1 = write
     emitter.instruction("syscall");                                             // emit the dynamic instanceof TypeError diagnostic
     emitter.instruction("mov edi, 1");                                          // exit status 1 indicates abnormal termination
-    emitter.instruction("mov eax, 60");                                         // Linux syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate after the dynamic instanceof TypeError
 }

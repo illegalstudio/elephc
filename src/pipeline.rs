@@ -139,7 +139,11 @@ pub(crate) fn compile(config: CliConfig) {
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
     let phase_started = Instant::now();
-    let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
+    let ast = if php_version == crate::php_version::PhpVersion::default() {
+        pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"))
+    } else {
+        pdo_prelude::inject_if_used_for_version(ast, with_crates.contains("pdo"), php_version)
+    };
     timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
@@ -355,18 +359,6 @@ pub(crate) fn compile(config: CliConfig) {
             .any(|lib| lib == "elephc_tls");
 
     let phase_started = Instant::now();
-    let runtime_pic = matches!(emit, Emit::Cdylib);
-    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target, runtime_features, runtime_pic) {
-        Ok(runtime_object) => runtime_object,
-        Err(err) => {
-            eprintln!("Runtime cache error: {}", err);
-            process::exit(1);
-        }
-    };
-    timings.record_since("runtime-cache", phase_started);
-    timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
-
-    let phase_started = Instant::now();
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
@@ -433,6 +425,23 @@ pub(crate) fn compile(config: CliConfig) {
         );
         return;
     }
+
+    let phase_started = Instant::now();
+    let runtime_pic = matches!(emit, Emit::Cdylib);
+    let runtime_object = match runtime_cache::prepare_runtime_object(
+        heap_size,
+        target,
+        runtime_features,
+        runtime_pic,
+    ) {
+        Ok(runtime_object) => runtime_object,
+        Err(err) => {
+            eprintln!("Runtime cache error: {}", err);
+            process::exit(1);
+        }
+    };
+    timings.record_since("runtime-cache", phase_started);
+    timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
 
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
