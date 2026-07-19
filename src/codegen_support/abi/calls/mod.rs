@@ -17,7 +17,7 @@ pub use incoming::emit_store_incoming_param;
 pub use invoke::{emit_call_label, emit_call_reg};
 pub use outgoing::{
     build_outgoing_arg_assignments_for_target, materialize_outgoing_args,
-    outgoing_call_stack_pad_bytes,
+    materialize_outgoing_c_abi_args, outgoing_call_stack_pad_bytes,
 };
 pub use stack::{
     emit_load_temporary_stack_slot, emit_pop_float_reg, emit_pop_reg, emit_pop_reg_pair,

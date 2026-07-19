@@ -305,10 +305,28 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Returns true for PDO's internal SQLSTATE-aware widening of Exception::getCode().
+pub(crate) fn is_pdo_exception_get_code_contract(
+    class_name: &str,
+    method_name: &str,
+    return_type: &PhpType,
+) -> bool {
+    let PhpType::Union(types) = return_type else {
+        return false;
+    };
+    class_name.trim_start_matches('\\') == "PDOException"
+        && php_symbol_key(method_name) == "getcode"
+        && types.len() == 2
+        && types.contains(&PhpType::Str)
+        && types.contains(&PhpType::Int)
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
-/// return type when the parent has one or make it incompatible.
+/// return type when the parent has one or make it incompatible. PDOException's internal
+/// getCode override is allowed to widen the compiler-owned Exception integer slot to PHP's
+/// PDO-specific SQLSTATE `string|int` contract.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
     class_name: &str,
@@ -339,12 +357,14 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
+    let pdo_exception_sqlstate_override = is_pdo_exception_get_code_contract(
+        class_name,
+        &method.name,
+        &child_sig.return_type,
+    );
     if parent_sig.declared_return
-        && !declared_return_type_compatible(
-            checker,
-            &parent_sig.return_type,
-            &child_sig.return_type,
-        )
+        && !pdo_exception_sqlstate_override
+        && !declared_return_type_compatible(checker, &parent_sig.return_type, &child_sig.return_type)
     {
         return Err(CompileError::new(
             method.span,

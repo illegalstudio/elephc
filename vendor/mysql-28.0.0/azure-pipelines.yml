@@ -1,0 +1,292 @@
+trigger:
+  - master
+  - ci-*
+
+jobs:
+  - job: "TestBasicLinux"
+    pool:
+      vmImage: "ubuntu-latest"
+    strategy:
+      maxParallel: 10
+      matrix:
+        stable:
+          RUST_TOOLCHAIN: stable
+        beta:
+          RUST_TOOLCHAIN: beta
+        nightly:
+          RUST_TOOLCHAIN: nightly
+    steps:
+      - bash: |
+          sudo apt-get update
+          sudo apt-get -y install pkg-config libssl-dev build-essential
+        displayName: Install Dependencies
+      - bash: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain $(RUST_TOOLCHAIN)
+          echo '##vso[task.setvariable variable=toolchain;isOutput=true]$(RUST_TOOLCHAIN)'
+        displayName: Install Rust
+        name: installRust
+      - bash: |
+          cargo fmt -- --check
+        condition: and(succeeded(), eq(variables['installRust.toolchain'], 'stable'))
+        displayName: cargo fmt
+      - bash: |
+          cargo clippy -- -Dclippy::dbg_macro -Dclippy::todo
+        condition: and(succeeded(), eq(variables['installRust.toolchain'], 'stable'))
+        displayName: lint
+      - bash: |
+          cargo check
+          cargo check --no-default-features --features default-rust
+          cargo check --no-default-features --features minimal
+        displayName: Run check
+
+  - job: "TestBasicMacOs"
+    pool:
+      vmImage: "macOS-latest"
+    strategy:
+      maxParallel: 10
+      matrix:
+        stable:
+          RUST_TOOLCHAIN: stable
+    steps:
+      - bash: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain $RUST_TOOLCHAIN
+        displayName: Install rust (MacOs)
+      - bash: |
+          cargo check
+          cargo check --no-default-features --features default-rust
+          cargo check --no-default-features --features minimal
+        displayName: Run check
+
+  - job: "TestBasicWindows"
+    pool:
+      vmImage: "windows-latest"
+    strategy:
+      maxParallel: 10
+      matrix:
+        stable:
+          RUST_TOOLCHAIN: stable
+    steps:
+      - powershell: |
+          net stop MySQL
+          sc delete MySQL
+          winget uninstall Oracle.MySQL --accept-source-agreements
+
+          $paths = @(
+            "C:\Program Files\MySQL",
+            "C:\Program Files (x86)\MySQL",
+            "C:\ProgramData\MySQL",
+            "$env:AppData\MySQL"
+          )
+
+          foreach ($path in $paths) {
+            if (Test-Path $path) {
+              Remove-Item -Path $path -Recurse -Force
+              Write-Host "Удалено: $path"
+            }
+          }
+      - script: |
+          choco install 7zip
+          mkdir C:\mysql
+          CD /D C:\mysql
+          curl -fsS --retry 3 --retry-connrefused -o mysql.msi https://cdn.mysql.com//Downloads/MySQLInstaller/mysql-installer-community-8.0.45.0.msi
+          msiexec /q /log install.txt /i mysql.msi datadir=C:\mysql installdir=C:\mysql
+          call "C:\Program Files (x86)\MySQL\MySQL Installer for Windows\MySQLInstallerConsole.exe" community install server;8.0.42;x64:*:port=3306;enable_named_pipe=true;rootpasswd=password;servicename=MySQL -silent
+          netsh advfirewall firewall add rule name="Allow mysql" dir=in action=allow edge=yes remoteip=any protocol=TCP localport=80,8080,3306
+          net stop MySQL
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqld" --remove
+          echo [mysqld] >> C:\my.cnf
+          echo enable-named-pipe >> C:\my.cnf
+          echo socket=MYSQL >> C:\my.cnf
+          echo named_pipe_full_access_group=*everyone* >> C:\my.cnf
+          echo datadir=C:\\ProgramData\\MySQL\\MySQL Server 8.0\\Data\\ >> C:\my.cnf
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqld" --install MySQL --defaults-file=C:\my.cnf
+          net start MySQL
+          cat C:\my.cnf
+          cat "C:\ProgramData\MySQL\MySQL Server 8.0\Data\*err"
+          cat "C:\ProgramData\MySQL\MySQL Server 8.0\Data\*log"
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET GLOBAL max_allowed_packet = 36700160;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET @@GLOBAL.ENFORCE_GTID_CONSISTENCY = WARN;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET @@GLOBAL.ENFORCE_GTID_CONSISTENCY = ON;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET @@GLOBAL.GTID_MODE = OFF_PERMISSIVE;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET @@GLOBAL.GTID_MODE = ON_PERMISSIVE;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET @@GLOBAL.GTID_MODE = ON;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SET GLOBAL local_infile=1;" -uroot -ppassword
+          "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -e "SHOW VARIABLES;" -uroot -ppassword
+        displayName: Install MySql
+      - bash: |
+          rustup install $RUST_TOOLCHAIN
+        displayName: Install Rust (Windows)
+      - bash: |
+          SSL=false COMPRESS=false cargo test
+          SSL=true COMPRESS=false cargo test --features native-tls
+          SSL=false COMPRESS=true cargo test
+          SSL=true COMPRESS=true cargo test --features native-tls
+
+          SSL=true COMPRESS=false cargo test --no-default-features --features rustls-tls,minimal-rust,time,frunk,binlog
+          SSL=true COMPRESS=true cargo test --no-default-features --features rustls-tls-ring,minimal-rust,time,frunk,binlog
+
+          SSL=false COMPRESS=true cargo test --no-default-features --features minimal,time,frunk,binlog
+          SSL=false COMPRESS=false cargo test --no-default-features --features minimal,time,frunk,binlog
+        env:
+          RUST_BACKTRACE: 1
+          DATABASE_URL: mysql://root:password@localhost/mysql
+        displayName: Run tests
+
+  - job: "TestTiDB"
+    pool:
+      vmImage: "ubuntu-latest"
+    strategy:
+      matrix:
+        v7.5.1:
+          DB_VERSION: "v7.5.1"
+        v6.5.8:
+          DB_VERSION: "v6.5.8"
+        v5.3.4:
+          DB_VERSION: "v5.3.4"
+        v5.0.6:
+          DB_VERSION: "v5.0.6"
+    steps:
+      - bash: |
+          curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh
+          source ~/.profile
+          source ~/.bash_profile
+          tiup playground $(DB_VERSION) --db 1 --pd 1 --kv 1 &
+          while ! nc -W 1 localhost 4000 | grep -q -P '.+'; do sleep 1; done
+        displayName: Install and run TiDB
+      - bash: cargo test should_reuse_connections -- --nocapture
+        displayName: Run tests
+        env:
+          RUST_BACKTRACE: 1
+          DATABASE_URL: mysql://root@127.0.0.1:4000/mysql
+
+  - job: "TestMySql"
+    pool:
+      vmImage: "ubuntu-latest"
+    strategy:
+      maxParallel: 10
+      matrix:
+        v91:
+          DB_VERSION: "9.1"
+        v90:
+          DB_VERSION: "9.0"
+        v84:
+          DB_VERSION: "8.4"
+        v80:
+          DB_VERSION: "8.0-debian"
+        v57:
+          DB_VERSION: "5.7-debian"
+        v56:
+          DB_VERSION: "5.6"
+    steps:
+      - bash: |
+          sudo apt-get update
+          sudo apt-get install docker.io netcat grep
+          sudo systemctl unmask docker
+          sudo systemctl start docker
+          docker --version
+        displayName: Install docker
+      - bash: |
+          if [[ "5.6" == "$(DB_VERSION)" ]]; then ARG="--secure-auth=OFF"; fi
+          docker run -d --name container -v `pwd`:/root -p 3307:3306 -e MYSQL_ROOT_PASSWORD=password mysql:$(DB_VERSION) --max-allowed-packet=36700160 --local-infile --log-bin=mysql-bin --log-slave-updates --gtid_mode=ON --enforce_gtid_consistency=ON --server-id=1 $ARG
+          while ! nc -W 1 localhost 3307 | grep -q -P '.+'; do sleep 1; done
+        displayName: Run MySql in Docker
+      - bash: |
+          docker exec container bash -l -c "mysql -uroot -ppassword -e \"SET old_passwords = 1; GRANT ALL PRIVILEGES ON *.* TO 'root2'@'%' IDENTIFIED WITH mysql_old_password AS 'password'; SET PASSWORD FOR 'root2'@'%' = OLD_PASSWORD('password')\"";
+          docker exec container bash -l -c "echo 'deb [trusted=yes] http://archive.debian.org/debian/ stretch main non-free contrib' > /etc/apt/sources.list"
+          docker exec container bash -l -c "echo 'deb-src [trusted=yes] http://archive.debian.org/debian/ stretch main non-free contrib ' >> /etc/apt/sources.list"
+          docker exec container bash -l -c "echo 'deb [trusted=yes] http://archive.debian.org/debian-security/ stretch/updates main non-free contrib' >> /etc/apt/sources.list"
+          docker exec container bash -l -c "echo 'deb [trusted=yes] http://repo.mysql.com/apt/debian/ stretch mysql-5.6' > /etc/apt/sources.list.d/mysql.list"
+        condition: eq(variables['DB_VERSION'], '5.6')
+      - bash: |
+          docker exec container bash -l -c "apt-get --allow-unauthenticated -y update"
+          docker exec container bash -l -c "apt-get install -y curl clang libssl-dev pkg-config build-essential"
+          docker exec container bash -l -c "curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable"
+        displayName: Install Rust in docker (Debian)
+        condition: or(eq(variables['DB_VERSION'], '5.6'), eq(variables['DB_VERSION'], '5.7-debian'), eq(variables['DB_VERSION'], '8.0-debian'))
+      - bash: |
+          docker exec container bash -l -c "microdnf install dnf"
+          docker exec container bash -l -c "dnf group install \"Development Tools\""
+          docker exec container bash -l -c "curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable"
+        displayName: Install Rust in docker (RedHat)
+        condition: not(or(eq(variables['DB_VERSION'], '5.6'), eq(variables['DB_VERSION'], '5.7-debian'), eq(variables['DB_VERSION'], '8.0-debian')))
+      - bash: |
+          if [[ "5.6" != "$(DB_VERSION)" ]]; then SSL=true; else DATABASE_URL="mysql://root2:password@localhost/mysql?secure_auth=false"; fi
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL cargo test"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL COMPRESS=true cargo test"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=$SSL cargo test --features native-tls"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=$SSL COMPRESS=true cargo test --features native-tls"
+
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true COMPRESS=false cargo test --no-default-features --features rustls-tls,minimal-rust,time,frunk,binlog"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true COMPRESS=true cargo test --no-default-features --features rustls-tls-ring,minimal-rust,time,frunk,binlog"
+
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=false COMPRESS=true cargo test --no-default-features --features minimal,time,frunk,binlog"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=false COMPRESS=false cargo test --no-default-features --features minimal,time,frunk,binlog"
+        env:
+          RUST_BACKTRACE: 1
+          DATABASE_URL: mysql://root:password@localhost/mysql
+        displayName: Run tests in Docker
+
+  - job: "TestMariaDb"
+    pool:
+      vmImage: "ubuntu-latest"
+    strategy:
+      maxParallel: 10
+      matrix:
+        verylatest:
+          CONTAINER: "quay.io/mariadb-foundation/mariadb-devel:verylatest"
+        latest:
+          CONTAINER: "quay.io/mariadb-foundation/mariadb-devel:latest"
+        lts:
+          CONTAINER: "mariadb:lts"
+    steps:
+      - bash: |
+          sudo apt-get update
+          sudo apt-get install docker.io
+          sudo systemctl unmask docker
+          sudo systemctl start docker
+          docker --version
+        displayName: Install docker
+      - bash: |
+          docker run --rm -d \
+              --name container \
+              -v `pwd`:/root \
+              -p 3307:3306 \
+              -e MARIADB_ROOT_PASSWORD=password \
+              $(CONTAINER) \
+                  --max-allowed-packet=36700160 \
+                  --local-infile \
+                  --performance-schema=on \
+                  --log-bin=mysql-bin --gtid-domain-id=1 \
+                  --server-id=1 \
+                  --ssl \
+                  --ssl-ca=/root/tests/ca.crt \
+                  --ssl-cert=/root/tests/server.crt \
+                  --ssl-key=/root/tests/server-key.pem \
+                  --secure-auth=OFF \
+                  --plugin-load-add=auth_parsec \
+                  --plugin-load-add=auth_ed25519 &
+          while ! docker exec container healthcheck.sh --connect --innodb_initialized ; do sleep 1; echo waiting; done
+          docker logs container
+          docker exec container bash -l -c "mariadb -uroot -ppassword -e 'SHOW VARIABLES LIKE \"%ssl%\"'"
+          docker exec container bash -l -c "ls -la /root/tests"
+        displayName: Run MariaDb in Docker
+      - bash: |
+          docker exec container bash -l -c "apt-get update"
+          docker exec container bash -l -c "apt-get install -y curl clang libssl-dev pkg-config"
+          docker exec container bash -l -c "curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable"
+        displayName: Install Rust in docker
+      - bash: |
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL cargo test --features client_ed25519,client_parsec"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL COMPRESS=true cargo test --features client_ed25519,client_parsec"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true cargo test --features native-tls,client_ed25519,client_parsec"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true COMPRESS=true cargo test --features native-tls,client_ed25519,client_parsec"
+
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true COMPRESS=false cargo test --no-default-features --features rustls-tls,minimal-rust,time,frunk,binlog,client_ed25519,client_parsec"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=true COMPRESS=true cargo test --no-default-features --features rustls-tls-ring,minimal-rust,time,frunk,binlog,client_ed25519,client_parsec"
+
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=false COMPRESS=true cargo test --no-default-features --features minimal,time,frunk,binlog,client_ed25519,client_parsec"
+          docker exec container bash -l -c "cd \$HOME && DATABASE_URL=$DATABASE_URL SSL=false COMPRESS=false cargo test --no-default-features --features minimal,time,frunk,binlog,client_ed25519,client_parsec"
+        env:
+          RUST_BACKTRACE: 1
+          DATABASE_URL: mysql://root:password@localhost/mysql
+        displayName: Run tests in Docker

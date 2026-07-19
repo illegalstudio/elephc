@@ -11,13 +11,22 @@
 //   cargo run -- examples/pdo-pgsql/main.php
 //   ELEPHC_PG_DSN='pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test' \
 //       ./examples/pdo-pgsql/main
+//
+// For libpq-only connection modes such as GSSAPI, `require_auth`, encrypted
+// client keys, or replication connections, build the bridge and final program
+// with the libpq profile. The DSN itself keeps normal libpq keywords:
+//
+//   cargo build -p elephc-pdo --features libpq-gss
+//   ELEPHC_PDO_LIBPQ=1 cargo run -- examples/pdo-pgsql/main.php
+// Homebrew's keg-only libpq also needs /opt/homebrew/opt/libpq/bin on PATH while
+// the bridge is built.
 
 $dsn = (string) getenv("ELEPHC_PG_DSN");
 if ($dsn === "") {
     $dsn = "pgsql:host=localhost;port=55432;dbname=testdb;user=test;password=test";
 }
 
-$db = new PDO($dsn);
+$db = new PDO($dsn, null, null, [PDO::ATTR_PREFETCH => false]);
 
 $db->exec("DROP TABLE IF EXISTS contacts");
 $db->exec("CREATE TABLE contacts (

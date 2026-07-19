@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Runs the frontend with PDO prelude injection and asserts its first diagnostic.
+fn expect_pdo_error(src: &str, expected_substr: &str) {
+    let tokens = tokenize(src).expect("PDO diagnostic fixture must tokenize");
+    let ast = parse(&tokens).expect("PDO diagnostic fixture must parse");
+    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::pdo_prelude::inject_if_used(ast, false);
+    let ast = elephc::name_resolver::resolve(ast).expect("PDO fixture names must resolve");
+    let ast = elephc::optimize::fold_constants(ast);
+    let message = types::check(&ast)
+        .expect_err("PDO diagnostic fixture must fail")
+        .message;
+    assert!(
+        message.contains(expected_substr),
+        "Error '{}' doesn't contain '{}'",
+        message,
+        expected_substr
+    );
+}
+
 /// Verifies that `instanceof parent` reports "Class has no parent class" when the class
 /// has no parent.
 #[test]
@@ -736,5 +755,23 @@ fn test_error_nullsafe_dynamic_method_call_named_arguments() {
     expect_error(
         "<?php $obj?->$m(value: 1);",
         "Named arguments are not supported in dynamic calls",
+    );
+}
+
+/// Verifies user code cannot invoke the compiler-private PDORow constructor.
+#[test]
+fn test_error_pdo_row_constructor_is_private() {
+    expect_pdo_error(
+        "<?php $row = new PDORow();",
+        "Cannot access private constructor: PDORow::__construct",
+    );
+}
+
+/// Verifies user code cannot call PDOException's private driver-metadata factory.
+#[test]
+fn test_error_pdo_exception_internal_factory_is_private() {
+    expect_pdo_error(
+        "<?php $error = PDOException::__elephcFromErrorInfo('x', ['HY000', 1]);",
+        "Cannot access private method: PDOException::__elephcFromErrorInfo",
     );
 }

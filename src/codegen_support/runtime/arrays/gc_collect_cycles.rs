@@ -187,14 +187,19 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
 
     emitter.label("__rt_gc_collect_cycles_count_object");
-    emitter.instruction("ldr w13, [x9]");                                       // load the object payload size from the heap header
-    emitter.instruction("sub x13, x13, #8");                                    // subtract the leading class_id field
-    emitter.instruction("lsr x13, x13, #4");                                    // divide by 16 to get the number of property slots
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_gc_desc_count");
     emitter.instruction("ldr x15, [x15]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x14, x15");                                        // is the class_id within range?
     emitter.instruction("b.hs __rt_gc_collect_cycles_count_next");              // invalid class ids contribute no traversable edges
+    emitter.instruction("lsl x10, x14, #3");                                    // scale the class id by eight bytes for class-layout tables
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_payload_sizes");
+    emitter.instruction("ldr x13, [x15, x10]");                                 // load the class-declared payload size, not reused heap capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x15, [x15, x10]");                                 // load whether the layout includes a dynamic-property tail
+    emitter.instruction("sub x13, x13, #8");                                    // subtract the leading class_id field
+    emitter.instruction("sub x13, x13, x15, lsl #3");                           // exclude the optional eight-byte dynamic-property tail
+    emitter.instruction("lsr x13, x13, #4");                                    // divide the fixed property region by 16 bytes per slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x14, x14, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x14, [x15, x14]");                                 // load the property-tag descriptor pointer

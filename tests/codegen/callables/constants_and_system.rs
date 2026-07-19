@@ -365,6 +365,20 @@ fn test_call_user_func_array_basic() {
     assert_eq!(out, "7");
 }
 
+/// Verifies a callable boxed behind `mixed` remains recognizable by `is_callable()`.
+#[test]
+fn test_is_callable_accepts_boxed_callable_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+function accepts_mixed(mixed $value): bool {
+    return is_callable($value);
+}
+echo accepts_mixed(function () { return 1; }) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
 // Tests `call_user_func_array("double", [21])` where `double($n) { return $n * 2; }`
 // outputs "42".
 /// Verifies that call user func array single arg.

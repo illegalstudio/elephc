@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/time.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/time.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:615](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L615) (`lower_time`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:669](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L669) (`lower_time`)
 - **Function symbol**: `lower_time()`
 
 

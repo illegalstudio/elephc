@@ -458,6 +458,17 @@ impl Checker {
             // exception) instead of widening to `Mixed`, which would break
             // object-typed dispatch (`Fiber::throw` / `Generator::throw`).
             (PhpType::Object(_), PhpType::Object(_)) => a.clone(),
+            // Two array parameters join on their ELEMENT type, not to a bare `Mixed`. Collapsing
+            // `array<int>` and `array<mixed>` to `Mixed` would strip the parameter of its array-ness
+            // and break `count()`/`foreach` in the body; what the callee actually needs is
+            // `array<mixed>`, whose slots are boxed cells the body can then unbox correctly.
+            (PhpType::Array(a_elem), PhpType::Array(b_elem)) => {
+                PhpType::Array(Box::new(if a_elem == b_elem {
+                    a_elem.as_ref().clone()
+                } else {
+                    PhpType::Mixed
+                }))
+            }
             _ => PhpType::Mixed,
         }
     }

@@ -12,7 +12,7 @@
 #[allow(dead_code)]
 pub(super) fn map_syscall(macos_num: u32) -> u32 {
     match macos_num {
-        1 => 93,
+        1 => 94,
         3 => 63,
         4 => 64,
         5 => 56,

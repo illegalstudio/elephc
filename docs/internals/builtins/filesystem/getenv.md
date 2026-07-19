@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/getenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getenv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:645](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L645) (`lower_getenv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:699](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L699) (`lower_getenv`)
 - **Function symbol**: `lower_getenv()`
 
 

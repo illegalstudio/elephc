@@ -76,8 +76,18 @@ pub(super) fn layout_for_function(
     let mut local_offsets = HashMap::new();
     let mut offset = value_placement.total_slot_bytes;
     for local in &function.locals {
+        // A parameter may be widened to Mixed storage after its signature has been fixed (for
+        // example, bindColumn() promotes a string parameter to a durable ref-cell). Reserve the
+        // larger of the local representation and the incoming ABI representation so saving a
+        // two-word string cannot overlap the preceding widened one-word local.
+        let incoming_param_bytes = function
+            .params
+            .get(local.id.as_raw() as usize)
+            .map(|param| param.php_type.codegen_repr().stack_size())
+            .unwrap_or(0);
         let bytes = value_placement::bytes_for(local.ir_type)
-            .max(local.php_type.codegen_repr().stack_size());
+            .max(local.php_type.codegen_repr().stack_size())
+            .max(incoming_param_bytes);
         if bytes == 0 {
             continue;
         }
@@ -100,6 +110,17 @@ pub(super) fn layout_for_function(
     for reg in allocation.used_callee_saved() {
         offset += 8;
         callee_saved_offsets.push((*reg, offset));
+    }
+    // Method/callable dispatch hand-uses the reserved nested-call register
+    // (x19/r12) to hold a receiver across argument-lowering calls; it is
+    // callee-saved but outside the allocator's tracking, so reserve a save slot
+    // when the function needs it (issue #511).
+    if function_uses_nested_call_reg(function) {
+        let reg = nested_call_reg_name(target.arch);
+        if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
+            offset += 8;
+            callee_saved_offsets.push((reg, offset));
+        }
     }
     offset += 8;
     let concat_base_offset = offset;
@@ -158,6 +179,47 @@ fn try_handler_tokens(function: &Function) -> Vec<i64> {
         }
     }
     tokens
+}
+
+/// Returns the reserved "nested call" scratch register for `arch` — the
+/// callee-saved register (`x19` / `r12`) that method- and callable-dispatch
+/// lowering hand-uses to hold a receiver or descriptor across argument-lowering
+/// calls. It lives outside the register allocator's pools, so a function that
+/// uses it must reserve its own save slot (see `layout_for_function`). Mirrors
+/// `abi::nested_call_reg`, which resolves the same register from an `Emitter`.
+fn nested_call_reg_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    }
+}
+
+/// Returns true when the function contains a method call whose receiver is
+/// dispatched through the reserved nested-call register: a union receiver or a
+/// receiver whose codegen representation is `Mixed`. `lower_mixed_method_call`
+/// and `lower_nullable_receiver_method_call` hand-use `nested_call_reg` to hold
+/// the unboxed object payload across argument-lowering calls, but that register
+/// is callee-saved and outside the allocator's tracking — without a reserved
+/// save slot the function silently clobbers the caller's value (issue #511: a
+/// `--web` handler calling a method on a `PDOStatement|bool` receiver corrupted
+/// the hyper worker's `x19`, freeing a garbage pointer during response flush).
+/// A plain single non-nullable object receiver uses direct dispatch and is
+/// excluded. Over-detection is harmless — an unused save/restore pair costs one
+/// store and one load — so the receiver test errs toward inclusion.
+fn function_uses_nested_call_reg(function: &Function) -> bool {
+    function.instructions.iter().any(|inst| {
+        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
+            return false;
+        }
+        let Some(receiver) = inst.operands.first() else {
+            return false;
+        };
+        let Some(value) = function.value(*receiver) else {
+            return false;
+        };
+        matches!(value.php_type, PhpType::Union(_))
+            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    })
 }
 
 /// Emits the process-entry prologue for the EIR main function.
@@ -437,6 +499,13 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Enable the small-bin double-free guard for every --web worker process: a detected
+    // double free `_exit(1)`s the worker (the prefork master respawns it), containing
+    // corruption to one request. Cheap — a short bin-chain scan on free, with no
+    // per-allocation free-list validation. Set once here at worker startup, not per
+    // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
+    ctx.emitter.comment("enable web heap-guard flag");
+    abi::emit_enable_web_heap_guard_flag(ctx.emitter);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
@@ -490,6 +559,11 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
                 || ctx.has_dynamic_ref_cell_state(local.id)
@@ -829,6 +903,11 @@ fn function_cleanup_locals(
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
                 || ctx.has_dynamic_ref_cell_state(local.id)
@@ -860,7 +939,7 @@ fn function_cleanup_locals(
     locals
 }
 
-/// Returns whether a local slot is populated from the function's incoming parameter ABI.
+/// Returns whether a local slot belongs to a function parameter.
 fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
 }

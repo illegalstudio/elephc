@@ -5433,6 +5433,26 @@ fclose($f);
     assert_eq!(out, "a,b,c\n\"x,y\",z\n");
 }
 
+/// A user wrapper's negative `stream_write()` result is the runtime failure
+/// sentinel and must surface from PHP `fwrite()` as boolean false, never integer
+/// `-1`; successful writes remain integer byte counts.
+#[test]
+fn test_fwrite_user_wrapper_negative_result_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class FailWriteWrapper {
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_write(string $data): int { return -1; }
+}
+stream_wrapper_register("failwrite", "FailWriteWrapper");
+$stream = fopen("failwrite://x", "r+");
+$result = fwrite($stream, "x");
+echo ($result === false) ? "false" : gettype($result) . ":" . $result;
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
 /// Verifies compiled PHP output for fopen user wrapper fgetc and rewind dispatch.
 #[test]
 fn test_fopen_user_wrapper_fgetc_and_rewind_dispatch() {

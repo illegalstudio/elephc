@@ -10,9 +10,32 @@
 
 use super::*;
 
+/// Verifies AArch64 truthiness helpers use a short inverse branch followed by a
+/// wide-range unconditional branch, avoiding `cbz`/`cbnz` fixup overflows in very
+/// large generated functions.
+#[test]
+fn test_emit_branch_helpers_use_long_range_aarch64_sequence() {
+    let mut emitter = test_emitter();
+    emit_branch_if_int_result_zero(&mut emitter, "zero_label");
+    emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    cbnz x0, 1f\n",
+            "    b zero_label\n",
+            "1:\n",
+            "    cbz x0, 1f\n",
+            "    b nonzero_label\n",
+            "1:\n",
+        )
+    );
+}
+
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
-/// sets up x29 as the frame pointer, and that restore/return undo this correctly.
+/// sets up x29 as the frame pointer, and that restore/return undo this correctly
+/// via the frame-pointer-anchored restore (immune to mid-body sp drift).
 #[test]
 fn test_emit_frame_helpers_small_frame() {
     let mut emitter = test_emitter();
@@ -27,8 +50,9 @@ fn test_emit_frame_helpers_small_frame() {
             "    sub sp, sp, #64\n",
             "    stp x29, x30, [sp, #48]\n",
             "    add x29, sp, #48\n",
-            "    ldp x29, x30, [sp, #48]\n",
-            "    add sp, sp, #64\n",
+            "    mov x9, x29\n",
+            "    add sp, x9, #16\n",
+            "    ldp x29, x30, [x9]\n",
             "    ret\n",
         )
     );

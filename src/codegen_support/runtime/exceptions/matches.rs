@@ -94,7 +94,8 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
 /// Output: eax = 1 if the thrown object matches the catch target, 0 otherwise.
 ///
 /// Identical logic to the ARM64 variant but expressed in x86_64 System V ABI conventions.
-/// Uses callee-saved registers r8–r12 and follows the x86_64 unwind/cleanup ABI expectations.
+/// Uses only caller-saved scratch registers so generated callers keep their
+/// live SysV callee-saved values intact across the helper call.
 fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_matches ---");
@@ -131,8 +132,8 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_exception_matches_interface_loop");
     emitter.instruction("test r11, r11");                                       // are there any remaining interfaces to scan for a catch match?
     emitter.instruction("je __rt_exception_matches_no");                        // no remaining interfaces means this catch target does not apply
-    emitter.instruction("mov r12, QWORD PTR [r10]");                            // r12 = current implemented interface_id
-    emitter.instruction("cmp r12, rsi");                                        // does this implemented interface match the catch target id?
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // rcx = current implemented interface_id without clobbering callee-saved r12
+    emitter.instruction("cmp rcx, rsi");                                        // does this implemented interface match the catch target id?
     emitter.instruction("je __rt_exception_matches_yes");                       // matching interface ids mean the catch clause applies
     emitter.instruction("add r10, 16");                                         // advance to the next [interface_id, impl_ptr] pair
     emitter.instruction("sub r11, 1");                                          // consume one implemented interface entry
@@ -145,4 +146,21 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_exception_matches_no");
     emitter.instruction("xor eax, eax");                                        // return false when the catch type does not match the thrown object
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies the x86_64 matcher never clobbers SysV callee-saved registers.
+    #[test]
+    fn linux_x86_64_matcher_uses_only_volatile_scratch_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_exception_matches(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("r12"));
+        assert!(asm.contains("mov rcx, QWORD PTR [r10]"));
+    }
 }

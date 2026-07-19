@@ -19,7 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, validate_signature_compatibility,
+    declared_return_type_compatible, is_pdo_exception_get_code_contract,
+    validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
 
@@ -463,7 +464,18 @@ fn validate_interface_method(
             )?;
         }
     }
+    let contract_owner = state
+        .method_declaring_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let pdo_exception_sqlstate_contract = is_pdo_exception_get_code_contract(
+        contract_owner,
+        method_name,
+        &actual_sig.return_type,
+    );
     if required_sig.declared_return
+        && !pdo_exception_sqlstate_contract
         && !declared_return_type_compatible(
             checker,
             &required_sig.return_type,

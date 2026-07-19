@@ -117,6 +117,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _heap_free_list, 8, 3\n");
     out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
+    out.push_str(".comm _web_heap_guard_enabled, 8, 3\n");
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
     out.push_str(".comm _json_last_error, 8, 3\n");

@@ -169,6 +169,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         is_readonly_class: false,
         allow_dynamic_properties: true,
         constants: HashMap::new(),
+        constant_deprecations: HashMap::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),

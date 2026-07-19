@@ -23,6 +23,8 @@ mod fibers;
 pub(crate) mod generators;
 mod io;
 mod objects;
+/// PDO Tier-D callback adapters (`__rt_pdo_*`) re-entering compiled-PHP callables.
+mod pdo;
 mod pointers;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;

@@ -123,6 +123,42 @@ fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     assert!(out.contains("    add sp, sp, #160\n"));
 }
 
+/// Verifies that AArch64 C overflow scalars are packed into adjacent 8-byte words
+/// while preserving the mandatory 16-byte stack alignment at the call site.
+#[test]
+fn test_materialize_outgoing_c_abi_args_packs_stack_words() {
+    let mut emitter = test_emitter();
+    let assignments = build_outgoing_arg_assignments_for_target(
+        Target::new(Platform::MacOS, Arch::AArch64),
+        &[
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Pointer(None),
+            PhpType::Pointer(None),
+        ],
+        0,
+    );
+
+    let overflow_bytes = materialize_outgoing_c_abi_args(&mut emitter, &assignments);
+    let out = emitter.output();
+
+    assert_eq!(overflow_bytes, 16);
+    assert!(out.contains("    sub sp, sp, #32\n"));
+    assert!(out.contains("    ldr x10, [sp, #48]\n"));
+    assert!(out.contains("    str x10, [sp]\n"));
+    assert!(out.contains("    ldr x10, [sp, #32]\n"));
+    assert!(out.contains("    str x10, [sp, #8]\n"));
+    assert!(out.contains("    str x10, [sp, #176]\n"));
+    assert!(out.contains("    str x10, [sp, #184]\n"));
+    assert!(out.contains("    add sp, sp, #176\n"));
+}
+
 /// Tests that `emit_store_local_slot_to_symbol` handles string slots with large
 /// offsets (>4095) by emitting the necessary adrp/add page calculations and
 /// decomposed sub instructions to reach the slot, then stores both x10 and x11

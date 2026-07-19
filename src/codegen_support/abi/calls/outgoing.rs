@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Stack reservation and register ordering must preserve live values while matching target ABI limits.
+//! - Elephc calls retain 16-byte stack slots, while C ABI overflow scalars are
+//!   packed into 8-byte words inside a 16-byte-aligned outgoing area.
 
 use crate::codegen_support::{
     emit::Emitter,
@@ -20,6 +22,15 @@ use super::super::registers::{
     secondary_scratch_reg, tertiary_scratch_reg, OutgoingArgAssignment, STACK_ARG_SENTINEL,
 };
 use super::stack::{emit_load_temporary_stack_slot, emit_store_to_sp};
+
+/// Selects the caller-stack layout used for arguments that overflow registers.
+#[derive(Clone, Copy)]
+enum OutgoingStackLayout {
+    /// Elephc's generated-function ABI uses one 16-byte slot per argument.
+    Elephc,
+    /// The platform C ABI packs each supported scalar extern argument into one word.
+    C,
+}
 
 /// Plans register and stack assignment for each outgoing call argument.
 ///
@@ -92,6 +103,20 @@ fn arg_slot_size(ty: &PhpType) -> usize {
     }
 }
 
+/// Returns the caller-stack bytes occupied by one overflow argument in `layout`.
+fn outgoing_arg_slot_size(ty: &PhpType, layout: OutgoingStackLayout) -> usize {
+    match (layout, ty) {
+        (_, PhpType::Void) => 0,
+        (OutgoingStackLayout::Elephc, _) => 16,
+        (OutgoingStackLayout::C, _) => 8,
+    }
+}
+
+/// Rounds a non-empty outgoing stack area up to the platform-required 16-byte alignment.
+fn align_outgoing_stack_bytes(bytes: usize) -> usize {
+    (bytes + 15) & !15
+}
+
 /// Copies one argument slot from `src_offset` (temporary stack) to `dst_offset` (SP-based
 /// outgoing area) using scratch registers.
 ///
@@ -152,16 +177,41 @@ pub fn materialize_outgoing_args(
     emitter: &mut Emitter,
     assignments: &[OutgoingArgAssignment],
 ) -> usize {
-    let slot_sizes: Vec<usize> = assignments
+    materialize_outgoing_args_with_layout(emitter, assignments, OutgoingStackLayout::Elephc)
+}
+
+/// Materializes pre-evaluated scalar extern arguments using the platform C ABI stack layout.
+///
+/// The temporary evaluation stack still uses elephc's 16-byte slots, but overflow
+/// arguments are packed into consecutive 8-byte C words and the final area is padded
+/// to preserve the target's 16-byte call-site stack alignment.
+pub fn materialize_outgoing_c_abi_args(
+    emitter: &mut Emitter,
+    assignments: &[OutgoingArgAssignment],
+) -> usize {
+    materialize_outgoing_args_with_layout(emitter, assignments, OutgoingStackLayout::C)
+}
+
+/// Copies pre-evaluated arguments into registers and the selected caller-stack layout.
+fn materialize_outgoing_args_with_layout(
+    emitter: &mut Emitter,
+    assignments: &[OutgoingArgAssignment],
+    layout: OutgoingStackLayout,
+) -> usize {
+    let temp_slot_sizes: Vec<usize> = assignments
         .iter()
         .map(|assignment| arg_slot_size(&assignment.ty))
         .collect();
-    let total_temp_bytes: usize = slot_sizes.iter().sum();
+    let outgoing_slot_sizes: Vec<usize> = assignments
+        .iter()
+        .map(|assignment| outgoing_arg_slot_size(&assignment.ty, layout))
+        .collect();
+    let total_temp_bytes: usize = temp_slot_sizes.iter().sum();
     let mut temp_offsets = vec![0usize; assignments.len()];
     let mut running_offset = 0usize;
     for i in (0..assignments.len()).rev() {
         temp_offsets[i] = running_offset;
-        running_offset += slot_sizes[i];
+        running_offset += temp_slot_sizes[i];
     }
 
     let overflow_indices: Vec<usize> = assignments
@@ -169,7 +219,11 @@ pub fn materialize_outgoing_args(
         .enumerate()
         .filter_map(|(idx, assignment)| (!assignment.in_register()).then_some(idx))
         .collect();
-    let overflow_bytes: usize = overflow_indices.iter().map(|idx| slot_sizes[*idx]).sum();
+    let packed_overflow_bytes: usize = overflow_indices
+        .iter()
+        .map(|idx| outgoing_slot_sizes[*idx])
+        .sum();
+    let overflow_bytes = align_outgoing_stack_bytes(packed_overflow_bytes);
 
     let staging_bytes = overflow_bytes;
     let reserved_overflow_bytes = overflow_bytes + staging_bytes;
@@ -232,7 +286,7 @@ pub fn materialize_outgoing_args(
         for idx in &overflow_indices {
             let src_offset = reserved_overflow_bytes + temp_offsets[*idx];
             emit_copy_stack_arg_slot(emitter, &assignments[*idx].ty, src_offset, staging_offset);
-            staging_offset += slot_sizes[*idx];
+            staging_offset += outgoing_slot_sizes[*idx];
         }
 
         let final_stack_base = total_temp_bytes + staging_bytes;
@@ -244,7 +298,7 @@ pub fn materialize_outgoing_args(
                 staging_offset,
                 final_stack_base + staging_offset,
             );
-            staging_offset += slot_sizes[*idx];
+            staging_offset += outgoing_slot_sizes[*idx];
         }
     }
 

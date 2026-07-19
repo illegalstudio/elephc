@@ -3,7 +3,7 @@ name = "elephc-pdo"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Multi-driver database bridge staticlib (SQLite + PostgreSQL) for the elephc PHP-to-native compiler's PDO support"
+description = "Multi-driver database bridge staticlib for the elephc PHP-to-native compiler's PDO support"
 
 # Built as both a C-callable staticlib (linked into compiled PHP programs that
 # use PDO) and an rlib (so the bridge can be unit-tested from Rust via
@@ -22,11 +22,16 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 # TCP/Unix sockets when a `pgsql:` DSN is opened. The `with-*` features add the
 # FromSql decoders for date/time, json, and uuid columns so the driver can read
 # those types back as their PHP-string representation.
-postgres = { version = "0.19", features = [
+tokio-postgres = { version = "0.7", features = [
     "with-chrono-0_4",
     "with-serde_json-1",
     "with-uuid-1",
 ] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+futures-util = { version = "0.3", features = ["sink"] }
+bytes = "1"
+whoami = "2"
+libpq = { version = "5.0.1", features = ["v12"], optional = true }
 # Type crates named directly in the column decoder (the postgres features above
 # only wire up the FromSql impls). rust_decimal's `db-postgres` feature adds the
 # numeric/decimal FromSql impl (postgres has no built-in one).
@@ -34,10 +39,77 @@ chrono = "0.4"
 serde_json = "1"
 uuid = "1"
 rust_decimal = { version = "1", features = ["db-postgres"] }
+# Optional pure-Rust Firebird wire client. php-src uses libfbclient, but the
+# protocol-backed profile keeps elephc's supported target matrix standalone
+# while preserving PDO_FIREBIRD's SQL, transaction, and scalar semantics.
+rsfbclient = { version = "0.27", default-features = false, features = ["pure_rust"], optional = true }
+# Thin ODBC 3.8 C ABI bindings. The selected profile links the platform's
+# unixODBC driver manager, matching php-src's delegation model.
+odbc-sys = { version = "0.31", default-features = false, features = ["odbc_version_3_80"], optional = true }
+# Oracle's supported ODPI-C wrapper. ODPI-C loads the system Oracle Instant
+# Client at runtime, preserving PDO_OCI's external-client dependency without
+# requiring proprietary headers or libraries while compiling elephc itself.
+oracle = { version = "0.6.3", optional = true }
+# CUBRID's official PDO extension delegates to CCI. Load the CCI shared library
+# at runtime so the optional profile remains buildable on CI and on developer
+# machines without a locally installed CUBRID client.
+libloading = { version = "0.8", optional = true }
 # The synchronous, pure-Rust MySQL/MariaDB client. `default-features = false` with
 # `minimal-rust` drops the optional TLS backends and selects flate2's pure-Rust
 # (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
 # no `libz` dependency and compiled PHP binaries stay fully standalone (no system
 # DB client, no `-lz`) while keeping the binary wire protocol and prepared
-# statements this driver needs.
-mysql = { version = "25", default-features = false, features = ["minimal-rust"] }
+# statements this driver needs. mysql 28 exposes a ring-backed rustls feature, so
+# TLS no longer needs aws-lc-rs or a C/asm crypto toolchain.
+mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
+# --- TLS (gated by the `tls` / `mysql-tls` features below) ---
+# PostgreSQL TLS uses rustls with the RING crypto provider ONLY (no aws-lc-rs),
+# mirroring crates/elephc-tls so the musl/Docker images and standalone binaries
+# stay free of the aws-lc C/asm toolchain prerequisites. tokio-postgres-rustls
+# exposes a `ring` feature, so `default-features = false` keeps aws-lc-rs out.
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = [
+    "ring",
+], optional = true }
+# The pg connector's rustls ClientConfig is built explicitly with the ring
+# provider (ClientConfig::builder_with_provider), so the pg path never consults a
+# process-global default provider. `std`/`tls12` mirror elephc-tls.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+], optional = true }
+# Default trust roots for pg verification when no custom `sslrootcert` is given.
+webpki-roots = { version = "0.26", optional = true }
+# Parses a custom `sslrootcert`/client-cert PEM into the pg rustls config.
+rustls-pemfile = { version = "2", optional = true }
+
+[features]
+# TLS is ON by default, but the default `tls` feature covers PostgreSQL ONLY and
+# is aws-lc-rs-free (ring): a `pgsql:` DSN with `sslmode=require`/`verify-full`
+# works out of the box against managed Postgres (Supabase/Neon/RDS/Timescale).
+# mysql 28's `rustls-tls-ring` keeps the MySQL path on the same provider as
+# PostgreSQL and elephc-tls, so both database TLS backends are enabled by default
+# without introducing aws-lc-rs. A minimal `--no-default-features` build keeps the
+# historical NoTls behavior for both.
+default = ["tls", "mysql-tls"]
+tls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-pemfile"]
+mysql-tls = ["tls", "mysql/rustls-tls-ring"]
+libpq-gss = ["dep:libpq"]
+# Matches php-src's PDO_DBLIB backend by linking the system FreeTDS DB-Library.
+# The default bridge remains system-client-free; final binaries using this
+# profile must also link `libsybdb`.
+dblib = []
+firebird = ["dep:rsfbclient"]
+# Matches php-src's PDO_ODBC backend through the system ODBC driver manager.
+odbc = ["dep:odbc-sys"]
+# Matches the current PECL PDO_INFORMIX driver through the Informix ODBC/CLI
+# driver. A live connection requires IBM/HCL Client SDK on the host.
+informix = ["dep:odbc-sys"]
+# Matches PECL PDO_IBM through the IBM CLI/ODBC ABI exposed by the driver manager.
+ibm = ["dep:odbc-sys"]
+# Matches Microsoft PDO_SQLSRV 5.13 through Microsoft ODBC Driver 18/17.
+sqlsrv = ["dep:odbc-sys"]
+# Matches the current PECL PDO_OCI driver through Oracle Instant Client/ODPI-C.
+oci = ["dep:oracle"]
+# Matches the official PDO_CUBRID extension through CUBRID CCI (`libcascci`).
+cubrid = ["dep:libloading"]

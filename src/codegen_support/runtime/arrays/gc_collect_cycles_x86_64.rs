@@ -196,14 +196,19 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_count_object");
     emitter.instruction("lea r9, [rdx + 16]");                                  // compute the source object user pointer from its heap header
-    emitter.instruction("mov eax, DWORD PTR [rdx]");                            // load the source object payload size before deriving the property count
-    emitter.instruction("sub rax, 8");                                          // subtract the leading class_id field from the object payload size
-    emitter.instruction("shr rax, 4");                                          // divide by 16 to get the source object property count
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the runtime class_id stored at the start of the source object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the number of emitted class GC descriptors for bounds checking
     emitter.instruction("cmp r10, r11");                                        // is the runtime class_id within the emitted descriptor table range?
     emitter.instruction("jae __rt_gc_collect_cycles_count_next");               // invalid class ids contribute no traversable property metadata
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");                  // load the class-declared payload size, not reused heap capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // load whether the layout includes a dynamic-property tail
+    emitter.instruction("sub rax, 8");                                          // subtract the leading class_id field
+    emitter.instruction("shl rcx, 3");                                          // convert the tail flag into its eight-byte storage size
+    emitter.instruction("sub rax, rcx");                                        // exclude the optional tail from the fixed property region
+    emitter.instruction("shr rax, 4");                                          // divide the fixed property region by 16 bytes per slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the per-class property-tag descriptor pointer for the source object
     emitter.instruction("xor r10, r10");                                        // initialize the source object property index to zero for the incoming-edge scan

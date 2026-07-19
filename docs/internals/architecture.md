@@ -205,7 +205,7 @@ src/
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
 ├── pdo_prelude.rs             PDO standard-library prelude injection entry point
-├── pdo_prelude/               PDO driver detection from the DSN prefix
+├── pdo_prelude/               AST usage detection for PDO classes, subclasses, and `pdo_drivers()`
 ├── tz_prelude.rs              Timezone-introspection prelude injection entry point
 ├── tz_prelude/                Timezone-introspection prelude usage detection
 ├── list_id_prelude.rs         DateTimeZone identifier-list prelude injection entry point
@@ -290,8 +290,7 @@ src/
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
-│   ├── callables.rs           Top-level callable metadata and indirect-call helpers
-│   ├── reflection.rs          Shared ReflectionAttribute materialization helpers
+│   ├── reflection.rs          ReflectionAttribute materialization helpers
 │   ├── prescan.rs             Constant pre-scan feeding EIR lowering
 │   ├── program_usage.rs       Required-class analysis feeding metadata emission
 │   ├── program_usage/         Required-class scanners
@@ -323,17 +322,18 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (72 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (150 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (114 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (70 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
+│       ├── pdo/               SQLite UDF/collation/aggregate callback adapters (5 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -344,7 +344,8 @@ src/
     └── report.rs              Error formatting
 
 crates/
-└── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+└── elephc-pdo/                Optional PDO driver bridge and native-client adapters
 ```
 
 ## ARM64 calling conventions
@@ -435,7 +436,7 @@ Offset  Size  Field
 
 ### Runtime BSS and data symbols
 
-The runtime data emission in `src/codegen/runtime/data/` is split into `emit_runtime_data_fixed()` for shared heap buffers, diagnostics, and lookup tables, plus `emit_runtime_data_user()` for globals, statics, enum-case storage, metadata derived from the user's program, and dynamic `instanceof` lookup names:
+The runtime data emission in `src/codegen_support/runtime/data/` is split into `emit_runtime_data_fixed()` for shared heap buffers, diagnostics, and lookup tables, plus `emit_runtime_data_user()` for globals, statics, enum-case storage, metadata derived from the user's program, and dynamic `instanceof` lookup names:
 
 | Symbol group | Symbols | Purpose |
 |---|---|---|

@@ -156,6 +156,14 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Eval array reads use a dedicated owned shared-cell mode. Unlike an ordinary
+PHP array read, which detaches a boxed zval to preserve value semantics, the
+bridge must retain the exact stored cell because that handle can be the
+writeback target for an AOT by-reference method, constructor, reflection, or
+callable invocation. This mode is separate from the nested-write fetch, which
+COW-normalizes the outer container and detaches the selected zval before
+mutation.
+
 ## Parsing and cache
 
 Dynamic source is parsed into Magician's immutable EvalIR. The process-wide

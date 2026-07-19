@@ -244,6 +244,6 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the fatal negative-repeat message before terminating
     emitter.instruction("mov edi, 1");                                          // exit code 1 for the negative-repeat abort path
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting the invalid repeat count
 }

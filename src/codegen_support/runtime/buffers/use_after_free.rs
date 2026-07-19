@@ -34,7 +34,7 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 variant of `__rt_buffer_use_after_free`.
 /// Uses Linux syscall 1 (`write`) to emit the error message to stderr (fd=2), then
-/// syscall 60 (`exit`) to terminate with exit code 70 (EX_SOFTWARE), matching the ARM64 runtime.
+/// syscall 231 (`exit_group`) to terminate with exit code 70 (EX_SOFTWARE), matching ARM64.
 fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");
@@ -45,6 +45,6 @@ fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the fatal buffer use-after-free diagnostic to stderr
     emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE as the process exit status for consistency with the ARM runtime
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process immediately after the fatal buffer use-after-free diagnostic
 }

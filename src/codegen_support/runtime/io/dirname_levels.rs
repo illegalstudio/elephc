@@ -97,6 +97,6 @@ fn emit_dirname_levels_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 writes the diagnostic bytes
     emitter.instruction("syscall");                                             // emit the invalid dirname levels diagnostic
     emitter.instruction("mov edi, 1");                                          // use a failing process exit status for invalid dirname levels
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 exits the process
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 exits the process group
     emitter.instruction("syscall");                                             // terminate after the fatal dirname diagnostic
 }

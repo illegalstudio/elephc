@@ -101,3 +101,45 @@ echo W::at(['x', 'y']);
     );
     assert_eq!(out, "xy");
 }
+
+/// `isset()` dispatches on the runtime tag of each Mixed-valued associative-array entry before it
+/// attempts to unbox the entry payload.
+///
+/// PDO SQLSRV exposed this through repeated `prepare()` option dispatch: the nested option helper
+/// passed raw integer `42` to `__rt_mixed_unbox` as though it were a boxed pointer. The null entry
+/// covers the concrete tag-8 path, while the final reads prove the non-null entry remains intact.
+#[test]
+fn test_nested_method_array_param_isset_handles_concrete_mixed_entries() {
+    let out = compile_and_run(
+        r#"<?php
+class Options {
+    public function prepare(array $options): string {
+        $missing = $this->configure($options, 1000);
+        $null = $this->configure($options, 1004);
+        $present = $this->configure($options, 1003);
+        return $missing . ":" . $null . ":" . $present . ":" . $options[1003];
+    }
+
+    private function configure(array $options, int $option): int {
+        if (!isset($options[$option])) {
+            return -1;
+        }
+        return $this->asInt($options[$option]);
+    }
+
+    private function asInt(mixed $value): int {
+        return (int) $value;
+    }
+}
+
+$options = [10 => 1, 1003 => 42, 1004 => null, 1006 => true, 1007 => true];
+echo (new Options())->prepare($options), ":", $options[1003];
+$boxed = $options;
+foreach ($boxed as &$entry) {
+}
+unset($entry);
+echo "|", (new Options())->prepare($boxed);
+"#,
+    );
+    assert_eq!(out, "-1:-1:42:42:42|-1:-1:42:42");
+}

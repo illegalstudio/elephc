@@ -53,7 +53,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Install native test dependencies
-        run: brew install pcre2
+        run: brew install freetds pcre2 unixodbc
 
       - name: Check (no warnings)
         shell: bash
@@ -61,6 +61,30 @@ jobs:
           set -o pipefail
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
+
+      - name: Build optional PDO_FIREBIRD profile
+        run: cargo build -p elephc-pdo --features firebird
+
+      - name: Build optional PDO_ODBC profile
+        run: cargo build -p elephc-pdo --features odbc
+
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
+
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
+
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
+      - name: Build optional PDO_OCI profile
+        run: cargo build -p elephc-pdo --features oci
+
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -126,6 +150,30 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
+
+      - name: Build optional PDO_FIREBIRD profile
+        run: cargo build -p elephc-pdo --features firebird
+
+      - name: Build optional PDO_ODBC profile
+        run: cargo build -p elephc-pdo --features odbc
+
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
+
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
+
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
+      - name: Build optional PDO_OCI profile
+        run: cargo build -p elephc-pdo --features oci
+
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
@@ -184,6 +232,30 @@ jobs:
           set -o pipefail
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build optional PDO_DBLIB profile
+        run: cargo build -p elephc-pdo --features dblib
+
+      - name: Build optional PDO_FIREBIRD profile
+        run: cargo build -p elephc-pdo --features firebird
+
+      - name: Build optional PDO_ODBC profile
+        run: cargo build -p elephc-pdo --features odbc
+
+      - name: Build optional PDO_INFORMIX profile
+        run: cargo build -p elephc-pdo --features informix
+
+      - name: Build optional PDO_IBM profile
+        run: cargo build -p elephc-pdo --features ibm
+
+      - name: Build optional PDO_SQLSRV profile
+        run: cargo build -p elephc-pdo --features sqlsrv
+
+      - name: Build optional PDO_OCI profile
+        run: cargo build -p elephc-pdo --features oci
+
+      - name: Build optional PDO_CUBRID profile
+        run: cargo build -p elephc-pdo --features cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge

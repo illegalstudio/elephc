@@ -105,6 +105,40 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies cross-target `--emit-asm` stops before preparing a host-incompatible runtime object.
+#[test]
+fn test_cli_emit_asm_does_not_require_target_assembler() {
+    let dir = make_cli_test_dir("elephc_cli_emit_cross_target_asm");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'cross-target';").unwrap();
+
+    let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-aarch64"
+    } else {
+        "linux-x86_64"
+    };
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg(target)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run cross-target elephc CLI with --emit-asm");
+
+    assert!(
+        output.status.success(),
+        "cross-target elephc --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.join("main.s").exists(), "expected target assembly output");
+    assert!(
+        !dir.join("main.o").exists() && !dir.join("main").exists(),
+        "cross-target --emit-asm must not assemble or link"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies plain `--web` assembly keeps the compact auto-start core while
 /// pruning public session APIs and callable-handler machinery that user code
 /// does not reference.

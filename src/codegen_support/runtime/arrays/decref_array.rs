@@ -43,6 +43,14 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_decref_array_skip");                         // yes — not a valid heap pointer, skip
 
+    // -- a statically indexed array may have been promoted to hash storage by a Mixed key --
+    emitter.instruction("ldr x11, [x0, #-8]");                                  // load the uniform heap kind word before choosing the deep-free contract
+    emitter.instruction("and x11, x11, #0xff");                                 // isolate the low-byte runtime storage kind
+    emitter.instruction("cmp x11, #3");                                         // kind 3 is associative hash storage
+    emitter.instruction("b.ne __rt_decref_array_kind_checked");                 // ordinary indexed storage keeps the indexed release path
+    emitter.instruction("b __rt_decref_hash");                                  // release promoted storage with the hash entry walker
+    emitter.label("__rt_decref_array_kind_checked");
+
     // -- debug mode: reject decref on freed storage --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
     emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
@@ -90,9 +98,13 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, r11");                                        // is the candidate array pointer outside the live heap window?
     emitter.instruction("jae __rt_decref_array_skip");                          // pointers above the live heap end are not refcounted arrays
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("mov r11, r10");                                        // preserve the low-byte runtime kind before checking the high-word marker
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
     emitter.instruction("jne __rt_decref_array_skip");                          // skip foreign/static pointers that do not carry elephc heap headers
+    emitter.instruction("and r11, 0xff");                                       // isolate the runtime storage kind from the preserved header word
+    emitter.instruction("cmp r11, 3");                                          // kind 3 is associative hash storage behind a static Array type
+    emitter.instruction("je __rt_decref_hash");                                 // release promoted storage with the hash entry walker
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the refcount for the array owner that is going away
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // persist the decremented array refcount in the uniform heap header

@@ -32,6 +32,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         ca-certificates \
         curl \
         file \
+        freetds-dev \
         git \
         libbz2-dev \
         libpcre2-dev \
@@ -39,6 +40,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         netbase \
         pkg-config \
         tzdata \
+        unixodbc-dev \
         zlib1g-dev \
         zstd \
     && rm -rf /var/lib/apt/lists/*

@@ -22,8 +22,16 @@
 //! - The value is a boxed `Mixed` pointer consumed by the write (stored directly
 //!   into the slot for the indexed path, or stored as a `Mixed`-tagged hash
 //!   payload for the hash path), mirroring `__rt_array_set_mixed` ownership.
-//! - The helper does not release the incoming array pointer; the caller owns the
-//!   old local release so the promoted hash can replace it cleanly.
+//! - OWNERSHIP: the caller hands this helper an OWNED reference to the incoming
+//!   array (`lower_array_set_mixed_key_*` acquires it, mirroring `Op::ArrayToHash`).
+//!   The in-place paths hand that `+1` back inside the returned pointer; the promote
+//!   paths abandon the source for a freshly built hash and RELEASE it, because
+//!   `__rt_array_hash_union` only borrows its operands. The helper therefore always
+//!   returns a `+1` the caller owns, and `Op::ArraySetMixedKey` is classified as an
+//!   owning temporary so `store_local` releases whatever the slot held before.
+//!   Getting this wrong in either direction is fatal: releasing without the caller's
+//!   acquire is a use-after-free (the source's only reference lives in the caller's
+//!   slot); not releasing at all leaks the whole abandoned array on every promotion.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -81,6 +89,24 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load the current logical length of the indexed array
     emitter.instruction("cmp x1, x9");                                          // a key past the end would create a sparse gap
     emitter.instruction("b.hi __rt_array_set_mixed_key_int_promote");           // promote to a hash so a sparse key survives like PHP
+
+    // -- widen typed slots to boxed Mixed BEFORE dropping a Mixed cell into one --
+    // `__rt_array_set_mixed` re-stamps the destination's value_type to 7 (boxed Mixed) but never
+    // converts the slots that are already there. Writing into a still-typed array (`[1, 2, 3]`)
+    // therefore left slots 1 and 2 holding raw integers while the header claimed they were Mixed
+    // cell pointers — reading either one dereferenced the integer and segfaulted. Only element 0,
+    // the one just written, survived. Widen first, exactly as the Mixed-append lowering does.
+    emitter.instruction("str x1, [sp, #24]");                                   // save the target index across the widening call
+    emitter.instruction("ldr x1, [x0, #-8]");                                   // load the destination's packed metadata
+    emitter.instruction("lsr x1, x1, #8");                                      // move the runtime value_type tag into the low bits
+    emitter.instruction("and x1, x1, #0x7f");                                   // isolate the destination's value_type tag
+    emitter.instruction("cmp x1, #7");                                          // tag 7 = the slots already hold boxed Mixed cells
+    emitter.instruction("b.eq __rt_array_set_mixed_key_int_boxed");             // nothing to widen for an already-Mixed destination
+    emitter.instruction("bl __rt_array_to_mixed");                              // box every existing typed slot and stamp the array Mixed
+    emitter.instruction("str x0, [sp, #0]");                                    // republish the possibly copy-on-write-split array pointer
+    emitter.label("__rt_array_set_mixed_key_int_boxed");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the widened indexed-array pointer
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the target index
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the consumed boxed Mixed value
     emitter.instruction("bl __rt_array_set_mixed");                             // store the value into packed indexed storage and return the array
     emitter.instruction("b __rt_array_set_mixed_key_done");                     // finish after an indexed write
@@ -116,6 +142,8 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // save the promoted merged hash pointer
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the temporary hash for release
     emitter.instruction("bl __rt_decref_hash");                                 // release the empty temporary hash after the union copy
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source indexed array this promotion abandons
+    emitter.instruction("bl __rt_decref_array");                                // release the reference the lowering acquired: hash_union only BORROWED it
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("bl __rt_hash_to_mixed");                               // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("str x0, [sp, #48]");                                   // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)
@@ -210,8 +238,24 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the current logical length of the indexed array
     emitter.instruction("cmp rdi, rcx");                                        // a key past the end would create a sparse gap
     emitter.instruction("ja __rt_array_set_mixed_key_int_promote");             // promote to a hash so a sparse key survives like PHP
-    emitter.instruction("mov rsi, rdi");                                        // publish the integer key as the indexed-set index argument
-    emitter.instruction("mov rdi, rax");                                        // reload the indexed-array pointer into the set argument
+
+    // -- widen typed slots to boxed Mixed BEFORE dropping a Mixed cell into one --
+    // See the AArch64 twin: `__rt_array_set_mixed` re-stamps the destination Mixed but never
+    // converts the slots already in it, so a write into `[1, 2, 3]` left the untouched slots
+    // holding raw integers behind a header claiming they were cell pointers. Here `rdi` holds the
+    // integer key and `rax` the array — the opposite of the AArch64 register split.
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the target index across the widening call
+    emitter.instruction("mov rsi, QWORD PTR [rax - 8]");                        // load the destination's packed metadata
+    emitter.instruction("shr rsi, 8");                                          // move the runtime value_type tag into the low bits
+    emitter.instruction("and rsi, 0x7f");                                       // isolate the destination's value_type tag
+    emitter.instruction("cmp rsi, 7");                                          // tag 7 = the slots already hold boxed Mixed cells
+    emitter.instruction("je __rt_array_set_mixed_key_int_boxed");               // nothing to widen for an already-Mixed destination
+    emitter.instruction("mov rdi, rax");                                        // __rt_array_to_mixed takes the array in rdi and the tag in rsi
+    emitter.instruction("call __rt_array_to_mixed");                            // box every existing typed slot and stamp the array Mixed
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // republish the possibly copy-on-write-split array pointer
+    emitter.label("__rt_array_set_mixed_key_int_boxed");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the widened indexed-array pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the target index as the indexed-set index argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
     emitter.instruction("call __rt_array_set_mixed");                           // store the value into packed indexed storage and return the array
     emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // finish after an indexed write
@@ -246,6 +290,8 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the promoted merged hash pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the temporary hash for release
     emitter.instruction("call __rt_decref_hash");                               // release the empty temporary hash after the union copy
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed array this promotion abandons
+    emitter.instruction("call __rt_decref_array");                              // release the reference the lowering acquired: hash_union only BORROWED it
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("call __rt_hash_to_mixed");                             // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)

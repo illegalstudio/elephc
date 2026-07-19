@@ -188,7 +188,7 @@ sidebar:
 | [`fsync()`](./builtins/io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./builtins/io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./builtins/io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data): int` | `int` | ✓ | ✓ |
+| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./builtins/io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./builtins/io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./builtins/io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |

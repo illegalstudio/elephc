@@ -112,6 +112,16 @@ fn test_warning_closure_call_marks_callable_variable_as_used() {
     );
 }
 
+/// Verifies that writing through a by-reference closure capture is treated as an
+/// observable caller update rather than an unused closure-local assignment.
+#[test]
+fn test_warning_byref_closure_capture_write_is_used() {
+    expect_no_warning(
+        "<?php function install(int &$target): void { $setter = function(int $value) use (&$target): void { $target = $value; }; $setter(42); }",
+        "Unused variable: $target",
+    );
+}
+
 /// Verifies that unused parameters of nested function declarations are analyzed
 /// and produce warnings, not silently ignored.
 #[test]
@@ -207,6 +217,16 @@ fn test_warning_deprecated_static_method_call() {
     expect_warning(
         "<?php class Reg { #[\\Deprecated(\"removed in v3\")] public static function lookup(): int { return 1; } } echo Reg::lookup();",
         "Call to deprecated static method: Reg::lookup() — removed in v3",
+    );
+}
+
+/// Verifies PHP 8.5-style deprecated class constants retain their attribute
+/// metadata through schema construction and warn when accessed.
+#[test]
+fn test_warning_deprecated_class_constant_access() {
+    expect_warning(
+        "<?php class Status { #[\\Deprecated(\"as it has no effect\")] public const OLD = 1; } echo Status::OLD;",
+        "Use of deprecated class constant: Status::OLD — as it has no effect",
     );
 }
 

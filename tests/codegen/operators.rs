@@ -645,3 +645,125 @@ check([1]);
     );
     assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nbool(true)\n");
 }
+
+// --- Deep array strict equality (`===` / `!==`) ---
+
+/// Regression: two empty array literals are strictly equal (deep structural `===`, not pointer
+/// identity). This is the base case of the `__rt_array_strict_eq` runtime helper.
+#[test]
+fn test_strict_eq_empty_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([] === []);
+var_dump([] === [1]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
+/// Regression: a value typed `array|false` (a runtime-Mixed union) compared against an array
+/// literal must deep-compare, not compare heap pointers. Previously `$x === []` was always false.
+#[test]
+fn test_strict_eq_union_array_against_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function make(bool $b): array|false { return $b ? [1, 2] : false; }
+$empty = make(true);
+$empty = [];
+var_dump($empty === []);
+$xs = make(true);
+var_dump($xs === [1, 2]);
+var_dump($xs === [1, 3]);
+var_dump($xs === [1, 2, 3]);
+$no = make(false);
+var_dump($no === []);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Regression: indexed integer arrays compare element-by-element with length sensitivity.
+#[test]
+fn test_strict_eq_indexed_int_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([1, 2, 3] === [1, 2, 3]);
+var_dump([1, 2, 3] === [1, 2, 4]);
+var_dump([1, 2, 3] === [1, 2]);
+var_dump([1, 2] === [1, 2, 3]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\nbool(false)\n");
+}
+
+/// Regression: string-element arrays compare by string contents, not pointer identity.
+#[test]
+fn test_strict_eq_string_element_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(["a", "b"] === ["a", "b"]);
+var_dump(["a", "b"] === ["a", "c"]);
+var_dump(["a", "b"] === ["a"]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
+}
+
+/// Regression: associative arrays require the same key => value pairs in the same insertion order.
+#[test]
+fn test_strict_eq_assoc_arrays_order_sensitive() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(["x" => 1, "y" => 2] === ["x" => 1, "y" => 2]);
+var_dump(["x" => 1, "y" => 2] === ["x" => 1, "y" => 3]);
+var_dump(["x" => 1, "y" => 2] === ["x" => 1, "z" => 2]);
+var_dump(["x" => 1, "y" => 2] === ["y" => 2, "x" => 1]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\nbool(false)\n");
+}
+
+/// Regression: nested arrays compare recursively through `__rt_mixed_strict_eq` re-entering
+/// `__rt_array_strict_eq`.
+#[test]
+fn test_strict_eq_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([[1, 2], [3, 4]] === [[1, 2], [3, 4]]);
+var_dump([[1, 2], [3, 4]] === [[1, 2], [3, 5]]);
+var_dump([["a" => [1]]] === [["a" => [1]]]);
+var_dump([["a" => [1]]] === [["a" => [2]]]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\nbool(false)\n");
+}
+
+/// Regression: heterogeneous arrays (mixed element types, stored as boxed Mixed slots) compare
+/// with full per-element type precision.
+#[test]
+fn test_strict_eq_heterogeneous_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([1, "a", 3] === [1, "a", 3]);
+var_dump([1, "a", 3] === [1, "b", 3]);
+var_dump([1, "a", 3] === [1, "a", 4]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
+}
+
+/// Regression: `!==` is the negation of the deep `===` for arrays.
+#[test]
+fn test_strict_not_eq_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([1, 2] !== [1, 3]);
+var_dump([1, 2] !== [1, 2]);
+var_dump(["a" => 1] !== ["a" => 1]);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
+}

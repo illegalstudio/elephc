@@ -74,6 +74,34 @@ flate2 = "1"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
 
+[features]
+# Keeps the codegen test package and its PDO dev-dependency on the same libpq
+# backend profile. Without this relay, a later `cargo test` can rebuild and
+# replace the feature-built staticlib with the pure-Rust default archive.
+pdo-libpq-gss = ["elephc-pdo/libpq-gss"]
+# Keeps codegen fixtures and the PDO archive on the FreeTDS-backed PDO_DBLIB profile.
+pdo-dblib = ["elephc-pdo/dblib"]
+# Keeps codegen fixtures and the PDO archive on the pure-Rust PDO_FIREBIRD profile.
+pdo-firebird = ["elephc-pdo/firebird"]
+# Keeps codegen fixtures and the PDO archive on the system ODBC-manager profile.
+pdo-odbc = ["elephc-pdo/odbc"]
+# Keeps codegen fixtures and the PDO archive on the Informix CLI/ODBC profile.
+pdo-informix = ["elephc-pdo/informix"]
+# Keeps codegen fixtures and the PDO archive on the IBM Db2 CLI profile.
+pdo-ibm = ["elephc-pdo/ibm"]
+# Keeps codegen fixtures and the PDO archive on Microsoft PDO_SQLSRV 5.13.
+pdo-sqlsrv = ["elephc-pdo/sqlsrv"]
+# Keeps codegen fixtures and the PDO archive on the Oracle Instant Client profile.
+pdo-oci = ["elephc-pdo/oci"]
+# Keeps codegen fixtures and the PDO archive on the official CUBRID CCI profile.
+pdo-cubrid = ["elephc-pdo/cubrid"]
+
+# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
+# caller-supplied authentication RSA keys and rustls cipher-suite selection.
+# Keep the small audited patch in-tree until those options land upstream.
+[patch.crates-io]
+mysql = { path = "vendor/mysql-28.0.0" }
+
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces

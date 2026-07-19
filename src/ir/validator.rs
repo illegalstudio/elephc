@@ -464,7 +464,7 @@ fn validate_opcode_rules(
         | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
-        MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
+        MixedTagOf | MixedClone | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
@@ -485,7 +485,7 @@ fn validate_opcode_rules(
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
-        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
+        ArrayLen | ArrayGet | ArrayGetSilent | ArrayGetForWrite | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
@@ -506,9 +506,30 @@ fn validate_opcode_rules(
                 "Heap(Mixed)",
             )
         }
-        HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
+        HashLen | HashGet | HashGetSilent | HashGetForWrite | HashIsset | HashSet | HashAppend | HashEnsureUnique
         | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
+        }
+        // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
+        // on an indexed array (via `__rt_array_set_refcounted`) or on a hash (via `__rt_hash_set`).
+        // This rule is not optional — the match ends in `_ => Ok(())`, so an unlisted op would be
+        // validated by *accepting anything*, including a malformed operand list.
+        SlotDetach => {
+            check_count(inst_id, inst, 2, "2")?;
+            let container = inst.operands[0];
+            let actual = function
+                .value(container)
+                .ok_or(ValidationError::UnknownValue(container))?
+                .ir_type;
+            match actual {
+                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => Ok(()),
+                _ => Err(ValidationError::OperandTypeMismatch {
+                    inst: inst_id,
+                    operand: container,
+                    expected: "Heap(Array) or Heap(Hash)",
+                    actual,
+                }),
+            }
         }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),

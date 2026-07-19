@@ -512,7 +512,8 @@ fn emit_assoc_aarch64(emitter: &mut Emitter) {
 /// Emits the ARM64 runtime helper for boxed Mixed callable dispatch.
 /// Unboxes the Mixed payload and dispatches by runtime tag:
 /// string → `__rt_is_callable_string`, array → `__rt_is_callable_array`,
-/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`.
+/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`,
+/// callable descriptor → true.
 /// Input: x0=Mixed pointer. Output: x0=1 (true) or 0 (false).
 fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -531,6 +532,8 @@ fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_is_callable_mixed_assoc");                   // associative arrays may carry numeric 0/1 callable keys
     emitter.instruction("cmp x0, #6");                                          // is the mixed payload an object?
     emitter.instruction("b.eq __rt_is_callable_mixed_object");                  // objects may be invokable through public __invoke
+    emitter.instruction("cmp x0, #10");                                         // is the mixed payload a callable descriptor?
+    emitter.instruction("b.eq __rt_is_callable_mixed_true");                    // boxed closure and first-class descriptors are callable
     emitter.instruction("mov x0, #0");                                          // unsupported mixed payloads are not callable
     emitter.instruction("b __rt_is_callable_mixed_done");                       // restore frame before returning false
 
@@ -553,6 +556,10 @@ fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_is_callable_mixed_object");
     emitter.instruction("mov x0, x1");                                          // pass unboxed object pointer to invokable-object lookup
     abi::emit_call_label(emitter, "__rt_is_callable_object");                   // test for public __invoke
+    emitter.instruction("b __rt_is_callable_mixed_done");                       // restore frame after invokable-object lookup
+
+    emitter.label("__rt_is_callable_mixed_true");
+    emitter.instruction("mov x0, #1");                                          // a boxed callable descriptor is callable by construction
 
     emitter.label("__rt_is_callable_mixed_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame pointer and return address
@@ -1104,7 +1111,8 @@ fn emit_assoc_x86_64(emitter: &mut Emitter) {
 /// Emits the x86_64 runtime helper for boxed Mixed callable dispatch.
 /// Unboxes the Mixed payload and dispatches by runtime tag:
 /// string → `__rt_is_callable_string`, array → `__rt_is_callable_array`,
-/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`.
+/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`,
+/// callable descriptor → true.
 /// Input: rdi=Mixed pointer. Output: rax=1 (true) or 0 (false).
 fn emit_mixed_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -1123,6 +1131,8 @@ fn emit_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_is_callable_mixed_assoc_x86_64");              // associative arrays may be method callables
     emitter.instruction("cmp rax, 6");                                          // is the mixed payload an object?
     emitter.instruction("je __rt_is_callable_mixed_object_x86_64");             // objects may be invokable through public __invoke
+    emitter.instruction("cmp rax, 10");                                         // is the mixed payload a callable descriptor?
+    emitter.instruction("je __rt_is_callable_mixed_true_x86_64");               // boxed closure and first-class descriptors are callable
     emitter.instruction("xor eax, eax");                                        // unsupported mixed payloads are not callable
     emitter.instruction("jmp __rt_is_callable_mixed_done_x86_64");              // restore frame before returning false
 
@@ -1141,6 +1151,10 @@ fn emit_mixed_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_mixed_object_x86_64");
     abi::emit_call_label(emitter, "__rt_is_callable_object");                   // rdi already holds unboxed object pointer
+    emitter.instruction("jmp __rt_is_callable_mixed_done_x86_64");              // restore frame after invokable-object lookup
+
+    emitter.label("__rt_is_callable_mixed_true_x86_64");
+    emitter.instruction("mov eax, 1");                                          // a boxed callable descriptor is callable by construction
 
     emitter.label("__rt_is_callable_mixed_done_x86_64");
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

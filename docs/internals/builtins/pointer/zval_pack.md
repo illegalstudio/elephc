@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_pack.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:533](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L533) (`lower_zval_pack`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:724](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L724) (`lower_zval_pack`)
 - **Function symbol**: `lower_zval_pack()`
 
 

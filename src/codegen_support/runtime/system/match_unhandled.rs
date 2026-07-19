@@ -16,8 +16,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// process with exit code 70 (EX_SOFTWARE). It is invoked by generated code when a
 /// match expression has no corresponding arm for a given discriminant value.
 ///
-/// AArch64 path: uses syscall 4 (sys_write) then syscall 1 (sys_exit).
-/// x86_64 path: uses syscall 1 (write) then syscall 60 (exit).
+/// AArch64 path: uses syscall 4 (write), then `sys_exit` on macOS or `exit_group` on Linux.
+/// x86_64 path: uses syscall 1 (write), then syscall 231 (`exit_group`).
 pub fn emit_match_unhandled(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: match_unhandled ---");
@@ -38,7 +38,7 @@ pub fn emit_match_unhandled(emitter: &mut Emitter) {
             emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
             emitter.instruction("syscall");                                     // emit the unhandled-match fatal diagnostic on x86_64
             emitter.instruction("mov edi, 70");                                 // use EX_SOFTWARE as the process exit status on the x86_64 fatal path
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall number 60 = exit
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process after reporting the unhandled match case
         }
     }
