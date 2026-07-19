@@ -477,8 +477,7 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     emit_eval_context_epilogue_cleanup(ctx);
 }
 
-/// Returns main local slots that receive owned refcounted values through `StoreLocal`
-/// or take ownership of a caught exception through `CatchBind`.
+/// Returns main local slots that receive owned refcounted values through `StoreLocal`.
 fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, PhpType, usize)> {
     let param_names = ctx
         .function
@@ -816,8 +815,7 @@ fn emit_function_local_epilogue_cleanup(
     }
 }
 
-/// Returns function local slots that receive owned refcounted values through `StoreLocal`
-/// or take ownership of a caught exception through `CatchBind`.
+/// Returns function local slots that receive owned refcounted values through `StoreLocal`.
 ///
 /// `skip_return_slot` excludes the one local whose refcounted owner is transferred by the
 /// current return terminator. It is deliberately path-local: another `return` in the same
@@ -902,7 +900,7 @@ pub(super) fn emit_owned_local_cleanup(
     }
 }
 
-/// Returns whether a local kind can own values through ordinary `StoreLocal` or `CatchBind`.
+/// Returns whether a local kind can own values through ordinary `StoreLocal`.
 fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,

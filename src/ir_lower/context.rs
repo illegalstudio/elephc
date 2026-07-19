@@ -1023,19 +1023,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
+        let transfer_catch_source_to_store = matches!(
+            self.builder.value_defining_op(value.value),
+            Some(Op::CatchBind)
+        ) && previous_kind != LocalKind::StaticLocal;
         let release_source_after_store =
             self.value_needs_release_after_retaining_store(value)
-                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp);
+                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp)
+                && !transfer_catch_source_to_store;
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
+        let transfer_source_to_store =
+            transfer_callable_source_to_store || transfer_catch_source_to_store;
         // Retain before cleanup because a borrowed result can alias the old slot.
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
+            && !transfer_source_to_store
             && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
+            && !transfer_source_to_store
         {
             // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
             // When the source is Mixed and the ref cell's previous type is Int,
@@ -1087,7 +1094,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store && !transfer_callable_source_to_store {
+            if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;
@@ -1116,7 +1123,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store && !transfer_callable_source_to_store && !ref_cell_narrowed_mixed_to_int {
+        if release_source_after_store
+            && !transfer_source_to_store
+            && !ref_cell_narrowed_mixed_to_int
+        {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -1625,6 +1635,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    | Op::CatchBind
                     // `yield`/`yield from` return owned Mixed cells (the sent
                     // value from `__rt_gen_suspend`, the delegated return from
                     // `__rt_gen_delegate`); a discarded result must be released.
@@ -2099,6 +2110,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 op, operands, immediate, ir_type, php_type, ownership, effects, span,
             )
             .expect("value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
+    /// Emits a value-producing opcode whose result is an unconditional owned reference.
+    ///
+    /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears
+    /// the source runtime cell and hands its sole reference to the returned SSA value.
+    pub(crate) fn emit_owned_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let ir_type = value_ir_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op,
+                operands,
+                immediate,
+                ir_type,
+                php_type,
+                Ownership::Owned,
+                effects,
+                span,
+            )
+            .expect("owned value opcode produces a value");
         LoweredValue { value, ir_type }
     }
 

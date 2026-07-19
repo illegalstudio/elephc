@@ -1995,36 +1995,27 @@ fn lower_current_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> Low
     )
 }
 
-/// Binds and clears the active exception for a matched catch clause. The bound slot
-/// takes over the in-flight reference (the runtime cell is zeroed by the bind), so it
-/// participates in the owned-local lifecycle: the previous binding is released before
-/// the rebind, and the frame epilogue releases whatever the slot still holds (issue
-/// #448). A variable-less catch consumes the reference through a hidden owned
-/// temporary so it flows through the same lifecycle instead of leaking.
+/// Takes and clears the active exception for a matched catch clause, then stores the
+/// owned result through the ordinary variable-storage planner. This keeps local,
+/// global, static, and reference-cell destinations consistent while preserving the
+/// single in-flight reference transferred by the runtime (issue #448). A variable-less
+/// catch consumes the reference through a hidden owned temporary so it follows the
+/// same lifecycle instead of leaking.
 fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span: Span) {
     let php_type = catch_variable_type(catch);
     let variable = match catch.variable.as_ref() {
         Some(variable) => variable.clone(),
         None => ctx.declare_owned_hidden_temp(php_type.clone()),
     };
-    let slot = ctx.declare_local(&variable, php_type.clone());
-    ctx.set_local_type(&variable, php_type.clone());
-    // Release the slot's previous exception before rebinding: a catch that fires
-    // again (next loop iteration, later try block) would otherwise overwrite the
-    // only owned reference. Catch-bound slots are zero-initialized in the prologue,
-    // so the release is a runtime no-op the first time through.
-    ctx.release_stored_local_value(&variable, slot, Some(span));
-    ctx.mark_local_initialized(&variable);
-    ctx.builder.emit_with_effects(
+    let caught = ctx.emit_owned_value(
         Op::CatchBind,
         Vec::new(),
-        Some(Immediate::LocalSlot(slot)),
-        IrType::Void,
-        php_type,
-        Ownership::NonHeap,
+        None,
+        php_type.clone(),
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    ctx.store_local(&variable, caught, php_type, Some(span));
 }
 
 /// Returns the local type to use for a catch variable.

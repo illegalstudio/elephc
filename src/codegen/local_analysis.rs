@@ -7,10 +7,12 @@
 //!
 //! Key details:
 //! - Ref-cell state is a forward may-analysis, so later promotions never affect earlier ops.
+//! - Runtime exception handlers conservatively seed every potentially promoted slot because
+//!   their incoming edges are implicit rather than represented by EIR terminators.
 //! - `UnsetLocal` returns a promoted slot to raw local storage on subsequent paths.
 //! - Closure, iterator, alias, and explicit binding operations all update representation state.
-//! - `CatchBind` counts as a store: the catch slot takes ownership of the in-flight
-//!   exception and must join epilogue cleanup / prologue zero-init (issue #448).
+//! - `CatchBind` produces an owned SSA value; its following storage opcode determines
+//!   which local lifecycle, if any, participates in cleanup (issue #448).
 
 use std::collections::{HashSet, VecDeque};
 
@@ -36,9 +38,7 @@ impl LocalSlotAnalysis {
         let mut stored_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
-            // CatchBind moves the in-flight exception into the slot (issue #448), so it
-            // must be treated like StoreLocal for epilogue cleanup and prologue zero-init.
-            if matches!(inst.op, Op::StoreLocal | Op::CatchBind) {
+            if inst.op == Op::StoreLocal {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }
@@ -51,7 +51,11 @@ impl LocalSlotAnalysis {
         }
 
         let (release_ops_with_possible_ref_cell, ref_cell_slots_before_inst) =
-            analyze_release_local_slot_states(function, &initially_ref_cell_slots);
+            analyze_release_local_slot_states(
+                function,
+                &initially_ref_cell_slots,
+                &ever_ref_cell_slots,
+            );
         let owned_parameter_slots = owned_parameter_slots(
             function,
             &stored_slots,
@@ -68,7 +72,7 @@ impl LocalSlotAnalysis {
         }
     }
 
-    /// Returns whether this slot receives an owned value via `StoreLocal` or `CatchBind`.
+    /// Returns whether this slot receives an owned value via `StoreLocal`.
     pub(super) fn has_store(&self, slot: LocalSlotId) -> bool {
         self.stored_slots.contains(&slot)
     }
@@ -159,6 +163,7 @@ fn loaded_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId>
 fn analyze_release_local_slot_states(
     function: &Function,
     initially_ref_cell_slots: &HashSet<LocalSlotId>,
+    ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> (HashSet<InstId>, HashSet<(InstId, LocalSlotId)>) {
     if function.blocks.is_empty() {
         return (HashSet::new(), HashSet::new());
@@ -171,6 +176,16 @@ fn analyze_release_local_slot_states(
     }
     block_inputs[entry_index] = Some(initially_ref_cell_slots.clone());
     let mut worklist = VecDeque::from([function.entry]);
+    for handler in exception_handler_blocks(function) {
+        let handler_index = handler.as_raw() as usize;
+        if handler_index >= block_inputs.len() {
+            continue;
+        }
+        block_inputs[handler_index] = Some(ever_ref_cell_slots.clone());
+        if handler != function.entry {
+            worklist.push_back(handler);
+        }
+    }
     while let Some(block_id) = worklist.pop_front() {
         let block_index = block_id.as_raw() as usize;
         let Some(mut state) = block_inputs[block_index].clone() else {
@@ -228,6 +243,24 @@ fn analyze_release_local_slot_states(
         }
     }
     (releases, ref_cell_slots_before_inst)
+}
+
+/// Returns blocks entered through runtime exception-handler edges that are absent
+/// from ordinary EIR terminators.
+fn exception_handler_blocks(function: &Function) -> HashSet<BlockId> {
+    function
+        .instructions
+        .iter()
+        .filter_map(|inst| {
+            if inst.op != Op::TryPushHandler {
+                return None;
+            }
+            let Some(Immediate::I64(raw)) = inst.immediate else {
+                return None;
+            };
+            u32::try_from(raw).ok().map(BlockId::from_raw)
+        })
+        .collect()
 }
 
 /// Applies one instruction's local representation change to the forward state.
@@ -451,6 +484,91 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert!(analysis.release_may_observe_ref_cell(InstId::from_raw(1)));
         assert!(analysis.inst_may_observe_ref_cell(InstId::from_raw(1), slot));
+    }
+
+    /// Verifies runtime exception-handler edges conservatively preserve ref-cell
+    /// representation established before the protected region.
+    #[test]
+    fn exception_handler_observes_preexisting_ref_cell_aliases() {
+        let mut function =
+            Function::new("catch_ref_cell".to_string(), IrType::Void, PhpType::Void);
+        let value_slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("LogicException".to_string()),
+            LocalKind::PhpLocal,
+        );
+        let owner_slot = function.add_local(
+            None,
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("LogicException".to_string()),
+            LocalKind::RefCell,
+        );
+        let alias_slot = function.add_local(
+            Some("target".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("LogicException".to_string()),
+            LocalKind::PhpLocal,
+        );
+        let handler_load;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let handler = builder.create_named_block("catch", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: value_slot,
+                    second: owner_slot,
+                }),
+                IrType::Void,
+                PhpType::Object("LogicException".to_string()),
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: alias_slot,
+                    second: value_slot,
+                }),
+                IrType::Void,
+                PhpType::Object("LogicException".to_string()),
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::TryPushHandler,
+                Vec::new(),
+                Some(Immediate::I64(handler.as_raw() as i64)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Unreachable);
+
+            builder.position_at_end(handler);
+            handler_load = builder.emit(
+                Op::LoadRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlot(alias_slot)),
+                IrType::Heap(crate::ir::IrHeapKind::Object),
+                PhpType::Object("LogicException".to_string()),
+                Ownership::MaybeOwned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        let handler_load = handler_load.expect("load_ref_cell produces an SSA result");
+        let load_inst = match function.value(handler_load).expect("load result exists").def {
+            ValueDef::Instruction { inst, .. } => inst,
+            ValueDef::BlockParam { .. } => panic!("load result cannot be a block parameter"),
+        };
+        assert!(analysis.inst_may_observe_ref_cell(load_inst, alias_slot));
+        assert!(analysis.has_dynamic_ref_cell_state(alias_slot));
     }
 
     /// Verifies a widened scalar parameter stays owned even if optimization removes its stores.
