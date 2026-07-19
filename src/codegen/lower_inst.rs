@@ -3959,8 +3959,7 @@ fn lower_fiber_start(
     for value in &args {
         ctx.load_value_to_result(*value)?;
         let source_ty = ctx.raw_value_php_type(*value)?;
-        let push_ty =
-            materialize_direct_call_arg_for_param(ctx, *value, &source_ty, &PhpType::Mixed)?;
+        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
         abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
@@ -4177,7 +4176,7 @@ fn emit_optional_mixed_arg(ctx: &mut FunctionContext<'_>, value: Option<ValueId>
     if let Some(value) = value {
         ctx.load_value_to_result(value)?;
         let source_ty = ctx.raw_value_php_type(value)?;
-        materialize_direct_call_arg_for_param(ctx, value, &source_ty, &PhpType::Mixed)?;
+        materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
         return Ok(());
     }
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -5158,8 +5157,7 @@ fn materialize_direct_call_args_with_refs_and_borrowed_options(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty =
-                materialize_direct_call_arg_for_param(ctx, *value, &source_ty, param_ty)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             if let Some(cleanup) = cleanup_slots
                 .iter()
                 .find(|cleanup| cleanup.param_index == index)
@@ -5232,8 +5230,7 @@ fn materialize_static_method_call_args_with_refs(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty =
-                materialize_direct_call_arg_for_param(ctx, *value, &source_ty, param_ty)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             if let Some(cleanup) = cleanup_slots
                 .iter()
                 .find(|cleanup| cleanup.param_index == index)
@@ -5297,7 +5294,6 @@ fn materialize_called_class_id(
 /// Converts the loaded call operand to the ABI shape required by the callee parameter.
 fn materialize_direct_call_arg_for_param(
     ctx: &mut FunctionContext<'_>,
-    value: ValueId,
     source_ty: &PhpType,
     param_ty: &PhpType,
 ) -> Result<PhpType> {
@@ -5322,11 +5318,7 @@ fn materialize_direct_call_arg_for_param(
             Ok(PhpType::Str)
         }
         PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
-            if ctx.value_can_own_mixed_box_source(value)? {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, source_ty);
-            } else {
-                emit_box_current_value_as_mixed(ctx.emitter, source_ty);
-            }
+            emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
         }
         PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
@@ -5729,8 +5721,7 @@ fn materialize_method_call_args_with_receiver_local_and_refs(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty =
-                materialize_direct_call_arg_for_param(ctx, *value, &source_ty, param_ty)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
@@ -5800,8 +5791,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty =
-                materialize_direct_call_arg_for_param(ctx, *value, &source_ty, param_ty)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
