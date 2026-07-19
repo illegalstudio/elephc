@@ -59,6 +59,7 @@ impl Checker {
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::False => Ok(PhpType::False),
             crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
             crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
             crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
@@ -116,6 +117,7 @@ impl Checker {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
                     "callable" => Ok(PhpType::Callable),
+                    "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
                     // Relative class types only survive to this point when used outside a class

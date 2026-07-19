@@ -31,6 +31,8 @@ echo "Default logger: " . $default->describe() . "\n";
 
 $named = new Logger("audit");
 echo "Named logger: " . $named->describe() . "\n";
+// Object receivers resolve the concrete runtime class, like get_class($named).
+echo "Named logger runtime class: " . $named::class . "\n";
 
 // Inheritance + parent::class
 class Base {

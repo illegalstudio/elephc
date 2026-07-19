@@ -25,7 +25,7 @@
 //!   preserved two ways: (1) `transplant_callee_body` reproduces the callee's
 //!   per-slot cleanup decisions only when all direct-returning paths transfer the
 //!   same slot — parameter and uniformly directly-returned slots become
-//!   `HiddenTemp` (epilogue-excluded), ordinary refcounted internal locals stay
+//!   `BorrowedTemp` (epilogue-excluded), ordinary refcounted internal locals stay
 //!   `PhpLocal` so the host epilogue still frees them; (2) the destructor-free
 //!   restriction makes the only residual difference — deferring those frees to the
 //!   host epilogue — unobservable (no `__destruct`, no object identity).
@@ -123,6 +123,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
         | PhpType::Float
         | PhpType::Str
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Void
         | PhpType::Never
         | PhpType::Pointer(_)
@@ -151,7 +152,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 /// 2. `transplant_callee_body` replicates the callee's per-slot cleanup *decisions*:
 ///    parameter slots and directly-returned slots (which the callee epilogue excludes,
 ///    because the argument is borrowed and the return value's ownership is moved out) are
-///    transplanted as `HiddenTemp` so the host epilogue ignores them; ordinary refcounted
+///    transplanted as `BorrowedTemp` so the host epilogue ignores them; ordinary refcounted
 ///    internal locals stay `PhpLocal` so the host epilogue still frees them. This
 ///    is only allowed when direct-return cleanup is uniform across all return paths.
 ///
@@ -173,7 +174,10 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
     for local in &callee.locals {
         if !matches!(
             local.kind,
-            LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::NamedArgTemp
+            LocalKind::PhpLocal
+                | LocalKind::HiddenTemp
+                | LocalKind::BorrowedTemp
+                | LocalKind::NamedArgTemp
         ) {
             return false;
         }
@@ -599,10 +603,11 @@ fn transplant_callee_body(
 
     // Parameter slots and directly-returned slots are excluded from the callee's
     // epilogue cleanup (borrowed argument / ownership moved into the return value). The
-    // host epilogue keys cleanup off `LocalKind::PhpLocal`, so transplant these slots as
-    // `HiddenTemp` to reproduce that exclusion; ordinary refcounted internal locals keep
-    // their `PhpLocal` kind so the host epilogue still frees them (the only difference is
-    // deferred timing, which is unobservable for the destructor-free types we inline).
+    // host epilogue cleans owning local kinds, so transplant these slots as
+    // `BorrowedTemp` to reproduce that exclusion; ordinary refcounted internal locals
+    // keep their `PhpLocal` kind so the host epilogue still frees them (the only
+    // difference is deferred timing, which is unobservable for the destructor-free
+    // types we inline).
     let excluded_from_cleanup: HashSet<LocalSlotId> = callee_param_slots(callee)
         .into_iter()
         .chain(callee_directly_returned_slots(callee))
@@ -611,7 +616,7 @@ fn transplant_callee_body(
     // Clone locals first.
     for local in &callee.locals {
         let kind = if excluded_from_cleanup.contains(&local.id) {
-            LocalKind::HiddenTemp
+            LocalKind::BorrowedTemp
         } else {
             local.kind
         };

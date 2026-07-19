@@ -16,6 +16,8 @@ pub enum TypeExpr {
     Int,
     Float,
     Bool,
+    /// PHP's literal `false` type, kept distinct from `bool` for flow narrowing.
+    False,
     Str,
     Void,
     Never,

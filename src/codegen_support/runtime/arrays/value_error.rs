@@ -5,6 +5,7 @@
 //! Called from:
 //! - `crate::codegen_support::runtime::arrays::array_filter`.
 //! - `crate::codegen_support::runtime::arrays::array_filter_refcounted`.
+//! - `crate::codegen_support::runtime::strings::mb_strlen`.
 //!
 //! Key details:
 //! - The emitted sequence does not return; it publishes `_exc_value` and enters the unwinder.
@@ -17,7 +18,7 @@ use crate::codegen_support::emit::Emitter;
 /// Allocates a 32-byte Throwable payload, stamps the per-program `ValueError`
 /// class id, stores the message pointer/length and zero code, then jumps to
 /// `__rt_throw_current`.
-pub(super) fn emit_throw_value_error_aarch64(
+pub(in crate::codegen_support::runtime) fn emit_throw_value_error_aarch64(
     emitter: &mut Emitter,
     message_symbol: &str,
     message_len: usize,
@@ -43,7 +44,7 @@ pub(super) fn emit_throw_value_error_aarch64(
 ///
 /// Preserves `rbp`, aligns the nested allocation call, writes the standard
 /// Throwable payload layout, and jumps to `__rt_throw_current` without returning.
-pub(super) fn emit_throw_value_error_x86_64(
+pub(in crate::codegen_support::runtime) fn emit_throw_value_error_x86_64(
     emitter: &mut Emitter,
     message_symbol: &str,
     message_len: usize,

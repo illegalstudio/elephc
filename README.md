@@ -21,11 +21,11 @@
 </p>
 
 <p align="center">
-  <strong>3 native targets &middot; no Zend Engine &middot; zero runtime dependencies &middot; single standalone binary</strong>
+  <strong>3 native targets &middot; no Zend Engine &middot; no external PHP runtime &middot; single standalone binary</strong>
 </p>
 
 <p align="center">
-  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. No opcode fallback, just real machine code.
+  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
 </p>
 
 <p align="center">
@@ -88,6 +88,8 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, and MySQL/MariaDB drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/) and [`examples/eval-globals/`](examples/eval-globals/).
+
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
@@ -109,13 +111,13 @@ elephc is designed to be read. The code generation and runtime layers are heavil
 
 There are several ways to make PHP easier to distribute or faster to run: bundling a PHP runtime into one executable, encrypting bytecode, running through the Zend VM with JIT, or compiling selected hot paths while falling back to opcodes for dynamic code.
 
-elephc takes a narrower but cleaner route: it is a from-scratch compiler for a static subset of PHP. It parses PHP source, type-checks it, lowers it to target-specific assembly, assembles and links it into a native executable, and ships only the small runtime routines needed by the generated program. If elephc compiles a construct, that construct is native code rather than interpreted PHP.
+elephc takes a narrower but cleaner route: it is a from-scratch compiler for a static subset of PHP. It parses PHP source, type-checks it, lowers it to target-specific assembly, assembles and links it into a native executable, and ships only the small runtime routines needed by the generated program. Ordinary supported constructs are native code. Eligible literal `eval()` fragments can also be lowered ahead of time; fragments that require runtime parsing use the optional Magician interpreter bridge.
 
 That tradeoff is intentional:
 
 - **Less long-tail compatibility** than a VM-backed PHP implementation.
 - **More mechanical transparency**: readable assembly output, source maps, line-by-line commented codegen, and a documented memory model.
-- **No hidden runtime dependency**: the generated binary does not need PHP, the Zend Engine, a loader extension, or an embedded interpreter.
+- **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
 That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, but the roadmap also includes shared/static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
@@ -177,6 +179,9 @@ elephc --gc-stats heavy.php
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
+# Accept only PHP-compatible constructs (reject every elephc extension)
+elephc --strict-php app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 
@@ -195,8 +200,10 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image) regardless of auto-detection
+# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image, eval, web) regardless of auto-detection
 elephc app.php --with-pdo --with-crypto
+# --with-eval force-links Magician; normal eval use is detected automatically
+elephc app.php --with-eval
 
 # Explicit target selection
 # Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
@@ -461,6 +468,7 @@ src/
 ├── magic_constants/     # File/scope/trait magic-constant walkers
 ├── autoload/            # Composer/SPL AOT autoload indexing and file insertion
 ├── resolver/            # Include/require resolution, declaration discovery, once guards
+├── eval_aot.rs          # Compile-time planning for literal eval AOT vs bridge fallback
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── termination.rs       # Structured terminal-effect analysis
@@ -567,6 +575,9 @@ src/
 │       └── generators/  # Generator frame layout and __rt_gen_* helpers
 │
 └── errors/              # Error formatting with line:col
+
+crates/
+└── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
 ```
 
 </details>

@@ -2,7 +2,7 @@
 title: "stream_socket_pair() — internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 224
 ---
 
 ## `stream_socket_pair()` — internals
@@ -32,6 +32,11 @@ function stream_socket_pair(int $domain, int $type, int $protocol): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 3 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

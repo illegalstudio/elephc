@@ -9,7 +9,7 @@
 //! - Trait adaptation names remain syntactic until class flattening and name resolution bind them.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{TraitAdaptation, TraitUse, Visibility};
 use crate::span::Span;
@@ -22,7 +22,7 @@ use super::super::{expect_semicolon, expect_token, parse_name};
 /// `;`, and a closing `}`. Outside the block, a trailing `;` is consumed. Returns `TraitUse`
 /// with the collected trait names and any adaptations.
 pub(in crate::parser::stmt) fn parse_trait_use(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<TraitUse, CompileError> {
@@ -164,7 +164,7 @@ pub(in crate::parser::stmt) fn parse_trait_use(
 /// representing the method name on the trait. Otherwise the name's last segment is used as
 /// the method name, allowing bare `methodName` shorthand.
 fn parse_trait_adaptation_target(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<(Option<Name>, String), CompileError> {

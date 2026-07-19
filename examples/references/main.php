@@ -100,3 +100,17 @@ $bag = new Bag();
 $entries = &$bag->items;
 $entries = [10, 20, 30];         // elements are boxed to match the property
 echo implode(", ", $bag->items), "\n"; // 10, 20, 30
+
+// --- Aliasing an indexed-array element (write-through both ways) ---
+$nums = [1, 2, 3];
+$second = &$nums[1];             // $second aliases the array's element 1
+$second = 99;                    // writes through to the array
+echo implode(", ", $nums), "\n"; // 1, 99, 3
+$nums[1] = 42;                   // writes through to the alias
+echo $second, "\n";              // 42
+
+// --- Aliasing a string array element ---
+$words = ["hello", "world"];
+$first = &$words[0];
+$first = "HEY";
+echo $words[0], "\n";            // HEY

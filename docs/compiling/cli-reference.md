@@ -28,7 +28,10 @@ binary is written next to it, named after the source without its extension.
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
-| `--source-map` | — | off | Emit a `.map` sidecar next to the assembly. |
+| `--strict-php` | — | off | Reject every elephc extension; accept only PHP-compatible constructs. See [Strict PHP mode](#strict-php-mode). |
+| `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
+| `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
+| `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
@@ -68,7 +71,7 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
@@ -91,7 +94,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
+| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `eval`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-eval` force-links Magician but is not required for normal `eval()` use; eligible literal eval can remain bridge-free. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -101,6 +104,49 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 |---|---|---|---|
 | `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
+
+## Strict PHP mode
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--strict-php` | — | off | Accept only PHP-compatible constructs: every elephc extension becomes a compile error. |
+
+Under `--strict-php` the compiler rejects the [beyond-PHP extensions](../beyond-php/pointers.md)
+at the source level:
+
+- extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
+  `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
+  (`int $x = 5;`), and `ptr`/`buffer<T>` type annotations — is reported with a
+  `rejected by --strict-php` diagnostic, one error per violation, wherever the
+  construct appears (statement bodies, closures, class members, and PHP
+  attribute arguments alike);
+- extension builtins (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`) behave
+  as if they did not exist, exactly as under the PHP interpreter:
+  `function_exists()` returns `false` for them, calling one is an undefined
+  function (the diagnostic names the disabled extension), and user code may
+  declare its own functions with those names;
+- names prefixed with `__elephc_` are reserved for the compiler and rejected in
+  user code.
+
+The audit covers the main file plus every `include`/`require`d and autoloaded
+user file. Compiler-injected preludes (PDO, timezone, image, web, …) are exempt,
+so programs using those PHP-level APIs keep compiling in strict mode.
+
+Strict mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
+code: the compiled binary marks the eval bridge as strict, so extension
+builtins do not exist inside eval'd fragments either — calling one is a runtime
+fatal (like any unknown function in eval), `function_exists()`/`is_callable()`
+report them as missing, and extension syntax in a fragment is a runtime parse
+error. Fragments are never rejected at compile time: PHP only fails eval'd code
+when it actually executes, and strict mode preserves that. User functions that
+shadow extension names remain callable from eval'd code.
+
+`--strict-php` cannot be combined with `--define`: defines only feed the `ifdef`
+extension, which strict mode rejects.
+
+Strict mode guarantees that the *constructs* used are PHP-compatible; it does
+not change elephc's static-subset semantics. A strict-valid program can still be
+rejected by the type checker in places where the PHP interpreter would run it.
 
 ## Diagnostics and debugging
 

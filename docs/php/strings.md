@@ -2,7 +2,7 @@
 title: "Strings"
 description: "String types, escape sequences, interpolation, heredoc/nowdoc, and built-in string functions."
 sidebar:
-  order: 5
+  order: 6
 ---
 
 ## Double-quoted strings
@@ -52,7 +52,14 @@ $p = new Point();
 echo "x = $p->x\n";             // simple: one $var->prop
 
 echo "Sum: {$user['age']}\n";   // complex: {$expr} allows full expressions
+
+// PHP 8.x deprecated forms are accepted for compatibility:
+echo "Hello, ${name}\n";        // deprecated ${var}
+echo "Sum: ${1 + 2}\n";         // deprecated ${expr}
 ```
+
+The `${var}` and `${expr}` forms behave like PHP 8.x: they still work, but are
+deprecated. Prefer `$var` or `{$expr}` in new code.
 
 Variable and identifier names may contain non-ASCII letters, matching PHP:
 
@@ -185,8 +192,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
-| `htmlspecialchars()` | `htmlspecialchars($str): string` | Escape HTML special chars |
-| `htmlentities()` | `htmlentities($str): string` | Alias for htmlspecialchars |
+| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
+| `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |

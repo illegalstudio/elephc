@@ -2,7 +2,7 @@
 title: "log10()"
 description: "Returns the base-10 logarithm of a number."
 sidebar:
-  order: 255
+  order: 259
 ---
 
 ## log10()
@@ -17,6 +17,11 @@ Returns the base-10 logarithm of a number.
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/log10.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/log10.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

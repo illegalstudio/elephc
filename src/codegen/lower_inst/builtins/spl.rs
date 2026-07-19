@@ -853,7 +853,7 @@ fn emit_preserve_keys_truthiness(
     value: ValueId,
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
-        PhpType::Bool | PhpType::Int => {
+        PhpType::Bool | PhpType::False | PhpType::Int => {
             ctx.load_value_to_result(value)?;
             predicates::emit_int_result_nonzero_bool(ctx);
         }

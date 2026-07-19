@@ -12,13 +12,13 @@ use super::*;
 /// Verifies var_dump() produces correct error when called with no arguments.
 #[test]
 fn test_error_var_dump_wrong_args() {
-    expect_error("<?php var_dump();", "var_dump() takes exactly 1 argument");
+    expect_error("<?php var_dump();", "var_dump() takes at least 1 argument");
 }
 
 /// Verifies print_r() produces correct error when called with no arguments.
 #[test]
 fn test_error_print_r_wrong_args() {
-    expect_error("<?php print_r();", "print_r() takes exactly 1 argument");
+    expect_error("<?php print_r();", "print_r() takes 1 or 2 arguments");
 }
 
 /// Verifies fopen() produces correct error when called with only one argument.
@@ -177,7 +177,7 @@ function read_char(): string {
     return fgetc(STDIN);
 }
 "#,
-        "Function 'read_char' return type expects Str, got Union([Str, Bool])",
+        "Function 'read_char' return type expects Str, got Union([Str, False])",
     );
 }
 

@@ -48,6 +48,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
         is_static: property.is_static,
         is_abstract: property.is_abstract,
         by_ref: property.by_ref,
+        is_promoted: property.is_promoted,
         default: property
             .default
             .map(|expr| propagate_expr(expr, &HashMap::new())),
@@ -64,7 +65,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
 pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         params: propagate_params(method.params),
-        body: propagate_block(method.body, HashMap::new()).0,
+        body: with_function_scope(|| propagate_block(method.body, HashMap::new()).0),
         ..method
     }
 }

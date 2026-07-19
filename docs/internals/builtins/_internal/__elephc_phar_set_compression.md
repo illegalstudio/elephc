@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_compression() — internals"
 description: "Compiler internals for __elephc_phar_set_compression(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 439
+  order: 449
 ---
 
 ## `__elephc_phar_set_compression()` — internals
@@ -32,6 +32,10 @@ function __elephc_phar_set_compression(string $filename, int $compression): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -32,6 +32,11 @@ function array_slice(array $array, int $offset, int $length = null): array
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_slice.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_slice.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_slice()`](../../../php/builtins/array/array_slice.md)

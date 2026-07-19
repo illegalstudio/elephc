@@ -22,6 +22,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
         "__ElephcAppendIteratorArrayIterator".to_string(),
         FlattenedClass {
             name: "__ElephcAppendIteratorArrayIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("ArrayIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -32,6 +33,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

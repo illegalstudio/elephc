@@ -26,6 +26,14 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x1, x9");                                          // preserve the dedicated null-string sentinel across ownership stabilization
+    emitter.instruction("b.eq __rt_str_persist_done");                          // a missing string has no payload to allocate or copy
+
     // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
     // (the old early-return let explode()'s empty segment alias the subject string and double-free it on release)
 
@@ -89,6 +97,14 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
+
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rax, r10");                                        // preserve the dedicated null-string sentinel across ownership stabilization
+    emitter.instruction("je __rt_str_persist_done");                            // a missing string has no payload to allocate or copy
 
     // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
 

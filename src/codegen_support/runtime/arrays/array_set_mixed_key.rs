@@ -69,7 +69,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #1");                                          // string mixed keys need hash storage
     emitter.instruction("b.eq __rt_array_set_mixed_key_string_promote");        // promote the indexed array to a hash for string keys
     emitter.instruction("cmp x0, #8");                                          // null mixed keys normalize to the empty string like PHP
-    emitter.instruction("b.eq __rt_array_set_mixed_key_null_promote");         // promote the indexed array to a hash with an empty-string key
+    emitter.instruction("b.eq __rt_array_set_mixed_key_null_promote");          // promote the indexed array to a hash with an empty-string key
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_int_ready");             // integer/bool keys are already valid indexed indexes
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
@@ -135,7 +135,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #1");                                          // string mixed keys need normalization
     emitter.instruction("b.eq __rt_array_set_mixed_key_hash_string");           // route string keys through the hash-key normalizer
     emitter.instruction("cmp x0, #8");                                          // null mixed keys normalize to the empty string like PHP
-    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_null");            // route null keys to the empty-string hash key path
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_null");             // route null keys to the empty-string hash key path
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_hash_int");              // integer/bool keys become scalar integer hash keys
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
@@ -198,7 +198,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 1");                                          // string mixed keys need hash storage
     emitter.instruction("je __rt_array_set_mixed_key_string_promote");          // promote the indexed array to a hash for string keys
     emitter.instruction("cmp rax, 8");                                          // null mixed keys normalize to the empty string like PHP
-    emitter.instruction("je __rt_array_set_mixed_key_null_promote");           // promote the indexed array to a hash with an empty-string key
+    emitter.instruction("je __rt_array_set_mixed_key_null_promote");            // promote the indexed array to a hash with an empty-string key
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_int_ready");              // integer/bool keys are already valid indexed indexes
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
@@ -224,7 +224,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     // -- indexed destination + null key: promote to hash with the empty-string key like PHP --
     emitter.label("__rt_array_set_mixed_key_null_promote");
-    emitter.instruction("lea rax, [rip + _empty_str]");                          // null normalizes to the empty string "" key pointer
+    emitter.instruction("lea rax, [rip + _empty_str]");                         // null normalizes to the empty string "" key pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the empty-string key low word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // the empty-string key has zero length (string-key marker)
     emitter.instruction("jmp __rt_array_set_mixed_key_promote_alloc");          // share the indexed-to-hash promotion path
@@ -265,7 +265,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 1");                                          // string mixed keys need normalization
     emitter.instruction("je __rt_array_set_mixed_key_hash_string");             // route string keys through the hash-key normalizer
     emitter.instruction("cmp rax, 8");                                          // null mixed keys normalize to the empty string like PHP
-    emitter.instruction("je __rt_array_set_mixed_key_hash_null");              // route null keys to the empty-string hash key path
+    emitter.instruction("je __rt_array_set_mixed_key_hash_null");               // route null keys to the empty-string hash key path
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_hash_int");               // integer/bool keys become scalar integer hash keys
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
@@ -275,9 +275,9 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks scalar integer hash keys
     emitter.instruction("jmp __rt_array_set_mixed_key_hash_set");               // proceed to the hash insert with an integer key
     emitter.label("__rt_array_set_mixed_key_hash_null");
-    emitter.instruction("lea rax, [rip + _empty_str]");                          // null normalizes to the empty string "" key pointer
+    emitter.instruction("lea rax, [rip + _empty_str]");                         // null normalizes to the empty string "" key pointer
     emitter.instruction("mov rsi, rax");                                        // publish the empty-string pointer as the hash key low word
-    emitter.instruction("xor edx, edx");                                       // the empty-string key has zero length (string-key marker)
+    emitter.instruction("xor edx, edx");                                        // the empty-string key has zero length (string-key marker)
     emitter.instruction("jmp __rt_array_set_mixed_key_hash_set");               // proceed to the hash insert with the empty-string key
     emitter.label("__rt_array_set_mixed_key_hash_string");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the normalizer input

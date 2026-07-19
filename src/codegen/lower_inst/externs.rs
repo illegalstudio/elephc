@@ -609,10 +609,10 @@ fn pop_ffi_return_value(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
 fn emit_sign_extend_i32_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("sxtw x0, w0"); // sign-extend the C int return into PHP's 64-bit integer result
+            ctx.emitter.instruction("sxtw x0, w0");                             // sign-extend the C int return into PHP's 64-bit integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movsxd rax, eax"); // sign-extend the C int return into PHP's 64-bit integer result
+            ctx.emitter.instruction("movsxd rax, eax");                         // sign-extend the C int return into PHP's 64-bit integer result
         }
     }
 }

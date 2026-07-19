@@ -2,7 +2,7 @@
 title: "strcasecmp() — internals"
 description: "Compiler internals for strcasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 385
+  order: 395
 ---
 
 ## `strcasecmp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strcasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strcasecmp.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:139](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L139) (`lower_binary_string_runtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:157](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L157) (`lower_binary_string_runtime`)
 - **Function symbol**: `lower_binary_string_runtime()`
 
 
@@ -32,6 +32,11 @@ function strcasecmp(string $string1, string $string2): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strcasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcasecmp.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

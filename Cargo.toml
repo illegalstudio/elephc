@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.26.0"
+version = "0.26.1"
 edition = "2021"
 default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
@@ -17,23 +17,30 @@ categories = ["compilers", "command-line-utilities"]
 # (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo), and
-# libelephc_web.a (--web prefork HTTP server) into target/<profile>/, where
-# linker.rs locates them for programs that use those features.
+# libelephc_web.a (--web prefork HTTP server), and libelephc_magician.a
+# (optional eval runtime) into target/<profile>/, where linker.rs locates them
+# for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
 name = "elephc"
 path = "src/main.rs"
 
-[[bin]]
+# Documentation exporter: declared as an example so it can read the eval
+# interpreter's metadata (elephc-magician is a dev-dependency) without
+# linking magician into the elephc binary.
+[[example]]
 name = "gen_builtins"
-path = "src/bin/gen_builtins.rs"
+path = "tools/gen_builtins.rs"
 
 [dependencies]
 inventory = "0.3"
+# Grows the stack on demand inside the recursive-descent parser so deeply
+# nested expressions never overflow small (2 MiB test-thread) stacks.
+stacker = "0.1"
 bitflags = "2"
 serde_json = "1"
 # flate2 (default miniz_oxide backend = pure Rust, no system zlib) is used by the
@@ -57,6 +64,7 @@ elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
 elephc-image = { path = "crates/elephc-image" }
 elephc-web = { path = "crates/elephc-web" }
+elephc-magician = { path = "crates/elephc-magician" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.

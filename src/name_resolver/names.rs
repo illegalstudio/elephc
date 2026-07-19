@@ -27,6 +27,7 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Int => TypeExpr::Int,
         TypeExpr::Float => TypeExpr::Float,
         TypeExpr::Bool => TypeExpr::Bool,
+        TypeExpr::False => TypeExpr::False,
         TypeExpr::Str => TypeExpr::Str,
         TypeExpr::Void => TypeExpr::Void,
         TypeExpr::Never => TypeExpr::Never,
@@ -287,7 +288,7 @@ pub(super) fn resolve_function_name(
 }
 
 /// Resolves a constant name to its canonical form using imports, current namespace,
-/// the symbol table, and builtin globals (e.g., PHP_OS, STDIN, STDOUT, STDERR).
+/// the symbol table, and builtin globals (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR).
 pub(super) fn resolve_constant_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -298,7 +299,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS") {
+        if matches!(name.as_str(), "PHP_OS" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -345,11 +346,12 @@ pub(super) fn resolve_constant_name(
 }
 
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
-/// resolution (e.g., PHP_OS, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
+/// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
     if matches!(
         name,
         "PHP_OS"
+            | "SID"
             | "PATHINFO_DIRNAME"
             | "PATHINFO_BASENAME"
             | "PATHINFO_EXTENSION"
@@ -368,9 +370,11 @@ fn is_builtin_global_constant(name: &str) -> bool {
     ) {
         return true;
     }
-    // Shared source-of-truth slices for JSON and stream/socket constants.
+    // Shared source-of-truth slices for JSON, stream/socket, and session constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
+        .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
+        .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

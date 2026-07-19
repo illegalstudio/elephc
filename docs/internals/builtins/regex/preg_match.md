@@ -2,7 +2,7 @@
 title: "preg_match() — internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 311
+  order: 320
 ---
 
 ## `preg_match()` — internals
@@ -22,7 +22,6 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_preg_match`
-- `__rt_preg_match_all`
 - `__rt_preg_match_capture`
 
 ## Signature summary
@@ -34,6 +33,12 @@ function preg_match(string $pattern, string $subject, array $matches = []): int
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+- **By-reference parameters**: `$matches`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 
 ## Cross-references

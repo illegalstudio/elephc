@@ -54,7 +54,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             ));
         }
     }
-    Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::False]))
 }
 
 /// Lowers a `fsockopen` call by dispatching to the shared io emitter.

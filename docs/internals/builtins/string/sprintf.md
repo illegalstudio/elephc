@@ -2,7 +2,7 @@
 title: "sprintf() — internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 385
 ---
 
 ## `sprintf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/sprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sprintf.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:511](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L511) (`lower_sprintf`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:574](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L574) (`lower_sprintf`)
 - **Function symbol**: `lower_sprintf()`
 
 
@@ -32,6 +32,12 @@ function sprintf(string $format, ...$values): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/formatting/sprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/sprintf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

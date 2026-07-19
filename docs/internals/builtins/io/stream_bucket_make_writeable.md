@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable() — internals"
 description: "Compiler internals for stream_bucket_make_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 189
+  order: 193
 ---
 
 ## `stream_bucket_make_writeable()` — internals
@@ -32,6 +32,11 @@ function stream_bucket_make_writeable(mixed $brigade): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

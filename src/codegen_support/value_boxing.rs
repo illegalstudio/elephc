@@ -21,7 +21,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Int => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
-        PhpType::Bool => 3,
+        PhpType::Bool | PhpType::False => 3,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
@@ -81,7 +81,12 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                 emitter.instruction("call __rt_mixed_from_value");              // box the tagged scalar payload into a mixed cell
             }
         },
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Resource(_) => match emitter.target.arch {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::Resource(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
                 emitter.instruction("mov x2, xzr");                             // scalar mixed payloads do not use a second word

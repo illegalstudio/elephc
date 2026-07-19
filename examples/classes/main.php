@@ -2,8 +2,8 @@
 // Classes — constructors, methods, properties
 
 class Counter {
-    const STEP = 1;
-    const TRIPLE_STEP = self::STEP * 3;
+    const int STEP = 1;
+    const int TRIPLE_STEP = self::STEP * 3;
 
     public $count;
 

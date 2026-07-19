@@ -1,0 +1,12 @@
+{
+  "description": "Repeated eval fragments that include the same PHP code block from disk.",
+  "eval_fragments": [
+    {
+      "label": "include",
+      "source": "include \"piece.php\";",
+      "invocations": 1000,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

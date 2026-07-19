@@ -2,7 +2,7 @@
 title: "inet_pton() — internals"
 description: "Compiler internals for inet_pton(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 361
+  order: 370
 ---
 
 ## `inet_pton()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_pton.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:497](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L497) (`lower_inet`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L560) (`lower_inet`)
 - **Function symbol**: `lower_inet()`
 
 
@@ -32,6 +32,11 @@ function inet_pton(string $ip): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/inet_pton.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -16,6 +16,10 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
 
+/// Borrowed attribute-name/argument metadata from a reflection-visible source.
+pub(crate) type AttributeMetadataSource<'a> =
+    (&'a [String], &'a [Option<Vec<AttrArgEntry>>]);
+
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
 /// `id` is assigned sequentially and must match across all compilation units
@@ -46,10 +50,20 @@ pub(crate) fn resolve_class_name<'a>(
 }
 
 /// Scans every class in `classes` and collects all distinct class-level,
-/// method-level, and property-level attribute name/argument pairs into a
-/// sorted vector of `ReflectionAttributeFactory` records with sequential ids.
+/// method-level, property-level, and constant-level attribute name/argument
+/// pairs into a sorted vector of `ReflectionAttributeFactory` records with
+/// sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
+) -> Vec<ReflectionAttributeFactory> {
+    collect_attribute_factories_with_extra(classes, &[])
+}
+
+/// Scans class metadata plus additional attribute metadata sources and collects
+/// all distinct attribute name/argument pairs into deterministic factory records.
+pub(crate) fn collect_attribute_factories_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<ReflectionAttributeFactory> {
     let mut unique = BTreeMap::new();
     for class_info in classes.values() {
@@ -69,6 +83,14 @@ pub(crate) fn collect_attribute_factories(
                 collect_from_attribute_lists(classes, names, args, &mut unique);
             }
         }
+        for (member, names) in &class_info.constant_attribute_names {
+            if let Some(args) = class_info.constant_attribute_args.get(member) {
+                collect_from_attribute_lists(classes, names, args, &mut unique);
+            }
+        }
+    }
+    for (names, args) in extra_attrs {
+        collect_from_attribute_lists(classes, names, args, &mut unique);
     }
 
     unique
@@ -85,11 +107,11 @@ pub(crate) fn collect_attribute_factories(
         .collect()
 }
 
-/// Returns the factory id for the given attribute `attr_name` with
-/// `attr_args`. Returns 0 if the class cannot be resolved or no matching
-/// factory exists.
-pub(crate) fn attribute_factory_id(
+/// Returns the factory id for an attribute, considering classes plus extra
+/// metadata sources such as top-level function attributes retained by EIR.
+pub(crate) fn attribute_factory_id_with_extra(
     classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
     attr_name: &str,
     attr_args: &[AttrArgEntry],
 ) -> i64 {
@@ -99,17 +121,21 @@ pub(crate) fn attribute_factory_id(
     let lookup_name = resolve_class_name(classes, attr_name)
         .map(|resolved| resolved.to_string())
         .unwrap_or_else(|| attr_name.to_string());
-    collect_attribute_factories(classes)
+    collect_attribute_factories_with_extra(classes, extra_attrs)
         .into_iter()
         .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
         .map(|factory| factory.id)
         .unwrap_or(0)
 }
 
-/// Builds the synthetic dispatch body for `ReflectionAttribute::newInstance()`.
-pub(crate) fn build_attribute_new_instance_body(classes: &HashMap<String, ClassInfo>) -> Vec<Stmt> {
+/// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
+/// metadata plus additional attribute metadata sources.
+pub(crate) fn build_attribute_new_instance_body_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
+) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
-    let factories = collect_attribute_factories(classes);
+    let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
         // Only resolvable attribute classes can be instantiated. Non-class
@@ -126,7 +152,18 @@ pub(crate) fn build_attribute_new_instance_body(classes: &HashMap<String, ClassI
                     args: factory
                         .args
                         .iter()
-                        .map(|entry| attr_arg_expr(&entry.value))
+                        .map(|entry| match &entry.key {
+                            // Named attribute arguments must construct with
+                            // named-argument semantics, not positionally.
+                            Some(crate::types::AttrKey::Str(name)) => Expr::new(
+                                ExprKind::NamedArg {
+                                    name: name.clone(),
+                                    value: Box::new(attr_arg_expr(&entry.value)),
+                                },
+                                span,
+                            ),
+                            _ => attr_arg_expr(&entry.value),
+                        })
                         .collect(),
                 },
                 span,
@@ -250,17 +287,14 @@ fn attr_key_expr(key: &AttrKey) -> Expr {
     Expr::new(kind, span)
 }
 
-/// Builds the synthetic body for `ReflectionAttribute::getArguments()`. For
-/// each attribute whose class resolves, it dispatches on the factory id and
-/// returns the captured arguments as a lowered array literal — so named
-/// arguments and associative arrays are materialized through the normal array
-/// path. Attributes without a resolvable class fall back to the `$__args`
-/// property populated at construction.
-pub(crate) fn build_attribute_get_arguments_body(
+/// Builds the synthetic `ReflectionAttribute::getArguments()` body using class
+/// metadata plus additional attribute metadata sources.
+pub(crate) fn build_attribute_get_arguments_body_with_extra(
     classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
-    let factories = collect_attribute_factories(classes);
+    let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
         let condition = factory_condition(factory.id);
@@ -278,11 +312,17 @@ pub(crate) fn build_attribute_get_arguments_body(
             span,
         ));
     }
-    // Every attribute with supported arguments is registered as a factory
-    // above (class or not), so this is only a defensive default; return an
-    // empty associative array to match the declared return type.
+    // Runtime eval materializes `ReflectionAttribute` objects with factory id
+    // zero and stores their retained arguments in `__args`, so the fallback
+    // must preserve that path instead of returning an empty factory miss.
     body.push(Stmt::new(
-        StmtKind::Return(Some(entries_to_array_expr(&[], true))),
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: "__args".to_string(),
+            },
+            span,
+        ))),
         span,
     ));
     body

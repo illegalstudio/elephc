@@ -165,6 +165,7 @@ pub(super) fn resolve_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -176,6 +177,7 @@ pub(super) fn resolve_expr(
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
+            variadic_by_ref: *variadic_by_ref,
             variadic_type: variadic_type.clone(),
             return_type: return_type
                 .as_ref()
@@ -262,6 +264,9 @@ pub(super) fn resolve_expr(
                 _ => receiver.clone(),
             },
         },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
@@ -299,6 +304,18 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+            method: Box::new(resolve_expr(method, current_namespace, imports, symbols)),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -310,7 +327,9 @@ pub(super) fn resolve_expr(
                 )),
                 _ => receiver.clone(),
             };
-            let resolved_method = php_symbol_key(method);
+            // Keep the source spelling: dispatch lookups fold case at lookup
+            // time, and `__callStatic` must receive the as-written name.
+            let method_key = php_symbol_key(method);
             let resolved_args: Vec<Expr> = args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -321,7 +340,7 @@ pub(super) fn resolve_expr(
             // function's flow-inferred array<string> return keeps its element type,
             // so in_array works on the filtered result, where the synthetic method
             // would yield scalar mixed and regress in_array.
-            if resolved_method == "listidentifiers"
+            if method_key == "listidentifiers"
                 && resolved_args.len() <= 2
                 && matches!(
                     &resolved_receiver,
@@ -337,7 +356,7 @@ pub(super) fn resolve_expr(
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
-                    method: resolved_method,
+                    method: method.clone(),
                     args: resolved_args,
                 }
             }
@@ -367,6 +386,13 @@ pub(super) fn resolve_expr(
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
+        },
+        // A named argument wraps its value expression — without this arm the value escaped
+        // resolution entirely, so e.g. `new self(url: new Url('/'))` left the imported `Url`
+        // alias unresolved ("Undefined class: Url").
+        ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
+            name: name.clone(),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
         },
         _ => expr.kind.clone(),
     };

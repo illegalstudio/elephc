@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_metadata() — internals"
 description: "Compiler internals for __elephc_phar_set_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 441
+  order: 451
 ---
 
 ## `__elephc_phar_set_metadata()` — internals
@@ -31,6 +31,10 @@ function __elephc_phar_set_metadata(string $filename, string $metadata): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

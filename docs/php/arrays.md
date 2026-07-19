@@ -2,7 +2,7 @@
 title: "Arrays"
 description: "Indexed arrays, associative arrays, copy-on-write, and built-in array functions."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## Indexed arrays
@@ -46,7 +46,7 @@ $map["age"] = "30";      // add new key
 
 Associative arrays use a hash table runtime. If later values do not match the first value type, the checker widens to internal `mixed` runtime shape.
 
-Keys follow PHP's array-key normalization. Integer keys remain integers, booleans and floats normalize to integer keys, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
+Keys follow PHP's array-key normalization. Integer keys remain integers, booleans and floats normalize to integer keys, `null` normalizes to the empty-string key, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php
 <?php
@@ -214,7 +214,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
-| `in_array()` | `in_array($needle, $arr): int` | Search for value (0/1) |
+| `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
@@ -284,4 +284,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. Sorting an array of **strings** with a user comparator is not yet supported and reports a clear unsupported-feature error.
 
-**Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
+**Not supported yet:** `compact()` and `extract()` need dynamic access to the
+current variable scope. Magician's materialized named scope makes that behavior
+feasible, but these functions are not wired into the compiler or interpreter
+today. Use an associative array explicitly in portable elephc code.

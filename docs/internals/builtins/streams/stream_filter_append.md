@@ -2,7 +2,7 @@
 title: "stream_filter_append() — internals"
 description: "Compiler internals for stream_filter_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 341
 ---
 
 ## `stream_filter_append()` — internals
@@ -31,6 +31,11 @@ function stream_filter_append(resource $stream, string $filtername, int $read_wr
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

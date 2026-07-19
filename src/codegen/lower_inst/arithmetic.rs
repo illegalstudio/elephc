@@ -63,13 +63,13 @@ pub(super) fn lower_int_checked_binop(
             // AArch64 ABI: x0 = first arg, x1 = second arg.
             // lhs is already in x0 (int_result_reg), but rhs is in x10 (secondary_scratch_reg).
             // Move rhs to x1 to match the helper's expected calling convention.
-            ctx.emitter.instruction("mov x1, x10");                               // place the right integer operand in the ABI argument register x1
+            ctx.emitter.instruction("mov x1, x10");                             // place the right integer operand in the ABI argument register x1
             abi::emit_call_label(ctx.emitter, helper);
         }
         Arch::X86_64 => {
             // x86_64 SysV ABI: rdi = first arg, rsi = second arg.
             // Move lhs to rdi, rhs to rsi before the call.
-            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));           // place the left integer operand in the first SysV argument register
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));          // place the left integer operand in the first SysV argument register
             ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // place the right integer operand in the second SysV argument register
             abi::emit_call_label(ctx.emitter, helper);
         }

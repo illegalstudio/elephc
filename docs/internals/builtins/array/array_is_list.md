@@ -37,6 +37,10 @@ function array_is_list(mixed $array): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_is_list()`](../../../php/builtins/array/array_is_list.md)

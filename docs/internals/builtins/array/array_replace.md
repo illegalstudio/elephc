@@ -35,6 +35,10 @@ function array_replace(array $array, array $replacements): mixed
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_replace()`](../../../php/builtins/array/array_replace.md)

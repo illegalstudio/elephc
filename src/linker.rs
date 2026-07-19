@@ -134,6 +134,15 @@ const BRIDGES: &[BridgeStaticlib] = &[
         // Rust runtime/unwinder symbols, like the other bridges.
         needs_libdl: true,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_magician",
+        env_var: "ELEPHC_MAGICIAN_LIB_DIR",
+        crate_name: "elephc-magician",
+        flag_name: "eval",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+    },
 ];
 
 /// Resolves a `--with-<flag>` crate flag to its bridge `lib_name`, or `None`
@@ -249,6 +258,23 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Makes `--debug-info` line tables reachable by debuggers after the user
+/// object file is deleted.
+///
+/// On macOS the linked binary only carries a debug map pointing at the object
+/// files, so `dsymutil` must bake the DWARF into a standalone `.dSYM` bundle
+/// while the object still exists. Returns `false` when that fails (the caller
+/// then keeps the object file so lldb can follow the debug map instead).
+/// On Linux the linker copies `.debug_line` into the binary itself, so there
+/// is nothing to do.
+pub(crate) fn bake_debug_info(target: Target, bin_path: &Path) -> bool {
+    if target.platform != Platform::MacOS {
+        return true;
+    }
+    let status = Command::new("dsymutil").arg(bin_path).status();
+    matches!(status, Ok(status) if status.success())
+}
+
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
 /// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
@@ -358,6 +384,7 @@ pub(crate) fn link(
             }
             cmd
         }
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     // Search paths for the located bridge staticlibs.
     for (_, dir) in &needed_bridges {
@@ -434,6 +461,7 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
     for lib in extra_link_libs {
@@ -466,6 +494,7 @@ pub(crate) fn link(
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");
                     }
+                    Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
                 }
             }
             None => {
@@ -700,6 +729,10 @@ fn macos_sdk_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serializes tests that temporarily modify process environment variables.
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     /// Verifies an empty or whitespace-only SDK path (xcrun missing or misconfigured)
     /// yields an actionable Xcode Command Line Tools hint instead of being silently
@@ -759,6 +792,19 @@ mod tests {
         assert!(!entry.whole_archive, "tz bridge must not force-load (no link-time side effects)");
     }
 
+    /// Verifies the optional eval bridge is registered for programs that use `eval()`.
+    #[test]
+    fn bridges_includes_elephc_magician() {
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_magician")
+            .expect("elephc_magician must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-magician");
+        assert_eq!(entry.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_magician.a");
+        assert!(!entry.whole_archive, "eval bridge must not force-load");
+    }
+
     /// Verifies every bridge exposes a non-empty `--with-<flag>` name and that
     /// `bridge_lib_for_flag` maps each one back to its `lib_name`, so the CLI's
     /// `--with-<crate>` validation stays in lockstep with the `BRIDGES` table.
@@ -786,5 +832,29 @@ mod tests {
         assert_eq!(bridge_lib_for_flag("elephc_pdo"), None);
         assert!(crate_flag_names().contains(&"pdo"));
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
+    }
+
+    /// Verifies the eval bridge honors `ELEPHC_MAGICIAN_LIB_DIR` before filesystem discovery.
+    #[test]
+    fn eval_bridge_lib_dir_uses_env_override() {
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock should not be poisoned");
+        let previous = std::env::var_os("ELEPHC_MAGICIAN_LIB_DIR");
+        let override_dir = "/tmp/elephc-magician-lib-dir-override";
+        std::env::set_var("ELEPHC_MAGICIAN_LIB_DIR", override_dir);
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_magician")
+            .expect("elephc_magician must be a registered bridge");
+
+        let resolved = entry.lib_dir();
+
+        match previous {
+            Some(value) => std::env::set_var("ELEPHC_MAGICIAN_LIB_DIR", value),
+            None => std::env::remove_var("ELEPHC_MAGICIAN_LIB_DIR"),
+        }
+        assert_eq!(resolved.as_deref(), Some(override_dir));
     }
 }

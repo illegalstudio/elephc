@@ -2,7 +2,7 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 415
+  order: 425
 ---
 
 ## `is_array()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_array.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1005](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1005) (`lower_is_array`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1617](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1617) (`lower_is_array`)
 - **Function symbol**: `lower_is_array()`
 
 
@@ -33,6 +33,11 @@ function is_array(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

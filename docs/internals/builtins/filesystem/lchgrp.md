@@ -2,7 +2,7 @@
 title: "lchgrp() — internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 129
+  order: 133
 ---
 
 ## `lchgrp()` — internals
@@ -32,6 +32,11 @@ function lchgrp(string $filename, string $group): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lchgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lchgrp.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

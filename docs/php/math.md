@@ -2,7 +2,7 @@
 title: "Math"
 description: "Mathematical functions: abs, floor, ceil, round, clamp, trigonometry, logarithms, and more."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 ## Built-in math functions

@@ -39,7 +39,7 @@ builtin! {
 /// arity (1–2 args) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.require_builtin_library("z");
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `gzinflate` call by dispatching to the shared `lower_gzinflate` emitter.

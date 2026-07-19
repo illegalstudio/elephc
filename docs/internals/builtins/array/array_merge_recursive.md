@@ -36,6 +36,10 @@ function array_merge_recursive(...$arrays): array
 - **Arity**: takes no arguments.
 - **Variadic**: collects excess arguments into `$arrays`.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_merge_recursive()`](../../../php/builtins/array/array_merge_recursive.md)

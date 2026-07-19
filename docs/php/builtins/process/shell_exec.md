@@ -2,7 +2,7 @@
 title: "shell_exec()"
 description: "Executes a command via the shell and returns the complete output as a string."
 sidebar:
-  order: 307
+  order: 315
 ---
 
 ## shell_exec()
@@ -17,6 +17,11 @@ Executes a command via the shell and returns the complete output as a string.
 - `$command` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

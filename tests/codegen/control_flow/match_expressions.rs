@@ -195,6 +195,27 @@ echo gettype(pick(0)), "|", gettype(pick(1));
     assert_eq!(out, "object|string");
 }
 
+/// Regression for the assignment-effects Match path: assigning a heterogeneous
+/// match to a local and returning that local through an inferred return type
+/// must keep per-arm types (`object|string`), not reintroduce the Str-absorbing
+/// syntactic join that coerced both arms to string.
+#[test]
+fn test_match_heterogeneous_assign_inferred_return_preserves_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    $v = match($n) {
+        0 => new stdClass(),
+        default => "s",
+    };
+    return $v;
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "object|string");
+}
+
 /// Tests that homogeneous string arms keep working (the merged temp stays a
 /// plain string, no boxing regression for same-typed arms).
 #[test]

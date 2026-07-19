@@ -36,7 +36,7 @@ builtin! {
 /// Argument types are inferred by the common registry dispatch path before this hook fires;
 /// arity (exactly 1 arg) is pre-validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers an `inet_ntop` call by dispatching to the shared `lower_inet` emitter.

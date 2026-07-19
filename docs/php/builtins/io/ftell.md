@@ -2,7 +2,7 @@
 title: "ftell()"
 description: "Returns the current position of the file read/write pointer."
 sidebar:
-  order: 174
+  order: 178
 ---
 
 ## ftell()
@@ -17,6 +17,11 @@ Returns the current position of the file read/write pointer.
 - `$stream` (`resource`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -113,6 +113,9 @@ pub(crate) fn runtime_builtin_wrapper_supported(
         "strtolower" | "strtoupper" | "trim" => source_arg_ty.is_none_or(|source_arg_ty| {
             matches!(source_arg_ty, PhpType::Str)
         }),
+        // Type predicates take a Mixed wrapper param; concrete source types
+        // fold to a static boolean in the predicate lowering.
+        "is_array" | "is_integer" => true,
         "gettype" => true,
         _ => false,
     }
@@ -127,6 +130,8 @@ fn runtime_builtin_name_supported(name: &str) -> bool {
             | "floatval"
             | "gettype"
             | "intval"
+            | "is_array"
+            | "is_integer"
             | "strlen"
             | "strtolower"
             | "strtoupper"
@@ -277,8 +282,8 @@ fn emit_string_name_compare(
             abi::emit_symbol_address(emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(emitter, "x4", candidate_len as i64);
             abi::emit_call_label(emitter, "__rt_strcasecmp");
-            emitter.instruction("cmp x0, #0"); // did the runtime string callback name match this userland target?
-            emitter.instruction(&format!("b.eq {}", matched_label)); // select this callable case when names match case-insensitively
+            emitter.instruction("cmp x0, #0");                                  // did the runtime string callback name match this userland target?
+            emitter.instruction(&format!("b.eq {}", matched_label));            // select this callable case when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "rdi", ptr_offset);
@@ -286,8 +291,8 @@ fn emit_string_name_compare(
             abi::emit_symbol_address(emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(emitter, "__rt_strcasecmp");
-            emitter.instruction("test rax, rax"); // did the runtime string callback name match this userland target?
-            emitter.instruction(&format!("je {}", matched_label)); // select this callable case when names match case-insensitively
+            emitter.instruction("test rax, rax");                               // did the runtime string callback name match this userland target?
+            emitter.instruction(&format!("je {}", matched_label));              // select this callable case when names match case-insensitively
         }
     }
 }

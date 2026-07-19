@@ -2,7 +2,7 @@
 title: "gettype()"
 description: "Returns the type of a variable as a string."
 sidebar:
-  order: 413
+  order: 423
 ---
 
 ## gettype()
@@ -17,6 +17,11 @@ Returns the type of a variable as a string.
 - `$value` (`mixed`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/gettype.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

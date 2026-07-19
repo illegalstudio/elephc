@@ -302,6 +302,18 @@ fn test_match_token() {
     assert_eq!(t[1], Token::Match);
 }
 
+/// Verifies case-insensitive keyword classification retains each exact source spelling for
+/// parser contexts where the token becomes a case-sensitive member or argument name.
+#[test]
+fn test_keyword_tokens_retain_source_spelling() {
+    let t = tokenize("<?php MATCH Match match DEFAULT Default default").unwrap();
+    let expected = ["MATCH", "Match", "match", "DEFAULT", "Default", "default"];
+    for ((token, metadata), spelling) in t[1..7].iter().zip(expected) {
+        assert!(matches!(token, Token::Match | Token::Default));
+        assert_eq!(token.word_spelling(metadata), Some(spelling));
+    }
+}
+
 /// Verifies `fn($x) => $x` arrow function tokenizes as `Fn`.
 #[test]
 fn test_fn_token() {
@@ -376,6 +388,35 @@ fn test_static_keyword() {
             Token::Eof,
         ]
     );
+}
+
+/// Verifies `declare(strict_types=1);` token sequence includes `Declare`.
+#[test]
+fn test_declare_keyword() {
+    let t = tokens("<?php declare(strict_types=1);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Declare,
+            Token::LParen,
+            Token::Identifier("strict_types".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies the alternative `declare` syntax recognizes `enddeclare` as its closing keyword.
+#[test]
+fn test_enddeclare_keyword() {
+    let t = tokens("<?php declare(ticks=1): echo 1; enddeclare;");
+    assert!(t.contains(&Token::Declare));
+    assert!(t.contains(&Token::Colon));
+    assert!(t.contains(&Token::EndDeclare));
 }
 
 // --- Reference parameter ---

@@ -185,6 +185,7 @@ pub fn materialize_outgoing_args(
         let src_offset = base_shift + temp_offsets[i];
         match &assignment.ty {
             PhpType::Bool
+            | PhpType::False
             | PhpType::Int
             | PhpType::Resource(_)
             | PhpType::Iterable
@@ -253,4 +254,17 @@ pub fn materialize_outgoing_args(
     }
 
     overflow_bytes
+}
+
+/// Returns the temporary caller-stack padding needed after outgoing stack args are materialized.
+///
+/// AArch64 callees read the first spilled incoming argument at `x29+32`, which leaves a
+/// 16-byte gap above the outgoing stack-argument area after the callee saves `x29/x30`.
+/// x86_64 already gets the corresponding gap from `call` pushing the return address and the
+/// callee saving `rbp`.
+pub fn outgoing_call_stack_pad_bytes(target: Target, overflow_bytes: usize) -> usize {
+    match target.arch {
+        Arch::AArch64 if overflow_bytes > 0 => 16,
+        _ => 0,
+    }
 }

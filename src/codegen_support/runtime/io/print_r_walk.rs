@@ -60,8 +60,7 @@ pub fn emit_print_r_spaces(emitter: &mut Emitter) {
     emitter.instruction("sub x0, x0, x2");                                      // remaining -= chunk
     emitter.instruction("str x0, [sp, #0]");                                    // save the decremented count
     abi::emit_symbol_address(emitter, "x1", "_pr_spaces");                      // buffer = the 64-space pad
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the space chunk
+    emitter.instruction("bl __rt_pr_write");                                    // write the space chunk
     emitter.instruction("b __rt_pr_spaces_loop");                               // continue padding
 
     emitter.label("__rt_pr_spaces_done");
@@ -91,9 +90,7 @@ fn emit_print_r_spaces_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rax, rdx");                                        // remaining -= chunk
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the decremented count
     abi::emit_symbol_address(emitter, "rsi", "_pr_spaces");                     // buffer = the 64-space pad
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the space chunk
+    emitter.instruction("call __rt_pr_write");                                  // write the space chunk
     emitter.instruction("jmp __rt_pr_spaces_loop_x86");                         // continue padding
 
     emitter.label("__rt_pr_spaces_done_x86");
@@ -132,8 +129,7 @@ fn emit_print_r_paren_aarch64(emitter: &mut Emitter, label: &str, paren_sym: &st
     emitter.instruction("bl __rt_print_r_spaces");                              // x0 holds the base indent → pad it
     abi::emit_symbol_address(emitter, "x1", paren_sym);                         // load the `(\n` or `)\n` literal
     emitter.instruction("mov x2, #2");                                          // both paren literals are 2 bytes
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the paren line
+    emitter.instruction("bl __rt_pr_write");                                    // write the paren line
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to caller
@@ -150,9 +146,7 @@ fn emit_print_r_paren_linux_x86_64(emitter: &mut Emitter, label: &str, paren_sym
     emitter.instruction("call __rt_print_r_spaces");                            // rdi holds the base indent → pad it
     abi::emit_symbol_address(emitter, "rsi", paren_sym);                        // load the `(\n` or `)\n` literal
     emitter.instruction("mov edx, 2");                                          // both paren literals are 2 bytes
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the paren line
+    emitter.instruction("call __rt_pr_write");                                  // write the paren line
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }
@@ -178,16 +172,13 @@ pub fn emit_print_r_int_key(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_spaces");                              // pad the entry indent
     abi::emit_symbol_address(emitter, "x1", "_pr_lbrack");                      // load the `[` delimiter
     emitter.instruction("mov x2, #1");                                          // len("[") = 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `[`
+    emitter.instruction("bl __rt_pr_write");                                    // write `[`
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer key
     emitter.instruction("bl __rt_itoa");                                        // x1=digits ptr, x2=digits len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the key digits
+    emitter.instruction("bl __rt_pr_write");                                    // write the key digits
     abi::emit_symbol_address(emitter, "x1", "_pr_arrow");                       // load the `] => ` separator
     emitter.instruction("mov x2, #5");                                          // len("] => ") = 5
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `] => `
+    emitter.instruction("bl __rt_pr_write");                                    // write `] => `
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to caller
@@ -208,20 +199,14 @@ fn emit_print_r_int_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_print_r_spaces");                            // pad the entry indent
     abi::emit_symbol_address(emitter, "rsi", "_pr_lbrack");                     // load the `[` delimiter
     emitter.instruction("mov edx, 1");                                          // len("[") = 1
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `[`
+    emitter.instruction("call __rt_pr_write");                                  // write `[`
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the integer key
     emitter.instruction("call __rt_itoa");                                      // rax=digits ptr, rdx=digits len
     emitter.instruction("mov rsi, rax");                                        // digits ptr → write buffer
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the key digits
+    emitter.instruction("call __rt_pr_write");                                  // write the key digits
     abi::emit_symbol_address(emitter, "rsi", "_pr_arrow");                      // load the `] => ` separator
     emitter.instruction("mov edx, 5");                                          // len("] => ") = 5
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `] => `
+    emitter.instruction("call __rt_pr_write");                                  // write `] => `
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -248,16 +233,13 @@ pub fn emit_print_r_str_key(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_spaces");                              // pad the entry indent
     abi::emit_symbol_address(emitter, "x1", "_pr_lbrack");                      // load the `[` delimiter
     emitter.instruction("mov x2, #1");                                          // len("[") = 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `[`
+    emitter.instruction("bl __rt_pr_write");                                    // write `[`
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the key ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the key len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the raw (unquoted) key bytes
+    emitter.instruction("bl __rt_pr_write");                                    // write the raw (unquoted) key bytes
     abi::emit_symbol_address(emitter, "x1", "_pr_arrow");                       // load the `] => ` separator
     emitter.instruction("mov x2, #5");                                          // len("] => ") = 5
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `] => `
+    emitter.instruction("bl __rt_pr_write");                                    // write `] => `
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to caller
@@ -279,19 +261,13 @@ fn emit_print_r_str_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_print_r_spaces");                            // pad the entry indent
     abi::emit_symbol_address(emitter, "rsi", "_pr_lbrack");                     // load the `[` delimiter
     emitter.instruction("mov edx, 1");                                          // len("[") = 1
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `[`
+    emitter.instruction("call __rt_pr_write");                                  // write `[`
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the key ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the key len
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the raw (unquoted) key bytes
+    emitter.instruction("call __rt_pr_write");                                  // write the raw (unquoted) key bytes
     abi::emit_symbol_address(emitter, "rsi", "_pr_arrow");                      // load the `] => ` separator
     emitter.instruction("mov edx, 5");                                          // len("] => ") = 5
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `] => `
+    emitter.instruction("call __rt_pr_write");                                  // write `] => `
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -337,22 +313,19 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.label("__rt_pr_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
     emitter.instruction("bl __rt_itoa");                                        // x1=digits ptr, x2=digits len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the decimal digits
+    emitter.instruction("bl __rt_pr_write");                                    // write the decimal digits
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_str");
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the string ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the string len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the raw string bytes
+    emitter.instruction("bl __rt_pr_write");                                    // write the raw string bytes
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_flt");
     emitter.instruction("ldr d0, [sp, #0]");                                    // reload the float bit pattern
     emitter.instruction("bl __rt_ftoa");                                        // x1=text ptr, x2=text len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write the float text
+    emitter.instruction("bl __rt_pr_write");                                    // write the float text
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_bool");
@@ -360,15 +333,13 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_pr_val_done");                            // false → render the empty string
     abi::emit_symbol_address(emitter, "x1", "_pr_one");                         // true → load the `1` literal
     emitter.instruction("mov x2, #1");                                          // len("1") = 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `1`
+    emitter.instruction("bl __rt_pr_write");                                    // write `1`
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_arr");
     abi::emit_symbol_address(emitter, "x1", "_pr_array_hdr");                   // load the `Array\n` header
     emitter.instruction("mov x2, #6");                                          // len("Array\n") = 6
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `Array\n`
+    emitter.instruction("bl __rt_pr_write");                                    // write `Array\n`
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested indexed-array pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
     emitter.instruction("bl __rt_print_r_indexed");                             // recurse into the indexed walker
@@ -377,8 +348,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.label("__rt_pr_val_hash");
     abi::emit_symbol_address(emitter, "x1", "_pr_array_hdr");                   // load the `Array\n` header
     emitter.instruction("mov x2, #6");                                          // len("Array\n") = 6
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // write `Array\n`
+    emitter.instruction("bl __rt_pr_write");                                    // write `Array\n`
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
     emitter.instruction("bl __rt_print_r_hash");                                // recurse into the hash walker
@@ -430,26 +400,20 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the integer payload
     emitter.instruction("call __rt_itoa");                                      // rax=digits ptr, rdx=digits len
     emitter.instruction("mov rsi, rax");                                        // digits ptr → write buffer
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the decimal digits
+    emitter.instruction("call __rt_pr_write");                                  // write the decimal digits
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_str_x86");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the string ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the string len
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the raw string bytes
+    emitter.instruction("call __rt_pr_write");                                  // write the raw string bytes
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_flt_x86");
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload the float bit pattern
     emitter.instruction("call __rt_ftoa");                                      // rax=text ptr, rdx=text len
     emitter.instruction("mov rsi, rax");                                        // text ptr → write buffer
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write the float text
+    emitter.instruction("call __rt_pr_write");                                  // write the float text
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_bool_x86");
@@ -458,17 +422,13 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pr_val_done_x86");                             // false → render the empty string
     abi::emit_symbol_address(emitter, "rsi", "_pr_one");                        // true → load the `1` literal
     emitter.instruction("mov edx, 1");                                          // len("1") = 1
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `1`
+    emitter.instruction("call __rt_pr_write");                                  // write `1`
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_arr_x86");
     abi::emit_symbol_address(emitter, "rsi", "_pr_array_hdr");                  // load the `Array\n` header
     emitter.instruction("mov edx, 6");                                          // len("Array\n") = 6
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `Array\n`
+    emitter.instruction("call __rt_pr_write");                                  // write `Array\n`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested indexed-array pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
     emitter.instruction("call __rt_print_r_indexed");                           // recurse into the indexed walker
@@ -477,9 +437,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pr_val_hash_x86");
     abi::emit_symbol_address(emitter, "rsi", "_pr_array_hdr");                  // load the `Array\n` header
     emitter.instruction("mov edx, 6");                                          // len("Array\n") = 6
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // write `Array\n`
+    emitter.instruction("call __rt_pr_write");                                  // write `Array\n`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
     emitter.instruction("call __rt_print_r_hash");                              // recurse into the hash walker
@@ -585,8 +543,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.label("__rt_pr_idx_after");
     abi::emit_symbol_address(emitter, "x1", "_pr_nl");                          // load the line terminator
     emitter.instruction("mov x2, #1");                                          // len("\n") = 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // terminate the entry line
+    emitter.instruction("bl __rt_pr_write");                                    // terminate the entry line
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the index
     emitter.instruction("add x9, x9, #1");                                      // advance the index
     emitter.instruction("str x9, [sp, #32]");                                   // save the updated index
@@ -683,9 +640,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pr_idx_after_x86");
     abi::emit_symbol_address(emitter, "rsi", "_pr_nl");                         // load the line terminator
     emitter.instruction("mov edx, 1");                                          // len("\n") = 1
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // terminate the entry line
+    emitter.instruction("call __rt_pr_write");                                  // terminate the entry line
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the index
     emitter.instruction("add rax, 1");                                          // advance the index
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the updated index
@@ -770,8 +725,7 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "x1", "_pr_nl");                          // load the line terminator
     emitter.instruction("mov x2, #1");                                          // len("\n") = 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);                                                         // terminate the entry line
+    emitter.instruction("bl __rt_pr_write");                                    // terminate the entry line
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload items emitted
     emitter.instruction("add x9, x9, #1");                                      // count this entry
     emitter.instruction("str x9, [sp, #40]");                                   // save the updated item count
@@ -850,9 +804,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_pr_nl");                         // load the line terminator
     emitter.instruction("mov edx, 1");                                          // len("\n") = 1
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // terminate the entry line
+    emitter.instruction("call __rt_pr_write");                                  // terminate the entry line
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload items emitted
     emitter.instruction("add rax, 1");                                          // count this entry
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the updated item count

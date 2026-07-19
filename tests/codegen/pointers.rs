@@ -72,6 +72,26 @@ echo $x;
     assert_eq!(out, "99");
 }
 
+/// Verifies `ptr($local)` selects raw frame storage or ref-cell storage per runtime path.
+#[test]
+fn test_ptr_after_conditional_ref_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+function update(bool $bind): int {
+    $value = 1;
+    if ($bind) {
+        $alias =& $value;
+    }
+    $pointer = ptr($value);
+    ptr_set($pointer, 9);
+    return $value;
+}
+echo update(false) . '|' . update(true);
+"#,
+    );
+    assert_eq!(out, "9|9");
+}
+
 /// Tests `ptr_offset()` with offset 0 returns the same address as the base pointer.
 #[test]
 fn test_ptr_offset() {

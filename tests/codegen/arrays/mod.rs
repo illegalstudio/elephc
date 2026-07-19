@@ -13,5 +13,7 @@ mod assoc_helpers;
 mod nested;
 mod callbacks;
 mod foreach_key_write;
+mod foreach_value_append;
 mod list_and_keys;
+mod nested_mixed_write;
 mod assoc_set_ops;

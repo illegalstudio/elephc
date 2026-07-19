@@ -24,6 +24,7 @@ fn map_anon_private_flags(platform: Platform) -> i32 {
     match platform {
         Platform::MacOS => 0x1002, // MAP_PRIVATE | MAP_ANON
         Platform::Linux => 0x22,   // MAP_PRIVATE | MAP_ANONYMOUS
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     }
 }
 

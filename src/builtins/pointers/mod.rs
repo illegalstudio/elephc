@@ -7,11 +7,16 @@
 //! - `crate::builtins` (`mod pointers;` in `src/builtins/mod.rs`).
 //!
 //! Key details:
-//! - All 15 pointer builtins require a `check` hook because they validate
+//! - Pointer builtins require a `check` hook because they validate
 //!   pointer/argument types at compile time and some return `PhpType::Pointer(None)`
 //!   which `TypeSpec` cannot express statically.
 //! - Add `pub mod <name>;` here for every new pointer builtin home.
 
+pub mod __elephc_ptr_is_null;
+pub mod __elephc_ptr_read_string;
+pub mod __elephc_ptr_write_string;
+pub mod buffer_free;
+pub mod buffer_len;
 pub mod ptr;
 pub mod ptr_get;
 pub mod ptr_is_null;
@@ -27,3 +32,7 @@ pub mod ptr_write16;
 pub mod ptr_write32;
 pub mod ptr_write8;
 pub mod ptr_write_string;
+pub mod zval_free;
+pub mod zval_pack;
+pub mod zval_type;
+pub mod zval_unpack;

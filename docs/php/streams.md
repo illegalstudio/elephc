@@ -2,7 +2,7 @@
 title: "Streams"
 description: "Stream resources, wrappers, contexts, filters, sockets, TLS, and process pipes."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 ## Resource model

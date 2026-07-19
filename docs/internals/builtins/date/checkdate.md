@@ -2,7 +2,7 @@
 title: "checkdate() — internals"
 description: "Compiler internals for checkdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 85
+  order: 89
 ---
 
 ## `checkdate()` — internals
@@ -36,6 +36,11 @@ function checkdate(int $month, int $day, int $year): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 3 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

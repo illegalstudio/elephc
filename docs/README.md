@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-elephc compiles PHP to native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64. No interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
+elephc compiles PHP to standalone native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64 — without PHP, the Zend Engine, or an external VM. Ordinary source is AOT-compiled; experimental `eval()` may embed an optional interpreter bridge when a fragment requires runtime parsing. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
 ## Getting Started
 
@@ -28,7 +28,8 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
 - [Targets and cross-compilation](compiling/targets.md) — the supported target matrix and `--target`
 - [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR identity, peephole, and dead-instruction passes), `--regalloc`, `--null-repr`
-- [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug`
+- [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
+- [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
 - [Linking, heap, and conditional compilation](compiling/linking-and-conditional-compilation.md) — `--link`/`-l`, `--link-path`/`-L`, `--framework`, `--heap-size`, `--define`
 
 ## PHP Syntax
@@ -39,6 +40,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
+- [Eval](php/eval.md) — experimental literal-AOT and runtime PHP fragment evaluation, scope synchronization, dynamic declarations, safety, supported builtins, and limitations
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 70+ built-in string functions
 - [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and native PCRE2 build requirements
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
@@ -48,6 +50,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
+- [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
@@ -67,6 +70,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone prefork HTTP server binary
+- [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 
 ## Compiler Internals
 
@@ -81,6 +85,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly
 - [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by codegen and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
+- [Eval Runtime Architecture](internals/eval-runtime.md) — literal AOT planning, scope synchronization, Magician fallback, and bridge ABI
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64

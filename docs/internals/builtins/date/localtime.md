@@ -2,7 +2,7 @@
 title: "localtime() — internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 93
+  order: 97
 ---
 
 ## `localtime()` — internals
@@ -38,6 +38,11 @@ function localtime(int $timestamp = -1, bool $associative = false): array
 ## What the type checker enforces
 
 - **Arity**: takes 0–2 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/localtime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

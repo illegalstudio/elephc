@@ -17,7 +17,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -45,14 +45,14 @@ fn elephc_bin() -> String {
     })
 }
 
-/// Compiles `source` with the given extra elephc flags; returns the binary path.
-fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
+/// Compiles `source` in web mode with extra compiler flags and returns the binary path.
+fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
-    cmd.arg("--web").arg(&php);
+    cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),
@@ -60,6 +60,11 @@ fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
         String::from_utf8_lossy(&output.stderr)
     );
     dir.join(stem)
+}
+
+/// Compiles `source` in web mode without extra compiler flags.
+fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
+    compile_web_with_flags(dir, source, stem, &[])
 }
 
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
@@ -578,6 +583,60 @@ fn web_conditional_early_return_halts() {
     assert!(good.ends_with("good"), "ok body must be 'good': {:?}", good);
 }
 
+/// Verifies `--gc-stats` emits one counter line after every web request,
+/// including a request that leaves the top-level handler through early return.
+#[test]
+fn web_gc_stats_are_emitted_per_request() {
+    let dir = make_test_dir("web_gc_stats");
+    let src = "<?php if (!isset($_GET['ok'])) { echo 'early'; return; } echo 'normal';";
+    let bin = compile_web_with_flags(&dir, src, "app", &["--gc-stats"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .expect("spawn web server with gc stats");
+    wait_until_ready(&addr);
+
+    let early = http_request(&addr, "GET", "/", &[], "");
+    let normal = http_request(&addr, "GET", "/?ok=1", &[], "");
+    let pid = child.id();
+    let signal = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .expect("send SIGTERM to web server");
+    assert!(signal.success(), "failed to stop web server");
+    let status = child.wait().expect("wait for web server shutdown");
+    assert_eq!(status.code(), Some(0), "web server must stop cleanly");
+
+    assert!(early.ends_with("early"), "early-return response: {:?}", early);
+    assert!(normal.ends_with("normal"), "normal response: {:?}", normal);
+    let stderr = fs::read_to_string(&stderr_path).expect("read captured server stderr");
+    let stats: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("GC: allocs="))
+        .collect();
+    assert_eq!(
+        stats.len(),
+        2,
+        "expected one gc-stats line per handled request, stderr: {}",
+        stderr
+    );
+    for line in stats {
+        let Some((allocs, frees)) = line
+            .strip_prefix("GC: allocs=")
+            .and_then(|rest| rest.split_once(" frees="))
+        else {
+            panic!("malformed gc-stats line: {}", line);
+        };
+        assert!(allocs.parse::<u64>().is_ok(), "invalid allocation count: {}", line);
+        assert!(frees.parse::<u64>().is_ok(), "invalid free count: {}", line);
+    }
+}
+
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
 /// under the limit is served normally.
 #[test]
@@ -846,6 +905,47 @@ fn web_max_requests_recycles_and_keeps_serving() {
         }
         assert!(ok, "server stopped serving across a --max-requests recycle");
     }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Regression for issue #516 (caveat 2): planned --max-requests recycles used to
+/// count toward the master's fast-death crash-loop guard, so sustained traffic
+/// recycled a worker >10 times in under a second each and the master printed
+/// "giving up" and shut the whole server down. Drive enough requests through a
+/// tiny quota to force well past MAX_FAST_DEATHS (10) recycles and assert the
+/// master is still alive and serving at the end.
+#[test]
+fn web_max_requests_survives_sustained_recycle_churn() {
+    let dir = make_test_dir("web_maxreq_churn");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    // 30 requests with a quota of 2 forces ~15 recycles (> MAX_FAST_DEATHS).
+    // Recycling is not graceful, so tolerate transient failures at recycle
+    // boundaries — but every logical request must eventually succeed.
+    for i in 0..30 {
+        let mut ok = false;
+        for _ in 0..40 {
+            if try_http_get(&addr, "/").ends_with("ok") {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(ok, "server gave up during recycle churn at request {}", i + 1);
+    }
+    // The master must still be running (it must NOT have printed "giving up"
+    // and exited after 10 fast recycles).
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "master exited during sustained --max-requests recycle churn"
+    );
     let _ = child.kill();
     let _ = child.wait();
 }

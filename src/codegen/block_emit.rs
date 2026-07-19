@@ -11,6 +11,8 @@
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 
+use std::fmt::Write as _;
+
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -41,6 +43,7 @@ use super::literal_defaults::{
 };
 use super::lower_inst;
 use super::lower_term;
+use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -62,19 +65,30 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
+    let mut shared = SharedCodegenState::default();
     function_variants::emit_dispatchers(module, emitter, data);
+    // In `--web` builds the reset routine references every request superglobal.
+    // If a superglobal is never read or written by user/prelude code, the symbol
+    // would otherwise be missing from the object, so reserve storage up front.
+    if web {
+        let sg_type = crate::superglobals::superglobal_type();
+        let sg_size = sg_type.codegen_repr().stack_size().max(8);
+        for name in crate::superglobals::SUPERGLOBALS {
+            data.add_comm(crate::names::ir_global_symbol(name), sg_size);
+        }
+    }
     for function in module
         .functions
         .iter()
         .filter(|function| !is_main(function))
     {
-        emit_user_function(module, function, emitter, data, regalloc_linear)?;
+        emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
     }
     for method in &module.class_methods {
-        emit_class_method(module, method, emitter, data, regalloc_linear)?;
+        emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
     }
     for closure in &module.closures {
-        emit_user_function(module, closure, emitter, data, regalloc_linear)?;
+        emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
     }
     emit_eir_fiber_wrappers(module, emitter);
     if matches!(emit, Emit::Cdylib) {
@@ -90,6 +104,7 @@ pub(super) fn emit_module(
         main,
         emitter,
         data,
+        &mut shared,
         gc_stats,
         heap_debug,
         requires_elephc_tls,
@@ -160,18 +175,24 @@ fn emit_user_function(
     function: &Function,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    let entry_label = user_function_entry_symbol(function);
+    let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
+    emit_fn_marker(emitter, &function.name, &entry_label, synthetic);
     if function.flags.is_generator {
-        let entry_label = user_function_entry_symbol(function);
-        return emit_generator_function(
+        emit_generator_function(
             module,
             function,
             &entry_label,
             emitter,
             data,
+            shared,
             regalloc_linear,
-        );
+        )?;
+        emit_endfn_marker(emitter, &function.name);
+        return Ok(());
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = user_function_epilogue_symbol(function);
@@ -180,16 +201,17 @@ fn emit_user_function(
         function,
         emitter,
         data,
+        shared,
         layout,
         false,
         false,
         false,
         Some(epilogue_label),
     );
-    let entry_label = user_function_entry_symbol(function);
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     Ok(())
 }
 
@@ -200,6 +222,7 @@ pub(super) fn emit_synthetic_function_with_label(
     entry_label: &str,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
@@ -209,6 +232,7 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter,
         data,
+        shared,
         layout,
         false,
         false,
@@ -248,18 +272,23 @@ fn emit_class_method(
     function: &Function,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
+    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic);
     if function.flags.is_generator {
-        return emit_generator_function(
+        emit_generator_function(
             module,
             function,
             &entry_label,
             emitter,
             data,
+            shared,
             regalloc_linear,
-        );
+        )?;
+        emit_endfn_marker(emitter, &function.name);
+        return Ok(());
     }
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
@@ -268,6 +297,7 @@ fn emit_class_method(
         function,
         emitter,
         data,
+        shared,
         layout,
         false,
         false,
@@ -277,6 +307,7 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     Ok(())
 }
 
@@ -297,6 +328,7 @@ fn emit_generator_function(
     entry_label: &str,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
     let body_label = format!("{}__genbody", entry_label);
@@ -324,6 +356,7 @@ fn emit_generator_function(
         &body_label,
         emitter,
         data,
+        shared,
         regalloc_linear,
     )?;
     emit_generator_callback(emitter, &callback_label, &body_label, &param_types);
@@ -442,18 +475,18 @@ fn emit_generator_constructor(
     // -- allocate the Generator coroutine object --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #0"); // no callable descriptor — the wrapper runs the compiled body
+            emitter.instruction("mov x0, #0");                                  // no callable descriptor — the wrapper runs the compiled body
             abi::emit_load_symbol_to_reg(emitter, "x1", "_generator_class_id", 0); // x1 = runtime class id of Generator
             abi::emit_symbol_address(emitter, "x2", callback_label); // x2 = generator coroutine entry wrapper
-            emitter.instruction("bl __rt_fiber_construct"); // x0 = freshly allocated Generator coroutine object
-            emitter.instruction("mov x19, x0"); // cache the generator object across the per-parameter boxing calls
+            emitter.instruction("bl __rt_fiber_construct");                     // x0 = freshly allocated Generator coroutine object
+            emitter.instruction("mov x19, x0");                                 // cache the generator object across the per-parameter boxing calls
         }
         Arch::X86_64 => {
-            emitter.instruction("xor edi, edi"); // no callable descriptor — the wrapper runs the compiled body
+            emitter.instruction("xor edi, edi");                                // no callable descriptor — the wrapper runs the compiled body
             abi::emit_load_symbol_to_reg(emitter, "rsi", "_generator_class_id", 0); // rsi = runtime class id of Generator
             abi::emit_symbol_address(emitter, "rdx", callback_label); // rdx = generator coroutine entry wrapper
-            emitter.instruction("call __rt_fiber_construct"); // rax = freshly allocated Generator coroutine object
-            emitter.instruction("mov r12, rax"); // cache the generator object across the per-parameter boxing calls
+            emitter.instruction("call __rt_fiber_construct");                   // rax = freshly allocated Generator coroutine object
+            emitter.instruction("mov r12, rax");                                // cache the generator object across the per-parameter boxing calls
         }
     }
 
@@ -465,8 +498,8 @@ fn emit_generator_constructor(
             GenParamKind::Mixed => {
                 abi::load_at_offset(emitter, gen_reg, slot);
                 match target.arch {
-                    Arch::AArch64 => emitter.instruction("bl __rt_incref"), // own a reference to the forwarded Mixed cell
-                    Arch::X86_64 => emitter.instruction("call __rt_incref"), // own a reference to the forwarded Mixed cell
+                    Arch::AArch64 => emitter.instruction("bl __rt_incref"),     // own a reference to the forwarded Mixed cell
+                    Arch::X86_64 => emitter.instruction("call __rt_incref"),    // own a reference to the forwarded Mixed cell
                 }
             }
             GenParamKind::Float => {
@@ -507,16 +540,16 @@ fn emit_generator_constructor(
     // -- publish the forwarded argument count and return the Generator object --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{}", n)); // number of boxed start arguments forwarded to the body
+            emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
             emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // publish the start argument count
-            emitter.instruction("mov x0, x19"); // return the Generator object to the caller
+            emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], {}",
                 FIBER_START_ARG_COUNT_OFFSET, n
             )); // publish the start argument count
-            emitter.instruction("mov rax, r12"); // return the Generator object to the caller
+            emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
         }
     }
     abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
@@ -535,6 +568,7 @@ fn emit_generator_body(
     body_label: &str,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
@@ -544,6 +578,7 @@ fn emit_generator_body(
         function,
         emitter,
         data,
+        shared,
         layout,
         false,
         false,
@@ -591,8 +626,8 @@ fn emit_generator_callback(
     abi::emit_frame_prologue(emitter, frame_size);
     abi::store_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // preserve the caller's callee-saved generator-object cache register
     match target.arch {
-        Arch::AArch64 => emitter.instruction("mov x19, x0"), // x19 = Generator object passed by __rt_fiber_entry
-        Arch::X86_64 => emitter.instruction("mov r12, rdi"), // r12 = Generator object passed by __rt_fiber_entry
+        Arch::AArch64 => emitter.instruction("mov x19, x0"),                    // x19 = Generator object passed by __rt_fiber_entry
+        Arch::X86_64 => emitter.instruction("mov r12, rdi"),                    // r12 = Generator object passed by __rt_fiber_entry
     };
 
     // -- unbox each start_args cell into its scratch frame slot --
@@ -601,7 +636,7 @@ fn emit_generator_callback(
         let load_off = FIBER_START_ARGS_OFFSET as usize + idx * 8;
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off)); // load the boxed Mixed start argument
+                emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off));
@@ -613,16 +648,16 @@ fn emit_generator_callback(
             continue;
         }
         match target.arch {
-            Arch::AArch64 => emitter.instruction("bl __rt_mixed_unbox"), // x1 = primary payload, x2 = string length
-            Arch::X86_64 => emitter.instruction("call __rt_mixed_unbox"), // rdi = primary payload, rdx = string length
+            Arch::AArch64 => emitter.instruction("bl __rt_mixed_unbox"),        // x1 = primary payload, x2 = string length
+            Arch::X86_64 => emitter.instruction("call __rt_mixed_unbox"),       // rdi = primary payload, rdx = string length
         }
         match (gen_param_kind(ty), target.arch) {
             (GenParamKind::Float, Arch::AArch64) => {
-                emitter.instruction("fmov d0, x1"); // reinterpret the unboxed float payload bits
+                emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits
                 abi::store_at_offset(emitter, "d0", slot);
             }
             (GenParamKind::Float, Arch::X86_64) => {
-                emitter.instruction("movq xmm0, rdi"); // reinterpret the unboxed float payload bits
+                emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits
                 abi::store_at_offset(emitter, "xmm0", slot);
             }
             (GenParamKind::Str, Arch::AArch64) => {
@@ -687,10 +722,10 @@ fn emit_generator_callback(
     // -- run the body, park its return value, and yield a null fiber transfer value --
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("bl {}", body_label)); // run the generator body to completion; x0 = boxed return value
+            emitter.instruction(&format!("bl {}", body_label));                 // run the generator body to completion; x0 = boxed return value
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("call {}", body_label)); // run the generator body to completion; rax = boxed return value
+            emitter.instruction(&format!("call {}", body_label));               // run the generator body to completion; rax = boxed return value
         }
     }
     abi::emit_release_temporary_stack(emitter, call_pad); // drop the ARM64 nested-call alignment pad
@@ -698,14 +733,14 @@ fn emit_generator_callback(
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
-            emitter.instruction("mov x0, #0"); // hand the fiber transfer value a null so it does not alias the return
+            emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], rax",
                 GEN_RETURN_VALUE_OFFSET
             )); // park the body return value for getReturn()
-            emitter.instruction("xor eax, eax"); // hand the fiber transfer value a null so it does not alias the return
+            emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
         }
     }
     abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
@@ -742,15 +777,22 @@ fn emit_main_function(
     function: &Function,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    shared: &mut SharedCodegenState,
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
+    let entry_symbol = if web {
+        frame::WEB_HANDLER_SYMBOL
+    } else {
+        emitter.entry_symbol()
+    };
+    emit_fn_marker(emitter, &function.name, entry_symbol, false);
     let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let mut ctx = FunctionContext::new(
-        module, function, emitter, data, layout, true, gc_stats, heap_debug, None,
+        module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
     if web {
         ctx.web = true;
@@ -771,6 +813,7 @@ fn emit_main_function(
             frame::emit_main_epilogue(&mut ctx);
         }
     }
+    emit_endfn_marker(ctx.emitter, &function.name);
     if web {
         frame::emit_web_entry_stub(&mut ctx);
     }
@@ -784,11 +827,11 @@ fn is_main(function: &Function) -> bool {
 
 /// Emits global singleton objects for enum cases used by EIR user code.
 fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
-    let allowed_class_names = super::runtime_referenced_class_names(ctx.module);
+    let allowed_enum_names = super::runtime_referenced_enum_singleton_names(ctx.module);
     let mut sorted_enums = ctx.module.enum_infos.iter().collect::<Vec<_>>();
     sorted_enums.sort_by_key(|(name, _)| name.as_str());
     for (enum_name, enum_info) in sorted_enums {
-        if !allowed_class_names.contains(enum_name) {
+        if !allowed_enum_names.contains(enum_name) {
             continue;
         }
         let Some(class_info) = ctx.module.class_infos.get(enum_name) else {
@@ -862,10 +905,10 @@ fn emit_enum_object_allocation(
             ctx.emitter
                 .instruction(&format!("mov x0, #{}", payload_size)); // request enum singleton object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4"); // heap kind 4 marks enum singletons as object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]"); // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", class_id)); // materialize the enum class id
-            ctx.emitter.instruction("str x10, [x0]"); // store the enum class id at payload offset zero
+            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks enum singletons as object instances
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the enum singleton payload
+            ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the enum class id
+            ctx.emitter.instruction("str x10, [x0]");                           // store the enum class id at payload offset zero
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -875,9 +918,9 @@ fn emit_enum_object_allocation(
                 "mov r10, 0x{:x}",
                 (X86_64_HEAP_MAGIC_HI32 << 32) | 4
             )); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id)); // materialize the enum class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // store the enum class id at payload offset zero
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
+            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the enum class id at payload offset zero
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
@@ -933,7 +976,14 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
             let default = class_info
                 .static_defaults
                 .get(index)
-                .and_then(Option::as_ref);
+                .and_then(Option::as_ref)
+                // A null default whose slot cannot represent null (a scalar slot
+                // rebound by later type refinement) is skipped; the slot is always
+                // written before an observable read on those paths.
+                .filter(|default_expr| {
+                    !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
+                        || php_type.null_property_default_required()
+                });
             if let Some(default_expr) = default {
                 default_initializers.push((
                     class_name.clone(),
@@ -1109,6 +1159,7 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+    ctx.emitter.comment(&format!("@block name={}", block.name));
     ctx.emitter
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
     for inst_id in &block.instructions {
@@ -1122,6 +1173,8 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
+/// The marker carries the EIR opcode spelling so v2 maps can label mappings at
+/// expression granularity.
 fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return Err(CodegenIrError::missing_entry(
@@ -1133,8 +1186,33 @@ fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId
         return Ok(());
     };
     if span.line > 0 {
-        ctx.emitter
-            .comment(&format!("@src line={} col={}", span.line, span.col));
+        let mut marker = format!("@src line={} col={}", span.line, span.col);
+        if span.has_extent() {
+            let _ = write!(marker, " end={}:{}", span.end_line, span.end_col);
+        }
+        let _ = write!(marker, " op={}", inst.op.name());
+        if let Some(origin) = inst.origin {
+            let _ = write!(marker, " origin={}", origin.name());
+        }
+        ctx.emitter.comment(&marker);
     }
     Ok(())
+}
+
+/// Emits the source-map marker opening a function region. `name` is the PHP-level
+/// function/method name and `symbol` the assembly entry label; the map generator
+/// pairs it with the matching `@endfn` to derive the function's assembly range.
+/// `synthetic` marks compiler-generated bodies with no user-written PHP source.
+fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bool) {
+    let mut marker = format!("@fn name={} symbol={}", name, symbol);
+    if synthetic {
+        marker.push_str(" synthetic=1");
+    }
+    emitter.comment(&marker);
+}
+
+/// Emits the source-map marker closing the function region opened by
+/// `emit_fn_marker()`.
+fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
+    emitter.comment(&format!("@endfn name={}", name));
 }

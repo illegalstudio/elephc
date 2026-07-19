@@ -240,3 +240,21 @@ echo $pick ? $n->a : $n->b;
     );
     assert_eq!(out, "Tishri");
 }
+
+/// Regression for the assignment-effects ternary path: assigning a
+/// heterogeneous ternary to a local and returning it through an inferred
+/// return type must preserve per-branch types (`object|string`), matching
+/// the match assign→return fix for issue #488.
+#[test]
+fn test_ternary_heterogeneous_assign_inferred_return_preserves_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    $v = $n === 0 ? new stdClass() : "s";
+    return $v;
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "object|string");
+}

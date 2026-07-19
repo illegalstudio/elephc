@@ -40,6 +40,7 @@ mod callables;
 mod comparisons;
 mod conversions;
 mod enums;
+mod exceptions;
 mod externs;
 mod floats;
 mod hashes;
@@ -58,6 +59,7 @@ const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
+    ctx.begin_instruction(inst_id);
     let inst = ctx
         .function
         .instruction(inst_id)
@@ -79,6 +81,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -149,7 +152,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
-        Op::HashGet => hashes::lower_hash_get(ctx, &inst),
+        Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
+        Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
@@ -167,10 +171,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
+        Op::DynamicObjectNewWithoutConstructorMixed => {
+            objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
+        }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
+        Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
@@ -184,6 +194,15 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::LoadReflectionStaticProperty => {
+            static_properties::lower_load_reflection_static_property(ctx, &inst)
+        }
+        Op::ReflectionStaticPropertyInitialized => {
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
+        }
+        Op::StoreReflectionStaticProperty => {
+            static_properties::lower_store_reflection_static_property(ctx, &inst)
+        }
         Op::Call => lower_direct_call(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
@@ -192,10 +211,21 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
+        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
+        Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
+        Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
+        Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
+        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
+        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
+        Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
+        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
+        Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
@@ -206,6 +236,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
+        Op::ThrowError => lower_throw_error(ctx, &inst),
+        Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
         Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
         Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
         Op::CatchCurrent => lower_catch_current(ctx, &inst),
@@ -413,8 +445,55 @@ fn promote_local_slot_for_ref_capture(
     release_replaced_value: bool,
 ) -> Result<()> {
     if local_slot_stores_ref_cell_pointer(ctx, slot) {
+        let Some(state_offset) = ctx.ref_cell_state_offset(slot) else {
+            return Ok(());
+        };
+        let promote = ctx.next_label("promote_local_ref_cell");
+        let done = ctx.next_label("promote_local_ref_cell_done");
+        let state_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, promote)); // create the fallback cell only on the first runtime promotion
+                ctx.emitter
+                    .instruction(&format!("b {}", done));                         // reuse the existing cell on later loop iterations
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test whether this slot already stores a fallback cell
+                ctx.emitter
+                    .instruction(&format!("je {}", promote));                       // create the fallback cell only on the first runtime promotion
+                ctx.emitter
+                    .instruction(&format!("jmp {}", done));                         // reuse the existing cell on later loop iterations
+            }
+        }
+        ctx.emitter.label(&promote);
+        promote_local_slot_for_ref_capture_unchecked(
+            ctx,
+            slot,
+            owner_slot,
+            capture_ty,
+            release_replaced_value,
+        )?;
+        ctx.emitter.label(&done);
         return Ok(());
     }
+    promote_local_slot_for_ref_capture_unchecked(
+        ctx,
+        slot,
+        owner_slot,
+        capture_ty,
+        release_replaced_value,
+    )
+}
+
+/// Allocates and installs a ref-cell after the caller has ruled out an existing cell.
+fn promote_local_slot_for_ref_capture_unchecked(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    owner_slot: Option<LocalSlotId>,
+    capture_ty: &PhpType,
+    release_replaced_value: bool,
+) -> Result<()> {
     reject_multiword_ref_param_local(capture_ty, "capture")?;
     let local_ty = ctx.local_php_type(slot)?;
     let offset = ctx.local_offset(slot)?;
@@ -605,6 +684,8 @@ fn function_signature_from_eir_with_param_count(
             .take(param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; param_count],
+        param_attributes: Vec::new(),
         defaults: function
             .params
             .iter()
@@ -644,12 +725,29 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     if signature.params.iter().any(|(name, _)| name == &variadic) {
         return;
     }
+    let variadic_index = signature.params.len();
+    let variadic_type_expr = if signature.param_type_exprs.len() > variadic_index {
+        signature.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_ref = if signature.ref_params.len() > variadic_index {
+        signature.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if signature.declared_params.len() > variadic_index {
+        signature.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
     signature.defaults.push(None);
-    signature.ref_params.push(false);
-    signature.declared_params.push(false);
+    signature.ref_params.push(variadic_ref);
+    signature.declared_params.push(variadic_declared);
+    signature.param_type_exprs.push(variadic_type_expr);
 }
 
 /// Lowers a concrete include-loaded function variant activation marker.
@@ -1547,6 +1645,7 @@ fn emit_runtime_call_wrapper_inline(
         &label,
         ctx.emitter,
         ctx.data,
+        ctx.shared,
         false,
     )?;
     ctx.emitter.label(&done_label);
@@ -1764,17 +1863,6 @@ fn first_class_callable_descriptor(
             method_name,
         ));
     }
-    if let Some(callee) = ctx.callable_function_by_name(target) {
-        return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: function_symbol(&callee.name),
-            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
-            sig: Some(function_signature_from_eir(callee)),
-            invocation: callable_descriptor::CallableDescriptorInvocation::named(
-                callable_descriptor::CallableDescriptorShape::Function,
-                callee.name.clone(),
-            ),
-        }));
-    }
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
             entry_label: ctx.emitter.target.extern_symbol(target),
@@ -1788,6 +1876,17 @@ fn first_class_callable_descriptor(
     }
     if let Some(descriptor) = first_class_builtin_descriptor(ctx, target)? {
         return Ok(Some(descriptor));
+    }
+    if let Some(callee) = ctx.callable_function_by_name(target) {
+        return Ok(Some(FirstClassCallableDescriptor {
+            entry_label: function_symbol(&callee.name),
+            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            sig: Some(function_signature_from_eir(callee)),
+            invocation: callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Function,
+                callee.name.clone(),
+            ),
+        }));
     }
     Ok(None)
 }
@@ -1902,6 +2001,15 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
             return Ok(());
         }
         emit_object_tostring_call(ctx, value, normalized)?;
+        return store_if_result(ctx, inst);
+    }
+    if inst.result_php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
@@ -2222,15 +2330,15 @@ fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]"); // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("lsr x1, x1, #8"); // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f"); // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]"); // load indexed-array metadata before Mixed-slot conversion
-            ctx.emitter.instruction("shr rsi, 8"); // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f"); // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -2243,7 +2351,7 @@ fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) -> Result<()>
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // pass the unboxed associative-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative-array payload to the Mixed conversion helper
         }
         Arch::X86_64 => {}
     }
@@ -2472,7 +2580,7 @@ fn lower_mixed_property_array_runtime_set_x86_64(
     hashes::materialize_hash_key_x86_64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     emit_property_array_target_get_x86_64(ctx, object, property, getter_label)?;
-    ctx.emitter.instruction("mov rdi, rax"); // pass the property Mixed cell as the array-write target
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the property Mixed cell as the array-write target
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
@@ -2561,43 +2669,43 @@ fn lower_mixed_cell_runtime_assign_aarch64(
     let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
     let done = ctx.next_label("mixed_cell_assign_done");
 
-    ctx.emitter.instruction("sub sp, sp, #32"); // reserve temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("str x0, [sp, #8]"); // preserve the boxed replacement while loading the target cell
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for target and replacement Mixed cells
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the boxed replacement while loading the target cell
     ctx.load_value_to_reg(target, "x0")?;
-    ctx.emitter.instruction("str x0, [sp, #0]"); // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction(&format!("cbz x0, {}", drop_new)); // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("ldr x9, [x0]"); // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp x9, #1"); // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("b.eq {}", release_string)); // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp x9, #4"); // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("b.lo {}", copy_new)); // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp x9, #7"); // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("b.hi {}", copy_new)); // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("ldr x0, [x0, #8]"); // pass the old refcounted child payload to the generic release helper
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the target Mixed cell across payload-release helpers
+    ctx.emitter.instruction(&format!("cbz x0, {}", drop_new));                  // drop the replacement when the target cell is missing
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // inspect the old payload tag before overwriting the cell
+    ctx.emitter.instruction("cmp x9, #1");                                      // strings own a persisted heap payload that needs safe free
+    ctx.emitter.instruction(&format!("b.eq {}", release_string));               // release string payloads through the string-safe free path
+    ctx.emitter.instruction("cmp x9, #4");                                      // tags below array/hash/object/mixed are scalar payloads
+    ctx.emitter.instruction(&format!("b.lo {}", copy_new));                     // scalar payloads can be overwritten directly
+    ctx.emitter.instruction("cmp x9, #7");                                      // tags above the refcounted payload range are not released here
+    ctx.emitter.instruction(&format!("b.hi {}", copy_new));                     // unknown/null payload tags can be overwritten directly
+    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old refcounted child payload to the generic release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("b {}", copy_new)); // continue with replacement after releasing the old child
+    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after releasing the old child
     ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("ldr x0, [sp, #0]"); // reload the target cell before reading its string payload
-    ctx.emitter.instruction("ldr x0, [x0, #8]"); // pass the old string payload pointer to the safe free helper
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the target cell before reading its string payload
+    ctx.emitter.instruction("ldr x0, [x0, #8]");                                // pass the old string payload pointer to the safe free helper
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("b {}", copy_new)); // continue with replacement after freeing the old string
+    ctx.emitter.instruction(&format!("b {}", copy_new));                        // continue with replacement after freeing the old string
     ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("ldr x0, [sp, #8]"); // reload the unused replacement Mixed cell
+    ctx.emitter.instruction("ldr x0, [sp, #8]");                                // reload the unused replacement Mixed cell
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("b {}", done)); // skip payload copy because there is no target cell
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip payload copy because there is no target cell
     ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("ldr x10, [sp, #0]"); // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("ldr x11, [sp, #8]"); // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("ldr x12, [x11]"); // copy the replacement runtime tag
-    ctx.emitter.instruction("str x12, [x10]"); // overwrite the target cell tag
-    ctx.emitter.instruction("ldr x12, [x11, #8]"); // copy the replacement low payload word
-    ctx.emitter.instruction("str x12, [x10, #8]"); // overwrite the target cell low payload word
-    ctx.emitter.instruction("ldr x12, [x11, #16]"); // copy the replacement high payload word
-    ctx.emitter.instruction("str x12, [x10, #16]"); // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov x0, x11"); // pass the now-empty replacement cell storage to heap_free
+    ctx.emitter.instruction("ldr x10, [sp, #0]");                               // reload the destination Mixed cell pointer
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // reload the replacement Mixed cell pointer
+    ctx.emitter.instruction("ldr x12, [x11]");                                  // copy the replacement runtime tag
+    ctx.emitter.instruction("str x12, [x10]");                                  // overwrite the target cell tag
+    ctx.emitter.instruction("ldr x12, [x11, #8]");                              // copy the replacement low payload word
+    ctx.emitter.instruction("str x12, [x10, #8]");                              // overwrite the target cell low payload word
+    ctx.emitter.instruction("ldr x12, [x11, #16]");                             // copy the replacement high payload word
+    ctx.emitter.instruction("str x12, [x10, #16]");                             // overwrite the target cell high payload word
+    ctx.emitter.instruction("mov x0, x11");                                     // pass the now-empty replacement cell storage to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
     ctx.emitter.label(&done);
-    ctx.emitter.instruction("add sp, sp, #32"); // release replacement temporaries
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release replacement temporaries
     Ok(())
 }
 
@@ -2611,44 +2719,44 @@ fn lower_mixed_cell_runtime_assign_x86_64(
     let copy_new = ctx.next_label("mixed_cell_assign_copy_new");
     let done = ctx.next_label("mixed_cell_assign_done");
 
-    ctx.emitter.instruction("sub rsp, 32"); // reserve aligned temporary slots for target and replacement Mixed cells
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the boxed replacement while loading the target cell
+    ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned temporary slots for target and replacement Mixed cells
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the boxed replacement while loading the target cell
     ctx.load_value_to_reg(target, "rax")?;
-    ctx.emitter.instruction("mov QWORD PTR [rsp], rax"); // preserve the target Mixed cell across payload-release helpers
-    ctx.emitter.instruction("test rax, rax"); // check whether the nested lookup produced a writable cell
-    ctx.emitter.instruction(&format!("jz {}", drop_new)); // drop the replacement when the target cell is missing
-    ctx.emitter.instruction("mov r9, QWORD PTR [rax]"); // inspect the old payload tag before overwriting the cell
-    ctx.emitter.instruction("cmp r9, 1"); // strings own a persisted heap payload that needs safe free
-    ctx.emitter.instruction(&format!("je {}", release_string)); // release string payloads through the string-safe free path
-    ctx.emitter.instruction("cmp r9, 4"); // tags below array/hash/object/mixed are scalar payloads
-    ctx.emitter.instruction(&format!("jl {}", copy_new)); // scalar payloads can be overwritten directly
-    ctx.emitter.instruction("cmp r9, 7"); // tags above the refcounted payload range are not released here
-    ctx.emitter.instruction(&format!("jg {}", copy_new)); // unknown/null payload tags can be overwritten directly
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"); // pass the old refcounted child payload to the generic release helper
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // preserve the target Mixed cell across payload-release helpers
+    ctx.emitter.instruction("test rax, rax");                                   // check whether the nested lookup produced a writable cell
+    ctx.emitter.instruction(&format!("jz {}", drop_new));                       // drop the replacement when the target cell is missing
+    ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                         // inspect the old payload tag before overwriting the cell
+    ctx.emitter.instruction("cmp r9, 1");                                       // strings own a persisted heap payload that needs safe free
+    ctx.emitter.instruction(&format!("je {}", release_string));                 // release string payloads through the string-safe free path
+    ctx.emitter.instruction("cmp r9, 4");                                       // tags below array/hash/object/mixed are scalar payloads
+    ctx.emitter.instruction(&format!("jl {}", copy_new));                       // scalar payloads can be overwritten directly
+    ctx.emitter.instruction("cmp r9, 7");                                       // tags above the refcounted payload range are not released here
+    ctx.emitter.instruction(&format!("jg {}", copy_new));                       // unknown/null payload tags can be overwritten directly
+    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old refcounted child payload to the generic release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new)); // continue with replacement after releasing the old child
+    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after releasing the old child
     ctx.emitter.label(&release_string);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]"); // reload the target cell before reading its string payload
-    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"); // pass the old string payload pointer to the safe free helper
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // reload the target cell before reading its string payload
+    ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");                    // pass the old string payload pointer to the safe free helper
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction(&format!("jmp {}", copy_new)); // continue with replacement after freeing the old string
+    ctx.emitter.instruction(&format!("jmp {}", copy_new));                      // continue with replacement after freeing the old string
     ctx.emitter.label(&drop_new);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]"); // reload the unused replacement Mixed cell
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // reload the unused replacement Mixed cell
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.instruction(&format!("jmp {}", done)); // skip payload copy because there is no target cell
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip payload copy because there is no target cell
     ctx.emitter.label(&copy_new);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]"); // reload the destination Mixed cell pointer
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]"); // reload the replacement Mixed cell pointer
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11]"); // copy the replacement runtime tag
-    ctx.emitter.instruction("mov QWORD PTR [r10], r9"); // overwrite the target cell tag
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]"); // copy the replacement low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9"); // overwrite the target cell low payload word
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 16]"); // copy the replacement high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r9"); // overwrite the target cell high payload word
-    ctx.emitter.instruction("mov rax, r11"); // pass the now-empty replacement cell storage to heap_free
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the destination Mixed cell pointer
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // reload the replacement Mixed cell pointer
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11]");                         // copy the replacement runtime tag
+    ctx.emitter.instruction("mov QWORD PTR [r10], r9");                         // overwrite the target cell tag
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                     // copy the replacement low payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // overwrite the target cell low payload word
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                    // copy the replacement high payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r9");                    // overwrite the target cell high payload word
+    ctx.emitter.instruction("mov rax, r11");                                    // pass the now-empty replacement cell storage to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
     ctx.emitter.label(&done);
-    ctx.emitter.instruction("add rsp, 32"); // release replacement temporaries
+    ctx.emitter.instruction("add rsp, 32");                                     // release replacement temporaries
     Ok(())
 }
 
@@ -2671,7 +2779,7 @@ fn cast_loaded_mixed_pointer_to_result(
         }
     };
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the returned boxed Mixed pointer as the SysV first argument
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the returned boxed Mixed pointer as the SysV first argument
     }
     abi::emit_call_label(ctx.emitter, label);
     Ok(())
@@ -2681,6 +2789,32 @@ fn cast_loaded_mixed_pointer_to_result(
 fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     super::lower_term::lower_throw_value(ctx, value)
+}
+
+/// Lowers a static-message catchable PHP `Error` without evaluating later operands.
+fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects no operands",
+            inst.op.name()
+        )));
+    }
+    let data = expect_data(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?
+        .clone();
+    exceptions::emit_error(ctx, &message);
+    Ok(())
+}
+
+/// Lowers a runtime-string catchable PHP `Error` without evaluating later operands.
+fn lower_throw_error_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let message = expect_operand(inst, 0)?;
+    exceptions::emit_error_value(ctx, message)
 }
 
 /// Pushes an EIR exception handler and branches to the handler block after `longjmp`.
@@ -2795,6 +2929,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             object_ty
         )));
     };
+    guard_static_method_receiver(ctx, object, &method_name)?;
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);
     }
@@ -2860,6 +2995,30 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
+/// Rejects the raw null-container representation before a static object method dispatch.
+fn guard_static_method_receiver(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let receiver_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let null_label = ctx.next_label("static_method_receiver_null");
+    let done_label = ctx.next_label("static_method_receiver_checked");
+    ctx.load_value_to_reg(object, receiver_reg)?;
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        receiver_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Lowers an instance-method call whose receiver is boxed as `Mixed`.
 fn lower_mixed_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -2869,11 +3028,15 @@ fn lower_mixed_method_call(
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
     if candidates.is_empty() {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+        }
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
     let done_label = ctx.next_label("mixed_method_done");
     let match_labels = candidates
@@ -2888,7 +3051,7 @@ fn lower_mixed_method_call(
 
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &no_match_label);
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -2904,6 +3067,14 @@ fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&no_match_label);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
+
+    ctx.emitter.label(&non_object_label);
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
@@ -2988,14 +3159,14 @@ fn emit_mixed_method_object_payload_or_fatal(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // require an object payload before method dispatch
-            ctx.emitter.instruction(&format!("b.ne {}", no_match_label)); // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction("cmp x0, #6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("b.ne {}", no_match_label));       // non-object Mixed receivers cannot call instance methods
             ctx.emitter
                 .instruction(&format!("mov {}, x1", receiver_reg)); // preserve the unboxed object payload across argument lowering
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // require an object payload before method dispatch
-            ctx.emitter.instruction(&format!("jne {}", no_match_label)); // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction("cmp rax, 6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("jne {}", no_match_label));        // non-object Mixed receivers cannot call instance methods
             ctx.emitter
                 .instruction(&format!("mov {}, rdi", receiver_reg)); // preserve the unboxed object payload across argument lowering
         }
@@ -3016,8 +3187,8 @@ fn emit_mixed_method_class_dispatch(
                 .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10"); // compare the receiver class id against this method candidate
-                ctx.emitter.instruction(&format!("b.eq {}", label)); // call this candidate when the runtime class id matches
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // call this candidate when the runtime class id matches
             }
         }
         Arch::X86_64 => {
@@ -3025,8 +3196,8 @@ fn emit_mixed_method_class_dispatch(
                 .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10"); // compare the receiver class id against this method candidate
-                ctx.emitter.instruction(&format!("je {}", label)); // call this candidate when the runtime class id matches
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("je {}", label));              // call this candidate when the runtime class id matches
             }
         }
     }
@@ -3237,31 +3408,10 @@ fn lower_nullable_receiver_interface_method_call(
 
 /// Emits PHP's fatal diagnostic for calling an instance method on null.
 fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) {
-    let message = format!(
-        "Fatal error: Call to a member function {}() on null\n",
-        method_name
+    exceptions::emit_error(
+        ctx,
+        &format!("Call to a member function {}() on null", method_name),
     );
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the member-call-on-null fatal to stderr
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the member-call-on-null fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the member-call-on-null fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the member-call-on-null fatal byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the member-call-on-null fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Returns the direct runtime intrinsic for built-in `Generator` instance methods.
@@ -3547,16 +3697,16 @@ fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
 fn emit_owned_null_mixed(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #8"); // runtime tag 8 = PHP null
-            ctx.emitter.instruction("mov x1, #0"); // null has no low payload word
-            ctx.emitter.instruction("mov x2, #0"); // null has no high payload word
-            ctx.emitter.instruction("bl __rt_mixed_from_value"); // allocate a boxed Mixed null cell
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            ctx.emitter.instruction("bl __rt_mixed_from_value");                // allocate a boxed Mixed null cell
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, 8"); // runtime tag 8 = PHP null
-            ctx.emitter.instruction("xor edi, edi"); // null has no low payload word
-            ctx.emitter.instruction("xor esi, esi"); // null has no high payload word
-            ctx.emitter.instruction("call __rt_mixed_from_value"); // allocate a boxed Mixed null cell
+            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            ctx.emitter.instruction("call __rt_mixed_from_value");              // allocate a boxed Mixed null cell
         }
     }
 }
@@ -3711,11 +3861,12 @@ fn lower_throwable_standard_method(
     store_if_result(ctx, inst)
 }
 
-/// Loads `Throwable::getMessage()` from payload offsets 8/16 into string result registers.
+/// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
 fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
     abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     Ok(PhpType::Str)
 }
 
@@ -3884,8 +4035,8 @@ fn emit_store_fiber_start_args_aarch64(
         }
         let source_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
-        ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1)); // is this start() slot allowed for user arguments?
-        ctx.emitter.instruction(&format!("b.lt {}", skip_label)); // stop once wrapper-reserved slots would be overwritten
+        ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1));              // is this start() slot allowed for user arguments?
+        ctx.emitter.instruction(&format!("b.lt {}", skip_label));               // stop once wrapper-reserved slots would be overwritten
         ctx.emitter
             .instruction(&format!("str {}, [x0, #{}]", source_reg, offset)); // store the boxed Mixed start() argument
     }
@@ -3913,8 +4064,8 @@ fn emit_store_fiber_start_args_x86_64(
     let mut overflow_slot = 0usize;
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
-        ctx.emitter.instruction(&format!("cmp r11, {}", idx + 1)); // is this start() slot allowed for user arguments?
-        ctx.emitter.instruction(&format!("jl {}", skip_label)); // stop once wrapper-reserved slots would be overwritten
+        ctx.emitter.instruction(&format!("cmp r11, {}", idx + 1));              // is this start() slot allowed for user arguments?
+        ctx.emitter.instruction(&format!("jl {}", skip_label));                 // stop once wrapper-reserved slots would be overwritten
         if assignment.in_register() {
             let source_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
             ctx.emitter
@@ -3923,7 +4074,7 @@ fn emit_store_fiber_start_args_x86_64(
         } else {
             let stack_offset = overflow_slot * 16;
             if stack_offset == 0 {
-                ctx.emitter.instruction("mov r10, QWORD PTR [rsp]"); // load the first stack-passed boxed Mixed start() argument
+                ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");            // load the first stack-passed boxed Mixed start() argument
             } else {
                 ctx.emitter
                     .instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset));
@@ -4090,26 +4241,26 @@ fn emit_mixed_fiber_receiver_to_arg(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // inspect the object class before calling the Fiber predicate
+            ctx.emitter.instruction("cmp x0, #6");                              // continue only when the Mixed receiver holds an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // inspect the object class before calling the Fiber predicate
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("ldr x9, [x1]"); // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id)); // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("b.eq {}", fiber_label)); // call the Fiber predicate only for real Fiber receivers
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // verify the boxed object is a Fiber instance
+            ctx.emitter.instruction(&format!("b.eq {}", fiber_label));          // call the Fiber predicate only for real Fiber receivers
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&fiber_label);
             ctx.emitter
                 .instruction(&format!("mov {}, x1", receiver_arg)); // pass the unboxed Fiber object to the runtime predicate
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // continue only when the Mixed receiver holds an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // inspect the object class before calling the Fiber predicate
+            ctx.emitter.instruction("cmp rax, 6");                              // continue only when the Mixed receiver holds an object
+            ctx.emitter.instruction(&format!("je {}", object_label));           // inspect the object class before calling the Fiber predicate
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]"); // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp r10, {}", class_id)); // verify the boxed object is a Fiber instance
-            ctx.emitter.instruction(&format!("je {}", fiber_label)); // call the Fiber predicate only for real Fiber receivers
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the receiver object's runtime class id
+            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // verify the boxed object is a Fiber instance
+            ctx.emitter.instruction(&format!("je {}", fiber_label));            // call the Fiber predicate only for real Fiber receivers
             emit_method_call_on_null_fatal(ctx, method_name);
             ctx.emitter.label(&fiber_label);
         }
@@ -4132,10 +4283,10 @@ fn emit_fiber_state_predicate_call(
     if matches!(state, FiberStatePredicate::Started) {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("eor x0, x0, #1"); // invert not-started into PHP's isStarted predicate
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert not-started into PHP's isStarted predicate
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("xor rax, 1"); // invert not-started into PHP's isStarted predicate
+                ctx.emitter.instruction("xor rax, 1");                          // invert not-started into PHP's isStarted predicate
             }
         }
     }
@@ -4306,7 +4457,6 @@ struct RefArgWriteback {
     param_index: usize,
     source_value: ValueId,
     source_slot: LocalSlotId,
-    source_is_ref_cell: bool,
     source_ty: PhpType,
     cell_offset: usize,
 }
@@ -4516,13 +4666,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     }
     let late_bound_static = is_late_bound_static_receiver(receiver_label);
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver.as_str())
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!("static method call on unknown class {}", receiver))
-        })?;
+    let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_static_method_call(
+                ctx,
+                inst,
+                receiver.as_str(),
+                method_name,
+            );
+        }
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call on unknown class {}",
+            receiver
+        )));
+    };
     let method_key = php_symbol_key(method_name);
     let impl_class = receiver_info
         .static_method_impl_classes
@@ -4569,6 +4726,22 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     } else {
         None
     };
+    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
+        let no_override_label = ctx.next_label("eval_late_static_no_override");
+        let done_label = ctx.next_label("eval_late_static_done");
+        builtins::lower_eval_native_frame_static_method_call(
+            ctx,
+            inst,
+            receiver.as_str(),
+            method_name,
+            &no_override_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&no_override_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let call_args = materialize_static_method_call_args_with_refs(
         ctx,
         &called_class_id,
@@ -4595,7 +4768,19 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
+}
+
+/// Lowers a direct static-method call against a class declared by a previous eval fragment.
+fn lower_eval_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = method_name_data(ctx, inst)?.to_string();
+    let (receiver_label, method_name) = parse_static_method_target(&target)?;
+    let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    builtins::lower_eval_static_method_call(ctx, inst, receiver.as_str(), method_name)
 }
 
 /// Lowers `self::method()` or `parent::method()` when it targets an instance method.
@@ -5164,14 +5349,14 @@ fn emit_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1"); // place the unboxed payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed Mixed tag into the tagged-scalar tag register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax"); // preserve the unboxed Mixed tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi"); // place the unboxed payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10"); // place the unboxed Mixed tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed Mixed tag before moving the payload
+            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
 }
@@ -5422,12 +5607,12 @@ fn emit_branch_if_cleanup_temp_aliases_result(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
-            ctx.emitter.instruction(&format!("b.eq {}", skip_label)); // keep the temp alive when ownership moved to the result
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // keep the temp alive when ownership moved to the result
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
-            ctx.emitter.instruction(&format!("je {}", skip_label)); // keep the temp alive when ownership moved to the result
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // keep the temp alive when ownership moved to the result
         }
     }
     Ok(())
@@ -5453,10 +5638,21 @@ fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", value_tag);
-            ctx.emitter.instruction("mov rdi, rax"); // pass the loaded indexed-array argument to the Mixed conversion helper
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed-array argument to the Mixed conversion helper
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+}
+
+/// Converts the currently loaded associative-array argument into boxed Mixed values.
+fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded associative-array argument to the Mixed conversion helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
 }
 
 /// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
@@ -5638,7 +5834,6 @@ fn plan_ref_arg_writebacks(
             param_index,
             source_value: *value,
             source_slot: source.slot,
-            source_is_ref_cell: source.is_ref_cell,
             source_ty,
             cell_offset: 0,
         });
@@ -5803,36 +5998,13 @@ fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,
     writeback: &RefArgWriteback,
 ) -> Result<()> {
-    if writeback.source_is_ref_cell
-        || local_slot_stores_ref_cell_pointer(ctx, writeback.source_slot)
-    {
-        let offset = ctx.local_offset(writeback.source_slot)?;
-        let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-        abi::emit_store_to_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            pointer_reg,
-            0,
-        );
-        return Ok(());
-    }
-    let offset = ctx.local_offset(writeback.source_slot)?;
-    abi::emit_store(ctx.emitter, &writeback.source_ty, offset);
-    Ok(())
+    ctx.store_current_result_to_local(writeback.source_slot)
 }
 
 /// Loads a local variable's address for a by-reference method-call argument.
 fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let source = local_ref_arg_source(ctx, value)?;
-    let slot = source.slot;
-    let offset = ctx.local_offset(slot)?;
-    if source.is_ref_cell || local_slot_stores_ref_cell_pointer(ctx, slot) {
-        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-    } else {
-        abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-    }
-    Ok(())
+    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))
 }
 
 /// Returns true when a value already holds a direct pointer to an array element slot.
@@ -5853,7 +6025,6 @@ fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> 
 /// Describes a local operand used as a by-reference call argument.
 struct LocalRefArgSource {
     slot: LocalSlotId,
-    is_ref_cell: bool,
 }
 
 /// Resolves an EIR value back to a local slot and whether it already stores a ref-cell pointer.
@@ -5870,9 +6041,8 @@ fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Loc
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    let is_ref_cell = match inst_ref.op {
-        Op::LoadLocal => false,
-        Op::LoadRefCell => true,
+    match inst_ref.op {
+        Op::LoadLocal | Op::LoadRefCell => {}
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "by-reference method call argument from opcode {}",
@@ -5885,7 +6055,7 @@ fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Loc
             "by-reference load argument has no local slot",
         ));
     };
-    Ok(LocalRefArgSource { slot, is_ref_cell })
+    Ok(LocalRefArgSource { slot })
 }
 
 /// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
@@ -5935,23 +6105,23 @@ pub(super) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1"); // check whether the Mixed payload already holds a string
-            ctx.emitter.instruction(&format!("b.ne {}", non_string)); // non-string casts need scratch conversion before persistence
+            ctx.emitter.instruction("cmp x0, #1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("b.ne {}", non_string));           // non-string casts need scratch conversion before persistence
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the generic cast path after the direct string persist
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1"); // check whether the Mixed payload already holds a string
-            ctx.emitter.instruction(&format!("jne {}", non_string)); // non-string casts need scratch conversion before persistence
+            ctx.emitter.instruction("cmp rax, 1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("jne {}", non_string));            // non-string casts need scratch conversion before persistence
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            ctx.emitter.instruction("mov rax, rdi"); // move the unboxed string pointer into str_persist's input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into str_persist's input register
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the generic cast path after the direct string persist
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
@@ -6015,10 +6185,7 @@ pub(super) fn direct_call_stack_pad_bytes(
     ctx: &FunctionContext<'_>,
     overflow_bytes: usize,
 ) -> usize {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 if overflow_bytes > 0 => 16,
-        _ => 0,
-    }
+    abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
 /// Lowers a signed integer comparison into a boolean result value.
@@ -6058,11 +6225,7 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
-    let source_ty = if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        load_ref_param_local_to_result(ctx, slot)?
-    } else {
-        ctx.load_local_to_result(slot)?
-    };
+    let source_ty = ctx.load_local_to_result(slot)?;
     let result_ty = ctx.value_php_type(result)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
@@ -6075,18 +6238,41 @@ fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
-    let source_ty = load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+        return ctx.store_result_value(result);
+    }
+    if !ctx.local_ref_cell_representation_is_dynamic(slot) {
+        let source_ty = ctx.load_raw_local_to_result(slot)?;
+        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        return ctx.store_result_value(result);
+    }
+    let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "dynamic ref-cell slot {} has no representation flag",
+            slot.as_raw()
+        ))
+    })?;
+    let ref_cell = ctx.next_label("dynamic_load_ref_cell");
+    let done = ctx.next_label("dynamic_load_ref_cell_done");
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the alias representation after runtime promotion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select the alias representation after runtime promotion
+        }
+    }
+    let source_ty = ctx.load_raw_local_to_result(slot)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&ref_cell);
+    load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    ctx.emitter.label(&done);
     ctx.store_result_value(result)
-}
-
-/// Loads the value pointed to by an incoming by-reference local parameter.
-fn load_ref_param_local_to_result(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-) -> Result<PhpType> {
-    let ty = ctx.local_php_type(slot)?;
-    load_ref_cell_local_to_result_as(ctx, slot, &ty)
 }
 
 /// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
@@ -6227,11 +6413,7 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let value = expect_operand(inst, 0)?;
     let reset_concat_after_store =
         inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        store_value_to_ref_param_local(ctx, slot, value)?;
-    } else {
-        ctx.store_value_to_local(slot, value)?;
-    }
+    ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
     }
@@ -6275,7 +6457,44 @@ fn instruction_for_value<'a>(
 fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type);
+    }
+    if !ctx.local_ref_cell_representation_is_dynamic(slot) {
+        return ctx.store_value_to_raw_local(slot, value);
+    }
+    let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "dynamic ref-cell slot {} has no representation flag",
+            slot.as_raw()
+        ))
+    })?;
+    let ref_cell = ctx.next_label("dynamic_store_ref_cell");
+    let done = ctx.next_label("dynamic_store_ref_cell_done");
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select ref-cell storage after a runtime promotion
+        }
+    }
+    ctx.store_value_to_raw_local(slot, value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done));                    // join dynamic ref-cell storage paths
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join dynamic ref-cell storage paths
+        }
+    }
+    ctx.emitter.label(&ref_cell);
+    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Promotes an existing raw local slot into a heap ref-cell pointer.
@@ -6344,19 +6563,65 @@ fn release_local_ref_cell_owner(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
-            ctx.emitter.instruction(&format!("cbz x9, {}", done)); // skip release when this variable no longer owns a fallback ref-cell
+            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
             abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
-            ctx.emitter.instruction("test r11, r11"); // check whether this variable owns a fallback ref-cell
-            ctx.emitter.instruction(&format!("je {}", done)); // skip release when the fallback owner is already clear
+            ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
             abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
         }
     }
     ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers a deferred `release_local_slot`: releases the refcounted value currently
+/// held in a local frame slot, typed by the slot's FINAL storage type.
+///
+/// Lowering emits this op before a retaining loop store when the slot's storage
+/// type still looked untracked at that point but a later store on a back-edge
+/// path could widen it (issue #534: an inner `for` counter widened Int→Mixed by
+/// its checked-add update leaked one Mixed box per outer iteration when the
+/// outer body re-initialized it). Only here, after widening finished, is the
+/// decision sound. The slot is either zero (prologue zero-initializes cleanup
+/// locals, and the null-guarded release helpers skip zero) or an owned value
+/// boxed by a previous retaining store, so releasing it is always balanced.
+fn lower_release_local_slot(
+    ctx: &mut FunctionContext<'_>,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    // A slot promoted on a predecessor path holds the cell address, not an
+    // owned value. The forward analysis intentionally ignores promotions that
+    // occur only after this instruction, including after a loop exit.
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let offset = ctx.local_offset(slot)?;
+    if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
+        // A merged path can hold either raw storage or a cell pointer. Slots
+        // with a runtime representation flag release only the raw path; slots
+        // that are always cells (notably by-ref params) remain excluded.
+        if ctx.ref_cell_state_offset(slot).is_some() {
+            super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        }
+        return Ok(());
+    }
+    match ty {
+        // Owned strings are freed through the validating helper, which skips
+        // null/uninitialized slots and non-heap (.rodata) literal pointers.
+        PhpType::Str => super::frame::emit_main_string_cleanup(ctx, offset),
+        PhpType::Callable => super::frame::emit_main_refcounted_cleanup(ctx, offset, &ty),
+        other if other.is_refcounted() => {
+            super::frame::emit_main_refcounted_cleanup(ctx, offset, &other)
+        }
+        // The slot never widened to refcounted storage: nothing can be owned.
+        // Lowering normally prunes these, so this arm is only a safety net.
+        _ => {}
+    }
     Ok(())
 }
 
@@ -6398,16 +6663,6 @@ fn clear_local_slot_storage(
         }
     }
     Ok(())
-}
-
-/// Stores an SSA value through the pointer held by an incoming by-reference local parameter.
-fn store_value_to_ref_param_local(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    value: ValueId,
-) -> Result<()> {
-    let target_ty = ctx.local_php_type(slot)?;
-    store_value_to_ref_cell_as(ctx, slot, value, &target_ty)
 }
 
 /// Stores an SSA value through a local ref-cell pointer using the supplied alias type.
@@ -6495,7 +6750,7 @@ fn coerce_ref_cell_store_value(
                 // Save int result to placeholder (at sp+16).
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
@@ -6517,7 +6772,7 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str x0, [sp, #16]");              // save the bool result to the placeholder slot
+                        ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
@@ -6537,7 +6792,7 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("str d0, [sp, #16]");               // save the float result to the placeholder slot
+                        ctx.emitter.instruction("str d0, [sp, #16]");           // save the float result to the placeholder slot
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction("movsd QWORD PTR [rsp + 16], xmm0"); // save the float result to the placeholder slot
@@ -6547,11 +6802,11 @@ fn coerce_ref_cell_store_value(
                 abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction("ldr d0, [sp], #16");              // restore the float result and release the placeholder slot
+                        ctx.emitter.instruction("ldr d0, [sp], #16");           // restore the float result and release the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");     // restore the float result from the placeholder
-                        ctx.emitter.instruction("add rsp, 16");                    // release the float result placeholder slot
+                        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]"); // restore the float result from the placeholder
+                        ctx.emitter.instruction("add rsp, 16");                 // release the float result placeholder slot
                     }
                 }
                 return Ok(());
@@ -6578,9 +6833,9 @@ fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?;
     let symbol = ir_global_symbol(name);
-    let result = inst.result.ok_or_else(|| {
-        CodegenIrError::invalid_module("load_global missing result value")
-    })?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
     ctx.data
         .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
@@ -6595,7 +6850,7 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    let store_ty = if crate::superglobals::is_superglobal(&name) {
+    let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
         ty.codegen_repr()
     } else {
         let source_ty = ty.codegen_repr();
@@ -6761,15 +7016,10 @@ fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
 fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let source_ty = ctx.local_php_type(slot)?.codegen_repr();
-    let offset = ctx.local_offset(slot)?;
     let ref_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
     let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        abi::load_at_offset(ctx.emitter, ref_cell_reg, offset);
-    } else {
-        abi::emit_frame_slot_address(ctx.emitter, ref_cell_reg, offset);
-    }
+    ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_tag_reg,
@@ -6788,8 +7038,12 @@ fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers PHP echo output for a previously computed SSA value.
 fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    if let PhpType::Object(class_name) = ctx.value_php_type(value)?.codegen_repr() {
-        return lower_object_echo_value(ctx, value, &class_name);
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Object(class_name) => return lower_object_echo_value(ctx, value, &class_name),
+        PhpType::Mixed | PhpType::Union(_) => {
+            return conversions::emit_mixed_string_context_stdout(ctx, value);
+        }
+        _ => {}
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
@@ -6861,19 +7115,19 @@ fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) 
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the object string-cast fatal to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
             ctx.emitter.adrp("x1", &label);
             ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len)); // pass the object string-cast fatal byte length
+            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the object string-cast fatal to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len)); // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the object string-cast fatal before exiting
+            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -6918,7 +7172,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
                         abi::int_result_reg(ctx.emitter),
                         sentinel_reg
                     )); // compare integer value against the runtime null sentinel
-                    ctx.emitter.instruction(&format!("b.eq {}", skip_label)); // skip integer echo when the value represents null
+                    ctx.emitter.instruction(&format!("b.eq {}", skip_label));   // skip integer echo when the value represents null
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!(
@@ -6926,7 +7180,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
                         abi::int_result_reg(ctx.emitter),
                         sentinel_reg
                     )); // compare integer value against the runtime null sentinel
-                    ctx.emitter.instruction(&format!("je {}", skip_label)); // skip integer echo when the value represents null
+                    ctx.emitter.instruction(&format!("je {}", skip_label));     // skip integer echo when the value represents null
                 }
             }
             abi::emit_write_stdout(ctx.emitter, ty);

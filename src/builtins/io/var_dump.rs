@@ -8,7 +8,9 @@
 //! Key details:
 //! - No `check` hook is needed: `var_dump` is a pure-data builtin whose return type
 //!   (`Void`) is fully determined by its declaration. The registry common path
-//!   infers the argument and enforces arity before falling back to `returns`.
+//!   infers every argument and enforces arity before falling back to `returns`.
+//! - `var_dump` is variadic (`var_dump($value, ...$values)`): each argument is
+//!   dumped independently in source order, matching PHP.
 //! - `lower` is a thin wrapper over `debug::lower_var_dump` in the EIR backend.
 
 use crate::codegen::context::FunctionContext;
@@ -19,6 +21,7 @@ builtin! {
     name: "var_dump",
     area: Io,
     params: [value: Mixed],
+    variadic: "values",
     returns: Void,
     lower: lower,
     summary: "Dumps information about a variable.",

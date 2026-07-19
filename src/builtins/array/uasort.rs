@@ -48,6 +48,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         if let ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             captures,
@@ -58,6 +59,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.checker.infer_closure_type_with_param_hints(
                 params,
                 variadic,
+                *variadic_by_ref,
                 return_type,
                 body,
                 captures,

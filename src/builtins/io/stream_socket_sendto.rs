@@ -36,7 +36,7 @@ builtin! {
 /// Validates arg[0] is a stream resource, then returns `Union(Int, Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(cx.checker, cx.name, &cx.args[0], cx.env)?;
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers a `stream_socket_sendto` call by dispatching to the shared io emitter.

@@ -2,7 +2,7 @@
 title: "pfsockopen() — internals"
 description: "Compiler internals for pfsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 338
 ---
 
 ## `pfsockopen()` — internals
@@ -31,6 +31,12 @@ function pfsockopen(string $hostname, int $port, int $error_code = null, string 
 ## What the type checker enforces
 
 - **Arity**: takes 2–5 arguments (3 optional).
+- **By-reference parameters**: `$error_code`, `$error_message`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/pfsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pfsockopen.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Cross-references

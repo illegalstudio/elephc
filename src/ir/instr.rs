@@ -45,6 +45,30 @@ pub struct Instruction {
     pub result_ownership: Ownership,
     pub effects: Effects,
     pub span: Option<Span>,
+    /// Optimization-pass provenance: set when a pass rewrote this instruction
+    /// (const-fold) or moved it (LICM), so source maps can explain assembly
+    /// that no longer matches the source shape. `None` for instructions
+    /// lowered directly from the AST. A one-byte enum rather than a string:
+    /// `Instruction` sits in the recursive lowering paths' stack frames, and
+    /// growing it measurably shrinks the headroom before test threads overflow.
+    pub origin: Option<PassOrigin>,
+}
+
+/// Optimization pass recorded as an instruction's provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOrigin {
+    ConstFold,
+    Licm,
+}
+
+impl PassOrigin {
+    /// Returns the lower-case spelling used by source maps and the EIR printer.
+    pub fn name(self) -> &'static str {
+        match self {
+            PassOrigin::ConstFold => "const_fold",
+            PassOrigin::Licm => "licm",
+        }
+    }
 }
 
 impl Instruction {
@@ -70,6 +94,7 @@ impl Instruction {
             result_ownership,
             effects,
             span,
+            origin: None,
         }
     }
 
@@ -87,18 +112,36 @@ pub enum Immediate {
     Bool(bool),
     Data(DataId),
     LocalSlot(LocalSlotId),
-    LocalSlotPair { first: LocalSlotId, second: LocalSlotId },
+    LocalSlotPair {
+        first: LocalSlotId,
+        second: LocalSlotId,
+    },
     GlobalName(DataId),
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),
     ExternRef(u32),
     ClassRef(u32),
-    EnumCaseRef { enum_id: u32, case_id: u32 },
-    MethodRef { class: u32, method: u32 },
-    PropertyRef { class: u32, property: u32 },
-    FieldRef { layout: u32, field: u32 },
-    FunctionVariantRef { group: u32, variant: u32 },
+    EnumCaseRef {
+        enum_id: u32,
+        case_id: u32,
+    },
+    MethodRef {
+        class: u32,
+        method: u32,
+    },
+    PropertyRef {
+        class: u32,
+        property: u32,
+    },
+    FieldRef {
+        layout: u32,
+        field: u32,
+    },
+    FunctionVariantRef {
+        group: u32,
+        variant: u32,
+    },
     HeapKind(IrHeapKind),
     MixedTag(u8),
     MixedNumericOp(MixedNumericOp),
@@ -171,6 +214,7 @@ pub enum Op {
     PromoteLocalRefCell,
     AliasLocalRefCell,
     ReleaseLocalRefCell,
+    ReleaseLocalSlot,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -178,6 +222,9 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    LoadReflectionStaticProperty,
+    StoreReflectionStaticProperty,
+    ReflectionStaticPropertyInitialized,
     IAdd,
     ISub,
     IMul,
@@ -250,6 +297,7 @@ pub enum Op {
     ArrayGet,
     ArrayGetSilent,
     HashGet,
+    HashGetSilent,
     ArrayIsset,
     HashIsset,
     ArrayElemAddr,
@@ -285,14 +333,23 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    EvalObjectNew,
+    ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
+    DynamicObjectNewWithoutConstructorMixed,
     PropGet,
+    PropInitialized,
     PropSet,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Promotes an indexed-array element to a reference cell and returns the cell
+    /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
+    /// addresses the element's inline storage within the array; the local aliases it
+    /// non-owning (the array owns the storage). Operands: array, index. No immediate.
+    LoadArrayElemRefCell,
     /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
     /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
     /// does not own the cell (no release at scope exit); the owner is the object/source.
@@ -304,6 +361,7 @@ pub enum Op {
     MethodLookup,
     MethodCall,
     StaticMethodCall,
+    EvalStaticMethodCall,
     /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
     /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
     /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
@@ -325,6 +383,15 @@ pub enum Op {
     Call,
     FunctionVariantCall,
     BuiltinCall,
+    EvalLiteralCall,
+    EvalScopeGet,
+    EvalScopeSet,
+    EvalFunctionCall,
+    EvalFunctionCallArray,
+    EvalFunctionExists,
+    EvalClassExists,
+    EvalConstantExists,
+    EvalConstantFetch,
     RuntimeCall,
     ExternCall,
     ClosureNew,
@@ -360,6 +427,8 @@ pub enum Op {
     ErrorSuppressEnd,
     Warn,
     ThrowException,
+    ThrowError,
+    ThrowErrorValue,
     TryPushHandler,
     TryPopHandler,
     CatchCurrent,
@@ -390,12 +459,49 @@ impl Op {
         use Effects as E;
         use Op::*;
         match self {
-            ConstI64 | ConstF64 | ConstStr | ConstNull | ConstBool | ConstClassName
-            | DataAddr | IAdd | ISub | IMul | IPow | INeg | IBitAnd | IBitOr | IBitXor
-            | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | ICmp
-            | FCmp | StrLen | IToF | FToI | BoolToStr | StrToI | StrToF | StrToNumber
-            | MixedTagOf | IsNull | IsTruthy | IsEmpty | FunctionVariantDispatch | PtrCast
-            | PtrOffset | Move | Borrow | Nop => E::PURE,
+            ConstI64
+            | ConstF64
+            | ConstStr
+            | ConstNull
+            | ConstBool
+            | ConstClassName
+            | DataAddr
+            | IAdd
+            | ISub
+            | IMul
+            | IPow
+            | INeg
+            | IBitAnd
+            | IBitOr
+            | IBitXor
+            | IBitNot
+            | IShl
+            | IShrA
+            | FAdd
+            | FSub
+            | FMul
+            | FDiv
+            | FPow
+            | FNeg
+            | ICmp
+            | FCmp
+            | StrLen
+            | IToF
+            | FToI
+            | BoolToStr
+            | StrToI
+            | StrToF
+            | StrToNumber
+            | MixedTagOf
+            | IsNull
+            | IsTruthy
+            | IsEmpty
+            | FunctionVariantDispatch
+            | PtrCast
+            | PtrOffset
+            | Move
+            | Borrow
+            | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
@@ -405,13 +511,30 @@ impl Op {
             | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
-            },
+            }
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
-            ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
-            LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
-            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
-            StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
-            | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
+            ReleaseLocalRefCell => {
+                E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
+            }
+            ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            LoadGlobal
+            | LoadStaticProperty
+            | LoadReflectionStaticProperty
+            | ReflectionStaticPropertyInitialized
+            | ScopedConstantGet
+            | ClassAttrNames
+            | ClassAttrArgs
+            | ClassGetAttributes
+            | CatchCurrent => E::READS_GLOBAL,
+            StoreGlobal
+            | StoreStaticLocal
+            | StoreStaticProperty
+            | StoreReflectionStaticProperty
+            | InitStaticLocal
+            | IncludeOnceMark
+            | FunctionVariantMark
+            | TryPushHandler
+            | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
@@ -422,17 +545,22 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent | HashGet
+            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
+            | HashGetSilent
             | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGet | HashGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
-            | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
+            | HashCloneShallow | ObjectCloneShallow => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
+            ArrayLen | HashLen => E::READS_HEAP | E::MAY_FATAL,
+            ArrayKeyExists | OffsetExists | PropGet | PropInitialized | LoadPropRefCell => {
                 E::READS_HEAP
             }
+            LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
@@ -448,7 +576,8 @@ impl Op {
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
-            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed | DynamicPropGet | NullsafePropGet
+            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
+            | DynamicObjectNewWithoutConstructorMixed | DynamicPropGet | NullsafePropGet
             | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
@@ -460,10 +589,26 @@ impl Op {
             EnumBackingStringToInt | EnumBackingMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
-            Call | FunctionVariantCall | BuiltinCall | RuntimeCall | ClosureCall | ExprCall
-            | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
-                E::all().difference(E::REFCOUNT_OP)
+            EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
+            EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
+            EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            EvalConstantFetch => {
+                E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
+            Call
+            | FunctionVariantCall
+            | BuiltinCall
+            | EvalLiteralCall
+            | EvalFunctionCall
+            | EvalFunctionCallArray
+            | EvalObjectNew
+            | EvalStaticMethodCall
+            | RuntimeCall
+            | ClosureCall
+            | ExprCall
+            | CallableDescriptorInvoke
+            | PipeCall
+            | FiberRuntimeCall => E::all().difference(E::REFCOUNT_OP),
             ExternCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
@@ -471,6 +616,13 @@ impl Op {
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
+            ThrowError | ThrowErrorValue => {
+                E::MAY_THROW
+                    | E::READS_GLOBAL
+                    | E::WRITES_GLOBAL
+                    | E::ALLOC_HEAP
+                    | E::WRITES_HEAP
+            }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
@@ -484,6 +636,11 @@ impl Op {
             Op::Call
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall
+                | Op::EvalLiteralCall
+                | Op::EvalFunctionCall
+                | Op::EvalFunctionCallArray
+                | Op::EvalObjectNew
+                | Op::EvalStaticMethodCall
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall
@@ -519,6 +676,7 @@ impl Op {
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
+            ReleaseLocalSlot => "release_local_slot",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
@@ -526,6 +684,9 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            LoadReflectionStaticProperty => "load_reflection_static_property",
+            StoreReflectionStaticProperty => "store_reflection_static_property",
+            ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
@@ -598,6 +759,7 @@ impl Op {
             ArrayGet => "array_get",
             ArrayGetSilent => "array_get_silent",
             HashGet => "hash_get",
+            HashGetSilent => "hash_get_silent",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
             ArrayElemAddr => "array_elem_addr",
@@ -633,11 +795,18 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            EvalObjectNew => "eval_object_new",
+            ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
+            DynamicObjectNewWithoutConstructorMixed => {
+                "dynamic_object_new_without_constructor_mixed"
+            }
             PropGet => "prop_get",
+            PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
@@ -646,6 +815,7 @@ impl Op {
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
+            EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             ClassConstant => "class_constant",
@@ -657,6 +827,15 @@ impl Op {
             Call => "call",
             FunctionVariantCall => "function_variant_call",
             BuiltinCall => "builtin_call",
+            EvalLiteralCall => "eval_literal_call",
+            EvalScopeGet => "eval_scope_get",
+            EvalScopeSet => "eval_scope_set",
+            EvalFunctionCall => "eval_function_call",
+            EvalFunctionCallArray => "eval_function_call_array",
+            EvalFunctionExists => "eval_function_exists",
+            EvalClassExists => "eval_class_exists",
+            EvalConstantExists => "eval_constant_exists",
+            EvalConstantFetch => "eval_constant_fetch",
             RuntimeCall => "runtime_call",
             ExternCall => "extern_call",
             ClosureNew => "closure_new",
@@ -692,6 +871,8 @@ impl Op {
             ErrorSuppressEnd => "error_suppress_end",
             Warn => "warn",
             ThrowException => "throw_exception",
+            ThrowError => "throw_error",
+            ThrowErrorValue => "throw_error_value",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",
             CatchCurrent => "catch_current",
@@ -715,5 +896,18 @@ impl Op {
             EnsureOwned => "ensure_owned",
             Nop => "nop",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `Instruction` is built by value inside the recursive AST->EIR lowering
+    /// paths, so its size feeds every lowering stack frame. Growing it past
+    /// main's 112 bytes shrank the headroom enough that 2 MiB test threads
+    /// overflowed on linux-aarch64. Keep provenance and future metadata inside
+    /// the existing padding.
+    #[test]
+    fn instruction_stays_112_bytes() {
+        assert!(std::mem::size_of::<super::Instruction>() <= 112);
     }
 }

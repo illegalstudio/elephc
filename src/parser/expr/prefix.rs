@@ -9,7 +9,7 @@
 //! - `__LINE__` is lowered at parse time while other magic constants remain AST nodes for later context passes.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
@@ -27,15 +27,18 @@ use super::{parse_args, parse_expr};
 /// Advances `pos` past all tokens consumed by the prefix; the caller continues with the
 /// remaining token stream. Returns an error on unexpected end of input or unrecognized tokens.
 pub(super) fn parse_prefix(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Expr, CompileError> {
     if *pos >= tokens.len() {
-        let span = tokens.last().map(|(_, span)| *span).unwrap_or(Span::dummy());
+        let span = tokens
+            .last()
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(Span::dummy());
         return Err(CompileError::new(span, "Unexpected end of input"));
     }
 
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
 
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
@@ -44,6 +47,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -247,7 +251,7 @@ pub(super) fn parse_prefix(
 /// parses a following expression or key => value pair. Returns a `Yield` or `YieldFrom` node
 /// using the given span. On end of input or a terminating token, returns bare `Yield { key: None, value: None }`.
 fn parse_yield(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -312,7 +316,7 @@ fn parse_yield(
 
 /// Advances `pos` by one and wraps the given `ExprKind` and `Span` in a new `Expr`.
 fn parse_simple(
-    _tokens: &[(Token, Span)],
+    _tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     kind: ExprKind,
@@ -326,7 +330,7 @@ fn parse_simple(
 /// enforce precedence. The `ctor` function constructs the target `ExprKind` variant
 /// (e.g., `Negate`, `Not`, `BitNot`). Returns the wrapped unary expression.
 fn parse_unary(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     ctor: fn(Box<Expr>) -> ExprKind,
@@ -341,7 +345,7 @@ fn parse_unary(
 /// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
 /// variable name. Returns an error if a variable does not follow the operator.
 fn parse_prefix_inc_dec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     increment: bool,
@@ -376,7 +380,7 @@ fn parse_prefix_inc_dec(
 /// Returns `Variable`, `PostIncrement`, `PostDecrement`, or `ClosureCall`. Advances `pos` past
 /// any consumed postfix tokens.
 fn parse_variable(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     name: String,
@@ -395,6 +399,7 @@ fn parse_variable(
             Token::LParen => {
                 *pos += 1;
                 let args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
             }
             _ => {}
@@ -411,7 +416,7 @@ fn parse_variable(
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
 /// call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -434,9 +439,10 @@ fn parse_group_or_cast(
     }
     *pos += 1;
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        let call_span = tokens[*pos].1;
+        let call_span = tokens[*pos].1.span;
         *pos += 1;
         let args = parse_args(tokens, pos, call_span)?;
+        let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(
             ExprKind::ExprCall {
                 callee: Box::new(inner),
@@ -455,9 +461,29 @@ fn parse_group_or_cast(
 /// Supports spread elements via `...`; spreads in keyed literals are parsed for
 /// source-order progress but remain limited by the associative-array representation.
 fn parse_array_literal(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
+) -> Result<Expr, CompileError> {
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RBracket, "']'")
+}
+
+/// Parses the legacy `array(...)` literal form after its opening parenthesis.
+pub(super) fn parse_legacy_array_literal(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RParen, "')'")
+}
+
+/// Parses an array literal body up to `closing`, starting at the opening token.
+fn parse_array_literal_with_terminator(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closing: &Token,
+    closing_desc: &str,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
     let mut elems = Vec::new();
@@ -465,21 +491,22 @@ fn parse_array_literal(
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+    let mut auto_key_initialized = false;
+    while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Expected ',' between array elements",
                 ));
             }
             *pos += 1;
-            if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+            if *pos < tokens.len() && tokens[*pos].0 == *closing {
                 break;
             }
         }
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            let spread_span = tokens[*pos].1;
+            let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
             if !is_assoc {
@@ -496,20 +523,29 @@ fn parse_array_literal(
             is_assoc = true;
             *pos += 1;
             let value = parse_expr(tokens, pos)?;
-            update_next_auto_key_from_explicit_key(&expr, &mut next_auto_key);
+            update_next_auto_key_from_explicit_key(
+                &expr,
+                &mut next_auto_key,
+                &mut auto_key_initialized,
+            );
             assoc_elems.push((expr, value));
         } else if is_assoc {
             let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
             assoc_elems.push((key, expr));
             next_auto_key += 1;
+            auto_key_initialized = true;
         } else {
             elems.push(expr);
             next_auto_key += 1;
+            auto_key_initialized = true;
         }
         first = false;
     }
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-        return Err(CompileError::new(span, "Expected ']'"));
+    if *pos >= tokens.len() || tokens[*pos].0 != *closing {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected {closing_desc}"),
+        ));
     }
     *pos += 1;
     if is_assoc {
@@ -536,10 +572,65 @@ fn promote_indexed_array_items_to_assoc(
 }
 
 /// Advances the automatic integer key cursor after a statically known integer key.
-fn update_next_auto_key_from_explicit_key(key: &Expr, next_auto_key: &mut i64) {
-    if let ExprKind::IntLiteral(value) = &key.kind {
-        if *value >= *next_auto_key {
-            *next_auto_key = *value + 1;
+///
+/// The first integer-like key seeds the cursor unconditionally so a leading
+/// negative key continues from there (PHP 8.3 semantics); later keys only
+/// raise it.
+fn update_next_auto_key_from_explicit_key(
+    key: &Expr,
+    next_auto_key: &mut i64,
+    auto_key_initialized: &mut bool,
+) {
+    if let Some(value) = explicit_integer_array_key(key) {
+        let candidate = value.saturating_add(1);
+        if !*auto_key_initialized || candidate > *next_auto_key {
+            *next_auto_key = candidate;
         }
+        *auto_key_initialized = true;
     }
+}
+
+/// Returns the integer key PHP assigns to an explicit array key literal,
+/// covering the int-normalizing forms: bools, integral floats, canonical
+/// numeric strings, and negated numeric literals.
+fn explicit_integer_array_key(key: &Expr) -> Option<i64> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        ExprKind::FloatLiteral(value) => integral_float_array_key(*value),
+        ExprKind::StringLiteral(value) => php_integer_string_array_key(value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            ExprKind::FloatLiteral(value) => integral_float_array_key(-*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the integer key for a float literal PHP casts without truncation.
+fn integral_float_array_key(value: f64) -> Option<i64> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    if value < i64::MIN as f64 || value >= i64::MAX as f64 {
+        return None;
+    }
+    Some(value as i64)
+}
+
+/// Returns the integer key for a canonical PHP integer string ("0", no
+/// leading zeros, no "-0"); other strings stay string keys.
+fn php_integer_string_array_key(value: &str) -> Option<i64> {
+    if value == "0" {
+        return value.parse().ok();
+    }
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    if digits.is_empty()
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse().ok()
 }

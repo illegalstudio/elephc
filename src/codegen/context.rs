@@ -16,13 +16,26 @@ use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_curren
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, Function, LocalKind, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{
+    BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
+    ValueDef, ValueId,
+};
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
 use super::frame::FrameLayout;
+use super::local_analysis::LocalSlotAnalysis;
+use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
+
+/// Runtime representation known for one local slot at the current EIR instruction.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LocalSlotRepresentation {
+    Raw,
+    RefCell,
+    Dynamic,
+}
 
 /// Mutable backend state for one EIR function.
 pub(crate) struct FunctionContext<'a> {
@@ -30,11 +43,15 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) function: &'a Function,
     pub(super) emitter: &'a mut Emitter,
     pub(super) data: &'a mut DataSection,
+    pub(super) shared: &'a mut SharedCodegenState,
     pub(super) placement: ValuePlacement,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
-    promoted_ref_cells: HashSet<LocalSlotId>,
+    ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    local_analysis: LocalSlotAnalysis,
+    current_inst: Option<InstId>,
+    current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
@@ -54,6 +71,7 @@ impl<'a> FunctionContext<'a> {
         function: &'a Function,
         emitter: &'a mut Emitter,
         data: &'a mut DataSection,
+        shared: &'a mut SharedCodegenState,
         layout: FrameLayout,
         is_main: bool,
         gc_stats: bool,
@@ -65,11 +83,15 @@ impl<'a> FunctionContext<'a> {
             function,
             emitter,
             data,
+            shared,
             placement: layout.value_placement,
             allocation: layout.allocation,
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
-            promoted_ref_cells: HashSet::new(),
+            ref_cell_state_offsets: layout.ref_cell_state_offsets,
+            local_analysis: layout.local_analysis,
+            current_inst: None,
+            current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
@@ -93,6 +115,65 @@ impl<'a> FunctionContext<'a> {
         );
         self.label_counter += 1;
         label
+    }
+
+    /// Emits an unconditional target-aware branch to one local assembly label.
+    pub(super) fn emit_branch(&mut self, label: &str) {
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                self.emitter
+                    .instruction(&format!("b {}", label));                       // join the dynamic local-representation paths
+            }
+            Arch::X86_64 => {
+                self.emitter
+                    .instruction(&format!("jmp {}", label));                     // join the dynamic local-representation paths
+            }
+        }
+    }
+
+    /// Materializes the address of a local's current raw value or aliased ref-cell storage.
+    pub(super) fn materialize_local_storage_address(
+        &mut self,
+        slot: LocalSlotId,
+        destination: &str,
+    ) -> Result<()> {
+        let offset = self.local_offset(slot)?;
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                abi::emit_frame_slot_address(self.emitter, destination, offset);
+            }
+            LocalSlotRepresentation::RefCell => {
+                abi::load_at_offset(self.emitter, destination, offset);
+            }
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_local_address_ref_cell");
+                let done = self.next_label("dynamic_local_address_done");
+                let result_reg = abi::int_result_reg(self.emitter);
+                let state_reg = if destination == result_reg {
+                    abi::secondary_scratch_reg(self.emitter)
+                } else {
+                    result_reg
+                };
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the aliased storage address after runtime promotion
+                    }
+                    Arch::X86_64 => {
+                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
+                    }
+                }
+                abi::emit_frame_slot_address(self.emitter, destination, offset);
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                abi::load_at_offset(self.emitter, destination, offset);
+                self.emitter.label(&done);
+            }
+        }
+        Ok(())
     }
 
     /// Returns the assembly label for a non-entry EIR block.
@@ -195,24 +276,100 @@ impl<'a> FunctionContext<'a> {
             .map(|local| local.id)
     }
 
-    /// Marks a local slot as storing a heap reference cell pointer instead of its raw value.
+    /// Returns whether this slot receives at least one ordinary EIR local store.
+    pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.has_store(slot)
+    }
+
+    /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
+    pub(super) fn local_slot_ever_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.ever_stores_ref_cell_pointer(slot)
+    }
+
+    /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.
+    pub(super) fn release_local_slot_may_observe_ref_cell(&self, inst: InstId) -> bool {
+        self.local_analysis.release_may_observe_ref_cell(inst)
+    }
+
+    /// Returns whether this by-value parameter slot is owned by the callee frame.
+    pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.owns_parameter_slot(slot)
+    }
+
+    /// Selects the EIR instruction whose CFG-local representation facts codegen must use.
+    pub(super) fn begin_instruction(&mut self, inst: InstId) {
+        self.current_inst = Some(inst);
+        self.current_inst_promoted_ref_cells.clear();
+    }
+
+    /// Returns the frame flag that records whether this slot currently stores a cell pointer.
+    pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
+        self.ref_cell_state_offsets.get(&slot).copied()
+    }
+
+    /// Returns the required runtime representation flag offset for one dynamic local slot.
+    fn dynamic_ref_cell_state_offset(&self, slot: LocalSlotId) -> Result<usize> {
+        self.ref_cell_state_offset(slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic ref-cell slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })
+    }
+
+    /// Returns whether this slot needs runtime raw-value/ref-cell discrimination at cleanup.
+    pub(super) fn has_dynamic_ref_cell_state(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.has_dynamic_ref_cell_state(slot)
+    }
+
+    /// Records at runtime that a path has changed this local slot to ref-cell representation.
     pub(super) fn mark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
-        self.promoted_ref_cells.insert(slot);
+        self.current_inst_promoted_ref_cells.insert(slot);
+        if let Some(offset) = self.ref_cell_state_offset(slot) {
+            abi::emit_load_int_immediate(self.emitter, abi::int_result_reg(self.emitter), 1);
+            abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+        }
     }
 
-    /// Marks a local slot as storing its raw value again after an `unset()` unbind.
+    /// Records at runtime that `unset()` restored this local slot to raw representation.
     pub(super) fn unmark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
-        self.promoted_ref_cells.remove(&slot);
+        self.current_inst_promoted_ref_cells.remove(&slot);
+        if let Some(offset) = self.ref_cell_state_offset(slot) {
+            abi::emit_store_zero_to_local_slot(self.emitter, offset);
+        }
     }
 
-    /// Returns true when a local slot has been promoted to a heap reference cell.
-    pub(super) fn is_promoted_ref_cell(&self, slot: LocalSlotId) -> bool {
-        self.promoted_ref_cells.contains(&slot)
-    }
-
-    /// Returns true when a local slot stores a heap reference-cell pointer.
+    /// Returns true when this instruction may observe a heap reference-cell pointer in the slot.
     pub(super) fn local_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
-        self.is_by_ref_param_slot(slot) || self.is_promoted_ref_cell(slot)
+        self.local_slot_representation(slot) != LocalSlotRepresentation::Raw
+    }
+
+    /// Returns whether this instruction needs a runtime raw/ref-cell branch for the slot.
+    pub(super) fn local_ref_cell_representation_is_dynamic(&self, slot: LocalSlotId) -> bool {
+        self.local_slot_representation(slot) == LocalSlotRepresentation::Dynamic
+    }
+
+    /// Returns whether every path reaching this instruction stores a ref-cell pointer.
+    pub(super) fn local_ref_cell_representation_is_definite(&self, slot: LocalSlotId) -> bool {
+        self.local_slot_representation(slot) == LocalSlotRepresentation::RefCell
+    }
+
+    /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
+    fn local_slot_representation(&self, slot: LocalSlotId) -> LocalSlotRepresentation {
+        if self.is_by_ref_param_slot(slot) || self.current_inst_promoted_ref_cells.contains(&slot) {
+            return LocalSlotRepresentation::RefCell;
+        }
+        let may_observe_ref_cell = self.current_inst.is_some_and(|inst| {
+            self.local_analysis.inst_may_observe_ref_cell(inst, slot)
+        });
+        if !may_observe_ref_cell {
+            return LocalSlotRepresentation::Raw;
+        }
+        if self.ref_cell_state_offset(slot).is_some() {
+            LocalSlotRepresentation::Dynamic
+        } else {
+            LocalSlotRepresentation::RefCell
+        }
     }
 
     /// Returns true when the local slot is the storage slot for a by-reference parameter.
@@ -280,9 +437,38 @@ impl<'a> FunctionContext<'a> {
 
     /// Loads a local slot into the target's canonical result register(s).
     pub(super) fn load_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
-        if self.local_stores_ref_cell_pointer(slot) {
-            return self.load_ref_cell_local_to_result(slot);
+        let ty = self.local_php_type(slot)?;
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => self.load_raw_local_to_result(slot),
+            LocalSlotRepresentation::RefCell => self.load_ref_cell_local_to_result(slot),
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_local_load_ref_cell");
+                let done = self.next_label("dynamic_local_load_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell loading after a runtime promotion
+                    }
+                    Arch::X86_64 => {
+                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
+                    }
+                }
+                self.load_raw_local_to_result(slot)?;
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.load_ref_cell_local_to_result(slot)?;
+                self.emitter.label(&done);
+                Ok(ty)
+            }
         }
+    }
+
+    /// Loads a local slot using its raw frame representation without consulting ref-cell state.
+    pub(super) fn load_raw_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;
         let offset = self.local_offset(slot)?;
         abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
@@ -361,9 +547,65 @@ impl<'a> FunctionContext<'a> {
 
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
-        if self.local_stores_ref_cell_pointer(slot) {
-            return self.store_value_to_ref_cell_local(slot, value);
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
+            LocalSlotRepresentation::RefCell => self.store_value_to_ref_cell_local(slot, value),
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_local_store_ref_cell");
+                let done = self.next_label("dynamic_local_store_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                    }
+                    Arch::X86_64 => {
+                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
+                    }
+                }
+                self.store_value_to_raw_local(slot, value)?;
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.store_value_to_ref_cell_local(slot, value)?;
+                self.emitter.label(&done);
+                Ok(())
+            }
         }
+    }
+
+    /// Releases a boxed source-local owner before a consuming container mutation.
+    ///
+    /// A concrete container loaded from a final Mixed frame slot is unboxed with an
+    /// extra owned reference. Releasing the previous Mixed box before the runtime
+    /// mutation transfers sole ownership to that SSA value, avoiding an artificial
+    /// COW split while preserving real aliases. The mutation result can then be boxed
+    /// as an owned replacement through the ordinary local store path.
+    pub(super) fn release_mutated_source_local_owner(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let offset = self.local_offset(slot)?;
+            super::frame::emit_owned_local_cleanup(self, slot, offset, &target_ty);
+        }
+        Ok(())
+    }
+
+    /// Stores an SSA value into a slot known to contain its raw frame representation.
+    pub(super) fn store_value_to_raw_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
@@ -404,6 +646,45 @@ impl<'a> FunctionContext<'a> {
         let offset = self.local_offset(slot)?;
         self.store_current_result_at_offset(&target_ty, offset);
         Ok(())
+    }
+
+    /// Stores the current result register(s) directly into an addressable local slot.
+    pub(super) fn store_current_result_to_local(&mut self, slot: LocalSlotId) -> Result<()> {
+        let target_ty = self.local_php_type(slot)?;
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                let offset = self.local_offset(slot)?;
+                self.store_current_result_at_offset(&target_ty, offset);
+                Ok(())
+            }
+            LocalSlotRepresentation::RefCell => {
+                self.store_current_result_to_ref_cell_local(slot, &target_ty)
+            }
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_current_store_ref_cell");
+                let done = self.next_label("dynamic_current_store_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select ref-cell storage after a runtime promotion
+                    }
+                    Arch::X86_64 => {
+                        self.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
+                    }
+                }
+                let offset = self.local_offset(slot)?;
+                self.store_current_result_at_offset(&target_ty, offset);
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.store_current_result_to_ref_cell_local(slot, &target_ty)?;
+                self.emitter.label(&done);
+                Ok(())
+            }
+        }
     }
 
     /// After an in-place hash/array mutation whose runtime helper returns the
@@ -481,6 +762,56 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores the current result register(s) through a local ref-cell pointer slot.
+    fn store_current_result_to_ref_cell_local(
+        &mut self,
+        slot: LocalSlotId,
+        target_ty: &PhpType,
+    ) -> Result<()> {
+        reject_multiword_ref_cell_local(target_ty, "store")?;
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        match target_ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_store_to_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_store_to_address(self.emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::float_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+            }
+            PhpType::TaggedScalar => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::int_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+                abi::emit_store_to_address(
+                    self.emitter,
+                    crate::codegen::sentinels::tagged_scalar_tag_reg(self.emitter),
+                    pointer_reg,
+                    8,
+                );
+            }
+            _ => {
+                abi::emit_store_to_address(
+                    self.emitter,
+                    abi::int_result_reg(self.emitter),
+                    pointer_reg,
+                    0,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Stores the current result register(s) into a frame offset.
     fn store_current_result_at_offset(&mut self, ty: &PhpType, offset: usize) {
         match &ty.codegen_repr() {
@@ -512,7 +843,8 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
-        if self.value_php_type(value)?.codegen_repr() == PhpType::Str {
+        let value_ty = self.value_php_type(value)?.codegen_repr();
+        if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
         }
         let Some(value_ref) = self.function.value(value) else {
@@ -525,6 +857,21 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return Ok(false);
+            };
+            let storage_ty = self.local_php_type(slot)?;
+            return Ok(matches!(storage_ty, PhpType::Mixed | PhpType::Union(_))
+                && matches!(
+                    value_ty,
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Callable
+                        | PhpType::Object(_)
+                        | PhpType::Iterable
+                ));
+        }
         Ok(matches!(
             inst.op,
             Op::Acquire
@@ -549,6 +896,9 @@ impl<'a> FunctionContext<'a> {
                 | Op::Call
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall
+                | Op::EvalFunctionCall
+                | Op::EvalFunctionCallArray
+                | Op::EvalConstantFetch
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall

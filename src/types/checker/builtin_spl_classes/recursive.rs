@@ -25,6 +25,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveFilterIterator".to_string(),
         FlattenedClass {
             name: "RecursiveFilterIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilterIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: true,
@@ -35,6 +36,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -42,6 +44,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveCallbackFilterIterator".to_string(),
         FlattenedClass {
             name: "RecursiveCallbackFilterIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("CallbackFilterIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: false,
@@ -52,6 +55,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -59,6 +63,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "ParentIterator".to_string(),
         FlattenedClass {
             name: "ParentIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("RecursiveFilterIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -69,6 +74,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }
@@ -154,7 +160,14 @@ fn spl_parent_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the synthetic method body for recursive filter get children.
 fn recursive_filter_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),
@@ -167,7 +180,14 @@ fn recursive_filter_get_children_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for recursive callback filter get children.
 fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),
@@ -195,7 +215,14 @@ fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for parent iterator get children.
 fn parent_iterator_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),

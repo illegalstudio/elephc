@@ -14,18 +14,21 @@ use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
 ///
 /// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
-/// between macOS and Linux), `PATHINFO_*` bitmask values, stream handles (`STDIN`/`STDOUT`/`STDERR`),
-/// `LOCK_*` values, array callback-mode constants, `JSON_*` integer constants, and
-/// `PREG_*` integer constants. User constants come from `const` declarations and
-/// `define()` calls discovered by `collect_constant_decls`.
+/// between macOS and Linux), `PATHINFO_*` bitmask values, `ENT_*` HTML-escaping flags,
+/// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
+/// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
+/// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
 pub(crate) fn collect_constants(
     program: &Program,
     target_platform: Platform,
@@ -37,6 +40,10 @@ pub(crate) fn collect_constants(
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
             PhpType::Str,
         ),
+    );
+    constants.insert(
+        "SID".to_string(),
+        (ExprKind::StringLiteral(String::new()), PhpType::Str),
     );
     constants.insert(
         "PATHINFO_DIRNAME".to_string(),
@@ -58,9 +65,16 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    for (name, value) in ENT_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
     constants.insert(
         "FNM_NOESCAPE".to_string(),
@@ -131,6 +145,18 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in DATE_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in SESSION_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in ERROR_LEVEL_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

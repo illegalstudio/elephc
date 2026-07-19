@@ -33,7 +33,7 @@ builtin! {
 ///
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `filetype` call by dispatching to the shared io emitter.

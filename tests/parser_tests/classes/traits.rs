@@ -132,6 +132,43 @@ fn test_parse_trait_use_insteadof() {
     }
 }
 
+/// Parses an enum using a trait and verifies the enum stores the trait-use adaptation metadata.
+#[test]
+fn test_parse_enum_trait_use_adaptation() {
+    let stmts = parse_source(
+        "<?php trait HasLabel { public function label() { return $this->name; } } enum Suit { use HasLabel { HasLabel::label as text; } case Hearts; }",
+    );
+    match &stmts[1].kind {
+        StmtKind::EnumDecl {
+            trait_uses,
+            cases,
+            methods,
+            ..
+        } => {
+            assert_eq!(trait_uses.len(), 1);
+            assert_eq!(trait_uses[0].trait_names, vec!["HasLabel".to_string()]);
+            assert_eq!(trait_uses[0].adaptations.len(), 1);
+            assert_eq!(cases.len(), 1);
+            assert!(methods.is_empty());
+            match &trait_uses[0].adaptations[0] {
+                TraitAdaptation::Alias {
+                    trait_name,
+                    method,
+                    alias,
+                    visibility,
+                } => {
+                    assert_eq!(trait_name.as_deref(), Some("HasLabel"));
+                    assert_eq!(method, "label");
+                    assert_eq!(alias.as_deref(), Some("text"));
+                    assert_eq!(*visibility, None);
+                }
+                _ => panic!("Expected trait alias adaptation"),
+            }
+        }
+        _ => panic!("Expected EnumDecl"),
+    }
+}
+
 /// Parses `echo __TRAIT__;` and asserts the expression is `ExprKind::MagicConstant(MagicConstant::Trait)`.
 #[test]
 fn test_parse_dunder_trait_magic_constant() {

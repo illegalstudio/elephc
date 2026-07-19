@@ -141,6 +141,9 @@ fn print_instruction(out: &mut String, function: &Function, data: &DataPool, ins
     if let Some(span) = inst.span {
         let _ = write!(out, " ; span: {}:{}", span.line, span.col);
     }
+    if let Some(origin) = inst.origin {
+        let _ = write!(out, " ; origin: {}", origin.name());
+    }
     out.push('\n');
 }
 

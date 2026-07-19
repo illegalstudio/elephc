@@ -14,51 +14,178 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
-/// Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.
+/// Lowers `print_r(value, $return = false)` for concrete scalar/resource values
+/// and array/hash shells.
+///
+/// Dispatch follows the call's static result type, which the checker
+/// (`src/builtins/io/print_r.rs`) and the EIR return-type override
+/// (`print_r_builtin_return_type_for_args`) derive from the `$return` flag:
+/// - `Str` (literal `true`): render into the capture buffer and return the owned
+///   string finalized by `__rt_pr_finish`.
+/// - `Bool` (flag absent or literal `false`): render to stdout and return `true`.
+/// - `Mixed` (runtime flag): select the mode at runtime; see
+///   `lower_print_r_runtime_flag`.
 pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "print_r", 1)?;
-    ctx.emitter.blank();
-    ctx.emitter.comment("print_r()");
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::unsupported(
+            "print_r() takes 1 or 2 arguments",
+        ));
+    }
     let value = expect_operand(inst, 0)?;
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Str => {
+            ctx.emitter.blank();
+            ctx.emitter.comment("print_r(value, true) — return mode");
+            // -- reset the capture offset and enable buffer mode --
+            let zero_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
+            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_off", 0);
+            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 1);
+            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_mode", 0);
+            // -- load the value into result regs and render it into the buffer --
+            let ty = loaded_php_semantic_type(ctx, value)?;
+            emit_print_r_loaded_value(ctx, &ty)?;
+            // -- finalize the captured bytes into an owned heap string --
+            abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
+            // -- result is in the platform string result regs (x1/x2 or rax/rdx) --
+            store_if_result(ctx, inst)
+        }
+        PhpType::Bool => {
+            ctx.emitter.blank();
+            ctx.emitter.comment("print_r()");
+            let ty = loaded_php_semantic_type(ctx, value)?;
+            emit_print_r_loaded_value(ctx, &ty)?;
+            // PHP `print_r` echo mode always returns true, regardless of the bytes
+            // written. The rendering above leaves the syscall/byte-count in the
+            // integer result register, so materialize a literal 1 before storing.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            store_if_result(ctx, inst)
+        }
+        _ => lower_print_r_runtime_flag(ctx, inst, value),
+    }
+}
+
+/// Lowers `print_r(value, $flag)` when the `$return` flag is only known at runtime.
+///
+/// The flag (0/1) is stored into `_print_r_mode` before rendering, so the shared
+/// write indirection (`__rt_pr_write` / `__rt_stdout_write`) routes every rendered
+/// byte to stdout (echo mode) or the capture buffer (return mode) on its own. A
+/// final branch on the stored mode boxes the result as `Mixed`: the finalized
+/// capture string (tag 1) in return mode, or PHP's `true` (tag 3) in echo mode —
+/// the call's static result type is `Mixed` because the value shape depends on the
+/// runtime flag. A missing flag operand (first-class-callable wrappers lower the
+/// one-argument form with a `Mixed` result type) defaults to echo mode, matching
+/// PHP's `$return = false`. `__rt_pr_finish` resets the mode and offset; the echo
+/// branch leaves them untouched (the stored flag was zero).
+fn lower_print_r_runtime_flag(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    ctx.emitter.blank();
+    ctx.emitter.comment("print_r(value, $flag) — runtime-selected mode");
+    // -- reset the capture offset, then store the flag as the capture mode --
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_off", 0);
+    match inst.operands.get(1).copied() {
+        Some(flag) => {
+            let flag_ty = ctx.load_value_to_reg(flag, result_reg)?;
+            if !matches!(flag_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "print_r $return flag for PHP type {:?}",
+                    flag_ty
+                )));
+            }
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
+    }
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
+    // -- render the value; the write indirection consults the mode per write --
     let ty = loaded_php_semantic_type(ctx, value)?;
     emit_print_r_loaded_value(ctx, &ty)?;
+    // -- branch on the stored mode: finalize the capture or materialize `true` --
+    let echo_label = ctx.next_label("print_r_runtime_echo");
+    let done_label = ctx.next_label("print_r_runtime_done");
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_print_r_mode", 0);
+    emit_compare_reg_zero(ctx, result_reg);
+    emit_branch_if_eq(ctx, &echo_label);
+    abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string for the captured bytes
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // captured string pointer → Mixed low payload word
+            ctx.emitter.instruction("mov rsi, rdx");                            // captured string length → Mixed high payload word
+            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string for the captured bytes
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&echo_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #1");                              // PHP echo mode always returns true
+            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 1");                              // PHP echo mode always returns true
+            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
-/// Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
+/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+/// Each operand is dumped independently in source order, matching PHP's variadic var_dump.
 pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "var_dump", 1)?;
-    ctx.emitter.blank();
-    ctx.emitter.comment("var_dump()");
-    let value = expect_operand(inst, 0)?;
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    match &ty {
-        PhpType::Int => emit_var_dump_int(ctx),
-        PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
-        PhpType::Float => emit_var_dump_float(ctx),
-        PhpType::Str => emit_var_dump_string(ctx),
-        PhpType::Bool => emit_var_dump_bool(ctx),
-        PhpType::Resource(_) => emit_var_dump_resource(ctx),
-        PhpType::Void | PhpType::Never => {
-            emit_var_dump_null(ctx);
-            Ok(())
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::unsupported(
+            "var_dump() requires at least 1 argument",
+        ));
+    }
+    for (index, operand) in inst.operands.iter().enumerate() {
+        ctx.emitter.blank();
+        if index > 0 {
+            ctx.emitter.comment(&format!("var_dump() — argument {}", index + 1));
+        } else {
+            ctx.emitter.comment("var_dump()");
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            emit_var_dump_array(ctx, &ty)
-        }
-        PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
-        PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
-        other => Err(CodegenIrError::unsupported(format!(
-            "var_dump for PHP type {:?}",
-            other
-        ))),
-    }?;
+        let value = *operand;
+        let ty = loaded_php_semantic_type(ctx, value)?;
+        match &ty {
+            PhpType::Int => emit_var_dump_int(ctx),
+            PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
+            PhpType::Float => emit_var_dump_float(ctx),
+            PhpType::Str => emit_var_dump_string(ctx),
+            PhpType::Bool => emit_var_dump_bool(ctx),
+            PhpType::Resource(_) => emit_var_dump_resource(ctx),
+            PhpType::Void | PhpType::Never => {
+                emit_var_dump_null(ctx);
+                Ok(())
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+                emit_var_dump_array(ctx, &ty)
+            }
+            PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
+            PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
+            other => Err(CodegenIrError::unsupported(format!(
+                "var_dump for PHP type {:?}",
+                other
+            ))),
+        }?;
+    }
     store_if_result(ctx, inst)
 }
 
@@ -368,6 +495,11 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
+    // An untyped null-defaulted property rebound to array storage reads a null
+    // pointer before its first write; PHP var_dumps that value as NULL.
+    let null_label = ctx.next_label("var_dump_array_null");
+    let done_label = ctx.next_label("var_dump_array_done");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_label);
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -391,6 +523,10 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
         abi::emit_call_label(ctx.emitter, walker);
     }
     emit_write_literal(ctx, b"}\n");
+    ctx.emit_branch(&done_label);
+    ctx.emitter.label(&null_label);
+    emit_var_dump_null(ctx);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -594,17 +730,4 @@ fn emit_branch_if_eq(ctx: &mut FunctionContext<'_>, label: &str) {
             ctx.emitter.instruction(&format!("je {}", label));                  // branch when the compared register payloads are equal
         }
     }
-}
-
-/// Verifies that the builtin call has exactly the expected operand count.
-fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<()> {
-    if inst.operands.len() == expected {
-        return Ok(());
-    }
-    Err(CodegenIrError::invalid_module(format!(
-        "{} expected {} args, got {}",
-        name,
-        expected,
-        inst.operands.len()
-    )))
 }

@@ -2,7 +2,7 @@
 title: "fseek()"
 description: "Seeks on a file pointer."
 sidebar:
-  order: 171
+  order: 175
 ---
 
 ## fseek()
@@ -19,6 +19,11 @@ Seeks on a file pointer.
 - `$whence` (`int`), default `0`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

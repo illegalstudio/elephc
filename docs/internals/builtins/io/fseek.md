@@ -2,7 +2,7 @@
 title: "fseek() — internals"
 description: "Compiler internals for fseek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 171
+  order: 175
 ---
 
 ## `fseek()` — internals
@@ -31,6 +31,11 @@ function fseek(resource $stream, int $offset, int $whence = 0): int
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

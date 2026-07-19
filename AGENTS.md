@@ -4,6 +4,10 @@
 
 A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries. No interpreter, no VM, no runtime dependencies.
 
+## Read CONTRIBUTING.md first
+
+Before contributing, read `CONTRIBUTING.md` in full. It holds the complete step-by-step recipes — adding an operator, a statement type, a built-in function, an EIR optimization pass, and a crate-backed `--with-<crate>` feature — plus the assembly comment policy, the coding style, and the Pull Request workflow. This guide covers the architecture, invariants, and context that go alongside those recipes; it deliberately does not repeat them.
+
 ## Supported target policy
 
 All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
@@ -180,9 +184,6 @@ crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
 (`src/pipeline.rs`: force-link + prelude forcing) → linker
 (`src/linker.rs`: `forced_whole_archive`).
 
-The full recipe for adding a new crate-backed feature and its `--with-<crate>`
-flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
-
 ### Codegen layout
 
 - `src/ir_lower/` is the active high-level lowering layer. Add PHP-visible semantics there.
@@ -194,7 +195,7 @@ flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
 
 ### Adding a new operator
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new operator").** Key invariants:
+Key invariants:
 
 - A new operator touches the whole pipeline: token (`src/lexer/`), Pratt binding power (`infix_bp()` in `src/parser/expr/pratt.rs`), `BinOp` variant (`src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
 - Precedence and associativity must match PHP; keep folds PHP-equivalent and cross-check edge cases with `php -r`.
@@ -202,7 +203,7 @@ flag lives in `CONTRIBUTING.md` ("Adding functionality via a Rust crate").
 
 ### Adding a new statement type
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new statement type").** Key invariants:
+Key invariants:
 
 - A new statement touches parser (`StmtKind` in `src/parser/ast.rs` + `src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
 - If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and frame-layout allocation before frame sizing.
@@ -236,7 +237,7 @@ entry, the EIR lowering dispatch (`spec.lower`), and the generated docs. Do **no
 re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, per-area
 `check_builtin` arms) — they are superseded by the registry.
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a built-in function").** Key invariants:
+Key invariants:
 
 - **One builtin per home file.** The `lower` hook is a thin wrapper over the real
   emitter in `src/codegen/lower_inst/builtins/<area>/`; leaf emitter files hold
@@ -246,19 +247,36 @@ re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, p
   separately in `call_return_type` (`src/ir_lower/expr/mod.rs`); a `returns: Mixed` +
   precise-`check` builtin also needs a matching EIR return-type arm, or the checker and
   EIR disagree on the value's type.
+- **Fresh result ownership belongs in the registry.** Set
+  `returns_fresh_storage: true` only when every refcounted result variant is newly
+  allocated for the caller. Leave it unset for borrowed results that can alias argument
+  or runtime storage.
 - **Separate surfaces still need hand-wiring** when relevant: the EIR emitter/runtime
   routine, optimizer effects (`src/optimize/effects/builtins.rs`), and the
   runtime-callable wrapper exclusion (`src/codegen/callable_dispatch.rs`).
-- `isset`/`unset`/`empty`/`exit`/`die`/`buffer_*` are language constructs that stay
+- `isset`/`unset`/`empty`/`exit`/`die` are language constructs that stay
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
+  `buffer_new` is catalog-name-only (its call form is dedicated syntax); `buffer_len`
+  and `buffer_free` are ordinary registry builtins.
+- **elephc-only builtins declare `extension: true`** so `--strict-php` hides them from
+  user programs (pinned in `src/builtins/parity_tests.rs`). Injected preludes must call
+  `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
+  parity gate scans the prelude sources to enforce this.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
   PHP-visible builtins); keep the parity gates in `src/builtins/parity_tests.rs` green.
+- Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
+  `update-builtin-docs` skill or the equivalent CI sequence:
+  `cargo build --example gen_builtins`,
+  `python3 scripts/docs/extract_builtins.py --render --force`,
+  `python3 scripts/docs/audit_builtins.py`, and
+  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`. Commit the
+  generated docs and registry.
 
 ### Adding a new EIR optimization pass
 
 IR-level transformations run after EIR lowering/validation through a fixed-point driver (`src/ir_passes/`), not in the AST optimizer.
 
-**The full step-by-step recipe lives in `CONTRIBUTING.md` ("Adding a new EIR optimization pass").** Key invariants:
+Key invariants:
 
 - Implement the `IrPass` trait in `src/ir_passes/<pass>.rs` and register it in `default_passes()` (`src/ir_passes/driver.rs`); the driver re-runs the whole set per function to a fixed point, capped by `MAX_PASS_ITERATIONS`.
 - Reuse `src/ir_passes/rewrite.rs` (RAUW via `replace_all_uses` + shared fold helpers) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
@@ -402,41 +420,8 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 
 ### Assembly comment policy
 
-**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the assembly instruction does. This is mandatory — the generated assembly is meant to be read, and every assembly line must be understandable by someone learning how compilers work.
-
-Rules:
-
-1. **Every instruction line gets a comment.** No exceptions. If you add a new `emitter.instruction(...)`, it must have a `// comment`.
-2. **Alignment: `//` starts at column 81.** Pad with spaces so the `//` is at the 81st character position (1-indexed). If the code itself is >= 80 characters, add exactly one space before `//`.
-3. **Block comments before related groups.** Use `// -- description --` on a standalone line before a block of related instructions (e.g., `// -- set up stack frame --`, `// -- copy bytes from source --`).
-4. **Comments explain intent, not mnemonics.** Write "store argc from OS" not "store x0 to memory". The reader can see the instruction — explain *why* it's there.
-
-Example of correct formatting:
-
-```rust
-    // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #32");                                 // allocate 32 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #16]");                        // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                // set new frame pointer
-
-    // -- convert integer to string and write to stdout --
-    emitter.instruction("bl __rt_itoa");                                    // convert x0 to decimal string → x1=ptr, x2=len
-    emitter.instruction("mov x0, #1");                                     // fd = stdout
-    emitter.instruction("mov x16, #4");                                    // syscall 4 = sys_write
-    emitter.instruction("svc #0x80");                                      // invoke macOS kernel
-```
-
-To verify alignment, run:
-```bash
-python3 -c "
-with open('path/to/file.rs') as f:
-    for i, line in enumerate(f, 1):
-        if 'emitter.instruction' in line and '//' in line:
-            pos = line.rstrip().index('//')
-            if pos != 80 and len(line[:pos].rstrip()) < 80:
-                print(f'Line {i}: // at col {pos+1}')
-"
-```
+Every `emitter.instruction(...)` call must have an inline `//` comment aligned to
+column 81, with `// -- description --` block comments before related groups.
 
 ## Examples
 
@@ -534,7 +519,7 @@ sidebar:
 
 **Documentation must be kept up to date.** When adding a new feature:
 
-1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example.
+1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example. For builtins, prefer the generated-docs path: run the `update-builtin-docs` skill before opening a PR, or run the manual builtins docs sequence above. Commit updates under `docs/php/builtins*`, `docs/internals/builtins/`, and `scripts/docs/builtin_registry.json`.
 2. **Compiler extension** (pointer, buffer, extern, ifdef) → update the relevant page in `docs/beyond-php/`.
 3. **Compiler internals change** (pipeline, type checker, optimizer, codegen, runtime, ABI, memory model) → update the relevant page in `docs/internals/`.
 4. **Compilation flow or CLI change** (new/changed flag, env var, pipeline phase, target, output mode) → update the relevant page in `docs/compiling/`, keeping `docs/compiling/cli-reference.md` authoritative and in sync with `src/cli.rs`. Mirror user-facing flag examples in `README.md`.
@@ -544,15 +529,22 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` tracks all planned and completed work, organized by version.
+`ROADMAP.md` is the planning document, organized by version. It stays as it is:
 
+- **Do not add entries to record implemented work.** Implementations are documented in `CHANGELOG.md` under `[Unreleased]` (see below). The roadmap only gains new items when work is being *planned*, under the appropriate future version.
+- When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
-- New work items go under the appropriate future version.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
 
 ## Changelog management
 
 `CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+
+**Every implementation lands a bullet under the `## [Unreleased]` section in the same PR** — one terse, user-facing entry describing what shipped, not how it was implemented. If the `[Unreleased]` section does not exist, add it at the top of the file (under the header, above the newest version section) together with its compare link at the top of the link list at the end of the file:
+
+```
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v<latest>...HEAD
+```
 
 When cutting a release:
 

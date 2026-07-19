@@ -2,7 +2,7 @@
 title: "http_response_code()"
 description: "Gets or sets the HTTP response code."
 sidebar:
-  order: 276
+  order: 280
 ---
 
 ## http_response_code()
@@ -17,6 +17,11 @@ Gets or sets the HTTP response code.
 - `$response_code` (`int`), default `0`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/http_response_code.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/http_response_code.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

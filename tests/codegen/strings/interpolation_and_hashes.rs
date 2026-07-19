@@ -72,6 +72,20 @@ fn test_string_interpolation_complex_property() {
     assert_eq!(out, "5");
 }
 
+/// Verifies complex interpolation retains a keyword-spelled property's exact source casing while
+/// re-tokenizing the expression between braces.
+#[test]
+fn test_string_interpolation_keyword_property_preserves_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+        class KeywordProperty { public string $Match = "ok"; }
+        $object = new KeywordProperty();
+        echo "{$object->Match}";
+        "#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies simple `$arr[key]` interpolation with a bareword key (treated as a string key).
 #[test]
 fn test_string_interpolation_simple_array_bareword() {
@@ -100,6 +114,22 @@ fn test_string_interpolation_simple_property() {
 fn test_string_literal_brace_not_interpolation() {
     let out = compile_and_run(r#"<?php echo "a{b}c";"#);
     assert_eq!(out, "a{b}c");
+}
+
+/// Verifies the deprecated `${var}` interpolation form still evaluates the variable
+/// (PHP 8.x deprecates it but supports it).
+#[test]
+fn test_string_interpolation_deprecated_dollar_brace_var() {
+    let out = compile_and_run(r#"<?php $b = "B"; echo "a${b}c";"#);
+    assert_eq!(out, "aBc");
+}
+
+/// Verifies the deprecated `${arr[key]}` interpolation form evaluates the full array
+/// access expression inside braces.
+#[test]
+fn test_string_interpolation_deprecated_dollar_brace_array() {
+    let out = compile_and_run(r#"<?php $a = ["x" => "ok"]; echo "${a['x']}";"#);
+    assert_eq!(out, "ok");
 }
 
 /// Verifies `md5()` produces the correct hash for an empty string input.

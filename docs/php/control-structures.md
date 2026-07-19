@@ -5,6 +5,45 @@ sidebar:
   order: 3
 ---
 
+## declare
+
+`declare(strict_types=1);` is accepted at the top of a file. elephc compiles a
+statically-typed subset and is **always strict**, so the directive is parsed and
+treated as a no-op rather than toggling a runtime mode. The `ticks` and `encoding`
+directives are likewise accepted and ignored. Directive values must be PHP
+literals; `strict_types` must be the first statement, use the statement form, and
+have the integer value `0` or `1`.
+
+```php
+<?php
+
+declare(strict_types=1);
+
+echo "always strict";
+```
+
+The block form runs its body in the enclosing scope:
+
+```php
+<?php
+
+declare(ticks=1) {
+    echo "ok";
+}
+```
+
+PHP's single-statement and alternative block forms are also accepted:
+
+```php
+<?php
+
+declare(ticks=1) echo "single statement";
+
+declare(ticks=1):
+    echo "alternative syntax";
+enddeclare;
+```
+
 ## if / elseif / else
 
 ```php

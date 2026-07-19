@@ -26,13 +26,8 @@ pub(crate) fn lower_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     ensure_arg_count(inst, "ptr", 1)?;
     let value = expect_operand(inst, 0)?;
     match pointer_source(ctx, value)? {
-        PointerSource::Local { slot, is_ref_cell } => {
-            let offset = ctx.local_offset(slot)?;
-            if is_ref_cell || ctx.local_stores_ref_cell_pointer(slot) {
-                abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-            } else {
-                abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-            }
+        PointerSource::Local { slot } => {
+            ctx.materialize_local_storage_address(slot, abi::int_result_reg(ctx.emitter))?;
         }
         PointerSource::Global { symbol, bytes } => {
             ctx.data.add_comm(symbol.clone(), bytes);
@@ -223,7 +218,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
 
 /// Addressable storage source accepted by the `ptr()` builtin.
 enum PointerSource {
-    Local { slot: LocalSlotId, is_ref_cell: bool },
+    Local { slot: LocalSlotId },
     Global { symbol: String, bytes: usize },
     Null,
 }
@@ -247,10 +242,7 @@ fn pointer_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<PointerSo
                     "ptr() local load has no local slot",
                 ));
             };
-            Ok(PointerSource::Local {
-                slot,
-                is_ref_cell: inst_ref.op == Op::LoadRefCell,
-            })
+            Ok(PointerSource::Local { slot })
         }
         Op::LoadGlobal => {
             let Some(Immediate::GlobalName(data)) = inst_ref.immediate else {
@@ -526,6 +518,89 @@ fn ensure_arg_count(inst: &Instruction, name: &str, expected: usize) -> Result<(
         expected,
         inst.operands.len()
     )))
+}
+
+/// Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking
+/// `__rt_zval_pack`, which returns a pointer to a freshly allocated 16-byte zval.
+///
+/// `__rt_zval_pack` only reads the `(tag, lo, hi)` triple out of the boxed Mixed
+/// cell; it never retains or frees that cell. When the operand was not already
+/// Mixed/Union, `emit_box_current_value_as_mixed` allocated a fresh owned box
+/// (persisting strings, increfing array/object/mixed children), so that box is a
+/// throwaway temporary that must be deep-released after the pack call or it leaks
+/// one Mixed cell per call. When the operand is already Mixed/Union no box was
+/// created, so the operand's own live cell must not be freed here.
+pub(crate) fn lower_zval_pack(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_pack", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?;
+    let boxed_a_temporary = !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    ctx.load_value_to_result(value)?;
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    if boxed_a_temporary {
+        let box_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, box_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_zval_pack");
+        abi::emit_push_reg(ctx.emitter, box_reg);                              // stash the returned zval pointer across the box release
+        emit_load_temp_box_for_release(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_free_deep");
+        abi::emit_pop_reg(ctx.emitter, box_reg);                               // recover the zval pointer as the builtin result
+        emit_drop_temp_box_slot(ctx);
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_zval_pack");
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Loads the throwaway Mixed box pointer so it can be released after `zval_pack`.
+fn emit_load_temp_box_for_release(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the throwaway box pointer from the deeper temporary slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the throwaway box pointer from the deeper temporary slot
+        }
+    }
+}
+
+/// Drops the temporary stack slot that held the throwaway Mixed box pointer.
+fn emit_drop_temp_box_slot(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the freed box slot without clobbering the zval result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rsp, 16");                             // discard the freed box slot without clobbering the zval result
+        }
+    }
+}
+
+/// Lowers `zval_unpack(zval_ptr)` by invoking `__rt_zval_unpack`.
+pub(crate) fn lower_zval_unpack(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_unpack", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_unpack")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_unpack");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `zval_type(zval_ptr)` by returning the PHP `IS_*` type byte.
+pub(crate) fn lower_zval_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_type", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_type")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_type");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `zval_free(zval_ptr)` by releasing the zval block and owned children.
+pub(crate) fn lower_zval_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "zval_free", 1)?;
+    let pointer = expect_operand(inst, 0)?;
+    load_pointer_payload(ctx, pointer, "zval_free")?;
+    abi::emit_call_label(ctx.emitter, "__rt_zval_free");
+    store_if_result(ctx, inst)
 }
 
 /// Verifies a pointer string-copy length operand is a concrete PHP integer.

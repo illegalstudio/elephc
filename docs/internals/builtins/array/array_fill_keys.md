@@ -32,6 +32,11 @@ function array_fill_keys(array $keys, mixed $value): array
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_fill_keys()`](../../../php/builtins/array/array_fill_keys.md)

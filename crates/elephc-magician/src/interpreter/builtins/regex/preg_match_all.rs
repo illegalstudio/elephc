@@ -1,0 +1,239 @@
+//! Purpose:
+//! Eval registry entry and implementation for `preg_match_all`.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::hooks` and special by-ref call handling.
+//!
+//! Key details:
+//! - This file owns registry metadata, direct dispatch, by-value dispatch, and
+//! - capture-matrix assembly for `preg_match_all()`.
+use super::super::super::*;
+use super::super::spec::EvalBuiltinDefaultValue;
+use super::super::*;
+use super::*;
+
+eval_builtin! {
+    name: "preg_match_all",
+    area: Regex,
+    params: [
+        pattern,
+        subject,
+        matches: by_ref = EvalBuiltinDefaultValue::EmptyArray,
+        flags = EvalBuiltinDefaultValue::Int(0),
+    ],
+    by_ref: [matches],
+    direct: PregMatchAll,
+    values: PregMatchAll,
+}
+
+
+/// Evaluates PHP `preg_match_all()` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_preg_match_all(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [pattern, subject] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            eval_preg_match_all_result(pattern, subject, values)
+        }
+        [pattern, subject, matches] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
+            let (result, matches_array) =
+                eval_preg_match_all_capture_result(pattern, subject, None, values)?;
+            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            Ok(result)
+        }
+        [pattern, subject, matches, flags] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            let (result, matches_array) =
+                eval_preg_match_all_capture_result(pattern, subject, Some(flags), values)?;
+            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            Ok(result)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `preg_match_all()` over full eval call metadata.
+pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "subject", "matches", "flags"],
+        &evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
+        return eval_preg_match_all_result(pattern.value, subject.value, values);
+    };
+    let target = matches
+        .ref_target
+        .clone()
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let (result, matches_array) =
+        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+    eval_write_preg_matches_target(&target, matches_array, context, values)?;
+    Ok(result)
+}
+
+/// Counts all non-overlapping regex matches in one subject string.
+pub(in crate::interpreter) fn eval_preg_match_all_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    let count = regex.captures_iter(&subject).count();
+    values.int(i64::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
+/// Returns the match count plus PHP's default `PREG_PATTERN_ORDER` `$matches` array.
+pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let capture_count = regex.captures_len();
+    let subject = values.string_bytes(subject)?;
+    let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
+    let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+    let flags = eval_preg_match_all_flags(flags, values)?;
+    let matches = if flags & EVAL_PREG_SET_ORDER != 0 {
+        eval_preg_match_all_set_order_array(&subject, &captures, capture_count, flags, values)?
+    } else {
+        eval_preg_match_all_pattern_order_array(&subject, &captures, capture_count, flags, values)?
+    };
+    Ok((count, matches))
+}
+
+/// Returns supported `preg_match_all()` flags.
+pub(in crate::interpreter) fn eval_preg_match_all_flags(
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let Some(flags) = flags else {
+        return Ok(EVAL_PREG_PATTERN_ORDER);
+    };
+    let flags = eval_int_value(flags, values)?;
+    let supported = EVAL_PREG_PATTERN_ORDER
+        | EVAL_PREG_SET_ORDER
+        | EVAL_PREG_OFFSET_CAPTURE
+        | EVAL_PREG_UNMATCHED_AS_NULL;
+    if flags & !supported != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(flags)
+}
+
+/// Builds PHP's default `preg_match_all()` pattern-order capture matrix.
+pub(in crate::interpreter) fn eval_preg_match_all_pattern_order_array(
+    subject: &[u8],
+    captures: &[Captures<'_>],
+    capture_count: usize,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
+    let mut outer = values.array_new(capture_count)?;
+    for capture_index in 0..capture_count {
+        let mut row = values.array_new(captures.len())?;
+        for (match_index, capture) in captures.iter().enumerate() {
+            let key =
+                values.int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let value = eval_preg_capture_value(
+                subject,
+                capture,
+                capture_index,
+                offset_capture,
+                unmatched_as_null,
+                values,
+            )?;
+            row = values.array_set(row, key, value)?;
+        }
+        let key =
+            values.int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        outer = values.array_set(outer, key, row)?;
+    }
+    Ok(outer)
+}
+
+/// Builds PHP's `preg_match_all(..., PREG_SET_ORDER)` match-order capture matrix.
+pub(in crate::interpreter) fn eval_preg_match_all_set_order_array(
+    subject: &[u8],
+    captures: &[Captures<'_>],
+    capture_count: usize,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
+    let mut outer = values.array_new(captures.len())?;
+    for (match_index, capture) in captures.iter().enumerate() {
+        let mut row = values.array_new(capture_count)?;
+        for capture_index in 0..capture_count {
+            let key =
+                values.int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let value = eval_preg_capture_value(
+                subject,
+                capture,
+                capture_index,
+                offset_capture,
+                unmatched_as_null,
+                values,
+            )?;
+            row = values.array_set(row, key, value)?;
+        }
+        let key = values.int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        outer = values.array_set(outer, key, row)?;
+    }
+    Ok(outer)
+}
+
+/// Dispatches by-value `preg_match_all()` calls after argument binding.
+pub(in crate::interpreter) fn eval_preg_match_all_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match evaluated_args {
+        [pattern, subject] => eval_preg_match_all_result(*pattern, *subject, values),
+        [pattern, subject, _matches] => {
+            values.warning(
+                "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
+            )?;
+            let (count, matches) =
+                eval_preg_match_all_capture_result(*pattern, *subject, None, values)?;
+            values.release(matches)?;
+            Ok(count)
+        }
+        [pattern, subject, _matches, flags] => {
+            values.warning(
+                "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
+            )?;
+            let (count, matches) =
+                eval_preg_match_all_capture_result(*pattern, *subject, Some(*flags), values)?;
+            values.release(matches)?;
+            Ok(count)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}

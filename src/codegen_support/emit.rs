@@ -166,6 +166,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@PAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, {}", reg, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -176,6 +177,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("add {}, {}, {}@PAGEOFF", dst, src, sym)),
             Platform::Linux => self.instruction(&format!("add {}, {}, :lo12:{}", dst, src, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -187,6 +189,7 @@ impl Emitter {
                 self.instruction(&format!("ldr {}, [{}, {}@PAGEOFF]", reg, base, sym))
             }
             Platform::Linux => self.instruction(&format!("ldr {}, [{}, :lo12:{}]", reg, base, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -197,6 +200,7 @@ impl Emitter {
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@GOTPAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, :got:{}", reg, sym)),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -210,6 +214,7 @@ impl Emitter {
             Platform::Linux => {
                 self.instruction(&format!("ldr {}, [{}, :got_lo12:{}]", reg, base, sym))
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -229,6 +234,7 @@ impl Emitter {
                 let target = self.target;
                 target.emit_linux_syscall(self, macos_num);
             }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
@@ -243,20 +249,28 @@ impl Emitter {
             (Platform::MacOS, Arch::X86_64) => {
                 panic!("C symbol calls are not implemented yet for target macos-x86_64");
             }
+            (Platform::Windows, _) => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
 
     // ── Platform-aware entry point ───────────────────────────────────
 
-    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
-    pub fn entry_label(&mut self) {
+    /// Returns the program entry point symbol: `_main` (macOS) or `main` (Linux).
+    pub fn entry_symbol(&self) -> &'static str {
         match self.target.arch {
             Arch::AArch64 => match self.platform {
-                Platform::MacOS => self.label_global("_main"),
-                Platform::Linux => self.label_global("main"),
+                Platform::MacOS => "_main",
+                Platform::Linux => "main",
+                Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
             },
-            Arch::X86_64 => self.label_global("main"),
+            Arch::X86_64 => "main",
         }
+    }
+
+    /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
+    pub fn entry_label(&mut self) {
+        let symbol = self.entry_symbol();
+        self.label_global(symbol);
     }
 }
 

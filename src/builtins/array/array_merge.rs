@@ -87,6 +87,11 @@ fn is_empty_array_element_type(ty: &PhpType) -> bool {
 fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Float
+        | PhpType::Callable
+        | PhpType::Void
     )
 }

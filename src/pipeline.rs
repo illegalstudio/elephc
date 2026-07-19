@@ -18,9 +18,9 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, conditional, errors, exports, ir, ir_lower, ir_passes, lexer, linker,
-    list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver,
-    runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    autoload, codegen, conditional, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
+    linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
+    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -47,18 +47,22 @@ pub(crate) fn compile(config: CliConfig) {
         check_only,
         emit_timings,
         emit_source_map,
+        emit_debug_info,
         regalloc_linear,
         ir_opt,
         target,
+        php_version,
         mut extra_link_libs,
         extra_link_paths,
         extra_frameworks,
         defines,
+        strict_php,
         web,
         with_crates,
     } = config;
     let filename = filename.as_str();
     codegen::set_null_repr(null_repr);
+    crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename, target, emit);
     let mut timings = CompileTimings::new(emit_timings);
@@ -97,6 +101,17 @@ pub(crate) fn compile(config: CliConfig) {
     let main_file_path = Path::new(filename).to_path_buf();
     let parsed = magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
     timings.record_since("magic-constants", phase_started);
+
+    // Strict-PHP audit of the main file: after magic-constant substitution
+    // (matching the include/autoload audit sites) and before
+    // `conditional::apply` consumes `ifdef` nodes, so every elephc-only
+    // construct is reported with its span. Included and autoloaded user files
+    // are audited where they are parsed (resolver / autoloader), so injected
+    // compiler preludes are never audited.
+    if let Err(e) = crate::strict_php::check_file(&parsed, filename) {
+        errors::report(&e);
+        process::exit(1);
+    }
 
     let parsed = conditional::apply(parsed, &defines);
 
@@ -163,7 +178,7 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("image-prelude", phase_started);
 
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web);
+    let ast = web_prelude::inject_if_web(ast, web, php_version);
     timings.record_since("web-prelude", phase_started);
 
     let phase_started = Instant::now();
@@ -257,7 +272,13 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program_with_source_path_and_web(
+            &ast,
+            &check_result,
+            target,
+            Path::new(filename),
+            web,
+        ) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -281,7 +302,13 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let phase_started = Instant::now();
-    let mut ir_module = match ir_lower::lower_program(&ast, &check_result, target) {
+    let mut ir_module = match ir_lower::lower_program_with_source_path_and_web(
+        &ast,
+        &check_result,
+        target,
+        Path::new(filename),
+        web,
+    ) {
         Ok(module) => module,
         Err(err) => {
             eprintln!("EIR lowering error: {}", err);
@@ -356,6 +383,11 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    let user_asm = if emit_debug_info {
+        debug_info::inject_line_directives(&user_asm, filename, target.platform)
+    } else {
+        user_asm
+    };
     timings.record_since("codegen", phase_started);
 
     for lib in &check_result.required_libraries {
@@ -379,7 +411,12 @@ pub(crate) fn compile(config: CliConfig) {
     if emit_source_map {
         let phase_started = Instant::now();
         if let Err(err) =
-            source_map::write_source_map(&user_asm, Path::new(filename), &output_paths.source_map)
+            source_map::write_source_map(
+                &user_asm,
+                Path::new(filename),
+                &output_paths.asm,
+                &output_paths.source_map,
+            )
         {
             eprintln!("Source map error: {}", err);
             process::exit(1);
@@ -415,7 +452,15 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("link", phase_started);
 
-    let _ = fs::remove_file(&output_paths.obj);
+    // With --debug-info the DWARF line tables must be preserved past object
+    // cleanup: on macOS `dsymutil` bakes them into a .dSYM while the object
+    // still exists; if that fails the object is kept so debuggers can follow
+    // the binary's debug map to it.
+    let keep_obj_for_debug =
+        emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
+    if !keep_obj_for_debug {
+        let _ = fs::remove_file(&output_paths.obj);
+    }
 
     timings.report();
     println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
@@ -436,6 +481,7 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
     };
     OutputPaths {

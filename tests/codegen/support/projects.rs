@@ -27,12 +27,13 @@ fn required_libraries_for_runtime_features(
 fn generate_project_asm(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
+    source_path: &Path,
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
 ) -> (String, String, elephc::codegen::RuntimeFeatures) {
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result);
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
@@ -180,6 +181,38 @@ pub(crate) fn compile_and_run_expect_failure(source: &str) -> String {
     output
 }
 
+/// Compiles a PHP source string through type checking and returns the expected diagnostic.
+pub(crate) fn compile_expect_type_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_type_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    let define_set = HashSet::new();
+    let ast = elephc::conditional::apply(ast, &define_set);
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
+    elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved =
+        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::optimize::fold_constants(resolved);
+    let error = match elephc::types::check_with_target(&resolved, target()) {
+        Ok(_) => panic!("source unexpectedly passed type checking"),
+        Err(error) => error.to_string(),
+    };
+
+    let _ = fs::remove_dir_all(&dir);
+    error
+}
+
 // Compiles a multi-file PHP project (using library directly, not CLI) where the
 // main entry point is `main_file`. Writes all files to an isolated temp directory,
 // runs the full pipeline, links, and asserts the binary exits successfully.
@@ -239,6 +272,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
         &check_result,
+        &php_path,
         8_388_608,
         false,
         false,
@@ -312,6 +346,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
         &check_result,
+        &php_path,
         8_388_608,
         false,
         false,
@@ -419,6 +454,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
         &check_result,
+        &synthetic_main,
         8_388_608,
         false,
         false,

@@ -12,6 +12,8 @@ use super::arrays;
 use super::buffers;
 use super::callables;
 use super::diagnostics;
+use super::eval_bridge;
+use super::eval_scope;
 use super::exceptions;
 use super::fibers;
 use super::generators;
@@ -21,6 +23,7 @@ use super::pointers;
 use super::spl;
 use super::strings;
 use super::system;
+use super::zval;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -91,6 +94,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
+    if features.mb_strlen {
+        strings::emit_mb_strlen(emitter);
+    }
     strings::emit_hash(emitter);
     strings::emit_hash_hmac(emitter);
     strings::emit_hash_equals(emitter);
@@ -153,6 +159,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
+        system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
         system::emit_preg_replace(emitter);
@@ -318,6 +325,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
+    if features.eval_bridge {
+        eval_bridge::emit_eval_bridge_runtime(emitter);
+    } else if features.eval_scope {
+        // Scope-only programs run compiled eval fragments natively: they need
+        // the self-contained value wrappers plus the native scope helpers
+        // (the magician staticlib supplies the scope symbols only in the full
+        // bridge configuration).
+        eval_bridge::emit_eval_bridge_runtime(emitter);
+        eval_scope::emit_eval_scope_runtime(emitter);
+    }
 
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);
@@ -475,6 +492,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_print_r_value(emitter);
     io::emit_print_r_indexed(emitter);
     io::emit_print_r_hash(emitter);
+    io::emit_pr_append(emitter);
+    io::emit_pr_write(emitter);
+    io::emit_pr_finish(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -511,6 +531,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     pointers::emit_cstr_to_str(emitter);
     pointers::emit_ptr_read_string(emitter);
     pointers::emit_ptr_write_string(emitter);
+
+    // zval pack/unpack bridge runtime functions
+    zval::emit_zval_string_new(emitter);
+    zval::emit_zval_djbx33a(emitter);
+    zval::emit_zval_pack(emitter);
+    zval::emit_zval_pack_array_packed(emitter);
+    zval::emit_zval_pack_array_hash(emitter);
+    zval::emit_zval_unpack(emitter);
+    zval::emit_zval_unpack_array(emitter);
+    zval::emit_zval_type(emitter);
+    zval::emit_zval_free_array(emitter);
+    zval::emit_zval_free(emitter);
 
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);
@@ -572,6 +604,25 @@ mod tests {
         assert!(!asm.contains("__rt_preg_match:"));
         assert!(!asm.contains("__rt_preg_replace:"));
         assert!(!asm.contains("__rt_preg_split:"));
+    }
+
+    /// Verifies the iconv-backed `mb_strlen()` helper is emitted only for programs that use it.
+    #[test]
+    fn test_runtime_can_gate_mb_strlen_helper() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut omitted = Emitter::new(target);
+        emit_runtime(&mut omitted, RuntimeFeatures::none());
+        assert!(!omitted.output().contains("__rt_mb_strlen:"));
+
+        let mut included = Emitter::new(target);
+        emit_runtime(
+            &mut included,
+            RuntimeFeatures {
+                mb_strlen: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        assert!(included.output().contains("__rt_mb_strlen:"));
     }
 
     /// Verifies that Linux x86_64 uses the shared runtime surface.

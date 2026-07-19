@@ -46,7 +46,23 @@ pub(super) fn lower_hash_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let hash = expect_operand(inst, 0)?;
     require_hash(ctx.load_value_to_result(hash)?, inst)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("hash_len_null");
+    let done_label = ctx.next_label("hash_len_done");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    super::exceptions::emit_error(
+        ctx,
+        "Only arrays and Traversables can be unpacked, null given",
+    );
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -74,15 +90,23 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
 }
 
 /// Lowers an associative-array lookup with PHP null-sentinel fallback on misses.
-pub(super) fn lower_hash_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_hash_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    warn_on_missing: bool,
+) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let value_ty = assoc_value_type(&ctx.value_php_type(hash)?, inst)?;
     require_hash_get_result(&value_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_get_aarch64(ctx, inst, hash, key, &value_ty, &result_ty),
-        Arch::X86_64 => lower_hash_get_x86_64(ctx, inst, hash, key, &value_ty, &result_ty),
+        Arch::AArch64 => {
+            lower_hash_get_aarch64(ctx, inst, hash, key, &value_ty, &result_ty, warn_on_missing)
+        }
+        Arch::X86_64 => {
+            lower_hash_get_x86_64(ctx, inst, hash, key, &value_ty, &result_ty, warn_on_missing)
+        }
     }
 }
 
@@ -96,6 +120,9 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
@@ -121,6 +148,9 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;
@@ -153,6 +183,9 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
@@ -220,6 +253,9 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_hash(ctx.value_php_type(dest)?, inst)?;
     require_hash(ctx.value_php_type(source)?, inst)?;
     let source_local = source_load_local_slot(ctx, dest)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, dest)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(dest, "x0")?;
@@ -247,16 +283,34 @@ fn lower_hash_get_aarch64(
     key: ValueId,
     value_ty: &PhpType,
     result_ty: &PhpType,
+    warn_on_missing: bool,
 ) -> Result<()> {
     materialize_hash_key_aarch64(ctx, key)?;
     ctx.load_value_to_reg(hash, "x0")?;
-    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     let miss = ctx.next_label("hash_get_miss");
+    let null_receiver = ctx.next_label("hash_get_null_recv");
+    let fallback = ctx.next_label("hash_get_fallback");
     let done = ctx.next_label("hash_get_done");
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "x0",
+        "x9",
+        &null_receiver,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x0, {}", miss));                      // branch to the null fallback when the associative lookup misses
     emit_hash_get_success_aarch64(ctx, value_ty, result_ty)?;
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
+    if warn_on_missing {
+        emit_undefined_hash_key_warning_aarch64(ctx, key)?;
+    }
+    abi::emit_jump(ctx.emitter, &fallback);
+    ctx.emitter.label(&null_receiver);
+    if warn_on_missing {
+        super::arrays::emit_array_offset_on_null_warning(ctx);
+    }
+    ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
@@ -270,17 +324,35 @@ fn lower_hash_get_x86_64(
     key: ValueId,
     value_ty: &PhpType,
     result_ty: &PhpType,
+    warn_on_missing: bool,
 ) -> Result<()> {
     materialize_hash_key_x86_64(ctx, key)?;
     ctx.load_value_to_reg(hash, "rdi")?;
-    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     let miss = ctx.next_label("hash_get_miss");
+    let null_receiver = ctx.next_label("hash_get_null_recv");
+    let fallback = ctx.next_label("hash_get_fallback");
     let done = ctx.next_label("hash_get_done");
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "rdi",
+        "r9",
+        &null_receiver,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction("test rax, rax");                                   // check whether the associative lookup found a matching key
     ctx.emitter.instruction(&format!("jz {}", miss));                           // branch to the null fallback when the associative lookup misses
     emit_hash_get_success_x86_64(ctx, value_ty, result_ty)?;
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
+    if warn_on_missing {
+        emit_undefined_hash_key_warning_x86_64(ctx, key)?;
+    }
+    abi::emit_jump(ctx.emitter, &fallback);
+    ctx.emitter.label(&null_receiver);
+    if warn_on_missing {
+        super::arrays::emit_array_offset_on_null_warning(ctx);
+    }
+    ctx.emitter.label(&fallback);
     emit_hash_get_miss(ctx, result_ty);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
@@ -516,6 +588,46 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
     }
 }
 
+/// Emits PHP's undefined-key warning for a normalized associative key on AArch64.
+fn emit_undefined_hash_key_warning_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    let integer_label = ctx.next_label("hash_warn_integer_key");
+    let done_label = ctx.next_label("hash_warn_key_done");
+    materialize_hash_key_aarch64(ctx, key)?;
+    ctx.emitter.instruction("cmn x2, #1");                                      // integer hash keys carry key_hi = -1
+    ctx.emitter.instruction(&format!("b.eq {}", integer_label));                // select the decimal undefined-key warning
+    abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_str");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&integer_label);
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the missing integer key in the warning ABI result register
+    abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits PHP's undefined-key warning for a normalized associative key on x86_64.
+fn emit_undefined_hash_key_warning_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    let integer_label = ctx.next_label("hash_warn_integer_key");
+    let done_label = ctx.next_label("hash_warn_key_done");
+    materialize_hash_key_x86_64(ctx, key)?;
+    ctx.emitter.instruction("cmp rdx, -1");                                     // integer hash keys carry key_hi = -1
+    ctx.emitter.instruction(&format!("je {}", integer_label));                  // select the decimal undefined-key warning
+    ctx.emitter.instruction("mov rdi, rsi");                                    // pass the missing string key pointer to the warning helper
+    ctx.emitter.instruction("mov rsi, rdx");                                    // pass the missing string key length to the warning helper
+    abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_str");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&integer_label);
+    ctx.emitter.instruction("mov rax, rsi");                                    // pass the missing integer key in the warning ABI result register
+    abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.
 fn materialize_mixed_hash_key_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -562,7 +674,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
     ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
     ctx.emitter.instruction("cmp rax, 8");                                      // null mixed keys normalize to the empty string like PHP
-    ctx.emitter.instruction(&format!("je {}", null_key));                      // route null keys to the empty-string key path
+    ctx.emitter.instruction(&format!("je {}", null_key));                       // route null keys to the empty-string key path
     ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
@@ -572,7 +684,7 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
     ctx.emitter.label(&null_key);
     emit_empty_string_hash_key_x86_64(ctx);                                    // null normalizes to the empty string "" hash key
-    ctx.emitter.instruction(&format!("jmp {}", done));                         // skip the string-key normalization path
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the string-key normalization path
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
@@ -1080,7 +1192,11 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
         },
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                ptr_reg,
+                crate::codegen::NULL_SENTINEL,
+            );
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         }
         PhpType::Mixed => match ctx.emitter.target.arch {

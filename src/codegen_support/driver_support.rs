@@ -22,16 +22,16 @@ pub(crate) fn emit_write_literal_stderr(emitter: &mut Emitter, label: &str, len:
     match emitter.target.arch {
         Arch::AArch64 => {
             crate::codegen_support::abi::emit_symbol_address(emitter, "x1", label); // load the page address of the stderr literal on AArch64
-            emitter.instruction(&format!("mov x2, #{}", len)); // materialize the stderr literal byte length in the AArch64 write-length register
-            emitter.instruction("mov x0, #2"); // target the stderr file descriptor on AArch64
+            emitter.instruction(&format!("mov x2, #{}", len));                  // materialize the stderr literal byte length in the AArch64 write-length register
+            emitter.instruction("mov x0, #2");                                  // target the stderr file descriptor on AArch64
             emitter.syscall(4);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "rsi", label);
-            emitter.instruction(&format!("mov edx, {}", len)); // materialize the stderr literal byte length in the x86_64 write-length register
-            emitter.instruction("mov edi, 2"); // target the stderr file descriptor on x86_64
-            emitter.instruction("mov eax, 1"); // Linux x86_64 syscall number 1 = write
-            emitter.instruction("syscall"); // write the requested literal bytes to stderr on x86_64
+            emitter.instruction(&format!("mov edx, {}", len));                  // materialize the stderr literal byte length in the x86_64 write-length register
+            emitter.instruction("mov edi, 2");                                  // target the stderr file descriptor on x86_64
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
+            emitter.instruction("syscall");                                     // write the requested literal bytes to stderr on x86_64
         }
     }
 }
@@ -41,16 +41,16 @@ pub(crate) fn emit_write_literal_stderr(emitter: &mut Emitter, label: &str, len:
 pub(crate) fn emit_write_current_string_stderr(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #2"); // target the stderr file descriptor on AArch64
+            emitter.instruction("mov x0, #2");                                  // target the stderr file descriptor on AArch64
             emitter.syscall(4);
         }
         Arch::X86_64 => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            emitter.instruction(&format!("mov rsi, {}", ptr_reg)); // move the current string pointer into the x86_64 write buffer register
-            emitter.instruction(&format!("mov rdx, {}", len_reg)); // move the current string length into the x86_64 write length register
-            emitter.instruction("mov edi, 2"); // target the stderr file descriptor on x86_64
-            emitter.instruction("mov eax, 1"); // Linux x86_64 syscall number 1 = write
-            emitter.instruction("syscall"); // write the current string payload to stderr on x86_64
+            emitter.instruction(&format!("mov rsi, {}", ptr_reg));              // move the current string pointer into the x86_64 write buffer register
+            emitter.instruction(&format!("mov rdx, {}", len_reg));              // move the current string length into the x86_64 write length register
+            emitter.instruction("mov edi, 2");                                  // target the stderr file descriptor on x86_64
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
+            emitter.instruction("syscall");                                     // write the current string payload to stderr on x86_64
         }
     }
 }

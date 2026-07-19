@@ -30,6 +30,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns an array of ReflectionAttribute objects for all attributes of a class.",
+    extension: true,
 }
 
 /// Validates that the argument is a string literal class name, resolves the class,

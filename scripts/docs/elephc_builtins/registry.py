@@ -978,6 +978,10 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "ptr_write16": ["pointer", "int"],
     "ptr_write32": ["pointer", "int"],
     "ptr_write_string": ["pointer", "string"],
+    "zval_pack": ["mixed"],
+    "zval_unpack": ["pointer"],
+    "zval_type": ["pointer"],
+    "zval_free": ["pointer"],
     "buffer_new": ["int"],
     "buffer_free": ["buffer"],
     "buffer_len": ["buffer"],
@@ -1137,6 +1141,10 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "ptr_write16": ["pointer", "int"],
     "ptr_write32": ["pointer", "int"],
     "ptr_write_string": ["pointer", "string"],
+    "zval_pack": ["mixed"],
+    "zval_unpack": ["pointer"],
+    "zval_type": ["pointer"],
+    "zval_free": ["pointer"],
 }
 
 
@@ -1193,6 +1201,14 @@ class Builtin:
     examples: List[str] = field(default_factory=list)  # raw ```php ... ``` blocks
     see_also: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # Eval-interpreter (elephc-magician) support block from the gen_builtins
+    # exporter: {supported, kind, area, hooks, params, variadic, home_file}.
+    eval_support: Optional[dict] = None
+    # True when only the eval interpreter exposes this builtin (no AOT support).
+    eval_only: bool = False
+    # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
+    # class_attribute_*); `--strict-php` hides them from user programs.
+    is_extension: bool = False
 
 
 def slug(name: str) -> str:
@@ -1263,6 +1279,15 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "vprintf": "int",
     "vsprintf": "string",
     "iterator_apply": "int",
+    "zval_pack": "pointer",
+    "zval_unpack": "mixed",
+    "zval_type": "int",
+    "zval_free": "void",
+}
+
+
+RUNTIME_HELPER_OVERRIDES: Dict[str, List[str]] = {
+    "mb_ereg_match": ["__rt_mb_ereg_match"],
 }
 
 

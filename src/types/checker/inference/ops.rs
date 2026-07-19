@@ -310,6 +310,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -320,6 +321,7 @@ impl Checker {
         self.infer_closure_type_with_param_hints(
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             captures,
@@ -342,6 +344,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -353,6 +356,7 @@ impl Checker {
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
+            variadic_by_ref,
             captures,
             expr.span,
             env,
@@ -363,6 +367,11 @@ impl Checker {
             .filter(|(_, _, _, is_ref)| *is_ref)
             .map(|(name, _, _, _)| name.clone())
             .collect();
+        if variadic_by_ref {
+            if let Some(name) = variadic {
+                closure_ref_params.push(name.clone());
+            }
+        }
         closure_ref_params.extend(capture_refs.iter().cloned());
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
@@ -1181,7 +1190,8 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::NullsafeDynamicPropertyAccess { .. }
-        | ExprKind::NullsafeMethodCall { .. } => true,
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => true,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::DynamicPropertyAccess { object, .. }
         | ExprKind::MethodCall { object, .. } => expr_contains_nullsafe_member(object),
@@ -1203,7 +1213,12 @@ fn is_array_like_type(ty: &PhpType) -> bool {
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
@@ -1223,7 +1238,7 @@ fn is_datetime_family_object(ty: &PhpType) -> bool {
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Mixed
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 

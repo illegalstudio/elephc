@@ -69,8 +69,8 @@ trap cleanup EXIT INT TERM
 
 # Run tests with the project mounted as a volume. Build the bridge staticlib
 # crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
-# libelephc_phar.a / libelephc_tz.a / libelephc_image.a / libelephc_web.a
-# exist in the target dir —
+# libelephc_phar.a / libelephc_tz.a / libelephc_image.a / libelephc_web.a /
+# libelephc_magician.a exist in the target dir —
 # `cargo test` alone never emits the staticlib crate-type.
 if [ "$TEST_ARG_COUNT" -eq 0 ]; then
     echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
@@ -80,12 +80,13 @@ if [ "$TEST_ARG_COUNT" -eq 0 ]; then
         --init \
         --rm \
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
+        -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web && cargo test'
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician && cargo test'
 else
     echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
@@ -94,10 +95,11 @@ else
         --init \
         --rm \
         -e "RUST_TEST_THREADS=$TEST_THREADS" \
+        -e "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}" \
         -e "CARGO_TARGET_DIR=/cargo-target" \
         -v "$PROJECT_DIR:/app" \
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web && cargo test "$@"' sh "${TEST_ARGS[@]}"
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician && cargo test "$@"' sh "${TEST_ARGS[@]}"
 fi

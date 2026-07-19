@@ -116,7 +116,7 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
             emitter.add_lo12(dest, dest, &format!("{}", symbol)); // resolve the exact address of the requested symbol storage
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol)); // materialize the symbol address through a RIP-relative LEA
+            emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));  // materialize the symbol address through a RIP-relative LEA
         }
     }
 }
@@ -186,10 +186,10 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
             }
             Arch::X86_64 => {
                 if is_float_register(reg) {
-                    emitter.instruction("push r11"); // preserve the borrowed GOT scratch register around the float load
+                    emitter.instruction("push r11");                            // preserve the borrowed GOT scratch register around the float load
                     emit_extern_symbol_address(emitter, "r11", symbol);
                     emit_load_from_address(emitter, reg, "r11", byte_offset);
-                    emitter.instruction("pop r11"); // restore the borrowed GOT scratch register after the float load
+                    emitter.instruction("pop r11");                             // restore the borrowed GOT scratch register after the float load
                 } else {
                     emit_extern_symbol_address(emitter, reg, symbol);
                     emit_load_from_address(emitter, reg, reg, byte_offset);
@@ -202,7 +202,7 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("ldr {}, [x9]", reg)); // load the symbol payload directly from its base address
+                emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
             } else {
                 emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset));
                 // load the symbol payload from the requested byte offset
@@ -258,10 +258,10 @@ pub fn emit_store_reg_to_symbol(
             }
             Arch::X86_64 => {
                 let scratch = if reg == "r11" { "r10" } else { "r11" };
-                emitter.instruction(&format!("push {}", scratch)); // preserve the borrowed GOT scratch register around the store
+                emitter.instruction(&format!("push {}", scratch));              // preserve the borrowed GOT scratch register around the store
                 emit_extern_symbol_address(emitter, scratch, symbol);
                 emit_store_to_address(emitter, reg, scratch, byte_offset);
-                emitter.instruction(&format!("pop {}", scratch)); // restore the borrowed GOT scratch register after the store
+                emitter.instruction(&format!("pop {}", scratch));               // restore the borrowed GOT scratch register after the store
             }
         }
         return;
@@ -270,7 +270,7 @@ pub fn emit_store_reg_to_symbol(
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("str {}, [x9]", reg)); // store the register payload directly into the symbol base slot
+                emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
             } else {
                 emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset));
                 // store the register payload into the requested symbol byte offset
@@ -315,15 +315,15 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
                 emit_store_reg_to_extern_symbol(emitter, "xzr", symbol, byte_offset);
             }
             Arch::X86_64 => {
-                emitter.instruction("push r11"); // preserve the borrowed GOT scratch register around the zero store
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the zero store
                 emit_extern_symbol_address(emitter, "r11", symbol);
                 if byte_offset == 0 {
-                    emitter.instruction("mov QWORD PTR [r11], 0"); // zero the symbol base slot through the GOT-resolved address
+                    emitter.instruction("mov QWORD PTR [r11], 0");              // zero the symbol base slot through the GOT-resolved address
                 } else {
                     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", byte_offset));
                     // zero the requested symbol byte offset through the GOT-resolved address
                 }
-                emitter.instruction("pop r11"); // restore the borrowed GOT scratch register after the zero store
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the zero store
             }
         }
         return;
@@ -357,7 +357,7 @@ pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register
             emit_load_int_immediate(emitter, "x10", imm);
             if byte_offset == 0 {
-                emitter.instruction("str x10, [x9]"); // store the immediate payload into the symbol base slot
+                emitter.instruction("str x10, [x9]");                           // store the immediate payload into the symbol base slot
             } else {
                 emitter.instruction(&format!("str x10, [x9, #{}]", byte_offset));
                 // store the immediate payload into the requested symbol byte offset
@@ -370,13 +370,13 @@ pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset
                 format!(" + {}", byte_offset)
             };
             if emitter.pic_data_refs {
-                emitter.instruction("push r11"); // preserve the borrowed GOT scratch register around the immediate store
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the immediate store
                 emit_extern_symbol_address(emitter, "r11", symbol);
                 emitter.instruction(&format!("mov QWORD PTR [r11{}], {}", slot_suffix, imm)); // store the immediate payload through the GOT-resolved address
-                emitter.instruction("pop r11"); // restore the borrowed GOT scratch register after the immediate store
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the immediate store
             } else {
                 let inst = format!("mov QWORD PTR [rip + {}{}], {}", symbol, slot_suffix, imm);
-                emitter.instruction(&inst); // store the immediate payload through RIP-relative addressing
+                emitter.instruction(&inst);                                     // store the immediate payload through RIP-relative addressing
             }
         }
     }
@@ -393,15 +393,15 @@ pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_load_symbol_to_reg(emitter, "x9", symbol, 0); // load the symbol payload into the x9 scratch register
-            emitter.instruction(&format!("cmp {}, x9", reg)); // compare the register payload against the symbol payload
+            emitter.instruction(&format!("cmp {}, x9", reg));                   // compare the register payload against the symbol payload
         }
         Arch::X86_64 => {
             if emitter.pic_data_refs {
                 let scratch = if reg == "r11" { "r10" } else { "r11" };
-                emitter.instruction(&format!("push {}", scratch)); // preserve the borrowed GOT scratch register (push leaves flags intact)
+                emitter.instruction(&format!("push {}", scratch));              // preserve the borrowed GOT scratch register (push leaves flags intact)
                 emit_extern_symbol_address(emitter, scratch, symbol);
                 emitter.instruction(&format!("cmp {}, QWORD PTR [{}]", reg, scratch)); // compare the register payload against the GOT-resolved symbol payload
-                emitter.instruction(&format!("pop {}", scratch)); // restore the borrowed GOT scratch register (pop leaves flags intact)
+                emitter.instruction(&format!("pop {}", scratch));               // restore the borrowed GOT scratch register (pop leaves flags intact)
             } else {
                 emitter.instruction(&format!("cmp {}, QWORD PTR [rip + {}]", reg, symbol));
                 // compare the register payload against the RIP-relative symbol payload
@@ -419,16 +419,16 @@ pub fn emit_dec_symbol(emitter: &mut Emitter, symbol: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register
-            emitter.instruction("ldr x10, [x9]"); // load the current counter value
-            emitter.instruction("sub x10, x10, #1"); // decrement the counter by one
-            emitter.instruction("str x10, [x9]"); // store the decremented counter back into symbol storage
+            emitter.instruction("ldr x10, [x9]");                               // load the current counter value
+            emitter.instruction("sub x10, x10, #1");                            // decrement the counter by one
+            emitter.instruction("str x10, [x9]");                               // store the decremented counter back into symbol storage
         }
         Arch::X86_64 => {
             if emitter.pic_data_refs {
-                emitter.instruction("push r11"); // preserve the borrowed GOT scratch register around the decrement
+                emitter.instruction("push r11");                                // preserve the borrowed GOT scratch register around the decrement
                 emit_extern_symbol_address(emitter, "r11", symbol);
-                emitter.instruction("dec QWORD PTR [r11]"); // decrement the counter through the GOT-resolved address
-                emitter.instruction("pop r11"); // restore the borrowed GOT scratch register after the decrement
+                emitter.instruction("dec QWORD PTR [r11]");                     // decrement the counter through the GOT-resolved address
+                emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the decrement
             } else {
                 emitter.instruction(&format!("dec QWORD PTR [rip + {}]", symbol));
                 // decrement the counter through RIP-relative addressing
@@ -491,28 +491,28 @@ pub fn emit_store_result_to_symbol(
             let (ptr_reg, len_reg) = string_result_regs(emitter);
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!"); // preserve the incoming string result while releasing the previous symbol payload
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the incoming string result while releasing the previous symbol payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", ptr_reg)); // preserve the incoming string pointer result while releasing the previous symbol payload
-                    emitter.instruction(&format!("push {}", len_reg)); // preserve the incoming string length result while releasing the previous symbol payload
+                    emitter.instruction(&format!("push {}", ptr_reg));          // preserve the incoming string pointer result while releasing the previous symbol payload
+                    emitter.instruction(&format!("push {}", len_reg));          // preserve the incoming string length result while releasing the previous symbol payload
                 }
             }
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
             emit_call_label(emitter, "__rt_heap_free_safe"); // release the previous string allocation before overwriting the symbol slot
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("ldp x1, x2, [sp], #16"); // restore the incoming string result after the release helper call
+                    emitter.instruction("ldp x1, x2, [sp], #16");               // restore the incoming string result after the release helper call
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", len_reg)); // restore the incoming string length result after the release helper call
-                    emitter.instruction(&format!("pop {}", ptr_reg)); // restore the incoming string pointer result after the release helper call
+                    emitter.instruction(&format!("pop {}", len_reg));           // restore the incoming string length result after the release helper call
+                    emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
                 }
             }
         } else if ty.is_refcounted() {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("str x0, [sp, #-16]!"); // preserve the incoming heap pointer while decreffing the previous symbol payload
+                    emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload
                 }
                 Arch::X86_64 => {
                     emitter.instruction(&format!("push {}", int_result_reg(emitter)));
@@ -523,7 +523,7 @@ pub fn emit_store_result_to_symbol(
             emit_decref_if_refcounted(emitter, &ty);
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("ldr x0, [sp], #16"); // restore the incoming heap pointer after decreffing the previous payload
+                    emitter.instruction("ldr x0, [sp], #16");                   // restore the incoming heap pointer after decreffing the previous payload
                 }
                 Arch::X86_64 => {
                     emitter.instruction(&format!("pop {}", int_result_reg(emitter)));

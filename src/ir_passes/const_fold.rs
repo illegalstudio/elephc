@@ -127,6 +127,31 @@ impl IrPass for ConstFold {
             return false;
         }
 
+        // Values returned by a heap-typed function must keep their boxed
+        // representation: narrowing a directly-returned Heap(Mixed) result to
+        // a raw scalar constant would break the return ABI (e.g. the fixed
+        // Heap(Mixed) contract of internal eval AOT functions).
+        if matches!(function.return_type, IrType::Heap(_)) {
+            let returned: std::collections::HashSet<ValueId> = function
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator {
+                    Some(crate::ir::Terminator::Return { value }) => *value,
+                    _ => None,
+                })
+                .collect();
+            folds.retain(|(inst_id, _, narrowing)| {
+                *narrowing == TypeNarrowing::None
+                    || function
+                        .instruction(*inst_id)
+                        .and_then(|inst| inst.result)
+                        .is_none_or(|result| !returned.contains(&result))
+            });
+            if folds.is_empty() {
+                return false;
+            }
+        }
+
         // Phase 2 (mutate): rewrite each folded instruction in place to a constant.
         // When the fold narrows the result type (e.g. ICheckedAdd → ConstI64),
         // also update the instruction's result_type/result_php_type/ownership and
@@ -324,6 +349,7 @@ fn convert_to_const(inst: &mut Instruction, value: Const) {
         }
     }
     inst.effects = inst.op.default_effects();
+    inst.origin = Some(crate::ir::PassOrigin::ConstFold);
 }
 
 /// Narrows the instruction's `result_type`, `result_php_type`, and
