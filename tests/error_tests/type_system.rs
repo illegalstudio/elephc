@@ -462,6 +462,50 @@ class Box {
     );
 }
 
+/// Verifies an enum-typed parameter default rejects a missing enum case semantically.
+#[test]
+fn test_error_enum_case_parameter_default_rejects_missing_case() {
+    expect_error(
+        r#"<?php
+enum A {
+    case One;
+}
+function unused_enum_default(A $a = A::Nope): void {}
+"#,
+        "Undefined enum case: A::Nope",
+    );
+}
+
+/// Verifies a scalar class constant cannot default an object-typed parameter.
+#[test]
+fn test_error_object_parameter_default_rejects_scalar_class_constant() {
+    expect_error(
+        r#"<?php
+class Foo {
+    public const BAR = 1;
+}
+function unused_class_constant_default(Foo $value = Foo::BAR): void {}
+"#,
+        "Function 'unused_class_constant_default' parameter $value expects Object(\"Foo\"), got Int",
+    );
+}
+
+/// Verifies plain property enum case defaults remain outside the supported EIR surface.
+#[test]
+fn test_error_plain_property_enum_case_default_remains_unsupported() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Config {
+    public Level $level = Level::Low;
+}
+"#,
+        "Property Config::$level default expects Object(\"Level\"), got Str",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

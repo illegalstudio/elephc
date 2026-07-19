@@ -18,7 +18,7 @@ mod enums;
 
 pub(crate) use attribute_refs::drop_unresolvable_attribute_arg_refs;
 pub(crate) use class_constants::validate_deferred_class_constants;
-pub(crate) use defaults::validate_deferred_object_defaults;
+pub(crate) use defaults::validate_deferred_declaration_defaults;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;

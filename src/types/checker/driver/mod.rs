@@ -40,7 +40,7 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_object_defaults,
+    validate_deferred_declaration_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::Checker;
@@ -272,8 +272,8 @@ pub(super) fn check_types_impl(
             }
         }
     }
-    errors.extend(validate_deferred_object_defaults(
-        &checker,
+    errors.extend(validate_deferred_declaration_defaults(
+        &mut checker,
         &flattened_classes,
         program,
     ));

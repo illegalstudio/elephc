@@ -3298,7 +3298,12 @@ class ReflectDefaultConstBase {
 }
 class ReflectDefaultConstTarget extends ReflectDefaultConstBase {
     const LABEL = "L";
-    public function run($self = self::LABEL, $parent = parent::BASE, $class = self::class, $literal = 7) {}
+    public function run($self = self::LABEL, $parent = parent::BASE, $named = ReflectDefaultConstTarget::LABEL, $class = self::class, $literal = 7) {}
+}
+class ReflectDefaultConstChild extends ReflectDefaultConstTarget {}
+interface ReflectDefaultConstInterface {
+    const LABEL = "I";
+    public function run($value = self::LABEL);
 }
 $params = (new ReflectionMethod(ReflectDefaultConstTarget::class, "run"))->getParameters();
 foreach ($params as $param) {
@@ -3320,6 +3325,16 @@ echo $direct->isDefaultValueConstant() ? "C:" : "c:";
 echo $direct->getDefaultValueConstantName();
 echo ":";
 echo $direct->getDefaultValue();
+$interface = (new ReflectionMethod(ReflectDefaultConstInterface::class, "run"))->getParameters()[0];
+echo "|interface:";
+echo $interface->getDefaultValueConstantName();
+echo ":";
+echo $interface->getDefaultValue();
+$inherited = (new ReflectionMethod(ReflectDefaultConstChild::class, "run"))->getParameters()[0];
+echo "|inherited:";
+echo $inherited->getDefaultValueConstantName();
+echo ":";
+echo $inherited->getDefaultValue();
 "##,
     );
     assert!(
@@ -3329,7 +3344,7 @@ echo $direct->getDefaultValue();
     );
     assert_eq!(
         out.stdout,
-        "self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|class:D:c:null:ReflectDefaultConstTarget|literal:D:c:null:7|direct:C:parent::BASE:B"
+        "self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|named:D:C:ReflectDefaultConstTarget::LABEL:L|class:D:c:null:ReflectDefaultConstTarget|literal:D:c:null:7|direct:C:parent::BASE:B|interface:self::LABEL:I|inherited:self::LABEL:L"
     );
 }
 

@@ -98,7 +98,7 @@ impl Checker {
                         span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    self.validate_declared_default_type(
+                    self.validate_resolved_declared_default_type(
                         &declared_ty,
                         default.as_ref(),
                         span,

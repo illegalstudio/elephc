@@ -216,6 +216,8 @@ pub struct InterfaceInfo {
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
+    /// Source declarations retained so Reflection can preserve lexical parameter-default names.
+    pub method_decls: Vec<crate::parser::ast::ClassMethod>,
     /// Instance method contracts, keyed by PHP's case-insensitive method key.
     ///
     /// These entries are the only methods that participate in interface

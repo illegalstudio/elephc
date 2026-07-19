@@ -93,7 +93,7 @@ fn contextual_closure_sig(
                     callback.span,
                     &format!("Closure parameter ${}", name),
                 )?;
-                checker.validate_declared_default_type(
+                checker.validate_resolved_declared_default_type(
                     &declared_ty,
                     default.as_ref(),
                     callback.span,

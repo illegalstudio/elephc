@@ -9,7 +9,7 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
@@ -190,6 +190,28 @@ impl Checker {
         Ok(())
     }
 
+    /// Semantically resolves a declaration default when it is a scoped constant access, then
+    /// validates the resolved type against the declared type. Other defaults keep the syntactic
+    /// validation used by declarations that do not depend on completed class-like metadata.
+    pub(crate) fn validate_resolved_declared_default_type(
+        &mut self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        let Some(default_expr) = default_expr else {
+            return Ok(());
+        };
+        let default_ty = match &default_expr.kind {
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                self.infer_scoped_constant_access(receiver, name, default_expr)?
+            }
+            _ => infer_expr_type_syntactic(default_expr),
+        };
+        self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
+    }
+
     /// Validates a declaration default while class-like schema metadata is still being built.
     /// Object-to-object checks are deferred because inheritance and interface relationships are
     /// incomplete during this phase; every other type pair is validated immediately.
@@ -210,11 +232,29 @@ impl Checker {
         self.validate_declared_default_type(expected_ty, default_expr, span, context)
     }
 
+    /// Validates a method parameter default while class-like schemas are being built.
+    /// Direct scoped constant accesses are deferred until enum cases and class/interface
+    /// constants are available; other defaults use the existing schema-time validation.
+    pub(crate) fn validate_schema_parameter_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if default_expr.is_some_and(|default| {
+            matches!(default.kind, ExprKind::ScopedConstantAccess { .. })
+        }) {
+            return Ok(());
+        }
+        self.validate_schema_declared_default_type(expected_ty, default_expr, span, context)
+    }
+
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
     /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
     /// array type, using the declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
-        &self,
+        &mut self,
         name: &str,
         decl: &FnDecl,
     ) -> Result<Vec<(String, PhpType)>, CompileError> {
@@ -226,7 +266,7 @@ impl Checker {
                     decl.span,
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
-                self.validate_declared_default_type(
+                self.validate_resolved_declared_default_type(
                     &declared_ty,
                     decl.defaults.get(idx).and_then(|d| d.as_ref()),
                     decl.span,

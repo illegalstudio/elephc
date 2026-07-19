@@ -52,6 +52,95 @@ fn test_enum_as_promoted_constructor_param_type() {
     assert_eq!(out, "<div>hi</div>");
 }
 
+/// Verifies an unused function accepts an enum case as the default for an enum-typed parameter.
+#[test]
+fn test_unused_function_accepts_enum_case_parameter_default() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+function unused_level(Level $level = Level::Low): string {
+    return $level->value;
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies method and promoted-constructor parameters materialize enum case defaults.
+#[test]
+fn test_method_and_promoted_constructor_accept_enum_case_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+final class Config {
+    public function __construct(public Level $level = Level::Low) {}
+    public function value(Level $level = Level::High): string {
+        return $level->value;
+    }
+}
+$config = new Config();
+echo $config->level->value;
+echo ":";
+echo $config->value();
+"#,
+    );
+    assert_eq!(out, "low:high");
+}
+
+/// Verifies `self::` and `parent::` defaults resolve in their declaring method contexts.
+#[test]
+fn test_method_enum_case_defaults_resolve_relative_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+
+    public function value(self $level = self::Low): string {
+        return $level->value;
+    }
+}
+class LevelDefaults {
+    public const DEFAULT_LEVEL = Level::High;
+}
+class ChildDefaults extends LevelDefaults {
+    public function value(Level $level = parent::DEFAULT_LEVEL): string {
+        return $level->value;
+    }
+}
+echo Level::High->value();
+echo ":";
+echo (new ChildDefaults())->value();
+"#,
+    );
+    assert_eq!(out, "low:high");
+}
+
+/// Verifies closure signatures accept and materialize enum case parameter defaults.
+#[test]
+fn test_closure_accepts_enum_case_parameter_default() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+$value = function (Level $level = Level::Low): string {
+    return $level->value;
+};
+echo $value();
+"#,
+    );
+    assert_eq!(out, "low");
+}
+
 /// Verifies `Color::tryFrom(99)` returns `null` for an unknown value (with null coalescing to `Color::Red`),
 /// `Color::cases()` returns all cases, and case index `1` is `Color::Green` by identity.
 #[test]
