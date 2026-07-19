@@ -9,7 +9,7 @@
 //! - Namespace and use syntax remains syntactic here; canonical resolution happens in `crate::name_resolver`.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseItem, UseKind};
 use crate::span::Span;
@@ -25,7 +25,7 @@ use super::{expect_semicolon, expect_token, parse_name, parse_stmt, recover_to_s
 /// Collects parse errors during block parsing and reports them all if the block
 /// closes successfully.
 pub(super) fn parse_namespace_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -86,7 +86,7 @@ pub(super) fn parse_namespace_stmt(
 ///
 /// Emits a `StmtKind::UseDecl` containing the complete list of `UseItem`s.
 pub(super) fn parse_use_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -152,7 +152,7 @@ pub(super) fn parse_use_stmt(
 ///
 /// Returns `None` if no `as` keyword is present. Otherwise consumes `as` and the
 /// following identifier, returning the alias name.
-fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<String> {
+fn parse_optional_alias(tokens: &[SpannedToken], pos: &mut usize) -> Option<String> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::As {
         *pos += 1;
         if let Some(Token::Identifier(alias)) = tokens.get(*pos).map(|(t, _)| t) {
@@ -169,7 +169,7 @@ fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<Str
 /// If an explicit `as Alias` clause follows, that alias is used; otherwise the
 /// last segment of `name` becomes the alias. Returns an error if the name is empty.
 fn parse_single_use_item_after_name(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     name: Name,
@@ -187,7 +187,7 @@ fn parse_single_use_item_after_name(
 /// to `prefix`. Each item may override the `default_kind` with `function` or `const`.
 /// Fully-qualified items inside the group are rejected. Returns the list of `UseItem`s.
 fn parse_group_use_items(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     prefix: Name,
@@ -284,7 +284,7 @@ fn token_as_import_name(token: &Token) -> Option<String> {
 }
 
 fn parse_use_prefix(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Name, CompileError> {

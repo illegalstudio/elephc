@@ -1068,6 +1068,45 @@ echo ($fn)(5);
     assert_eq!(out, "12");
 }
 
+/// Verifies a direct instance method call with a typed variadic tail keeps all
+/// trailing arguments before the first-class callable regression below.
+#[test]
+fn test_direct_instance_method_string_variadic_count() {
+    let out = compile_and_run(
+        r#"<?php
+class DirectVariadicMethodBox {
+    public function join(string $head, string ...$tail): string {
+        return $head . ":" . count($tail);
+    }
+}
+
+$box = new DirectVariadicMethodBox();
+echo $box->join("A", "B", "C");
+"#,
+    );
+    assert_eq!(out, "A:2");
+}
+
+/// Tests a captured first-class callable for an instance method with a variadic
+/// signature, verifying the variadic tail is packed before the bound method call.
+#[test]
+fn test_captured_first_class_callable_instance_method_variadic_call() {
+    let out = compile_and_run(
+        r#"<?php
+class VariadicMethodBox {
+    public function join(string $head, string ...$tail): string {
+        return $head . ":" . count($tail);
+    }
+}
+
+$box = new VariadicMethodBox();
+$fn = $box->join(...);
+echo $fn("A", "B", "C");
+"#,
+    );
+    assert_eq!(out, "A:2");
+}
+
 /// Tests a first-class callable where the method's receiver captures a private property
 /// from the outer scope, verifying the non-local state is correctly preserved across
 /// callable invocation.

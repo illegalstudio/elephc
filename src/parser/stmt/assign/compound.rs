@@ -9,7 +9,7 @@
 //! - Compound lowering must preserve PHP's read-modify-write semantics for the target variable.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -34,7 +34,7 @@ pub(super) enum AssignmentOperator {
 /// Returns the parsed `Assign` statement wrapping the target variable and the computed value
 /// expression, or an `ExprStmt` for the bitwise-chain fallback case.
 pub(super) fn parse_assign(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -97,7 +97,7 @@ pub(super) fn parse_assign(
 /// direct variable sources and leaves broader lvalue reference targets for
 /// future storage-specific lowering.
 fn parse_ref_assign(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     target: String,
     span: Span,

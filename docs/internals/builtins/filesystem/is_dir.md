@@ -2,7 +2,7 @@
 title: "is_dir() — internals"
 description: "Compiler internals for is_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 122
+  order: 126
 ---
 
 ## `is_dir()` — internals
@@ -34,6 +34,11 @@ function is_dir(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

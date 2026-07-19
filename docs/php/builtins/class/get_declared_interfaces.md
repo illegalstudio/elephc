@@ -2,7 +2,7 @@
 title: "get_declared_interfaces()"
 description: "Returns an array of all declared interfaces."
 sidebar:
-  order: 78
+  order: 81
 ---
 
 ## get_declared_interfaces()
@@ -16,6 +16,11 @@ Returns an array of all declared interfaces.
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_declared_interfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_declared_interfaces.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

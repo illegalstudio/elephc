@@ -2,7 +2,7 @@
 title: "zval_type() — internals"
 description: "Compiler internals for zval_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 306
 ---
 
 ## `zval_type()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_type.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:597](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L597) (`lower_zval_type`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:589](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L589) (`lower_zval_type`)
 - **Function symbol**: `lower_zval_type()`
 
 
@@ -33,6 +33,10 @@ function zval_type(pointer $zval): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

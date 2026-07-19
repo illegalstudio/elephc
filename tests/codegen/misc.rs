@@ -351,6 +351,118 @@ fn superglobal_get_is_recognized() {
     assert_eq!(out, "none");
 }
 
+/// Regression test: assigning an empty array literal `[]` to a superglobal
+/// inside a function body must contextualize as a hash (`AssocArray{Str,
+/// Mixed}`), not a scalar `Array(Never)`. Without superglobal type seeding
+/// in the lowering env, `local_type("_GET")` fell back to `Mixed` and the
+/// store emitted a scalar array into the shared global hash slot, crashing
+/// the runtime. The fixture writes `[]` then a string key inside a function
+/// and echoes the key back to prove the hash store round-trips.
+#[test]
+fn superglobal_assign_empty_array_in_function() {
+    let out = compile_and_run(
+        r#"<?php
+function reset_and_set() {
+    $_GET = [];
+    $_GET['k'] = 'v';
+    return $_GET['k'];
+}
+echo reset_and_set();
+"#,
+    );
+    assert_eq!(out, "v");
+}
+
+/// BUG-0 regression: a non-`--web` program reading a superglobal before any
+/// fresh assignment must not crash. `env_from_signature`
+/// (`src/ir_lower/function.rs`) previously seeded every request superglobal
+/// (`$_SERVER`/`$_SESSION`/…) with the fixed `AssocArray{Str, Mixed}` type in
+/// EVERY function/main env unconditionally, while `.comm` storage for that
+/// shared global slot is reserved only under `--web`
+/// (`codegen_ir::block_emit::emit_module`). Off-web, `count($_SERVER)`
+/// therefore read a never-initialized (zeroed) global as if it were a live
+/// Hash pointer and dereferenced a null pointer (`exit 139`). The seeding
+/// (and the `global_alias_type` fallback in `ir_lower::context`) is now
+/// gated on the `web` flag threaded from `Module::web`, so a CLI build
+/// leaves these names untyped (`Mixed`) instead of assuming initialized
+/// storage. `compile_and_run` itself asserts the binary exits successfully,
+/// so a regression here fails via that assertion, not just the output check.
+#[test]
+fn bug0_cli_read_of_server_superglobal_before_assignment_does_not_crash() {
+    let out = compile_and_run("<?php echo count($_SERVER);");
+    assert_eq!(out, "0");
+}
+
+/// BUG-0 regression (companion): a non-`--web` program checking `isset()` on
+/// `$_SESSION` before any assignment must not crash either. Exercises the
+/// same seeded-Hash-vs-uninitialized-storage mismatch as
+/// `bug0_cli_read_of_server_superglobal_before_assignment_does_not_crash`,
+/// but through `isset()` rather than a builtin call, and for `$_SESSION`
+/// (the superglobal the v2 session-support commit was specifically seeding).
+#[test]
+fn bug0_cli_isset_on_session_superglobal_before_assignment_does_not_crash() {
+    let out = compile_and_run(
+        r#"<?php
+if (isset($_SESSION)) {
+    echo "set";
+} else {
+    echo "unset";
+}
+"#,
+    );
+    assert_eq!(out, "unset");
+}
+
+/// BUG-7 / A1 regression: `PHP_SESSION_DISABLED`/`PHP_SESSION_NONE`/`PHP_SESSION_ACTIVE`
+/// are predefined `ext/session` integer constants (`src/types/session_constants.rs`,
+/// `SESSION_INT_CONSTANTS`), registered the same way as `JSON_INT_CONSTANTS` at the
+/// name-resolver, checker, and prescan sites. A bare reference folds to the literal
+/// with zero runtime `define()` calls.
+#[test]
+fn session_status_int_constants_resolve_to_php_values() {
+    let out = compile_and_run(
+        "<?php echo PHP_SESSION_DISABLED . PHP_SESSION_NONE . PHP_SESSION_ACTIVE;",
+    );
+    assert_eq!(out, "012");
+}
+
+/// BUG-7 / A1 companion: `defined('PHP_SESSION_NONE')` must fold to `true` at compile
+/// time (matching the JSON_INT_CONSTANTS registry mechanism), and the constants must
+/// coexist without error alongside the web prelude's existing
+/// `if (!defined('PHP_SESSION_NONE')) { define(...); }` guard (removed later by the
+/// prelude owner once every consumer relies on the predefined constants). Because
+/// `defined()` on a registry-backed name now folds true unconditionally, the guarded
+/// `define()` calls become unreachable and never run, so no "Constant already defined"
+/// warning can occur across repeated (request-like) executions of the guard.
+#[test]
+fn session_status_constants_coexist_with_guarded_define() {
+    let out = compile_and_run(
+        r#"<?php
+if (!defined('PHP_SESSION_NONE')) {
+    define('PHP_SESSION_DISABLED', 0);
+    define('PHP_SESSION_NONE', 1);
+    define('PHP_SESSION_ACTIVE', 2);
+}
+echo PHP_SESSION_DISABLED . PHP_SESSION_NONE . PHP_SESSION_ACTIVE;
+echo "|";
+var_dump(defined('PHP_SESSION_NONE'));
+"#,
+    );
+    assert_eq!(out, "012|bool(true)\n");
+}
+
+/// A2 regression: `SID` is a predefined string constant (deprecated in PHP 8.4+).
+/// elephc's session support is cookie-only, matching PHP's own cookie-mode `SID`,
+/// so it always resolves to the empty string. Wired via the same ad-hoc
+/// single-string-constant pattern as `PHP_OS` (`src/name_resolver/names.rs`
+/// early-return + `is_builtin_global_constant`, `src/types/checker/driver/init.rs`,
+/// `src/codegen/prescan.rs`).
+#[test]
+fn sid_constant_resolves_to_empty_string() {
+    let out = compile_and_run(r#"<?php echo "[" . SID . "]"; echo "|"; var_dump(defined('SID'));"#);
+    assert_eq!(out, "[]|bool(true)\n");
+}
+
 /// Verifies a ternary in a function where both branches return strings produces correct output
 /// for both positive and non-positive inputs.
 #[test]

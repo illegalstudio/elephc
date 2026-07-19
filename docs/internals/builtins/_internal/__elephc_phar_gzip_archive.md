@@ -2,7 +2,7 @@
 title: "__elephc_phar_gzip_archive() — internals"
 description: "Compiler internals for __elephc_phar_gzip_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 447
 ---
 
 ## `__elephc_phar_gzip_archive()` — internals
@@ -32,6 +32,10 @@ function __elephc_phar_gzip_archive(string $src): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

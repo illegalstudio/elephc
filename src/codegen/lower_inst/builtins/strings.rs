@@ -369,6 +369,51 @@ pub(crate) fn lower_crc32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `mb_strlen(string, encoding = null)` through the multibyte runtime helper.
+///
+/// Omitted/null encodings use a null pointer plus zero length; explicit names stay byte strings for PHP-compatible case-insensitive lookup and `ValueError` handling.
+pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "mb_strlen", 1, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the source string while loading the optional encoding
+            load_optional_mb_strlen_encoding(ctx, inst, "x3", "x4")?;
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the source string for the runtime helper
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", "rax", "rdx")?;
+            ctx.emitter.instruction("push rax");                                // preserve the source string pointer while loading the optional encoding
+            ctx.emitter.instruction("push rdx");                                // preserve the source string length while loading the optional encoding
+            load_optional_mb_strlen_encoding(ctx, inst, "r8", "r9")?;
+            ctx.emitter.instruction("pop rdx");                                 // restore the source string length for the runtime helper
+            ctx.emitter.instruction("pop rax");                                 // restore the source string pointer for the runtime helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mb_strlen");
+    store_if_result(ctx, inst)
+}
+
+/// Loads the nullable optional `mb_strlen()` encoding into a pointer/length pair.
+fn load_optional_mb_strlen_encoding(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let Some(encoding) = inst.operands.get(1).copied() else {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    }
+    load_value_as_string_to_regs(ctx, encoding, "mb_strlen encoding", ptr_reg, len_reg)
+}
+
 /// Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
 pub(crate) fn lower_md5(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_fixed_hash(ctx, inst, "md5", "__rt_md5")

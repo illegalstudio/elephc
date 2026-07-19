@@ -2,7 +2,7 @@
 title: "sleep()"
 description: "Delays execution for a number of seconds."
 sidebar:
-  order: 312
+  order: 316
 ---
 
 ## sleep()
@@ -17,6 +17,11 @@ Delays execution for a number of seconds.
 - `$seconds` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/sleep.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

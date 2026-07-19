@@ -1,0 +1,19 @@
+{
+  "description": "Repeated eval-side callable dispatch through call_user_func.",
+  "eval_fragments": [
+    {
+      "label": "declaration",
+      "source": "function magician_callback_add($x) { return $x + 2; }",
+      "invocations": 1,
+      "source_kind": "literal",
+      "parse_cache_should_hit": false
+    },
+    {
+      "label": "callable-dispatch",
+      "source": "$sum += call_user_func($callback, $i);",
+      "invocations": 2500,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

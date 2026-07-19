@@ -2,7 +2,7 @@
 title: "preg_match()"
 description: "Performs a regular expression match."
 sidebar:
-  order: 316
+  order: 320
 ---
 
 ## preg_match()
@@ -19,6 +19,11 @@ Performs a regular expression match.
 - `$matches` (`array`), passed by reference, default `[]`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

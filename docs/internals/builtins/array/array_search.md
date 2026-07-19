@@ -32,6 +32,11 @@ function array_search(mixed $needle, array $haystack, bool $strict = false): mix
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_search.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_search()`](../../../php/builtins/array/array_search.md)

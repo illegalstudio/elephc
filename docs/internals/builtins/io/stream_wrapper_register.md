@@ -2,7 +2,7 @@
 title: "stream_wrapper_register() — internals"
 description: "Compiler internals for stream_wrapper_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 226
+  order: 230
 ---
 
 ## `stream_wrapper_register()` — internals
@@ -32,6 +32,11 @@ function stream_wrapper_register(string $protocol, string $class, int $flags = 0
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_register.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

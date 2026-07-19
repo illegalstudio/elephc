@@ -33,6 +33,11 @@ function array_reduce(array $array, callable $callback, mixed $initial = null): 
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_reduce()`](../../../php/builtins/array/array_reduce.md)

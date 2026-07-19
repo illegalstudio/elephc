@@ -2,7 +2,7 @@
 title: "fpassthru() — internals"
 description: "Compiler internals for fpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 166
+  order: 170
 ---
 
 ## `fpassthru()` — internals
@@ -33,6 +33,11 @@ function fpassthru(resource $stream): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fpassthru.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fpassthru.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

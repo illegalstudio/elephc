@@ -44,7 +44,14 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the key high word (sentinel)
     emitter.instruction("str x3, [sp, #24]");                                   // save whether missing keys should emit PHP warnings
 
-    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // null array → Mixed(null)
+    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null_receiver");      // null array → optional warning + Mixed(null)
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_array_get_mixed_key_null_receiver");         // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
@@ -165,6 +172,13 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined integer-key warning
     emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) after the integer-key warning
 
+    // -- null receiver: direct reads warn, silent reads only return null --
+    emitter.label("__rt_array_get_mixed_key_null_receiver");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads suppress the null-receiver warning
+    emitter.instruction("bl __rt_warn_array_offset_on_null");                   // emit or suppress PHP's array-offset-on-null warning
+    emitter.instruction("b __rt_array_get_mixed_key_null");                     // return boxed Mixed(null) after the warning
+
     // -- return Mixed(null) ---
     emitter.label("__rt_array_get_mixed_key_null");
     emitter.instruction("mov x0, #8");                                          // x0 = null runtime value_type tag
@@ -196,7 +210,14 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether missing keys should emit PHP warnings
 
     emitter.instruction("test rdi, rdi");                                       // null array check
-    emitter.instruction("je __rt_array_get_mixed_key_null");                    // null array → Mixed(null)
+    emitter.instruction("je __rt_array_get_mixed_key_null_receiver");           // null array → optional warning + Mixed(null)
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r9");                                         // does the receiver carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_array_get_mixed_key_null_receiver");           // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
     emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed kind metadata from the array header
@@ -322,6 +343,14 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined integer-key warning
     emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) after the integer-key warning
+
+    // -- null receiver: direct reads warn, silent reads only return null --
+    emitter.label("__rt_array_get_mixed_key_null_receiver");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, r10");                                       // should this read emit the null-receiver warning?
+    emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads suppress the null-receiver warning
+    emitter.instruction("call __rt_warn_array_offset_on_null");                 // emit or suppress PHP's array-offset-on-null warning
+    emitter.instruction("jmp __rt_array_get_mixed_key_null");                   // return boxed Mixed(null) after the warning
 
     // -- return Mixed(null) ---
     emitter.label("__rt_array_get_mixed_key_null");

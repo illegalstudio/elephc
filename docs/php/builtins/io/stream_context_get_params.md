@@ -2,7 +2,7 @@
 title: "stream_context_get_params()"
 description: "Retrieves parameters from the specified stream context."
 sidebar:
-  order: 194
+  order: 198
 ---
 
 ## stream_context_get_params()
@@ -17,6 +17,11 @@ Retrieves parameters from the specified stream context.
 - `$context` (`resource`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

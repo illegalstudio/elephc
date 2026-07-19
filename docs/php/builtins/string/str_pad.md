@@ -2,7 +2,7 @@
 title: "str_pad()"
 description: "Pads a string to a certain length with another string."
 sidebar:
-  order: 385
+  order: 390
 ---
 
 ## str_pad()
@@ -20,6 +20,11 @@ Pads a string to a certain length with another string.
 - `$pad_type` (`int`), default `1`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_pad.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

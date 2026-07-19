@@ -2,7 +2,7 @@
 title: "ARM64 Assembly"
 description: "Introduction to ARM64 assembly for compiler output."
 sidebar:
-  order: 11
+  order: 12
 ---
 
 ## What is assembly language?

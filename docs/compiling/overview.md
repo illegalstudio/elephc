@@ -6,9 +6,11 @@ sidebar:
 ---
 
 elephc is an ahead-of-time compiler: it reads a `.php` file and produces a
-standalone native binary with no interpreter, no virtual machine, and no runtime
-dependencies. The generated program is plain machine code linked against a small
-hand-written runtime that is baked into the executable.
+standalone native binary with no PHP, Zend Engine, or external virtual-machine
+dependency. Ordinary source is machine code linked against a small hand-written
+runtime baked into the executable. Experimental dynamic `eval()` is the explicit
+exception: fragments that cannot be AOT-lowered embed the optional Magician
+interpreter bridge in that same standalone binary.
 
 ## Basic invocation
 

@@ -2,7 +2,7 @@
 title: "random_int()"
 description: "Get a cryptographically secure, uniformly selected integer."
 sidebar:
-  order: 264
+  order: 268
 ---
 
 ## random_int()
@@ -18,6 +18,11 @@ Get a cryptographically secure, uniformly selected integer.
 - `$max` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/random_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/random_int.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

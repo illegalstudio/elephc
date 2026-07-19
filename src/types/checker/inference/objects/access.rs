@@ -112,36 +112,6 @@ impl Checker {
         ))
     }
 
-    /// Returns the class whose `magic` method (`__isset` or `__unset`) should
-    /// handle `isset($obj->prop)` / `unset($obj->prop)`: that is, when `$obj` is
-    /// an object whose class declares `magic` and `prop` is not a declared
-    /// property. Infers (and type-checks) the receiver object as a side effect,
-    /// so callers can skip inferring the bare property access — which would
-    /// otherwise reject the undeclared property before the magic call is reached.
-    pub(crate) fn isset_unset_property_magic_class(
-        &mut self,
-        arg: &Expr,
-        magic: &str,
-        env: &TypeEnv,
-    ) -> Result<Option<String>, CompileError> {
-        let (object, property) = match &arg.kind {
-            ExprKind::PropertyAccess { object, property }
-            | ExprKind::NullsafePropertyAccess { object, property } => (object.as_ref(), property),
-            _ => return Ok(None),
-        };
-        let PhpType::Object(class_name) = self.infer_type(object, env)? else {
-            return Ok(None);
-        };
-        let normalized = class_name.trim_start_matches('\\').to_string();
-        let Some(class_info) = self.classes.get(&normalized) else {
-            return Ok(None);
-        };
-        if class_info.properties.iter().any(|(name, _)| name == property) {
-            return Ok(None);
-        }
-        Ok(class_info.methods.contains_key(magic).then_some(normalized))
-    }
-
     /// Infers the type of a nullsafe property access expression (`$obj?->prop`).
     ///
     /// For `Mixed` receivers returns `Mixed`. For valid nullable object unions,
@@ -258,7 +228,7 @@ impl Checker {
             {
                 return Ok(ty);
             }
-            if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+            if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
             if let Some(sig) = class_info.methods.get("__get") {
@@ -412,9 +382,15 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_property_receiver(receiver, expr)?;
-        let class_info = self.classes.get(&class_name).ok_or_else(|| {
-            CompileError::new(expr.span, &format!("Undefined class: {}", class_name))
-        })?;
+        let Some(class_info) = self.classes.get(&class_name) else {
+            if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+                return Ok(PhpType::Mixed);
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined class: {}", class_name),
+            ));
+        };
         if let Some(visibility) = class_info.static_property_visibilities.get(property) {
             let declaring_class = class_info
                 .static_property_declaring_classes

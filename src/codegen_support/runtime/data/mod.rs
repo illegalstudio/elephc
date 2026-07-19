@@ -15,6 +15,7 @@ mod user;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
+pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
@@ -38,3 +39,6 @@ pub(crate) const HASH_INIT_UNKNOWN_ALGO_MSG: &str =
 /// name or a non-cryptographic checksum (PHP rejects HMAC over crc32/adler/fnv/joaat).
 pub(crate) const HASH_HMAC_UNKNOWN_ALGO_MSG: &str =
     "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm";
+/// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
+pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
+    "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";

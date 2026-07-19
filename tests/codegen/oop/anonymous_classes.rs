@@ -119,6 +119,29 @@ fn test_readonly_anonymous_class() {
     assert_eq!(out, "frozen");
 }
 
+/// Verifies `ReflectionClass::isAnonymous()` reports anonymous-class metadata without relying on
+/// the parser-global synthetic class counter spelling.
+#[test]
+fn test_reflection_class_reports_anonymous_class() {
+    let out = compile_and_run(
+        "<?php
+        class NamedAnonReflect {}
+        $anonymous = new class {
+            public function value(): int { return 1; }
+        };
+        $anonRef = new ReflectionClass($anonymous);
+        $directRef = new ReflectionClass(new class {
+            public function value(): int { return 2; }
+        });
+        $namedRef = new ReflectionClass(NamedAnonReflect::class);
+        echo $anonRef->isAnonymous() ? \"A\" : \"a\";
+        echo $directRef->isAnonymous() ? \"D\" : \"d\";
+        echo $namedRef->isAnonymous() ? \"N\" : \"n\";
+        ",
+    );
+    assert_eq!(out, "ADn");
+}
+
 /// Compiles and runs the checked-in `examples/anonymous-classes/main.php` fixture, covering
 /// interface-implementing anonymous classes (with and without constructor args) and one that
 /// extends an abstract base.

@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir() — internals"
 description: "Compiler internals for sys_get_temp_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 147
+  order: 151
 ---
 
 ## `sys_get_temp_dir()` — internals
@@ -32,6 +32,11 @@ function sys_get_temp_dir(): string
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

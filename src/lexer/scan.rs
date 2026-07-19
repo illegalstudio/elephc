@@ -10,11 +10,10 @@
 
 use super::cursor::Cursor;
 use super::literals;
-use super::token::Token;
+use super::token::{spanned, SpannedToken, Token, TokenMetadata};
 use crate::errors::CompileError;
-use crate::span::Span;
 
-/// Scans the full PHP source into a stream of `(Token, Span)` pairs.
+/// Scans the full PHP source into a stream of syntax tokens with source metadata.
 ///
 /// Requires `<?php` as the first five characters. Dispatches to `literals` for
 /// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
@@ -22,7 +21,7 @@ use crate::span::Span;
 ///
 /// # Errors
 /// Returns `CompileError` if the file does not open with `<?php`.
-pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
+pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
@@ -36,7 +35,7 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
         for _ in 0..5 {
             cursor.advance();
         }
-        tokens.push((Token::OpenTag, span));
+        tokens.push(spanned(Token::OpenTag, span));
     } else {
         return Err(CompileError::new(span, "Expected '<?php' at start of file"));
     }
@@ -45,7 +44,7 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
         skip_whitespace_and_comments(&mut cursor);
 
         if cursor.is_eof() {
-            tokens.push((Token::Eof, cursor.span()));
+            tokens.push(spanned(Token::Eof, cursor.span()));
             break;
         }
 
@@ -62,12 +61,23 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
             let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
             tokens.extend(heredoc_tokens);
         } else {
+            let starts_word = cursor.peek().is_some_and(literals::is_ident_start);
+            let remaining_before = cursor.remaining();
             let token = scan_token(&mut cursor)?;
             let end = cursor.span();
-            tokens.push((
-                token,
-                crate::span::Span::with_end(span.line, span.col, end.line, end.col),
-            ));
+            let span = crate::span::Span::with_end(span.line, span.col, end.line, end.col);
+            let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
+                let consumed_len = remaining_before.len() - cursor.remaining().len();
+                let source_spelling = &remaining_before[..consumed_len];
+                if token.canonical_word_spelling() == Some(source_spelling) {
+                    TokenMetadata::new(span)
+                } else {
+                    TokenMetadata::with_source_spelling(span, source_spelling)
+                }
+            } else {
+                TokenMetadata::new(span)
+            };
+            tokens.push((token, metadata));
         }
     }
 

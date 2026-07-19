@@ -2,7 +2,7 @@
 title: "rand()"
 description: "Generate a random integer."
 sidebar:
-  order: 263
+  order: 267
 ---
 
 ## rand()
@@ -18,6 +18,11 @@ Generate a random integer.
 - `$max` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rand.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

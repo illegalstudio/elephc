@@ -9,7 +9,7 @@
 //! - Declaration headers keep unresolved names until resolver and name resolver apply include and namespace context.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, PackedField, Stmt, StmtKind};
 use crate::parser::expr::parse_args;
@@ -24,7 +24,7 @@ use super::body::parse_class_like_body;
 /// Consumes `class`, expects a name, optional `extends`/implements clauses, and a `{ ... }` body.
 /// The is_abstract, is_final, and is_readonly_class flags are passed through to the StmtKind::ClassDecl.
 pub(in crate::parser::stmt) fn parse_class_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     is_abstract: bool,
@@ -104,7 +104,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 /// `readonly` modifier (`new readonly class {}`). PHP anonymous classes do not capture the
 /// enclosing scope, so no captures are recorded.
 pub(crate) fn parse_anonymous_class(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     is_readonly: bool,
@@ -188,7 +188,7 @@ pub(crate) fn parse_anonymous_class(
 /// Consumes `enum`, expects a name, optional `: backing_type`, and `{ case; ... }` body.
 /// Enum cases may carry attributes, have optional values, and end with semicolons.
 pub(in crate::parser::stmt) fn parse_enum_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -231,12 +231,6 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
     if !properties.is_empty() {
         return Err(CompileError::new(span, "Enums cannot declare properties"));
     }
-    if !trait_uses.is_empty() {
-        return Err(CompileError::new(
-            span,
-            "Enums using traits are not supported yet",
-        ));
-    }
 
     Ok(Stmt::new(
         StmtKind::EnumDecl {
@@ -244,6 +238,7 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         },
@@ -255,7 +250,7 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
 /// Consumes `packed`, then `class`, expects a name and `{ type $field; ... }` body.
 /// Only public visibility is allowed; fields cannot have default values.
 pub(in crate::parser::stmt) fn parse_packed_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -289,7 +284,7 @@ pub(in crate::parser::stmt) fn parse_packed_decl(
     )?;
     let mut fields = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-        let field_span = tokens[*pos].1;
+        let field_span = tokens[*pos].1.span;
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Public) => *pos += 1,
             Some(
@@ -348,7 +343,7 @@ pub(in crate::parser::stmt) fn parse_packed_decl(
 /// Parses an abstract class declaration: abstract class Name { ... }
 /// Consumes `abstract`, then delegates to parse_modified_class_decl to consume remaining modifiers and `class`.
 pub(in crate::parser::stmt) fn parse_abstract_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -358,7 +353,7 @@ pub(in crate::parser::stmt) fn parse_abstract_decl(
 /// Parses a readonly class declaration: readonly class Name { ... }
 /// Consumes `readonly`, then delegates to parse_modified_class_decl to consume remaining modifiers and `class`.
 pub(in crate::parser::stmt) fn parse_readonly_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -368,7 +363,7 @@ pub(in crate::parser::stmt) fn parse_readonly_decl(
 /// Parses a final class declaration: final class Name { ... }
 /// Consumes `final`, then delegates to parse_modified_class_decl to consume remaining modifiers and `class`.
 pub(in crate::parser::stmt) fn parse_final_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -378,7 +373,7 @@ pub(in crate::parser::stmt) fn parse_final_decl(
 /// Consumes class modifier keywords (abstract, final, readonly) and then the `class` keyword,
 /// routing to parse_class_decl with the accumulated flags. Fails if abstract and final both appear.
 fn parse_modified_class_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {

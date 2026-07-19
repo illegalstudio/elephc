@@ -135,3 +135,28 @@ echo c();
 
     assert_eq!(out, "7");
 }
+
+/// Regression: tail-sinking must NOT sink a tail that itself contains control
+/// flow (`if`/`switch`/`try`/loops) into the branches of a preceding `if`.
+/// `stmts_contain_control_flow` (`src/optimize/control/dce.rs`) disables
+/// tail-sinking in that case; sinking a `for` loop into every branch of two
+/// sequential runtime-live `if`s would duplicate the loop repeatedly (the same
+/// exponential-growth shape that the sibling declaration-duplication test
+/// above guards for hoisted declarations) instead of leaving it to run once
+/// after the `if` chain falls through. `$argc`-conditioned `if`s keep both
+/// branches runtime-live so they reach DCE without being constant-folded away.
+#[test]
+fn test_dead_code_elimination_does_not_sink_control_flow_tail_into_if_branches() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc > 100) { echo "x"; }
+if ($argc > 200) { echo "y"; }
+for ($i = 0; $i < 3; $i++) {
+    echo "L";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "LLL!");
+}

@@ -2,7 +2,7 @@
 title: "hash_equals() — internals"
 description: "Compiler internals for hash_equals(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 355
+  order: 359
 ---
 
 ## `hash_equals()` — internals
@@ -34,6 +34,11 @@ function hash_equals(string $known_string, string $user_string): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_equals.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_equals.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

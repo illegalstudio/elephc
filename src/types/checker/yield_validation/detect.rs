@@ -182,6 +182,15 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_contains_yield(object) || args.iter().any(expr_contains_yield)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_contains_yield(object)
+                || expr_contains_yield(method)
+                || args.iter().any(expr_contains_yield)
+        }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_yield),
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()

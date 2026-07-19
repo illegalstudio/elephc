@@ -147,6 +147,11 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_ve(object) || args.iter().any(expr_refs_ve)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_ve(object) || expr_refs_ve(method) || args.iter().any(expr_refs_ve),
         ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::FirstClassCallable(target) => callable_target_refs_ve(target),
 
@@ -158,6 +163,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
@@ -225,6 +231,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_ve(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::ObjectClassName { object } => expr_refs_ve(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_ve)

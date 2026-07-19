@@ -11,6 +11,26 @@ The runtime is a collection of **hand-written assembly routines** that handle op
 
 These routines end up in every compiled binary. In the CLI flow they are usually pre-assembled into the cached runtime object rather than textually appended to each user `.s` file, but they are still part of the final executable rather than an external shared dependency.
 
+## Eval execution paths
+
+`eval()` is an optional hybrid boundary rather than part of the ordinary
+shared runtime. Eligible literal fragments are parsed at compile time and
+lowered directly to EIR. Some literal fragments use only the core eval-scope
+helpers, while dynamic or unsupported fragments link the
+`elephc_magician` static interpreter bridge.
+
+The bridge shares elephc's boxed `Mixed` cells, copy-on-write containers,
+generated class/callable metadata, diagnostics, exceptions, and target-aware
+ABI helpers. It is embedded only when the final EIR module requires the
+`eval_bridge` runtime feature; the presence of a fully native literal
+`eval()` call does not force it into the binary.
+
+The compile-time planner, scope/context lifecycle, eval-specific EIR
+instructions, parse cache, ownership rules, and bridge linking contract are
+documented in [Eval Runtime Architecture](eval-runtime.md). PHP-visible
+syntax, supported statements and builtins, reflection behavior, safety, and
+limitations live in [Eval](../php/eval.md).
+
 ## Why a runtime?
 
 Some operations can't be done with a few inline instructions:
@@ -841,7 +861,7 @@ Additionally, the runtime emits static data tables:
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata used by dynamic `instanceof` string targets, including leading-backslash aliases
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>`, `_json_exception_class_id`, `_stdclass_class_id` — JSON object encoding descriptors, JsonException construction metadata, and stdClass runtime class id
-- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — emitted class-level PHP attribute metadata. The current PHP-facing helpers and Reflection owner constructors materialize their results from the same `ClassInfo` metadata during codegen, rather than doing dynamic runtime class/member lookup.
+- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — emitted class-level PHP attribute metadata. The current PHP-facing helpers and class/enum Reflection attribute constructors materialize their results from the same `ClassInfo` metadata during codegen, rather than doing dynamic runtime class/member lookup.
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 - `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted by `__rt_call_object_destructor` during object deep-free

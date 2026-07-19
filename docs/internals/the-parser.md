@@ -98,6 +98,7 @@ Things that have a value:
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 | `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
 | `ClassConstant { receiver }` | `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` | The PHP `::class` reflection literal. Codegen lowers it to a string literal carrying the fully-qualified class name. `static::class` follows late static binding. |
+| `ObjectClassName { object }` | `$object::class`, `make_object()::class` | Runtime `::class` lookup for an object-valued expression. The object expression remains structural so later passes evaluate it once and read its concrete runtime class. |
 | `ScopedConstantAccess { receiver, name }` | `MyClass::LIMIT`, `self::DEFAULT_SIZE` | User-declared class constant access through `::`; later phases resolve the receiver and constant metadata. |
 
 ### Statements (`Stmt`)
@@ -230,12 +231,12 @@ forms such as `?T|U` and normalize accepted declarations.
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, and property names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs; parameter reflection is not implemented yet. |
+| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, property, and method-parameter names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs. Method parameter names, positions, optional/variadic/by-reference flags, declared-type presence, and method-parameter attributes feed the supported `ReflectionMethod::getParameters()` / `ReflectionParameter` slice. |
 | `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
 | `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
 | `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
@@ -391,6 +392,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `new` + `$var` + `(` | Parse dynamic object instantiation → `NewDynamic` (class named by a runtime variable) |
 | `new` + `self` / `static` / `parent` + `(` | Parse scoped object instantiation → `NewScopedObject` |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
+| `<object-expression>::class` | Parse `$object::class`, `make_object()::class` → `ObjectClassName` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |

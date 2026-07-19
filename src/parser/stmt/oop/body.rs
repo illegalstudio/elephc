@@ -9,11 +9,11 @@
 //! - Modifier and member parsing must preserve PHP visibility and abstract/static/final/readonly rules.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::{property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, PropertyHooks, Stmt, StmtKind, TraitUse,
-    TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, PropertyHooks, Stmt,
+    StmtKind, TraitUse, TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -27,7 +27,7 @@ use super::traits::parse_trait_use;
 /// Consumes the `interface` keyword and expects a name followed by optional `extends` parents
 /// and a body containing constants, properties, and method signatures.
 pub(in crate::parser::stmt) fn parse_interface_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -88,7 +88,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
 /// Parses a `trait` declaration, consuming the `trait` keyword, name, and body.
 /// Trait bodies support `use` trait statements, properties, methods, and constants.
 pub(in crate::parser::stmt) fn parse_trait_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -127,7 +127,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 /// `owner_kind` is used only for error messages (e.g., "class", "trait").
 /// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
 pub(in crate::parser::stmt) fn parse_class_like_body(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     owner_kind: &str,
     enclosing_is_abstract: bool,
@@ -154,7 +154,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
             break;
         }
-        let member_span = tokens[*pos].1;
+        let member_span = tokens[*pos].1.span;
         if tokens[*pos].0 == Token::Use {
             if !member_attributes.is_empty() {
                 return Err(CompileError::new(
@@ -177,8 +177,24 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             }
             *pos += 1; // consume 'case'
             let case_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(name)) => {
-                    let name = name.clone();
+                Some(Token::Class) => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Cannot use 'class' as an enum case name",
+                    ))
+                }
+                Some(t)
+                    if crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .is_some() =>
+                {
+                    let name = crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .unwrap();
                     *pos += 1;
                     name
                 }
@@ -228,6 +244,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             *pos += 1; // consume `const`
+            let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
             // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
             // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -237,8 +254,18 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                         "Cannot use 'class' as a class constant name",
                     ))
                 }
-                Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
+                Some(t)
+                    if crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .is_some() =>
+                {
+                    let n = crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .unwrap();
                     *pos += 1;
                     n
                 }
@@ -267,6 +294,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 name: const_name,
                 visibility: modifiers.visibility,
                 is_final: modifiers.is_final,
+                type_expr,
                 value,
                 span: member_span,
                 attributes: member_attributes,
@@ -324,7 +352,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             if modifiers.is_abstract && default.is_some() {
                 return Err(CompileError::new(
                     member_span,
-                    &format!("Abstract property ${} cannot have a default value", prop_name),
+                    &format!(
+                        "Abstract property ${} cannot have a default value",
+                        prop_name
+                    ),
                 ));
             }
             if modifiers.is_abstract && !hooks.any() {
@@ -394,6 +425,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 is_static: modifiers.is_static,
                 is_abstract: modifiers.is_abstract,
                 by_ref: false,
+                is_promoted: false,
                 default,
                 span: member_span,
                 attributes: member_attributes,
@@ -421,7 +453,10 @@ fn append_promoted_properties(
     promoted_properties: Vec<ClassProperty>,
 ) -> Result<(), CompileError> {
     for promoted in promoted_properties {
-        if properties.iter().any(|property| property.name == promoted.name) {
+        if properties
+            .iter()
+            .any(|property| property.name == promoted.name)
+        {
             return Err(CompileError::new(
                 promoted.span,
                 &format!("Cannot redeclare promoted property ${}", promoted.name),
@@ -436,7 +471,7 @@ fn append_promoted_properties(
 /// Returns `None` if the next token is a variable (no type given), or a `Some(TypeExpr)` otherwise.
 /// Does not consume the variable token itself; the caller handles that.
 fn parse_optional_property_type(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<TypeExpr>, CompileError> {
@@ -450,6 +485,27 @@ fn parse_optional_property_type(
         return Ok(None);
     }
     Ok(Some(parse_type_expr(tokens, pos, span)?))
+}
+
+/// Parses the optional PHP 8.3 type between `const` and a class-constant name.
+/// A token followed immediately by `=` is the untyped constant name, including
+/// semi-reserved names such as `string`.
+fn parse_optional_class_const_type(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Option<TypeExpr> {
+    if matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::Assign)) {
+        return None;
+    }
+    let before_type = *pos;
+    match parse_type_expr(tokens, pos, span) {
+        Ok(type_expr) => Some(type_expr),
+        Err(_) => {
+            *pos = before_type;
+            None
+        }
+    }
 }
 
 /// Holds parsed member modifiers for class-like members: visibility, static, readonly, abstract, final.
@@ -468,7 +524,7 @@ pub(super) struct MemberModifiers {
 /// Scans tokens to collect member modifiers (visibility, static, readonly, abstract, final).
 /// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
 /// Default visibility is `Public` if no visibility modifier is present.
-fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberModifiers {
+fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> MemberModifiers {
     let mut visibility = Visibility::Public;
     let mut set_visibility = None;
     let mut is_static = false;
@@ -528,7 +584,7 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
 /// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
 /// returning `true` when one was present. Leaves `*pos` unchanged otherwise. `set` is matched
 /// case-insensitively, mirroring PHP's case-insensitive modifier keywords.
-fn consume_set_marker(tokens: &[(Token, Span)], pos: &mut usize) -> bool {
+fn consume_set_marker(tokens: &[SpannedToken], pos: &mut usize) -> bool {
     let is_set_ident = matches!(
         tokens.get(*pos + 1).map(|(t, _)| t),
         Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("set")
@@ -550,7 +606,7 @@ fn consume_set_marker(tokens: &[(Token, Span)], pos: &mut usize) -> bool {
 /// Modifier flags (visibility, static, abstract, final) are passed in and stored on the method;
 /// the function itself only consumes the `function` keyword and subsequent syntax.
 fn parse_class_like_method(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     visibility: Visibility,
@@ -568,7 +624,9 @@ fn parse_class_like_method(
     // `parent`, `static`, `list`, `print`).
     let method_name = match tokens
         .get(*pos)
-        .and_then(|(t, _)| crate::parser::keyword_name::bareword_name_from_token(t))
+        .and_then(|(token, metadata)| {
+            crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+        })
     {
         Some(n) => {
             *pos += 1;
@@ -583,8 +641,15 @@ fn parse_class_like_method(
         &Token::LParen,
         "Expected '(' after method name",
     )?;
-    let (params, variadic, variadic_type, promoted_properties, promoted_assignments) =
-        parse_method_params(tokens, pos, span, &method_name)?;
+    let (
+        params,
+        param_attributes,
+        variadic,
+        variadic_by_ref,
+        variadic_type,
+        promoted_properties,
+        promoted_assignments,
+    ) = parse_method_params(tokens, pos, span, &method_name)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
     // Parse optional return type: `: TypeExpr`
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
@@ -618,29 +683,34 @@ fn parse_class_like_method(
     } else {
         promoted_assignments.into_iter().chain(body).collect()
     };
-    Ok((ClassMethod {
-        name: method_name,
-        visibility,
-        is_static,
-        is_abstract,
-        is_final,
-        has_body,
-        params,
-        variadic,
-        variadic_type,
-        return_type,
-        by_ref_return,
-        body,
-        span,
-        attributes: Vec::new(),
-    }, promoted_properties))
+    Ok((
+        ClassMethod {
+            name: method_name,
+            visibility,
+            is_static,
+            is_abstract,
+            is_final,
+            has_body,
+            params,
+            param_attributes,
+            variadic,
+            variadic_by_ref,
+            variadic_type,
+            return_type,
+            by_ref_return,
+            body,
+            span,
+            attributes: Vec::new(),
+        },
+        promoted_properties,
+    ))
 }
 
 /// Parses the body of an `interface` declaration.
 /// Interface bodies may only contain constants, hooked properties, and method signatures (no bodies).
 /// All properties are implicitly abstract and public; modifiers are validated but not stored as-is.
 fn parse_interface_body(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
     let mut properties = Vec::new();
@@ -653,7 +723,7 @@ fn parse_interface_body(
         if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
             break;
         }
-        let member_span = tokens[*pos].1;
+        let member_span = tokens[*pos].1.span;
         let modifiers = parse_member_modifiers(tokens, pos);
         if *pos >= tokens.len() {
             return Err(CompileError::new(
@@ -663,6 +733,7 @@ fn parse_interface_body(
         }
         if tokens[*pos].0 == Token::Const {
             *pos += 1; // consume `const`
+            let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
             // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
             // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -672,8 +743,18 @@ fn parse_interface_body(
                         "Cannot use 'class' as a class constant name",
                     ))
                 }
-                Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
+                Some(t)
+                    if crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .is_some() =>
+                {
+                    let n = crate::parser::keyword_name::bareword_name_from_token(
+                        t,
+                        &tokens[*pos].1,
+                    )
+                    .unwrap();
                     *pos += 1;
                     n
                 }
@@ -702,6 +783,7 @@ fn parse_interface_body(
                 name: const_name,
                 visibility: modifiers.visibility,
                 is_final: modifiers.is_final,
+                type_expr,
                 value,
                 span: member_span,
                 attributes: member_attributes,
@@ -730,7 +812,10 @@ fn parse_interface_body(
             }
             let prop_name = prop_name.clone();
             *pos += 1;
-            if properties.iter().any(|property: &ClassProperty| property.name == prop_name) {
+            if properties
+                .iter()
+                .any(|property: &ClassProperty| property.name == prop_name)
+            {
                 return Err(CompileError::new(
                     member_span,
                     &format!("Cannot redeclare interface property ${}", prop_name),
@@ -779,6 +864,7 @@ fn parse_interface_body(
                 is_static: false,
                 is_abstract: true,
                 by_ref: false,
+                is_promoted: false,
                 default: None,
                 span: member_span,
                 attributes: member_attributes,
@@ -825,7 +911,7 @@ fn parse_interface_body(
 /// accessor receives it. Abstract/interface hooked properties (a hook ending in `;`) produce flags
 /// but no accessor methods.
 fn parse_property_hooks(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     prop_name: &str,
@@ -846,7 +932,7 @@ fn parse_property_hooks(
     let mut hooks = PropertyHooks::none();
     let mut accessors: Vec<ClassMethod> = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-        let hook_span = tokens[*pos].1;
+        let hook_span = tokens[*pos].1.span;
         let get_by_ref = if tokens[*pos].0 == Token::Ampersand {
             *pos += 1;
             true
@@ -855,12 +941,7 @@ fn parse_property_hooks(
         };
         let hook_name = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Identifier(name)) => name.clone(),
-            _ => {
-                return Err(CompileError::new(
-                    hook_span,
-                    "Expected property hook name",
-                ))
-            }
+            _ => return Err(CompileError::new(hook_span, "Expected property hook name")),
         };
         *pos += 1;
         let is_get = hook_name.eq_ignore_ascii_case("get");
@@ -913,10 +994,14 @@ fn parse_property_hooks(
                 if is_get {
                     Some(vec![Stmt::new(StmtKind::Return(Some(expr)), hook_span)])
                 } else {
-                    return Err(CompileError::new(
+                    Some(vec![Stmt::new(
+                        StmtKind::PropertyAssign {
+                            object: Box::new(Expr::new(ExprKind::This, hook_span)),
+                            property: prop_name.to_string(),
+                            value: expr,
+                        },
                         hook_span,
-                        "Short `set => expr` hooks require a backed property; use a block `set { ... }`",
-                    ));
+                    )])
                 }
             }
             Some(Token::LBrace) => Some(parse_block(tokens, pos)?),
@@ -943,7 +1028,9 @@ fn parse_property_hooks(
                     is_final: false,
                     has_body: true,
                     params: Vec::new(),
+                    param_attributes: Vec::new(),
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: prop_type.cloned(),
                     by_ref_return: get_by_ref,
@@ -972,7 +1059,9 @@ fn parse_property_hooks(
                     is_final: false,
                     has_body: true,
                     params: vec![(set_param, prop_type.cloned(), None, false)],
+                    param_attributes: vec![Vec::new()],
                     variadic: None,
+                    variadic_by_ref: false,
                     variadic_type: None,
                     return_type: Some(TypeExpr::Void),
                     by_ref_return: false,
@@ -991,7 +1080,10 @@ fn parse_property_hooks(
         "Expected '}' at end of property hook block",
     )?;
     if !hooks.any() {
-        return Err(CompileError::new(span, "Expected property hook declaration"));
+        return Err(CompileError::new(
+            span,
+            "Expected property hook declaration",
+        ));
     }
     Ok((hooks, accessors))
 }

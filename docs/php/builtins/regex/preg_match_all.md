@@ -2,7 +2,7 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match and returns the number of matches."
 sidebar:
-  order: 317
+  order: 321
 ---
 
 ## preg_match_all()
@@ -18,6 +18,11 @@ Performs a global regular expression match and returns the number of matches.
 - `$subject` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

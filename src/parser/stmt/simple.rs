@@ -9,7 +9,7 @@
 //! - Include statements preserve their path expression for resolver include discovery and loading.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -23,7 +23,7 @@ use super::{expect_semicolon, expect_token};
 /// Produces a `StmtKind::Include` with `once` and `required` flags set.
 /// The path expression is preserved for resolver include discovery.
 pub(super) fn parse_include(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     once: bool,
@@ -70,7 +70,7 @@ pub(super) fn parse_include(
 /// statements into the caller's statement list (sharing scope) and capturing its top-level
 /// `return` into a hidden temporary.
 pub(in crate::parser::stmt) fn try_parse_value_include(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
     let (once, required) = match tokens.get(*pos).map(|(token, _)| token) {
@@ -80,7 +80,7 @@ pub(in crate::parser::stmt) fn try_parse_value_include(
         Some(Token::RequireOnce) => (true, true),
         _ => return Ok(None),
     };
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     *pos += 1; // consume the include/require keyword
 
     let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
@@ -108,7 +108,7 @@ pub(in crate::parser::stmt) fn try_parse_value_include(
 /// Returns a single `Echo` statement for one expression, or a `Synthetic` wrapper
 /// containing multiple `Echo` statements for PHP's multi-argument echo syntax.
 pub(super) fn parse_echo(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -139,7 +139,7 @@ pub(super) fn parse_echo(
 /// Parses the expression, consumes the trailing semicolon, and wraps it in
 /// `StmtKind::ExprStmt`.
 pub(super) fn parse_expr_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -154,7 +154,7 @@ pub(super) fn parse_expr_stmt(
 /// delegates to `parse_include` with error-suppression semantics. Otherwise,
 /// falls back to `parse_expr_stmt`.
 pub(super) fn parse_error_suppressed_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -184,7 +184,7 @@ pub(super) fn parse_error_suppressed_stmt(
 /// Consumes `return`. If the next token is a semicolon, returns `Return(None)`.
 /// Otherwise parses an expression and consumes the trailing semicolon.
 pub(super) fn parse_return(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -210,7 +210,7 @@ pub(super) fn parse_return(
 ///
 /// Consumes the trailing semicolon and wraps the expression in `StmtKind::Throw`.
 pub(super) fn parse_throw(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -228,7 +228,7 @@ pub(super) fn parse_throw(
 /// `StmtKind::PropertyAssign`; otherwise returns an `ExprStmt`. Consumes the
 /// trailing semicolon in all cases.
 pub(super) fn parse_this_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -268,7 +268,7 @@ pub(super) fn parse_this_stmt(
 /// value expression, and consumes the trailing semicolon. Returns a
 /// `StmtKind::ConstDecl` with the name and value.
 pub(super) fn parse_const_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {

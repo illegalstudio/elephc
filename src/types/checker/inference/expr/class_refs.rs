@@ -72,6 +72,9 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
+        if !self.scoped_constant_receiver_is_known(&class_name) && self.eval_barrier_active {
+            return Ok(PhpType::Mixed);
+        }
         // First: enum case access (`Color::Red`). Enums shadow classes for
         // this syntax in PHP since 8.1. A name that is not a declared case is an enum *constant*
         // (`Scale::FACTOR`), which is resolved through the class-constant table below.
@@ -84,6 +87,9 @@ impl Checker {
         let mut current_class = Some(class_name.clone());
         while let Some(cn) = current_class.as_deref() {
             if let Some(info) = self.classes.get(cn) {
+                if let Some(type_expr) = info.constant_types.get(name).cloned() {
+                    return self.resolve_type_expr(&type_expr, expr.span);
+                }
                 if let Some(value_expr) = info.constants.get(name).cloned() {
                     return self.infer_type(&value_expr, &TypeEnv::default());
                 }
@@ -93,13 +99,19 @@ impl Checker {
         // Fallback: search implemented interfaces (and parent interfaces).
         if let Some(class_info) = self.classes.get(&class_name).cloned() {
             for iface_name in &class_info.interfaces {
-                if let Some(value) = self.lookup_interface_constant(iface_name, name) {
+                if let Some((value, type_expr)) = self.lookup_interface_constant(iface_name, name) {
+                    if let Some(type_expr) = type_expr {
+                        return self.resolve_type_expr(&type_expr, expr.span);
+                    }
                     return self.infer_type(&value, &TypeEnv::default());
                 }
             }
         }
         // Direct interface receiver (`Limits::MAX`).
-        if let Some(value) = self.lookup_interface_constant(&class_name, name) {
+        if let Some((value, type_expr)) = self.lookup_interface_constant(&class_name, name) {
+            if let Some(type_expr) = type_expr {
+                return self.resolve_type_expr(&type_expr, expr.span);
+            }
             return self.infer_type(&value, &TypeEnv::default());
         }
         // On an enum, a `::name` that is neither a declared case nor a constant is an undefined
@@ -116,13 +128,21 @@ impl Checker {
         ))
     }
 
+    /// Returns whether a scoped-constant receiver is known in static class-like metadata.
+    fn scoped_constant_receiver_is_known(&self, class_name: &str) -> bool {
+        self.classes.contains_key(class_name)
+            || self.interfaces.contains_key(class_name)
+            || self.declared_traits.contains(class_name)
+            || self.enums.contains_key(class_name)
+    }
+
     /// Looks up a constant by name on an interface, traversing parent interfaces breadth-first
-    /// to find it. Returns the constant's value expression if found.
+    /// to find it. Returns its value expression and optional declared type.
     fn lookup_interface_constant(
         &self,
         interface_name: &str,
         const_name: &str,
-    ) -> Option<crate::parser::ast::Expr> {
+    ) -> Option<(crate::parser::ast::Expr, Option<crate::parser::ast::TypeExpr>)> {
         let mut visited = std::collections::HashSet::new();
         let mut queue: Vec<String> = vec![interface_name.to_string()];
         while let Some(name) = queue.pop() {
@@ -131,7 +151,10 @@ impl Checker {
             }
             if let Some(iface) = self.interfaces.get(&name) {
                 if let Some(value) = iface.constants.get(const_name) {
-                    return Some(value.clone());
+                    return Some((
+                        value.clone(),
+                        iface.constant_types.get(const_name).cloned(),
+                    ));
                 }
                 queue.extend(iface.parents.iter().cloned());
             }

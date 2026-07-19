@@ -2,7 +2,7 @@
 title: "fdatasync()"
 description: "Synchronizes data (but not meta-data) to file."
 sidebar:
-  order: 155
+  order: 159
 ---
 
 ## fdatasync()
@@ -17,6 +17,11 @@ Synchronizes data (but not meta-data) to file.
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fdatasync.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fdatasync.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

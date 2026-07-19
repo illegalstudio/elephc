@@ -1201,6 +1201,14 @@ class Builtin:
     examples: List[str] = field(default_factory=list)  # raw ```php ... ``` blocks
     see_also: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # Eval-interpreter (elephc-magician) support block from the gen_builtins
+    # exporter: {supported, kind, area, hooks, params, variadic, home_file}.
+    eval_support: Optional[dict] = None
+    # True when only the eval interpreter exposes this builtin (no AOT support).
+    eval_only: bool = False
+    # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
+    # class_attribute_*); `--strict-php` hides them from user programs.
+    is_extension: bool = False
 
 
 def slug(name: str) -> str:

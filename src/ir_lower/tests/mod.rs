@@ -55,7 +55,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
     let ast = crate::optimize::eliminate_dead_code(ast);
-    crate::ir_lower::lower_program(&ast, &check_result, target).expect("EIR lowering failed")
+    crate::ir_lower::lower_program(&ast, &check_result, target, false).expect("EIR lowering failed")
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
@@ -103,6 +103,38 @@ echo $counter->value();
         "missing lowered method body: {text}"
     );
     assert!(text.contains("flags(method)"), "missing method flag: {text}");
+}
+
+/// Verifies a native program without Reflection references does not lower the synthetic surface.
+#[test]
+fn plain_program_omits_unreferenced_builtin_reflection_methods() {
+    let module = lower_source("<?php echo 1;");
+    assert!(
+        module
+            .class_methods
+            .iter()
+            .all(|function| !function.name.starts_with("Reflection")),
+        "plain EIR unexpectedly contains builtin Reflection methods"
+    );
+}
+
+/// Verifies a native ReflectionClass use retains its constructor and called method body.
+#[test]
+fn native_reflection_program_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class Plain {}
+$reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
 }
 
 /// Verifies mixed float/integer comparisons coerce both operands before `fcmp`.

@@ -2,7 +2,7 @@
 title: "floor()"
 description: "Rounds a number down to the nearest integer."
 sidebar:
-  order: 247
+  order: 251
 ---
 
 ## floor()
@@ -17,6 +17,11 @@ Rounds a number down to the nearest integer.
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/floor.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/floor.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

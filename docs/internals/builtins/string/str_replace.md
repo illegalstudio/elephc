@@ -2,7 +2,7 @@
 title: "str_replace() — internals"
 description: "Compiler internals for str_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 392
 ---
 
 ## `str_replace()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_replace.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:798](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L798) (`lower_string_replace`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:843](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L843) (`lower_string_replace`)
 - **Function symbol**: `lower_string_replace()`
 
 
@@ -31,6 +31,11 @@ function str_replace(string $search, string $replace, string $subject, int $coun
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

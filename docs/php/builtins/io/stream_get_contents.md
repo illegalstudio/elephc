@@ -2,7 +2,7 @@
 title: "stream_get_contents()"
 description: "Reads remainder of a stream into a string."
 sidebar:
-  order: 201
+  order: 205
 ---
 
 ## stream_get_contents()
@@ -19,6 +19,11 @@ Reads remainder of a stream into a string.
 - `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

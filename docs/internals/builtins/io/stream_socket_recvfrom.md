@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom() — internals"
 description: "Compiler internals for stream_socket_recvfrom(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 221
+  order: 225
 ---
 
 ## `stream_socket_recvfrom()` — internals
@@ -31,6 +31,12 @@ function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, s
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+- **By-reference parameters**: `$address`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$address`.
 
 ## Cross-references

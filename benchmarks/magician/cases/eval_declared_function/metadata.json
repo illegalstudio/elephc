@@ -1,0 +1,19 @@
+{
+  "description": "Function declaration through eval followed by repeated eval-side calls to the declared symbol.",
+  "eval_fragments": [
+    {
+      "label": "declaration",
+      "source": "function magician_declared_add($x) { return $x + 4; }",
+      "invocations": 1,
+      "source_kind": "literal",
+      "parse_cache_should_hit": false
+    },
+    {
+      "label": "call",
+      "source": "$sum += magician_declared_add($i);",
+      "invocations": 3000,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

@@ -74,7 +74,9 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
     if let Some(inst) = source_instruction(ctx, value)? {
         match inst.op {
             Op::StrCharAt => return emit_isset_string_offset_missing_result(ctx, &inst),
-            Op::ArrayGet => return emit_isset_array_offset_missing_result(ctx, &inst),
+            Op::ArrayGet | Op::ArrayGetSilent => {
+                return emit_isset_array_offset_missing_result(ctx, &inst)
+            }
             Op::HashGet => return emit_isset_hash_offset_missing_result(ctx, &inst),
             _ => {}
         }
@@ -317,6 +319,8 @@ fn emit_isset_array_offset_missing_aarch64(
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(index, result_reg)?;
     ctx.load_value_to_reg(array, array_reg)?;
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, array_reg, len_reg, missing);
     ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // reject negative indexes as missing array elements
     ctx.emitter.instruction(&format!("b.lt {}", missing));                      // missing indexes make isset return false
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -344,6 +348,8 @@ fn emit_isset_array_offset_missing_x86_64(
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(array, array_reg)?;
     ctx.load_value_to_reg(index, result_reg)?;
+    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, array_reg, len_reg, missing);
     ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // reject negative indexes as missing array elements
     ctx.emitter.instruction(&format!("jl {}", missing));                        // missing indexes make isset return false
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -467,17 +473,22 @@ fn require_isset_integer_like_index(
     }
 }
 
-/// Returns the instruction that produced an SSA value, when it has one.
-fn source_instruction(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<Instruction>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(Some(inst_ref.clone()))
+/// Returns the meaningful producer of an SSA value, looking through ownership acquires.
+fn source_instruction(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<Option<Instruction>> {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(None);
+        };
+        let inst_ref = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst_ref.op != Op::Acquire {
+            return Ok(Some(inst_ref.clone()));
+        }
+        value = expect_operand(inst_ref, 0)?;
+    }
 }

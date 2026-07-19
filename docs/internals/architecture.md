@@ -2,7 +2,7 @@
 title: "Architecture"
 description: "Module map, calling conventions, and pipeline diagram."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 ## Compilation pipeline
@@ -155,6 +155,13 @@ PHP source (.php)
 └─────────┘
 ```
 
+Experimental `eval()` follows the same front-end pipeline. A literal fragment
+is classified inside EIR lowering by `src/eval_aot.rs`: eligible fragments
+become native EIR, scope-backed fragments use only core runtime helpers, and
+dynamic fragments enable the optional `elephc-magician` interpreter staticlib
+at final linking. This is a lowering/linking decision, not a separate timed
+compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
+
 ## Target Model
 
 The compiler now distinguishes the operating-system side of a target from the instruction set:
@@ -184,6 +191,7 @@ src/
 ├── conditional/               Build-time `ifdef` pass
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
+├── eval_aot.rs                Target-independent literal eval planning and fallback classification
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
@@ -312,6 +320,8 @@ src/
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
 │       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
+│       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
+│       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
@@ -332,6 +342,9 @@ src/
 └── errors/
     ├── mod.rs                 CompileError, error trait
     └── report.rs              Error formatting
+
+crates/
+└── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
 ```
 
 ## ARM64 calling conventions

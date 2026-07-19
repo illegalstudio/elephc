@@ -287,6 +287,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Throw(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
@@ -425,6 +426,17 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(arg, names);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_required_class_names_in_expr(object, names);
+            collect_required_class_names_in_expr(method, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
         ExprKind::StaticMethodCall { receiver, args, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());
@@ -449,6 +461,9 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());
             }
+        }
+        ExprKind::ObjectClassName { object } => {
+            collect_required_class_names_in_expr(object, names);
         }
         ExprKind::ScopedConstantAccess { receiver, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {

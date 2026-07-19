@@ -35,6 +35,28 @@ fn test_reference_to_scalar_property_writes_through_both_ways() {
     assert_eq!(out, "5\n9\n");
 }
 
+/// A later local alias promotes the unbound path after a conditional property reference.
+#[test]
+fn test_conditional_property_reference_then_local_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class ConditionalRefBox { public int $value = 1; }
+function update_conditional_ref(bool $bind): int {
+    $local = 1;
+    $box = new ConditionalRefBox();
+    if ($bind) {
+        $local =& $box->value;
+    }
+    $alias =& $local;
+    $alias = 7;
+    return $local;
+}
+echo update_conditional_ref(false) . '|' . update_conditional_ref(true);
+"#,
+    );
+    assert_eq!(out, "7|7");
+}
+
 /// `$x = &$obj->prop` aliases an array property: appends through the alias are observed
 /// through the property, and clearing the alias to `[]` empties the property (the shape
 /// used by `$instanceof = []` after capturing a reference).

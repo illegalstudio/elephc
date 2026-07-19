@@ -495,6 +495,11 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
+    // An untyped null-defaulted property rebound to array storage reads a null
+    // pointer before its first write; PHP var_dumps that value as NULL.
+    let null_label = ctx.next_label("var_dump_array_null");
+    let done_label = ctx.next_label("var_dump_array_done");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_label);
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -518,6 +523,10 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
         abi::emit_call_label(ctx.emitter, walker);
     }
     emit_write_literal(ctx, b"}\n");
+    ctx.emit_branch(&done_label);
+    ctx.emitter.label(&null_label);
+    emit_var_dump_null(ctx);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 

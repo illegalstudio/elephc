@@ -2,7 +2,7 @@
 title: "__elephc_phar_sign_openssl() — internals"
 description: "Compiler internals for __elephc_phar_sign_openssl(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 450
+  order: 455
 ---
 
 ## `__elephc_phar_sign_openssl()` — internals
@@ -31,6 +31,10 @@ function __elephc_phar_sign_openssl(string $path, string $key): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

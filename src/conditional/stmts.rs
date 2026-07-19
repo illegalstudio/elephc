@@ -235,7 +235,9 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             by_ref_return,
             name,
             params,
+            param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -248,7 +250,9 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                     (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                 })
                 .collect(),
+            param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: apply_stmts(body, defines),
@@ -315,12 +319,14 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => StmtKind::EnumDecl {
             name,
             backing_type,
             implements,
+            trait_uses,
             methods,
             constants,
             cases: cases

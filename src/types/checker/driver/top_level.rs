@@ -27,6 +27,8 @@ impl Checker {
         &mut self,
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        let saved_eval_barrier_active = self.eval_barrier_active;
+        self.eval_barrier_active = false;
         let mut global_env = self.seed_global_env();
         let mut all_errors = Vec::with_capacity(program.len());
         for stmt in program {
@@ -38,6 +40,7 @@ impl Checker {
                 .unwrap_or_default();
             all_errors.push(stmt_errors);
         }
+        self.eval_barrier_active = saved_eval_barrier_active;
         (global_env, all_errors)
     }
 

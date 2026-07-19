@@ -2,7 +2,7 @@
 title: "htmlspecialchars()"
 description: "Converts the HTML special characters in a string into their entities."
 sidebar:
-  order: 363
+  order: 367
 ---
 
 ## htmlspecialchars()
@@ -19,6 +19,11 @@ Converts the HTML special characters in a string into their entities.
 - `$encoding` (`string`), default `'UTF-8'`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -2,7 +2,7 @@
 title: "gzcompress() — internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 348
+  order: 352
 ---
 
 ## `gzcompress()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzcompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzcompress.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:420](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L420) (`lower_gzcompress`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:465](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L465) (`lower_gzcompress`)
 - **Function symbol**: `lower_gzcompress()`
 
 
@@ -31,6 +31,11 @@ function gzcompress(string $data, int $level = -1): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzcompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzcompress.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

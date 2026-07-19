@@ -45,6 +45,8 @@ sidebar:
 
 {return_section}
 
+{availability_section}
+
 {examples_section}
 
 {notes_section}
@@ -83,6 +85,10 @@ sidebar:
 ## What the type checker enforces
 
 {checker_notes}
+
+## Eval interpreter (magician)
+
+{eval_section}
 
 ## Cross-references
 
@@ -203,6 +209,79 @@ def _github_url_with_line(repo_root: Path, file_path: str, line: int) -> str:
     return f"https://github.com/illegalstudio/elephc/blob/main/{rel}#L{line}"
 
 
+def _availability_section(b: dict) -> str:
+    """Two-line support matrix: compiled (AOT) vs eval() interpreter."""
+    lines = ["## Availability", ""]
+    if b.get("eval_only"):
+        lines.append(
+            "- **Compiled (AOT)**: not available — compiled programs cannot "
+            "call this builtin yet."
+        )
+    else:
+        lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
+    ev = b.get("eval") or {}
+    if ev.get("supported"):
+        kind = ev.get("kind")
+        if kind == "registry":
+            home = ev.get("home_file") or ""
+            lines.append(
+                "- **`eval()` (magician interpreter)**: supported — declarative "
+                f"interpreter builtin ([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}))."
+            )
+        elif kind == "date-alias":
+            lines.append(
+                "- **`eval()` (magician interpreter)**: supported through the "
+                "procedural date/time alias dispatcher."
+            )
+        else:
+            lines.append("- **`eval()` (magician interpreter)**: supported.")
+    else:
+        lines.append(
+            "- **`eval()` (magician interpreter)**: not available inside eval'd code."
+        )
+    if b.get("is_extension"):
+        lines.append(
+            "- **Strict PHP mode**: hidden — this builtin is an elephc extension "
+            "with no PHP equivalent, so programs compiled with "
+            "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
+            "treat the name as nonexistent, in compiled code and inside eval'd code."
+        )
+    return "\n".join(lines)
+
+
+def _eval_internals_section(b: dict) -> str:
+    """How the eval interpreter reaches this builtin, for the internals page."""
+    ev = b.get("eval") or {}
+    if not ev.get("supported"):
+        return (
+            "_Not callable from eval'd code — the magician interpreter has no "
+            "entry for this builtin._"
+        )
+    if ev.get("kind") == "date-alias":
+        home = ev.get("home_file") or ""
+        return (
+            "Dispatched as a procedural date/time alias by "
+            f"[`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home})."
+        )
+    home = ev.get("home_file") or ""
+    hooks = ev.get("hooks") or []
+    lines = [
+        f"- **Declaration**: [`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}) (`eval_builtin!`)",
+        "- **Dispatch hooks**: "
+        + (", ".join(f"`{h}`" for h in hooks) or "_none_"),
+    ]
+    by_ref = [p["name"] for p in (ev.get("params") or []) if p.get("by_ref")]
+    if by_ref:
+        lines.append(
+            "- **By-reference parameters**: "
+            + ", ".join(f"`${n}`" for n in by_ref)
+            + "."
+        )
+    if ev.get("variadic"):
+        lines.append(f"- **Variadic**: collects excess arguments into `${ev['variadic']}`.")
+    return "\n".join(lines)
+
+
 def _internals_link(b: dict) -> str:
     """Cross-link to the internals page for this builtin, if it has been lowered.
 
@@ -230,7 +309,7 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
     _ = repo_root  # reserved for future cross-repo links
     area_lower = b['area'].lower()
     article = "an" if area_lower[0] in "aeiou" else "a"
-    return USER_TEMPLATE.format(
+    rendered = USER_TEMPLATE.format(
         name=b["name"],
         short_description=_short_description(b).replace('"', '\\"'),
         area=b["area"],
@@ -241,15 +320,26 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
            "Behavior matches the PHP manual unless noted below.",
         parameters_section=_parameters_section(b),
         return_section=_return_section(b),
+        availability_section=_availability_section(b),
         examples_section=_examples_section(b),
         notes_section=_notes_section(b),
         see_also_section=_see_also_section(b),
         internals_link=_internals_link(b),
     )
+    # Empty optional sections can stack several blank lines. Preserve the
+    # established output otherwise, but collapse pathological trailing runs.
+    if rendered.endswith("\n\n\n"):
+        return rendered.rstrip() + "\n"
+    return rendered
 
 
 def render_internals(b: dict, order: int, repo_root: Path) -> str:
-    sig_file = b["lowering"].get("sig_file") or "src/types/signatures.rs"
+    sig_file = b["lowering"].get("sig_file")
+    if not sig_file and b.get("eval_only"):
+        # Eval-only builtins have no static signature home; point at the
+        # magician declaration instead.
+        sig_file = (b.get("eval") or {}).get("home_file")
+    sig_file = sig_file or "src/types/signatures.rs"
     codegen_file = b["lowering"].get("codegen_file")
     codegen_line = b["lowering"].get("codegen_line")
     codegen_function = b["lowering"].get("codegen_function") or "(none — type-checker only)"
@@ -303,6 +393,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         runtime_helpers_section=_runtime_helpers_section(b),
         signature=_signature_line(b),
         checker_notes=_checker_notes(b),
+        eval_section=_eval_internals_section(b),
         see_also_section=see_also_section,
     )
 
@@ -362,8 +453,11 @@ def _index_table_rows(builtins: list[dict], link_prefix: str = ".") -> list[str]
             link = f"{link_prefix}/_internal/{slug(b['name'])}.md"
         else:
             link = f"{link_prefix}/{area_folder}/{slug(b['name'])}.md"
+        aot = "—" if b.get("eval_only") else "✓"
+        ev = "✓" if (b.get("eval") or {}).get("supported") else "—"
         rows.append(
-            f"| [`{b['name']}()`]({link}) | `{sig}` | `{b['sig']['return_type']}` |"
+            f"| [`{b['name']}()`]({link}) | `{sig}` | `{b['sig']['return_type']}` "
+            f"| {aot} | {ev} |"
         )
     return rows
 
@@ -382,8 +476,8 @@ def render_area_index(area: str, builtins: list[dict], order: int = 0) -> str:
         "",
         f"## {area} builtins",
         "",
-        "| Function | Signature | Returns |",
-        "|---|---|---|",
+        "| Function | Signature | Returns | AOT | eval() |",
+        "|---|---|---|:-:|:-:|",
     ]
     lines.extend(_index_table_rows(relevant))
     return "\n".join(lines) + "\n"
@@ -403,8 +497,8 @@ def render_master_index(builtins: list[dict]) -> str:
         "",
         "## Builtins",
         "",
-        "| Function | Signature | Returns |",
-        "|---|---|---|",
+        "| Function | Signature | Returns | AOT | eval() |",
+        "|---|---|---|:-:|:-:|",
     ]
     lines.extend(_index_table_rows(relevant, link_prefix="./builtins"))
     return "\n".join(lines) + "\n"

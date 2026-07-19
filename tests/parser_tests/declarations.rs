@@ -143,6 +143,25 @@ fn test_parse_backed_enum_decl() {
     }
 }
 
+/// Verifies keyword-named enum cases retain source spelling, including two names that differ
+/// only by case; PHP enum-case identity and `->name` use these exact case-sensitive names.
+#[test]
+fn test_parse_keyword_named_enum_cases_preserve_spelling() {
+    let stmts = parse_source(
+        "<?php enum KeywordCase { case Default; case DEFAULT; case Match; case MATCH; case Print; }",
+    );
+    let StmtKind::EnumDecl { cases, .. } = &stmts[0].kind else {
+        panic!("Expected EnumDecl");
+    };
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Default", "DEFAULT", "Match", "MATCH", "Print"]
+    );
+}
+
 /// Verifies that `<?php echo Color::Red;` parses to an `Echo` containing a `ScopedConstantAccess`
 /// with receiver "Color" and member "Red". The parser emits `ScopedConstantAccess`; the type
 /// checker disambiguates between enum cases and class constants.

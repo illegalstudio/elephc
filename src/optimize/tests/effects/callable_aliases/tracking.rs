@@ -19,7 +19,9 @@ fn test_program_function_effects_track_closure_alias_locals() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -31,6 +33,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                             ExprKind::Closure {
                                 params: Vec::new(),
                                 variadic: None,
+                                variadic_by_ref: false,
                                 variadic_type: None,
                                 return_type: None,
                                 by_ref_return: false,
@@ -86,7 +89,9 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -147,7 +152,9 @@ fn test_program_function_effects_track_callable_alias_through_match() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -211,7 +218,9 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -271,7 +280,9 @@ fn test_program_function_effects_track_callable_alias_locals() {
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,

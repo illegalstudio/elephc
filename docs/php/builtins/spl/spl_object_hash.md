@@ -2,7 +2,7 @@
 title: "spl_object_hash()"
 description: "Return hash id for given object."
 sidebar:
-  order: 331
+  order: 335
 ---
 
 ## spl_object_hash()
@@ -17,6 +17,11 @@ Return hash id for given object.
 - `$object` (`object`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

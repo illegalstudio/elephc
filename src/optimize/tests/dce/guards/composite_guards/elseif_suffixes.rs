@@ -41,7 +41,9 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -99,7 +101,9 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_fal
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -165,7 +169,9 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_compos
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -239,7 +245,9 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_demorgan_equiv
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,

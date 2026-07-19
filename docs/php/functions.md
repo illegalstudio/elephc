@@ -321,6 +321,9 @@ counter(); // 1
 counter(); // 2
 ```
 
+The initializer is optional: `static $x;` declares the variable with an
+implicit `null` initial value, exactly like `static $x = null;`.
+
 ## Pass by reference
 
 ```php

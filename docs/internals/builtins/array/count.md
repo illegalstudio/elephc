@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/count.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:440](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L440) (`lower_count`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1023](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1023) (`lower_count`)
 - **Function symbol**: `lower_count()`
 
 
@@ -36,6 +36,11 @@ function count(array $value, int $mode = 0): int
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/count.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
