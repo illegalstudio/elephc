@@ -258,3 +258,38 @@ echo gettype(pick(0)), "|", gettype(pick(1));
     );
     assert_eq!(out, "object|string");
 }
+
+/// Regression for the short-ternary checker/lowering mismatch: a truthy int
+/// combined with a string fallback must keep its PHP integer type and value.
+#[test]
+fn test_short_ternary_heterogeneous_result_preserves_truthy_type() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    return $n ?: "fallback";
+}
+echo gettype(pick(7)), "|", pick(7), "|", gettype(pick(0)), "|", pick(0);
+"#,
+    );
+    assert_eq!(out, "integer|7|string|fallback");
+}
+
+/// Regression for issue #494: inferred ternary returns must retain nullability
+/// for object/null branches, including the assignment-effects path.
+#[test]
+fn test_ternary_object_null_inferred_returns_keep_null() {
+    let out = compile_and_run(
+        r#"<?php
+function direct(int $n) {
+    return $n === 0 ? new stdClass() : null;
+}
+function assigned(int $n) {
+    $value = $n === 0 ? new stdClass() : null;
+    return $value;
+}
+echo gettype(direct(0)), "|", gettype(direct(1)), "|";
+echo gettype(assigned(0)), "|", gettype(assigned(1));
+"#,
+    );
+    assert_eq!(out, "object|NULL|object|NULL");
+}

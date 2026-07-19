@@ -1299,9 +1299,9 @@ fn lower_short_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let condition_span = value.span;
+    let result_type = short_ternary_merge_result_type(ctx, value, default);
     let value = lower_expr(ctx, value);
     let cond = ctx.truthy(value, Some(condition_span));
-    let result_type = fallback_expr_type(expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx
@@ -15071,6 +15071,18 @@ fn match_merge_result_type(
     wider_type_for_merge(&fallback_ty, &merged.codegen_repr())
 }
 
+/// Chooses a short-ternary hidden-temp type without reintroducing the
+/// scalar-biased syntactic join used by the parser-only fallback inference.
+fn short_ternary_merge_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    value: &Expr,
+    default: &Expr,
+) -> PhpType {
+    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
+    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    wider_type_for_merge(&value_ty, &default_ty)
+}
+
 /// Chooses a ternary branch merge type without erasing PHP null branches.
 fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) -> PhpType {
     if php_type_allows_null(left) || php_type_allows_null(right) {
@@ -15118,9 +15130,7 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
             match_merge_result_type(ctx, arms, default.as_deref(), expr)
         }
         ExprKind::ShortTernary { value, default } => {
-            let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-            let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-            wider_type_for_merge(&value_ty, &default_ty)
+            short_ternary_merge_result_type(ctx, value, default)
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),

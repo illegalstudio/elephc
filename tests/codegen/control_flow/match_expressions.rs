@@ -216,6 +216,32 @@ echo gettype(pick(0)), "|", gettype(pick(1));
     assert_eq!(out, "object|string");
 }
 
+/// Regression for issue #494: object/null match arms must keep the inferred
+/// return nullable both directly and after assignment to a local.
+#[test]
+fn test_match_object_null_inferred_returns_keep_null() {
+    let out = compile_and_run(
+        r#"<?php
+function direct(int $n) {
+    return match($n) {
+        0 => new stdClass(),
+        default => null,
+    };
+}
+function assigned(int $n) {
+    $value = match($n) {
+        0 => new stdClass(),
+        default => null,
+    };
+    return $value;
+}
+echo gettype(direct(0)), "|", gettype(direct(1)), "|";
+echo gettype(assigned(0)), "|", gettype(assigned(1));
+"#,
+    );
+    assert_eq!(out, "object|NULL|object|NULL");
+}
+
 /// Tests that homogeneous string arms keep working (the merged temp stays a
 /// plain string, no boxing regression for same-typed arms).
 #[test]
