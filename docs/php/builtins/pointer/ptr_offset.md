@@ -2,7 +2,7 @@
 title: "ptr_offset()"
 description: "Returns a new pointer offset from the given pointer by the given byte count."
 sidebar:
-  order: 293
+  order: 306
 ---
 
 ## ptr_offset()

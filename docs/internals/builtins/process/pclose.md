@@ -2,7 +2,7 @@
 title: "pclose() — internals"
 description: "Compiler internals for pclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 312
+  order: 325
 ---
 
 ## `pclose()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pclose.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3630](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3630) (`lower_pclose`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3627](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3627) (`lower_pclose`)
 - **Function symbol**: `lower_pclose()`
 
 

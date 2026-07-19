@@ -2,7 +2,7 @@
 title: "define() — internals"
 description: "Compiler internals for define(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 289
 ---
 
 ## `define()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/define.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/define.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:370](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L370) (`lower_define`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:371](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L371) (`lower_define`)
 - **Function symbol**: `lower_define()`
 
 

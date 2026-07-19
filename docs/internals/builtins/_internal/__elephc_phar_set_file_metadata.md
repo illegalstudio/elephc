@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_file_metadata() — internals"
 description: "Compiler internals for __elephc_phar_set_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 450
+  order: 463
 ---
 
 ## `__elephc_phar_set_file_metadata()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_file_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_file_metadata.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4090](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4090) (`lower_elephc_phar_set_file_metadata`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4087](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4087) (`lower_elephc_phar_set_file_metadata`)
 - **Function symbol**: `lower_elephc_phar_set_file_metadata()`
 
 

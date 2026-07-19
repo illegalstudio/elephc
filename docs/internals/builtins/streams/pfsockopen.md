@@ -2,7 +2,7 @@
 title: "pfsockopen() — internals"
 description: "Compiler internals for pfsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 338
+  order: 351
 ---
 
 ## `pfsockopen()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pfsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pfsockopen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3644](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3644) (`lower_fsockopen`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3641](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3641) (`lower_fsockopen`)
 - **Function symbol**: `lower_fsockopen()`
 
 

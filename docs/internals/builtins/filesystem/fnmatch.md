@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fnmatch.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4603](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4603) (`lower_fnmatch`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4600](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4600) (`lower_fnmatch`)
 - **Function symbol**: `lower_fnmatch()`
 
 

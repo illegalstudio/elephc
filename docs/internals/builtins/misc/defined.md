@@ -2,7 +2,7 @@
 title: "defined() — internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 277
+  order: 290
 ---
 
 ## `defined()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/defined.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:549](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L549) (`lower_defined`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:550](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L550) (`lower_defined`)
 - **Function symbol**: `lower_defined()`
 
 

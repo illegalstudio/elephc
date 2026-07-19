@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fgetc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetc.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2980](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2980) (`lower_fgetc`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2979](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2979) (`lower_fgetc`)
 - **Function symbol**: `lower_fgetc()`
 
 

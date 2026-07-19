@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftell.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3133](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3133) (`lower_ftell`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3130](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3130) (`lower_ftell`)
 - **Function symbol**: `lower_ftell()`
 
 

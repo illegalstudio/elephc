@@ -2,7 +2,7 @@
 title: "str_contains() — internals"
 description: "Compiler internals for str_contains(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 400
 ---
 
 ## `str_contains()` — internals

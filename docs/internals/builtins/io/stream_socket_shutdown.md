@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown() — internals"
 description: "Compiler internals for stream_socket_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 228
+  order: 241
 ---
 
 ## `stream_socket_shutdown()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_shutdown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_shutdown.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2522](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2522) (`lower_stream_socket_shutdown`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2521](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2521) (`lower_stream_socket_shutdown`)
 - **Function symbol**: `lower_stream_socket_shutdown()`
 
 

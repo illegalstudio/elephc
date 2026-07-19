@@ -2,7 +2,7 @@
 title: "hash_hmac()"
 description: "Generates a keyed hash value using the HMAC method."
 sidebar:
-  order: 361
+  order: 374
 ---
 
 ## hash_hmac()

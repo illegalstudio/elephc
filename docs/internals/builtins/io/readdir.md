@@ -2,7 +2,7 @@
 title: "readdir() — internals"
 description: "Compiler internals for readdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 190
+  order: 203
 ---
 
 ## `readdir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3557](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3557) (`lower_readdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3554](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3554) (`lower_readdir`)
 - **Function symbol**: `lower_readdir()`
 
 

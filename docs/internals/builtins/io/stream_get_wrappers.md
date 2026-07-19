@@ -2,7 +2,7 @@
 title: "stream_get_wrappers() — internals"
 description: "Compiler internals for stream_get_wrappers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 210
+  order: 223
 ---
 
 ## `stream_get_wrappers()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_wrappers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_wrappers.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1461](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1461) (`lower_stream_get_wrappers`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1460](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1460) (`lower_stream_get_wrappers`)
 - **Function symbol**: `lower_stream_get_wrappers()`
 
 

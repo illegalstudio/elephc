@@ -2,7 +2,7 @@
 title: "stream_is_local() — internals"
 description: "Compiler internals for stream_is_local(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 211
+  order: 224
 ---
 
 ## `stream_is_local()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_is_local.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_is_local.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2103](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2103) (`lower_stream_is_local`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2102](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2102) (`lower_stream_is_local`)
 - **Function symbol**: `lower_stream_is_local()`
 
 

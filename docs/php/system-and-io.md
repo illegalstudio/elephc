@@ -370,3 +370,50 @@ var_export(['a' => 1, 'b' => [2, 3]]);
 //   ),
 // )
 ```
+
+## Output buffering
+
+Output buffering captures everything a piece of code prints — `echo`, `print`,
+`printf()`, `print_r()`, `var_dump()`, `readfile()`, `fpassthru()` — into an
+in-memory buffer instead of writing it to stdout. Buffers nest: flushing an
+inner buffer folds its contents into the enclosing one. Buffers still active at
+script end (including `exit()`/`die()`) are flushed to stdout automatically,
+matching PHP.
+
+| Function | Signature | Description |
+|---|---|---|
+| `ob_start()` | `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = 112): bool` | Start a new output buffer (nesting supported, up to 64 levels). Only the default `null` handler is supported — passing an output-handler callback is a compile-time error; `$chunk_size` and `$flags` are accepted for signature parity but have no effect (buffers are unchunked and always cleanable/flushable/removable) |
+| `ob_get_contents()` | `ob_get_contents(): string\|false` | Return the active buffer's contents without consuming them; `false` when no buffer is active |
+| `ob_get_clean()` | `ob_get_clean(): string\|false` | Return the active buffer's contents, then discard the buffer and pop it |
+| `ob_get_flush()` | `ob_get_flush(): string\|false` | Return the active buffer's contents, then flush them to the parent sink and pop the buffer |
+| `ob_get_length()` | `ob_get_length(): int\|false` | Byte length of the active buffer's contents; `false` when no buffer is active |
+| `ob_get_level()` | `ob_get_level(): int` | Current nesting depth (0 = no buffering) |
+| `ob_clean()` | `ob_clean(): bool` | Erase the active buffer's contents while keeping the buffer active |
+| `ob_end_clean()` | `ob_end_clean(): bool` | Discard the active buffer's contents and pop the buffer |
+| `ob_end_flush()` | `ob_end_flush(): bool` | Flush the active buffer's contents to the parent sink (enclosing buffer or stdout) and pop the buffer |
+| `ob_flush()` | `ob_flush(): bool` | Flush the active buffer's contents to the parent sink while keeping the buffer active |
+| `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Status of the active buffer (or an empty array without one): `name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`. With `$full_status = true`, one entry per nesting level |
+| `ob_implicit_flush()` | `ob_implicit_flush(bool $enable = true): bool` | Stores the flag and returns `true`. Semantically inert: elephc terminal writes are unbuffered syscalls, so implicit flushing is always effectively on |
+| `ob_list_handlers()` | `ob_list_handlers(): array` | One `"default output handler"` entry per active buffer level |
+
+```php
+<?php
+ob_start();
+echo "hello";
+$captured = ob_get_clean();
+echo strtoupper($captured);   // HELLO
+
+ob_start();
+echo "outer:";
+ob_start();
+echo "inner";
+ob_end_flush();               // "inner" flows into the outer buffer
+echo ob_get_clean(), "\n";    // outer:inner
+```
+
+Output buffering state is shared between statically compiled code and
+`eval()`'d code: a buffer started inside `eval()` captures static echoes and
+vice versa. `fwrite(STDOUT, ...)` writes to the real file descriptor and
+bypasses output buffers, matching PHP. Current limitations: user output-handler
+callbacks are not supported (`ob_start()` accepts only `null`), and buffered
+output is never chunked.

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fpassthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fpassthru.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3027](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3027) (`lower_fpassthru`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3026](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3026) (`lower_fpassthru`)
 - **Function symbol**: `lower_fpassthru()`
 
 

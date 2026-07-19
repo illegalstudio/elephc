@@ -2,7 +2,7 @@
 title: "stream_set_chunk_size() — internals"
 description: "Compiler internals for stream_set_chunk_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 216
+  order: 229
 ---
 
 ## `stream_set_chunk_size()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_chunk_size.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_chunk_size.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2194](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2194) (`lower_stream_set_chunk_size`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2193](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2193) (`lower_stream_set_chunk_size`)
 - **Function symbol**: `lower_stream_set_chunk_size()`
 
 

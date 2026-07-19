@@ -2,7 +2,7 @@
 title: "stream_filter_prepend() — internals"
 description: "Compiler internals for stream_filter_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 342
+  order: 355
 ---
 
 ## `stream_filter_prepend()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_filter_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_prepend.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1550](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1550) (`lower_stream_filter_attach`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1549](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1549) (`lower_stream_filter_attach`)
 - **Function symbol**: `lower_stream_filter_attach()`
 
 

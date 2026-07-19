@@ -2,7 +2,7 @@
 title: "clamp() — internals"
 description: "Compiler internals for clamp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 245
+  order: 258
 ---
 
 ## `clamp()` — internals

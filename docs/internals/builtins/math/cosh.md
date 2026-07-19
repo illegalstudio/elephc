@@ -2,7 +2,7 @@
 title: "cosh() — internals"
 description: "Compiler internals for cosh(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 247
+  order: 260
 ---
 
 ## `cosh()` — internals

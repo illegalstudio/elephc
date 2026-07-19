@@ -2,7 +2,7 @@
 title: "long2ip() — internals"
 description: "Compiler internals for long2ip(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 386
 ---
 
 ## `long2ip()` — internals

@@ -2,7 +2,7 @@
 title: "stream_context_get_params() — internals"
 description: "Compiler internals for stream_context_get_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 211
 ---
 
 ## `stream_context_get_params()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_get_params.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_get_params.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1291](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1291) (`lower_stream_context_get_params`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1290](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1290) (`lower_stream_context_get_params`)
 - **Function symbol**: `lower_stream_context_get_params()`
 
 

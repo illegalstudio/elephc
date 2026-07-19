@@ -2,7 +2,7 @@
 title: "stream_select() — internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 214
+  order: 227
 ---
 
 ## `stream_select()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_select.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_select.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2316](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2316) (`lower_stream_select`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2315](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2315) (`lower_stream_select`)
 - **Function symbol**: `lower_stream_select()`
 
 

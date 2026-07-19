@@ -20,7 +20,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_vd_write`
 
 ## Signature summary
 

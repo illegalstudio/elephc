@@ -2,7 +2,7 @@
 title: "readline() — internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 314
+  order: 327
 ---
 
 ## `readline()` — internals
@@ -22,6 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_fgets`
+- `__rt_vd_write`
 
 ## Signature summary
 

@@ -2,7 +2,7 @@
 title: "spl_autoload_unregister() — internals"
 description: "Compiler internals for spl_autoload_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 333
+  order: 346
 ---
 
 ## `spl_autoload_unregister()` — internals

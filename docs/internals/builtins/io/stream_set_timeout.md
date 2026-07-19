@@ -2,7 +2,7 @@
 title: "stream_set_timeout() — internals"
 description: "Compiler internals for stream_set_timeout(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 231
 ---
 
 ## `stream_set_timeout()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_timeout.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_timeout.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2267](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2267) (`lower_stream_set_timeout`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2266](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2266) (`lower_stream_set_timeout`)
 - **Function symbol**: `lower_stream_set_timeout()`
 
 

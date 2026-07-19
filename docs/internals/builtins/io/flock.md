@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/flock.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3309](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3309) (`lower_flock`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3306](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3306) (`lower_flock`)
 - **Function symbol**: `lower_flock()`
 
 

@@ -2,7 +2,7 @@
 title: "stream_isatty() — internals"
 description: "Compiler internals for stream_isatty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 212
+  order: 225
 ---
 
 ## `stream_isatty()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_isatty.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_isatty.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2127](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2127) (`lower_stream_isatty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2126](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2126) (`lower_stream_isatty`)
 - **Function symbol**: `lower_stream_isatty()`
 
 

@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_stub() — internals"
 description: "Compiler internals for __elephc_phar_set_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 452
+  order: 465
 ---
 
 ## `__elephc_phar_set_stub()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_stub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_stub.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3896](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3896) (`lower_elephc_phar_set_stub`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3893](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3893) (`lower_elephc_phar_set_stub`)
 - **Function symbol**: `lower_elephc_phar_set_stub()`
 
 

@@ -2,7 +2,7 @@
 title: "stream_supports_lock() — internals"
 description: "Compiler internals for stream_supports_lock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 242
 ---
 
 ## `stream_supports_lock()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_supports_lock.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_supports_lock.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2115](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2115) (`lower_stream_supports_lock`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2114](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2114) (`lower_stream_supports_lock`)
 - **Function symbol**: `lower_stream_supports_lock()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chmod.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4468](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4468) (`lower_chmod`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4465](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4465) (`lower_chmod`)
 - **Function symbol**: `lower_chmod()`
 
 

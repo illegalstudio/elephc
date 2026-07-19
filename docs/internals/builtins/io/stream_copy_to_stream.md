@@ -2,7 +2,7 @@
 title: "stream_copy_to_stream() — internals"
 description: "Compiler internals for stream_copy_to_stream(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 215
 ---
 
 ## `stream_copy_to_stream()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_copy_to_stream.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1360](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1360) (`lower_stream_copy_to_stream`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1359](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1359) (`lower_stream_copy_to_stream`)
 - **Function symbol**: `lower_stream_copy_to_stream()`
 
 

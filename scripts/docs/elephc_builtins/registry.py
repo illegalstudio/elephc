@@ -61,6 +61,7 @@ AREA_BY_FILE: Dict[str, Optional[Tuple[str, str]]] = {
     "regex.rs": ("Regex", "Regex"),
     "io.rs": ("IO", "IO"),
     "debug.rs": ("IO", "IO"),
+    "output_buffering.rs": ("IO", "IO"),
     "system.rs": ("Misc", "System"),
     "pointers.rs": ("Pointer", "Pointer"),
     "buffers.rs": ("Buffer", "Buffer"),

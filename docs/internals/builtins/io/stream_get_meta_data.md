@@ -2,7 +2,7 @@
 title: "stream_get_meta_data() — internals"
 description: "Compiler internals for stream_get_meta_data(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 221
 ---
 
 ## `stream_get_meta_data()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_meta_data.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_meta_data.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1446](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1446) (`lower_stream_get_meta_data`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1445](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1445) (`lower_stream_get_meta_data`)
 - **Function symbol**: `lower_stream_get_meta_data()`
 
 

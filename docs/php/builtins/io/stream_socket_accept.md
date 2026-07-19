@@ -2,7 +2,7 @@
 title: "stream_socket_accept()"
 description: "Accept a connection on a socket created by stream_socket_server()."
 sidebar:
-  order: 220
+  order: 233
 ---
 
 ## stream_socket_accept()

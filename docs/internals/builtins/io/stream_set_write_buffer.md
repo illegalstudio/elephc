@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer() — internals"
 description: "Compiler internals for stream_set_write_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 232
 ---
 
 ## `stream_set_write_buffer()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_write_buffer.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2254](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2254) (`lower_stream_set_buffer`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2253](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2253) (`lower_stream_set_buffer`)
 - **Function symbol**: `lower_stream_set_buffer()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath_cache_get.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3700](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3700) (`lower_realpath_cache_get`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3697](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3697) (`lower_realpath_cache_get`)
 - **Function symbol**: `lower_realpath_cache_get()`
 
 
