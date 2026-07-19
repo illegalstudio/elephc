@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ltrim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ltrim.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:130](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L130) (`lower_trim_like`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:129](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L129) (`lower_trim_like`)
 - **Function symbol**: `lower_trim_like()`
 
 

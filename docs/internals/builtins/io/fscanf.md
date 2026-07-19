@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fscanf.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2937](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2937) (`lower_fscanf`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2936](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2936) (`lower_fscanf`)
 - **Function symbol**: `lower_fscanf()`
 
 

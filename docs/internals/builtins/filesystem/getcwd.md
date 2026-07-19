@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getcwd.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5393](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5393) (`lower_getcwd`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5392](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5392) (`lower_getcwd`)
 - **Function symbol**: `lower_getcwd()`
 
 

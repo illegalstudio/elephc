@@ -18,7 +18,6 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 struct SplitStringTempCleanups {
@@ -1080,7 +1079,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
@@ -1170,7 +1169,7 @@ fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1302,7 +1301,7 @@ fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r9");                   // save the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1393,7 +1392,7 @@ fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str, after: &st
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r9");                    // seed destLen with the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer

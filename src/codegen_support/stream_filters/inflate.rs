@@ -23,8 +23,6 @@ use crate::codegen_support::emit::Emitter;
 /// Capacity of the shared `_stream_filter_buf` scratch, reused here as the
 /// compressed-input slurp buffer.
 const FILTER_BUF_SIZE: i64 = 65536;
-/// x86_64 owned-heap kind word: the elephc heap marker in the high 32 bits.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// ARM64: a 176-byte scratch frame holds the 112-byte `z_stream` at `[sp, #0]`
 /// plus the descriptor, lengths, and buffers at `[sp, #112..168)`.
@@ -207,7 +205,7 @@ where
     emitter.instruction(&format!(
         // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 128], rax");                      // save the decompressed buffer pointer

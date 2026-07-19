@@ -11,9 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Magic high-32 bits marker injected into x86_64 heap wrapper headers to distinguish
-/// managed heap payloads from foreign/static pointers during release validation.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Uniform release dispatcher for mixed heap-backed values.
 ///
@@ -120,7 +117,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker
     emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
+    emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
     emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?

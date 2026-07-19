@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/copy.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4440](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4440) (`lower_copy`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4439](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4439) (`lower_copy`)
 - **Function symbol**: `lower_copy()`
 
 

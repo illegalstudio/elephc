@@ -24,7 +24,6 @@ use crate::codegen_support::{
     platform::{Arch, Platform},
 };
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Byte offset of the address-family discriminator inside a freshly populated
 /// sockaddr buffer; macOS keeps a 1-byte `sa_len` ahead of the family byte
@@ -181,7 +180,7 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer, rax = pointer
     emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the buffer pointer
@@ -249,7 +248,7 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
     emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("xor edx, edx");                                        // empty address length

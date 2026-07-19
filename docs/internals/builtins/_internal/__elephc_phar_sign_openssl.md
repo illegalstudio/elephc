@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_sign_openssl.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_sign_openssl.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4146) (`lower_elephc_phar_sign_openssl`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4145](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4145) (`lower_elephc_phar_sign_openssl`)
 - **Function symbol**: `lower_elephc_phar_sign_openssl()`
 
 

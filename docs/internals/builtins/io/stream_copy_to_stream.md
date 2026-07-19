@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_copy_to_stream.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1359](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1359) (`lower_stream_copy_to_stream`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1358](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1358) (`lower_stream_copy_to_stream`)
 - **Function symbol**: `lower_stream_copy_to_stream()`
 
 

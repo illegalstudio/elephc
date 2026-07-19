@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/md5.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:418](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L418) (`lower_md5`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:417](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L417) (`lower_md5`)
 - **Function symbol**: `lower_md5()`
 
 

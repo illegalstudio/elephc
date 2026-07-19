@@ -14,13 +14,12 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
 const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
 /// Builds the x86_64 instruction that installs the Mixed heap-kind marker.
 fn x86_64_mixed_heap_kind_instruction() -> String {
-    format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)
+    format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
 }
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
@@ -4905,7 +4904,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
     emitter.instruction("mov rax, rcx");                                        // pass the source payload size to the heap allocator
     emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head

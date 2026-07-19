@@ -112,7 +112,7 @@ fn emit_throw_value_error_x86_64(emitter: &mut Emitter, message_symbol: &str, me
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
     emitter.instruction("mov rax, 32");                                         // request Throwable payload storage
     emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
-    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header

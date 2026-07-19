@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/opendir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3544](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3544) (`lower_opendir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3543) (`lower_opendir`)
 - **Function symbol**: `lower_opendir()`
 
 

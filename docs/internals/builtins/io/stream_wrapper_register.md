@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_wrapper_register.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_wrapper_register.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:999](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L999) (`lower_stream_wrapper_register`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:998](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L998) (`lower_stream_wrapper_register`)
 - **Function symbol**: `lower_stream_wrapper_register()`
 
 

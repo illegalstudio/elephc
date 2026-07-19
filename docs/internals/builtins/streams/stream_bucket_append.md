@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_append.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_append.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2063](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2063) (`lower_stream_bucket_append_or_prepend`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2062](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2062) (`lower_stream_bucket_append_or_prepend`)
 - **Function symbol**: `lower_stream_bucket_append_or_prepend()`
 
 

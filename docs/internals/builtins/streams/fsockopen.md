@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fsockopen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3641](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3641) (`lower_fsockopen`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3640](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3640) (`lower_fsockopen`)
 - **Function symbol**: `lower_fsockopen()`
 
 

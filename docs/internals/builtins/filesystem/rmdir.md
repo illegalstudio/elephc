@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rmdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4430](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4430) (`lower_rmdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4429](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4429) (`lower_rmdir`)
 - **Function symbol**: `lower_rmdir()`
 
 

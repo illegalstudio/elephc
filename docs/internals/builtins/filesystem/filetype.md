@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filetype.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5513](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5513) (`lower_filetype`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5512](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5512) (`lower_filetype`)
 - **Function symbol**: `lower_filetype()`
 
 

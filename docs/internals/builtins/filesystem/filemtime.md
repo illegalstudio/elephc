@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filemtime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5429](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5429) (`lower_filemtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5428](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5428) (`lower_filemtime`)
 - **Function symbol**: `lower_filemtime()`
 
 

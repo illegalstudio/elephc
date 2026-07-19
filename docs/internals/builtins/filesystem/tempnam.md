@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tempnam.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4450](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4450) (`lower_tempnam`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4449](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4449) (`lower_tempnam`)
 - **Function symbol**: `lower_tempnam()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pow.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:121](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L121) (`lower_pow`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:120](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L120) (`lower_pow`)
 - **Function symbol**: `lower_pow()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_repeat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_repeat.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:809](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L809) (`lower_str_repeat`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:808](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L808) (`lower_str_repeat`)
 - **Function symbol**: `lower_str_repeat()`
 
 

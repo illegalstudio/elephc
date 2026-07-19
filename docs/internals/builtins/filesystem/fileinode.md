@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileinode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileinode.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5505](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5505) (`lower_fileinode`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5504](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5504) (`lower_fileinode`)
 - **Function symbol**: `lower_fileinode()`
 
 

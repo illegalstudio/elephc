@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pclose.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3627](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3627) (`lower_pclose`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3626](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3626) (`lower_pclose`)
 - **Function symbol**: `lower_pclose()`
 
 

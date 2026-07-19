@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readfile.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:300](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L300) (`lower_readfile`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:299](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L299) (`lower_readfile`)
 - **Function symbol**: `lower_readfile()`
 
 

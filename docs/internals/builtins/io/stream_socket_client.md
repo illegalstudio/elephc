@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_client.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2396](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2396) (`lower_stream_socket_client`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2395](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2395) (`lower_stream_socket_client`)
 - **Function symbol**: `lower_stream_socket_client()`
 
 

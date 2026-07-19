@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/unlink.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4404](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4404) (`lower_unlink`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4403](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4403) (`lower_unlink`)
 - **Function symbol**: `lower_unlink()`
 
 

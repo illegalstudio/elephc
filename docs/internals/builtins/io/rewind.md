@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rewind.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewind.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3193](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3193) (`lower_rewind`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3192](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3192) (`lower_rewind`)
 - **Function symbol**: `lower_rewind()`
 
 

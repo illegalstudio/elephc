@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_isatty.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_isatty.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2126](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2126) (`lower_stream_isatty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2125](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2125) (`lower_stream_isatty`)
 - **Function symbol**: `lower_stream_isatty()`
 
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chgrp.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4475](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4475) (`lower_chgrp`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4474](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4474) (`lower_chgrp`)
 - **Function symbol**: `lower_chgrp()`
 
 

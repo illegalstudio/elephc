@@ -26,8 +26,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Upper 32 bits of the x86_64 elephc heap marker used by owned runtime values.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits `__rt_unserialize_mixed` plus its internal parser helpers.
 ///
@@ -924,7 +922,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 24");                                         // box the hash: Mixed cell = tag + two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the hash pointer
-    emitter.instruction(&format!("mov r11, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 boxed-Mixed heap kind word
+    emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 boxed-Mixed heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the Mixed box without discarding the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax], 5");                              // value tag 5 = associative array (hash)
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer (ownership transferred)
@@ -1069,7 +1067,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 24");                                         // box the object: Mixed cell = tag + two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the object pointer
-    emitter.instruction(&format!("mov r11, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 boxed-Mixed heap kind word
+    emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 boxed-Mixed heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the Mixed box without discarding the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax], 6");                              // value tag 6 = object
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the object pointer (ownership transferred)
