@@ -146,14 +146,14 @@ impl Checker {
                     }
                     let ty = self.match_arm_result_type(result, env)?;
                     result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(acc, ty),
+                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
                 }
                 if let Some(d) = default {
                     let ty = self.match_arm_result_type(d, env)?;
                     result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(acc, ty),
+                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
                 }
@@ -349,12 +349,12 @@ impl Checker {
                 };
                 // Same Mixed/nullable merge as match arms: heterogeneous heap
                 // types must not collapse through the Str-absorbing syntactic join.
-                Ok(merge_match_arm_result_type(then_ty, else_ty))
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
-                Ok(merge_match_arm_result_type(value_ty, default_ty))
+                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
@@ -830,11 +830,12 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
 /// Merges two match arm result types: identical arms keep their type,
 /// `Never`-typed arms (`throw`, normalized at the call site) defer to the
 /// other arm's type, `Void`-typed arms (checker `null`) keep the merge
-/// nullable so the null arm's value survives return-type-driven coercion
-/// (mirroring the lowered temp's nullable-aware merge), and any other
-/// heterogeneous pair widens to `Mixed` so each arm's runtime value survives
-/// instead of being coerced to the first arm's type.
-fn merge_match_arm_result_type(acc: PhpType, next: PhpType) -> PhpType {
+/// nullable so the null arm's value survives return-type-driven coercion.
+/// Object-only pairs retain a normalized object union so declared object-union
+/// returns and member validation remain precise; every other heterogeneous
+/// pair widens to `Mixed` so each arm's runtime value survives instead of being
+/// coerced to the first arm's type.
+fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -> PhpType {
     if acc == next {
         return acc;
     }
@@ -850,7 +851,23 @@ fn merge_match_arm_result_type(acc: PhpType, next: PhpType) -> PhpType {
     if next == PhpType::Void {
         return nullable_match_arm_type(acc);
     }
+    if object_match_arm_type(&acc) && object_match_arm_type(&next) {
+        return checker.normalize_union_type(vec![acc, next]);
+    }
     PhpType::Mixed
+}
+
+/// Returns whether a branch type contains only concrete objects plus an
+/// optional null member, which can be preserved as a checker-level union even
+/// though codegen materializes the value through boxed `Mixed` storage.
+fn object_match_arm_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void)),
+        _ => false,
+    }
 }
 
 /// Widens a match arm type to also admit PHP null, for merges where another
