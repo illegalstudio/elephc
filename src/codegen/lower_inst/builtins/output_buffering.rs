@@ -20,21 +20,358 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::callable_descriptor;
+use crate::codegen_support::callable_dispatch;
+use crate::codegen_support::runtime::{
+    OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_NTC_CREATE_FAIL,
+    OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
+};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
+use super::super::callables::runtime_string_descriptor_cases;
 use super::super::super::context::FunctionContext;
 use super::{load_value_to_first_int_arg, store_if_result};
 
-/// Lowers `ob_start([$callback[, $chunk_size[, $flags]]])` to `__rt_ob_start`.
+/// Lowers `ob_start([$callback[, $chunk_size[, $flags]]])` to `__rt_ob_start_ex`.
 ///
-/// The operands were already evaluated as separate EIR instructions (preserving
-/// side effects) and are intentionally unused: the checker only admits a `null`
-/// callback, and chunk size/flags are inert in elephc's buffer model.
+/// Resolves the handler triple (invocation stub, env word, display name) from
+/// the callback operand: `null` selects the default handler; a `Callable`
+/// descriptor is retained and invoked through `__rt_ob_invoke_descriptor`; a
+/// runtime string dispatches through the shared callable descriptor cases (a
+/// miss raises PHP's invalid-callback warning and returns `false`); a boxed
+/// `Mixed` value unboxes to one of those shapes at run time.
 pub(crate) fn lower_ob_start(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "ob_start", 0, 3)?;
-    abi::emit_call_label(ctx.emitter, "__rt_ob_start");
+    // Stage 1: push the handler triple as two pairs: [name_ptr, name_len]
+    // first, then [stub, env] on top. A stub of -1 marks "callback rejected"
+    // (warnings already written); the call is skipped and false returned.
+    match inst.operands.first().copied() {
+        None => emit_push_default_handler_triple(ctx),
+        Some(callback) => match ctx.value_php_type(callback)?.codegen_repr() {
+            PhpType::Void => emit_push_default_handler_triple(ctx),
+            PhpType::Callable => {
+                ctx.load_value_to_result(callback)?;
+                emit_push_descriptor_handler_triple(ctx);
+            }
+            PhpType::Str => {
+                super::io::load_string_to_result(ctx, callback, "ob_start callback name")?;
+                emit_push_string_handler_triple(ctx)?;
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                load_value_to_first_int_arg(ctx, callback)?;
+                emit_push_mixed_handler_triple(ctx)?;
+            }
+            ty => {
+                return Err(CodegenIrError::unsupported(format!(
+                    "ob_start callback for PHP type {:?}",
+                    ty
+                )));
+            }
+        },
+    }
+    // Stage 2: stage the chunk size and flags (defaults 0 / STDFLAGS).
+    match inst.operands.get(1).copied() {
+        Some(chunk) => resolve_integer_arg_to_result(ctx, chunk, "ob_start chunk_size")?,
+        None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0),
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match inst.operands.get(2).copied() {
+        Some(flags) => resolve_integer_arg_to_result(ctx, flags, "ob_start flags")?,
+        None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 112),
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    // Stage 3: assemble the __rt_ob_start_ex arguments and call (or fail).
+    let fail_label = ctx.next_label("ob_start_rejected");
+    let done_label = ctx.next_label("ob_start_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg(ctx.emitter, "x2");
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            abi::emit_pop_reg_pair(ctx.emitter, "x4", "x5");
+            ctx.emitter.instruction("cmn x0, #1");                              // was the callback rejected (stub sentinel -1)?
+            ctx.emitter.instruction(&format!("b.eq {}", fail_label));           // skip the buffer creation after a rejected callback
+            abi::emit_call_label(ctx.emitter, "__rt_ob_start_ex");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // return the runtime success flag
+            ctx.emitter.label(&fail_label);
+            ctx.emitter.instruction("mov x0, #0");                              // a rejected callback makes ob_start() return false
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg(ctx.emitter, "rdx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");
+            ctx.emitter.instruction("cmp rdi, -1");                             // was the callback rejected (stub sentinel -1)?
+            ctx.emitter.instruction(&format!("je {}", fail_label));             // skip the buffer creation after a rejected callback
+            abi::emit_call_label(ctx.emitter, "__rt_ob_start_ex");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // return the runtime success flag
+            ctx.emitter.label(&fail_label);
+            ctx.emitter.instruction("xor eax, eax");                            // a rejected callback makes ob_start() return false
+            ctx.emitter.label(&done_label);
+        }
+    }
     store_if_result(ctx, inst)
+}
+
+/// Pushes the default-handler triple: the "default output handler" name pair,
+/// then a zero stub/env pair.
+fn emit_push_default_handler_triple(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x4", "_ob_handler_name");
+            abi::emit_load_int_immediate(ctx.emitter, "x5", OB_DEFAULT_HANDLER_NAME.len() as i64);
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x5");
+            ctx.emitter.instruction("mov x4, #0");                              // no handler stub (default handler)
+            ctx.emitter.instruction("mov x5, #0");                              // no handler env word
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x5");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r8", "_ob_handler_name");
+            abi::emit_load_int_immediate(ctx.emitter, "r9", OB_DEFAULT_HANDLER_NAME.len() as i64);
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+            ctx.emitter.instruction("xor r8d, r8d");                            // no handler stub (default handler)
+            ctx.emitter.instruction("xor r9d, r9d");                            // no handler env word
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+        }
+    }
+}
+
+/// Pushes the handler triple for a callable descriptor held in the integer
+/// result register: name from the descriptor's php_name (or
+/// "Closure::__invoke"), a retain, and the descriptor-invoker stub.
+fn emit_push_descriptor_handler_triple(ctx: &mut FunctionContext<'_>) {
+    let closure_name = ctx.next_label("ob_start_closure_name");
+    let name_ready = ctx.next_label("ob_start_name_ready");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x4, [x0]");                            // load the descriptor kind
+            ctx.emitter.instruction("cmp x4, #4");                              // closure/first-class/adapter kinds (1..3)?
+            ctx.emitter.instruction(&format!("b.lo {}", closure_name));         // closure-shaped handlers report Closure::__invoke like PHP
+            ctx.emitter.instruction("ldr x4, [x0, #16]");                       // load the descriptor's PHP name pointer
+            ctx.emitter.instruction("ldr x5, [x0, #24]");                       // load the descriptor's PHP name length
+            ctx.emitter.instruction(&format!("cbnz x4, {}", name_ready));       // a named callable keeps its PHP name
+            ctx.emitter.label(&closure_name);
+            abi::emit_symbol_address(ctx.emitter, "x4", "_ob_closure_invoke_name");
+            abi::emit_load_int_immediate(ctx.emitter, "x5", OB_CLOSURE_INVOKE_NAME.len() as i64);
+            ctx.emitter.label(&name_ready);
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x5");
+            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+            abi::emit_symbol_address(ctx.emitter, "x4", "__rt_ob_invoke_descriptor");
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r8, QWORD PTR [rax]");                 // load the descriptor kind
+            ctx.emitter.instruction("cmp r8, 4");                               // closure/first-class/adapter kinds (1..3)?
+            ctx.emitter.instruction(&format!("jb {}", closure_name));           // closure-shaped handlers report Closure::__invoke like PHP
+            ctx.emitter.instruction("mov r8, QWORD PTR [rax + 16]");            // load the descriptor's PHP name pointer
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 24]");            // load the descriptor's PHP name length
+            ctx.emitter.instruction("test r8, r8");                             // does the descriptor carry a PHP name?
+            ctx.emitter.instruction(&format!("jnz {}", name_ready));            // a named callable keeps its PHP name
+            ctx.emitter.label(&closure_name);
+            abi::emit_symbol_address(ctx.emitter, "r8", "_ob_closure_invoke_name");
+            abi::emit_load_int_immediate(ctx.emitter, "r9", OB_CLOSURE_INVOKE_NAME.len() as i64);
+            ctx.emitter.label(&name_ready);
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+            abi::emit_symbol_address(ctx.emitter, "r8", "__rt_ob_invoke_descriptor");
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "rax");
+        }
+    }
+}
+
+/// Pushes the handler triple for a runtime string callback name held in the
+/// platform string result registers: the name itself becomes the display name,
+/// and the shared callable descriptor cases resolve the target. A miss writes
+/// PHP's invalid-callback warning plus the failed-create notice and pushes the
+/// -1 rejection sentinel.
+fn emit_push_string_handler_triple(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, len_reg) = (ptr_reg.to_string(), len_reg.to_string());
+    abi::emit_push_reg_pair(ctx.emitter, &ptr_reg, &len_reg);
+    let call_reg = abi::nested_call_reg(ctx.emitter);
+    let cases = runtime_string_descriptor_cases(ctx, None)?;
+    let matched_join = ctx.next_label("ob_start_cb_matched");
+    let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
+        ptr_offset: 0,
+        len_offset: 8,
+        call_reg,
+    };
+    for case in &cases {
+        let next_case = ctx.next_label("ob_start_cb_next");
+        let matched_label = ctx.next_label("ob_start_cb_case");
+        callable_dispatch::emit_branch_if_callable_case_mismatch(
+            &selector,
+            case,
+            &next_case,
+            ctx.emitter,
+            &matched_label,
+            ctx.data,
+        );
+        abi::emit_jump(ctx.emitter, &matched_join);
+        ctx.emitter.label(&next_case);
+    }
+    // -- miss: PHP's invalid-callback warning + failed-create notice --
+    emit_static_funnel_write(
+        ctx,
+        "_ob_warn_bad_callback_prefix",
+        OB_WARN_BAD_CALLBACK_PREFIX.len(),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp]");                            // warning body = the rejected callback name pointer
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // warning body length = the rejected name length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // warning body = the rejected callback name pointer
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // warning body length = the rejected name length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+    emit_static_funnel_write(
+        ctx,
+        "_ob_warn_bad_callback_suffix",
+        OB_WARN_BAD_CALLBACK_SUFFIX.len(),
+    );
+    emit_static_funnel_write(ctx, "_ob_ntc_create_fail", OB_NTC_CREATE_FAIL.len());
+    emit_push_rejection_sentinel(ctx);
+    let stage_done = ctx.next_label("ob_start_cb_staged");
+    abi::emit_jump(ctx.emitter, &stage_done);
+    // -- match: the descriptor sits in the nested-call register --
+    ctx.emitter.label(&matched_join);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x0, {}", call_reg));          // move the matched descriptor into the retain register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rax, {}", call_reg));         // move the matched descriptor into the retain register
+        }
+    }
+    callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x4", "__rt_ob_invoke_descriptor");
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r8", "__rt_ob_invoke_descriptor");
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "rax");
+        }
+    }
+    ctx.emitter.label(&stage_done);
+    Ok(())
+}
+
+/// Pushes the handler triple for a boxed `Mixed` callback: unboxes the cell and
+/// dispatches on its runtime tag (callable descriptor, string name, null, or —
+/// for anything else — PHP's generic invalid-callback warning + rejection).
+fn emit_push_mixed_handler_triple(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let desc_case = ctx.next_label("ob_start_mixed_desc");
+    let string_case = ctx.next_label("ob_start_mixed_string");
+    let null_case = ctx.next_label("ob_start_mixed_null");
+    let bad_case = ctx.next_label("ob_start_mixed_bad");
+    let staged = ctx.next_label("ob_start_mixed_staged");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // is the boxed callback a callable descriptor?
+            ctx.emitter.instruction(&format!("b.eq {}", desc_case));            // dispatch the descriptor shape
+            ctx.emitter.instruction("cmp x0, #1");                              // is the boxed callback a string name?
+            ctx.emitter.instruction(&format!("b.eq {}", string_case));          // dispatch the string shape
+            ctx.emitter.instruction("cmp x0, #8");                              // is the boxed callback null?
+            ctx.emitter.instruction(&format!("b.eq {}", null_case));            // null selects the default handler
+            ctx.emitter.instruction(&format!("b {}", bad_case));                // anything else is not a supported handler
+            ctx.emitter.label(&desc_case);
+            ctx.emitter.instruction("mov x0, x1");                              // descriptor pointer = the unboxed low payload word
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 10");                             // is the boxed callback a callable descriptor?
+            ctx.emitter.instruction(&format!("je {}", desc_case));              // dispatch the descriptor shape
+            ctx.emitter.instruction("cmp rax, 1");                              // is the boxed callback a string name?
+            ctx.emitter.instruction(&format!("je {}", string_case));            // dispatch the string shape
+            ctx.emitter.instruction("cmp rax, 8");                              // is the boxed callback null?
+            ctx.emitter.instruction(&format!("je {}", null_case));              // null selects the default handler
+            ctx.emitter.instruction(&format!("jmp {}", bad_case));              // anything else is not a supported handler
+            ctx.emitter.label(&desc_case);
+            ctx.emitter.instruction("mov rax, rdi");                            // descriptor pointer = the unboxed low payload word
+        }
+    }
+    emit_push_descriptor_handler_triple(ctx);
+    abi::emit_jump(ctx.emitter, &staged);
+    ctx.emitter.label(&string_case);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // string pointer = the unboxed low payload word
+    }
+    emit_push_string_handler_triple(ctx)?;
+    abi::emit_jump(ctx.emitter, &staged);
+    ctx.emitter.label(&null_case);
+    emit_push_default_handler_triple(ctx);
+    abi::emit_jump(ctx.emitter, &staged);
+    ctx.emitter.label(&bad_case);
+    emit_static_funnel_write(
+        ctx,
+        "_ob_warn_bad_callback_generic",
+        OB_WARN_BAD_CALLBACK_GENERIC.len(),
+    );
+    emit_static_funnel_write(ctx, "_ob_ntc_create_fail", OB_NTC_CREATE_FAIL.len());
+    emit_push_default_handler_name_pair(ctx);
+    emit_push_rejection_sentinel_pair_only(ctx);
+    ctx.emitter.label(&staged);
+    Ok(())
+}
+
+/// Writes one static diagnostic line through the capture-aware stdout funnel.
+fn emit_static_funnel_write(ctx: &mut FunctionContext<'_>, symbol: &str, len: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x0", symbol);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", symbol);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+}
+
+/// Pushes the default handler name pair (used before a rejection sentinel).
+fn emit_push_default_handler_name_pair(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x4", "_ob_handler_name");
+            abi::emit_load_int_immediate(ctx.emitter, "x5", OB_DEFAULT_HANDLER_NAME.len() as i64);
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x5");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r8", "_ob_handler_name");
+            abi::emit_load_int_immediate(ctx.emitter, "r9", OB_DEFAULT_HANDLER_NAME.len() as i64);
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+        }
+    }
+}
+
+/// Pushes the rejection sentinel stub/env pair on top of an already-pushed
+/// name pair (string-miss path: the rejected name stays as the name pair).
+fn emit_push_rejection_sentinel(ctx: &mut FunctionContext<'_>) {
+    emit_push_rejection_sentinel_pair_only(ctx);
+}
+
+/// Pushes only the -1 stub / 0 env rejection sentinel pair.
+fn emit_push_rejection_sentinel_pair_only(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x4, #-1");                             // stub sentinel -1 marks a rejected callback
+            ctx.emitter.instruction("mov x5, #0");                              // rejected callbacks carry no env word
+            abi::emit_push_reg_pair(ctx.emitter, "x4", "x5");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r8, -1");                              // stub sentinel -1 marks a rejected callback
+            ctx.emitter.instruction("xor r9d, r9d");                            // rejected callbacks carry no env word
+            abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+        }
+    }
 }
 
 /// Lowers `ob_get_contents()` and boxes the runtime string-or-false result.
@@ -48,48 +385,27 @@ pub(crate) fn lower_ob_get_contents(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `ob_get_clean()`: capture the top buffer's contents, then discard the
-/// buffer, returning the captured string (or `false` when no buffer is active).
+/// Lowers `ob_get_clean()` through the composite runtime helper: REMOVABLE
+/// gating, handler CLEAN|FINAL phase, pop, and the raw contents (or `false`).
 pub(crate) fn lower_ob_get_clean(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_ob_get_then_end(ctx, inst, "ob_get_clean", "__rt_ob_end_clean")
+    ensure_arg_count_between(inst, "ob_get_clean", 0, 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_ob_get_clean_pop");
+    super::io::box_owned_string_or_false_result(ctx, "ob_get_clean");
+    store_if_result(ctx, inst)
 }
 
-/// Lowers `ob_get_flush()`: capture the top buffer's contents, then flush the
-/// buffer to the parent sink and pop it, returning the captured string.
+/// Lowers `ob_get_flush()` through the composite runtime helper: REMOVABLE
+/// gating, handler FINAL phase, parent-sink flush, pop, and the raw contents.
 pub(crate) fn lower_ob_get_flush(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_ob_get_then_end(ctx, inst, "ob_get_flush", "__rt_ob_end_flush")
-}
-
-/// Shared lowering for `ob_get_clean`/`ob_get_flush`: persist the contents first,
-/// run the pop helper (a no-op returning 0 when no buffer is active), and box the
-/// persisted string-or-false pair. `name` is used for diagnostics only.
-fn lower_ob_get_then_end(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    end_symbol: &str,
-) -> Result<()> {
-    ensure_arg_count_between(inst, name, 0, 0)?;
-    abi::emit_call_label(ctx.emitter, "__rt_ob_contents");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            abi::emit_call_label(ctx.emitter, end_symbol);
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-        }
-        Arch::X86_64 => {
-            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            abi::emit_call_label(ctx.emitter, end_symbol);
-            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-        }
-    }
-    super::io::box_owned_string_or_false_result(ctx, name);
+    ensure_arg_count_between(inst, "ob_get_flush", 0, 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_ob_get_flush_pop");
+    super::io::box_owned_string_or_false_result(ctx, "ob_get_flush");
     store_if_result(ctx, inst)
 }
 

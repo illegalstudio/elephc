@@ -6,10 +6,11 @@
 //!   and the EIR backend (lower hook), all via `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` rejects a non-null `$callback`: elephc does not support user output
-//! -   handlers, so only the default (null) handler is accepted.
-//! - `chunk_size`/`flags` are accepted for signature parity but are inert: buffers
-//! -   are unchunked and always cleanable/flushable/removable (the standard flags).
+//! - Output handlers are supported: closures, first-class callables, function
+//!   name strings, and boxed Mixed callables run on flush/clean with PHP's
+//!   phase bits; array-pair callables are rejected at compile time.
+//! - `chunk_size` arms PHP's auto-flush threshold; `flags` gate
+//!   cleanable/flushable/removable behavior exactly like PHP.
 //! - `lower` is a thin wrapper over `output_buffering::lower_ob_start`.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -35,14 +36,18 @@ builtin! {
     php_manual: "function.ob-start",
 }
 
-/// Returns `Bool`, rejecting any non-null `$callback`: user output handlers are
-/// not supported by elephc, so only the default (null) handler is accepted.
+/// Returns `Bool`. Output handlers are supported for `null`, closures,
+/// first-class callables, function-name strings, and boxed `Mixed` callables;
+/// array-pair callables (`[$obj, 'method']`) are rejected at compile time.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(callback) = cx.args.first() {
-        if !matches!(callback.kind, ExprKind::Null) {
+        if matches!(
+            callback.kind,
+            ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+        ) {
             return Err(CompileError::new(
                 cx.span,
-                "ob_start() output handler callbacks are not supported; pass null",
+                "ob_start() array output-handler callbacks are not supported; use a closure or function name",
             ));
         }
     }
