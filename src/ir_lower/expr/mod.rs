@@ -14051,6 +14051,26 @@ fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
+    // Fluent `with*` wither (@return static): a method declared to return a strict
+    // ancestor interface of the receiver interface actually returns the receiver.
+    // Must agree with `infer_method_call_on_interface_type`.
+    let fluent_receiver = if let (Some((recv_name, _)), PhpType::Object(return_name)) =
+        (singular_object_class(&object_ty), &return_ty)
+    {
+        if php_symbol_key(method).starts_with("with")
+            && ctx.interfaces.contains_key(recv_name.trim_start_matches('\\'))
+            && php_symbol_key(return_name.trim_start_matches('\\'))
+                != php_symbol_key(recv_name.trim_start_matches('\\'))
+            && interface_extends_interface_for_ir(ctx, recv_name, return_name)
+        {
+            Some(recv_name.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let return_ty = fluent_receiver.map(PhpType::Object).unwrap_or(return_ty);
     if op == Op::NullsafeMethodCall && nullable {
         nullable_result_type(return_ty)
     } else {

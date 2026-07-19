@@ -651,13 +651,22 @@ try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
 }
 
 /// The builtin exception constructors accept PHP's third `$previous` parameter (positional or
-/// the `previous:` named argument). It is not stored — `getPrevious()` remains synthesized as
-/// null — but wrap-and-rethrow code compiles and the message/code round-trip is byte-identical
-/// to PHP 8.5.
+/// the `previous:` named argument), store it on the Throwable payload, and expose it through
+/// `getPrevious()`. Byte-parity vs PHP 8.5 for message/code/`getPrevious()` round-trips.
 #[test]
 fn test_exception_constructor_accepts_previous() {
     let out = compile_and_run(
-        "<?php function f(): string { try { try { throw new \\ValueError('inner'); } catch (\\ValueError $e) { throw new \\InvalidArgumentException('outer: ' . $e->getMessage(), $e->getCode(), previous: $e); } } catch (\\InvalidArgumentException $x) { return $x->getMessage() . '/' . $x->getCode(); } } echo f();",
+        "<?php function f(): string { try { try { throw new \\ValueError('inner'); } catch (\\ValueError $e) { throw new \\InvalidArgumentException('outer: ' . $e->getMessage(), $e->getCode(), previous: $e); } } catch (\\InvalidArgumentException $x) { $prev = $x->getPrevious(); return $x->getMessage() . '/' . $x->getCode() . '/' . ($prev === null ? 'none' : $prev->getMessage()); } } echo f();",
     );
-    assert_eq!(out, "outer: inner/0");
+    assert_eq!(out, "outer: inner/0/inner");
+}
+
+/// `getPrevious()` returns `?Throwable`; method calls on that nullable interface type must use
+/// compact Throwable intrinsics (the interface vtable slots stay empty for builtins).
+#[test]
+fn test_nullable_throwable_get_message_via_previous() {
+    let out = compile_and_run(
+        "<?php function show(?Throwable $t): string { return $t === null ? 'null' : $t->getMessage(); } $inner = new ValueError('inner'); $outer = new Exception('outer', 0, $inner); echo show($outer->getPrevious());",
+    );
+    assert_eq!(out, "inner");
 }

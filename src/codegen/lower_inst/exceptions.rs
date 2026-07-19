@@ -50,7 +50,7 @@ fn emit_static_exception(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 32);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
@@ -61,11 +61,12 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            ctx.emitter.instruction("str xzr, [x0, #40]"); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 32);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap kind 6 with the runtime magic marker
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
@@ -76,6 +77,7 @@ fn emit_static_exception(
             abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0"); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
@@ -166,7 +168,7 @@ fn emit_uncaught_dynamic_error_fatal_if_no_handler(ctx: &mut FunctionContext<'_>
 fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 32);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
@@ -177,12 +179,13 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            ctx.emitter.instruction("str xzr, [x0, #40]"); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 32);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap kind 6 with the runtime magic marker
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
@@ -193,6 +196,7 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0"); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");

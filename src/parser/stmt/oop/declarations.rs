@@ -33,17 +33,18 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'class'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
+    let name = match tokens.get(*pos) {
+        Some((Token::Identifier(n), _)) => {
             let n = n.clone();
             *pos += 1;
             n
         }
         // `enum` is only a soft keyword — `class Enum {}` is legal PHP (vendor precedent:
-        // marc-mabe/php-enum). The lexer always tokenizes the word, so accept it here.
-        Some(Token::Enum) => {
+        // marc-mabe/php-enum). Preserve source spelling via token metadata.
+        Some((Token::Enum, meta)) => {
             *pos += 1;
-            "Enum".to_string()
+            crate::parser::keyword_name::bareword_name_from_token(&Token::Enum, meta)
+                .unwrap_or_else(|| "enum".to_string())
         }
         _ => return Err(CompileError::new(span, "Expected class name after 'class'")),
     };

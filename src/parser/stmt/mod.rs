@@ -471,14 +471,18 @@ pub(crate) fn expect_token(
     }
 }
 
-/// Returns true if the token at `pos` is the start of a PHP name (identifier or backslash).
+/// Returns true if the token at `pos` is the start of a PHP name (identifier, soft keyword, or backslash).
 ///
-/// Used to distinguish name-based declarations from generic expression statements.
+/// Soft keywords such as `enum` are valid class/interface/trait names in PHP, so `implements Enum`
+/// and similar name lists must treat `Token::Enum` as a bareword name start.
 pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
-    matches!(
-        tokens.get(pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Backslash)
-    )
+    match tokens.get(pos) {
+        Some((Token::Identifier(_), _)) | Some((Token::Backslash, _)) => true,
+        Some((token, meta)) => {
+            crate::parser::keyword_name::bareword_name_from_token(token, meta).is_some()
+        }
+        None => false,
+    }
 }
 
 /// Parses a PHP qualified or unqualified name from the token stream.
@@ -501,19 +505,24 @@ pub(crate) fn parse_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
+        match tokens.get(*pos) {
+            Some((Token::Identifier(name), _)) => {
                 parts.push(name.clone());
                 *pos += 1;
             }
             // `enum` is only a soft keyword: `Enum` is a legal class name and name segment
             // (`new Enum`, `extends Enum`, `MabeEnum\Enum`). Statement-position `enum`
             // dispatches to the enum-declaration parser before parse_name is consulted.
-            Some(Token::Enum) => {
-                parts.push("Enum".to_string());
+            Some((Token::Enum, meta)) => {
+                parts.push(
+                    crate::parser::keyword_name::bareword_name_from_token(&Token::Enum, meta)
+                        .unwrap_or_else(|| "enum".to_string()),
+                );
                 *pos += 1;
             }
-            _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ if parts.is_empty() => {
+                return Err(CompileError::new(span, first_error))
+            }
             _ => {
                 return Err(CompileError::new(
                     span,

@@ -286,6 +286,18 @@ impl Checker {
             env,
             &format!("Method {}::{}", interface_name, method),
         )?;
+        // Immutable "wither" fluent methods (PSR-FIG `with*`): declared return is often an
+        // ancestor interface while runtime returns `clone $this` / `@return static`. Keep the
+        // receiver interface so descendant-only chained calls still resolve.
+        if method_key.starts_with("with") {
+            if let PhpType::Object(return_name) = &sig.return_type {
+                if return_name != interface_name
+                    && self.interface_extends_interface(interface_name, return_name)
+                {
+                    return Ok(PhpType::Object(interface_name.to_string()));
+                }
+            }
+        }
         Ok(sig.return_type)
     }
 

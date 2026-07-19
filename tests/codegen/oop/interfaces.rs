@@ -363,3 +363,43 @@ fn test_interface_covariant_self_return() {
     );
     assert_eq!(out, "ok");
 }
+
+/// PSR-FIG immutable "wither" fluent methods carry `@return static` but declare the ancestor
+/// interface as the return type. Called through a descendant-interface receiver, the result must
+/// keep the receiver's type so a subsequent descendant-only call resolves.
+#[test]
+fn test_interface_wither_ancestor_return_stays_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface Message {
+    public function withHeader(string $value): Message;
+    public function body(): string;
+}
+interface Request extends Message {
+    public function withMethod(string $method): Request;
+    public function method(): string;
+}
+final class Req implements Request {
+    public function __construct(private string $verb = 'GET', private string $payload = '') {}
+    public function withHeader(string $value): Message { return new Req($this->verb, $value); }
+    public function withMethod(string $method): Request { return new Req($method, $this->payload); }
+    public function body(): string { return $this->payload; }
+    public function method(): string { return $this->verb; }
+}
+function chain(Request $r): string {
+    return $r->withHeader('x-trace')->withMethod('POST')->method();
+}
+echo chain(new Req());
+"#,
+    );
+    assert_eq!(out, "POST");
+}
+
+/// Parent method returns the parent class; child may override with `static` / self (covariant).
+#[test]
+fn test_class_covariant_self_return_override() {
+    let out = compile_and_run(
+        "<?php class Base { public function w(): Base { return $this; } } class Child extends Base { public function w(): static { return $this; } } echo (new Child())->w() instanceof Child ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}

@@ -119,13 +119,21 @@ fn test_example_v017_trio_compiles_and_runs() {
     assert_eq!(out, "health:[ok]:missing");
 }
 
-/// EC-10 (#493): `enum` is only a soft keyword — `class Enum {}` is legal PHP (vendor
-/// precedent: marc-mabe/php-enum). The always-tokenizing lexer must not block the class
-/// declaration. Byte-parity vs PHP 8.5.
+/// EC-10: `enum` is only a soft keyword — `class Enum {}` / `interface Enum` / `new Enum`
+/// are legal PHP (vendor precedent: marc-mabe/php-enum). Byte-parity vs PHP 8.5.
 #[test]
 fn test_class_named_enum_declares() {
     let out = compile_and_run(
         "<?php class Enum { public function tag(): string { return 'e'; } } echo (new Enum())->tag();",
     );
     assert_eq!(out, "e");
+}
+
+/// Soft-keyword `enum` is also legal as an interface name.
+#[test]
+fn test_interface_named_enum_declares() {
+    let out = compile_and_run(
+        "<?php interface Enum { public function tag(): string; } class C implements Enum { public function tag(): string { return 'i'; } } echo (new C())->tag();",
+    );
+    assert_eq!(out, "i");
 }

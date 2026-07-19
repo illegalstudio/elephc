@@ -60,7 +60,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_throw_error_return");                   // bail out when throwing is not requested
 
     // Allocate a 32-byte JsonException payload (class_id + message ptr/len + code).
-    emitter.instruction("mov x0, #32");                                         // size = class_id (8) + message ptr/len (16) + code (8)
+    emitter.instruction("mov x0, #56");                                         // size = class_id + message + code + previous slots
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the JsonException payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object
     emitter.instruction("str x9, [x0, #-8]");                                   // tag the allocation as an object in the uniform header
@@ -78,6 +78,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("str x2, [x0, #16]");                                   // obj.message_len
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the saved error code for $code field
     emitter.instruction("str x10, [x0, #24]");                                  // obj.code (matches Exception's `code` property layout)
+    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
 
     // Publish the new exception object via _exc_value and longjmp to the
     // active catch handler through the standard throw helper.
@@ -159,7 +160,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdx, 0x400000");                                  // JSON_THROW_ON_ERROR = 0x400000
     emitter.instruction("je __rt_json_throw_error_return_x");                   // bail out when throwing is not requested
 
-    emitter.instruction("mov rax, 32");                                         // size = class_id (8) + message ptr/len (16) + code (8)
+    emitter.instruction("mov rax, 56");                                         // size = class_id + message + code + previous slots
     emitter.instruction("call __rt_heap_alloc");                                // allocate the JsonException payload (rax = payload ptr)
     emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 (object)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the allocation as an object in the uniform header
@@ -176,6 +177,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // obj.message_len
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the saved error code for $code field
     emitter.instruction("mov QWORD PTR [rax + 24], rcx");                       // obj.code (matches Exception's `code` property layout)
+    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
 
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = JsonException pointer
     emitter.instruction("mov rsp, rbp");                                        // unwind the helper scratch frame before tail-call

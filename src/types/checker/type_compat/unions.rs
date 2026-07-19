@@ -96,7 +96,7 @@ impl Checker {
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
                 PhpType::Array(actual_elem)
-                    if matches!(expected_key.as_ref(), PhpType::Mixed)
+                    if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
                 {
                     true

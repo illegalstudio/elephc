@@ -156,8 +156,8 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 | Symbol | Kind | Description |
 |---|---|---|
 | `JsonSerializable` | Interface | Implementing classes can override `jsonSerialize(): mixed`; `json_encode()` dispatches to it instead of walking public properties. |
-| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. `FiberError` extends this class. |
-| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. |
+| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. `FiberError` extends this class. |
+| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. |
 | `RuntimeException` | Class | `extends Exception`. Standard PHP "runtime errors" base class. |
 | `JsonException` | Class | `extends RuntimeException`. Carries the originating `JSON_ERROR_*` code; `getCode()` returns it (e.g. 4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN). |
 | `stdClass` | Class | Dynamic-property container. `$obj = new stdClass(); $obj->name = "x";` works for any property name; storage is a backing hash on the instance. `json_decode($json)` returns stdClass by default (PHP semantics); pass `assoc: true` to get an associative array. |

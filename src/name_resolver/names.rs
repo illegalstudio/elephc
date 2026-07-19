@@ -348,28 +348,44 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-    if matches!(
-        name,
-        "PHP_OS"
-            | "SID"
-            | "PATHINFO_DIRNAME"
-            | "PATHINFO_BASENAME"
-            | "PATHINFO_EXTENSION"
-            | "PATHINFO_FILENAME"
-            | "PATHINFO_ALL"
-            | "FNM_NOESCAPE"
-            | "FNM_PATHNAME"
-            | "FNM_PERIOD"
-            | "FNM_CASEFOLD"
-            | "ARRAY_FILTER_USE_VALUE"
-            | "ARRAY_FILTER_USE_BOTH"
-            | "ARRAY_FILTER_USE_KEY"
-            | "STDIN"
-            | "STDOUT"
-            | "STDERR"
-    ) {
-        return true;
-    }
+        if matches!(
+            name,
+            "PHP_OS"
+                | "SID"
+                | "PATHINFO_DIRNAME"
+                | "PATHINFO_BASENAME"
+                | "PATHINFO_EXTENSION"
+                | "PATHINFO_FILENAME"
+                | "PATHINFO_ALL"
+                | "FNM_NOESCAPE"
+                | "FNM_PATHNAME"
+                | "FNM_PERIOD"
+                | "FNM_CASEFOLD"
+                | "ARRAY_FILTER_USE_VALUE"
+                | "ARRAY_FILTER_USE_BOTH"
+                | "ARRAY_FILTER_USE_KEY"
+                | "STDIN"
+                | "STDOUT"
+                | "STDERR"
+                | "PHP_INT_MAX"
+                | "PHP_INT_MIN"
+                | "PHP_FLOAT_MAX"
+                | "PHP_FLOAT_MIN"
+                | "PHP_FLOAT_EPSILON"
+                | "INF"
+                | "NAN"
+                | "M_PI"
+                | "M_E"
+                | "M_SQRT2"
+                | "M_PI_2"
+                | "M_PI_4"
+                | "M_LOG2E"
+                | "M_LOG10E"
+                | "PHP_EOL"
+                | "DIRECTORY_SEPARATOR"
+        ) {
+            return true;
+        }
     // Shared source-of-truth slices for JSON, stream/socket, and session constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()

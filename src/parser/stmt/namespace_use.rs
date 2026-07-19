@@ -257,30 +257,33 @@ fn parse_group_use_items(
 /// Canonical import spelling for constant-like tokens the lexer eagerly tokenizes.
 ///
 /// `use const PHP_INT_MAX;` is legal PHP, but `PHP_INT_MAX` never reaches the parser as an
-/// identifier — the lexer emits a dedicated token (expressions lower these to literals
-/// directly, so the import itself is inert). Accepting them here keeps such use
-/// declarations parseable.
-fn token_as_import_name(token: &Token) -> Option<String> {
-    let name = match token {
-        Token::PhpIntMax => "PHP_INT_MAX",
-        Token::PhpIntMin => "PHP_INT_MIN",
-        Token::PhpFloatMax => "PHP_FLOAT_MAX",
-        Token::PhpFloatMin => "PHP_FLOAT_MIN",
-        Token::PhpFloatEpsilon => "PHP_FLOAT_EPSILON",
-        Token::Inf => "INF",
-        Token::Nan => "NAN",
-        Token::MPi => "M_PI",
-        Token::ME => "M_E",
-        Token::MSqrt2 => "M_SQRT2",
-        Token::MPi2 => "M_PI_2",
-        Token::MPi4 => "M_PI_4",
-        Token::MLog2e => "M_LOG2E",
-        Token::MLog10e => "M_LOG10E",
-        Token::Stdin => "STDIN",
-        Token::Stdout => "STDOUT",
-        _ => return None,
-    };
-    Some(name.to_string())
+/// identifier — the lexer emits a dedicated token. Accepting them here keeps such use
+/// declarations parseable; aliases resolve through the normal constant import table because
+/// the same names are seeded in the checker/prescan constant maps.
+fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+    match token {
+        Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::Inf
+        | Token::Nan
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
+        | Token::Stdin
+        | Token::Stdout
+        | Token::Stderr
+        | Token::PhpEol
+        | Token::PhpOs
+        | Token::DirectorySeparator => token.word_spelling(metadata).map(str::to_string),
+        _ => None,
+    }
 }
 
 fn parse_use_prefix(
@@ -296,13 +299,13 @@ fn parse_use_prefix(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
+        match tokens.get(*pos) {
+            Some((Token::Identifier(name), _)) => {
                 parts.push(name.clone());
                 *pos += 1;
             }
-            Some(token) if token_as_import_name(token).is_some() => {
-                if let Some(name) = token_as_import_name(token) {
+            Some((token, meta)) if token_as_import_name(token, meta).is_some() => {
+                if let Some(name) = token_as_import_name(token, meta) {
                     parts.push(name);
                 }
                 *pos += 1;

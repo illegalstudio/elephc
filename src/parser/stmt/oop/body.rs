@@ -33,11 +33,17 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'interface'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
+    let name = match tokens.get(*pos) {
+        Some((Token::Identifier(n), _)) => {
             let n = n.clone();
             *pos += 1;
             n
+        }
+        // Soft keyword: `interface Enum` is legal PHP class-like naming.
+        Some((Token::Enum, meta)) => {
+            *pos += 1;
+            crate::parser::keyword_name::bareword_name_from_token(&Token::Enum, meta)
+                .unwrap_or_else(|| "enum".to_string())
         }
         _ => {
             return Err(CompileError::new(
@@ -94,11 +100,17 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'trait'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
+    let name = match tokens.get(*pos) {
+        Some((Token::Identifier(n), _)) => {
             let n = n.clone();
             *pos += 1;
             n
+        }
+        // Soft keyword: `trait Enum` is legal PHP class-like naming.
+        Some((Token::Enum, meta)) => {
+            *pos += 1;
+            crate::parser::keyword_name::bareword_name_from_token(&Token::Enum, meta)
+                .unwrap_or_else(|| "enum".to_string())
         }
         _ => return Err(CompileError::new(span, "Expected trait name after 'trait'")),
     };
