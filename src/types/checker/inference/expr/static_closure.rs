@@ -417,6 +417,18 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             }
             Ok(())
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(method, span)?;
+            for arg in args {
+                expr_must_not_use_this(arg, span)?;
+            }
+            Ok(())
+        }
         ExprKind::ArrayLiteral(items) => {
             for item in items {
                 expr_must_not_use_this(item, span)?;

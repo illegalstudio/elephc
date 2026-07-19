@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_product.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:56](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L56) (`lower_array_product`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:55](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L55) (`lower_array_product`)
 - **Function symbol**: `lower_array_product()`
 
 
@@ -32,6 +32,11 @@ function array_product(array $array): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_product.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_product.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

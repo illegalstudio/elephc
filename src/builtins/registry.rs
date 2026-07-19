@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::builtins::catalog` for name-based lookup.
-//! - `crate::codegen_ir::lower_inst::builtins` for lowering-hook dispatch.
+//! - `crate::codegen::lower_inst::builtins` for lowering-hook dispatch.
 //!
 //! Key details:
 //! - Registry is initialized once at first access via a `OnceLock`; subsequent calls
@@ -44,6 +44,10 @@ pub struct BuiltinDef {
     pub variadic: Option<String>,
     /// The PHP-level return type, derived from the spec's `TypeSpec` via `type_spec_to_php`.
     pub return_type: PhpType,
+    /// Whether refcounted result variants are freshly allocated for the caller.
+    pub returns_fresh_storage: bool,
+    /// Whether the result cannot reuse any argument's storage.
+    pub returns_independent_storage: bool,
     /// Whether this function returns by reference.
     pub by_ref_return: bool,
     /// Reference back to the original static `BuiltinSpec` for hooks and metadata.
@@ -101,6 +105,9 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             ref_params,
             variadic: spec.variadic.map(str::to_string),
             return_type: type_spec_to_php(&spec.returns),
+            returns_fresh_storage: spec.returns_fresh_storage,
+            returns_independent_storage: spec.returns_fresh_storage
+                || spec.returns_independent_storage,
             by_ref_return: spec.by_ref_return,
             spec,
         };
@@ -128,6 +135,16 @@ pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
 /// Returns `true` if the given name is a known PHP builtin.
 pub fn is_supported(name: &str) -> bool {
     lookup(name).is_some()
+}
+
+/// Returns whether a builtin declares fresh caller-owned refcounted result storage.
+pub fn returns_fresh_storage(name: &str) -> bool {
+    lookup(name).is_some_and(|def| def.returns_fresh_storage)
+}
+
+/// Returns whether a builtin result cannot alias any of its argument storage.
+pub fn returns_independent_storage(name: &str) -> bool {
+    lookup(name).is_some_and(|def| def.returns_independent_storage)
 }
 
 /// Returns an iterator over all registered canonical builtin names in sorted order.
@@ -165,6 +182,8 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
     Some(FunctionSig {
         params: def.params.clone(),
+        param_type_exprs: vec![None; def.params.len()],
+        param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
         return_type: def.return_type.clone(),
         declared_return: false,
@@ -192,8 +211,62 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let sig = function_sig(name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
+    refine_first_class_callable_sig(name, &mut fcc_sig);
     fcc_sig.declared_return = true;
+    // Mark params declared for reflection hasType, but keep by-ref params
+    // undeclared: their registry type is Mixed by generality, and a declared
+    // Mixed by-ref param would make the checker demand boxed storage from
+    // every argument variable (regressing e.g. `sort(...)` on plain arrays).
+    fcc_sig.declared_params = (0..fcc_sig.params.len())
+        .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
+        .collect();
     Some(fcc_sig)
+}
+
+/// Applies first-class-callable refinements that are broader in the direct builtin spec.
+fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
+    match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "preg_replace_callback" => {
+            if let Some((_, callback_ty)) = sig.params.get_mut(1) {
+                *callback_ty = PhpType::Callable;
+            }
+        }
+        "zval_pack" => {
+            if let Some((_, value_ty)) = sig.params.get_mut(0) {
+                *value_ty = PhpType::Mixed;
+            }
+            sig.return_type = PhpType::Pointer(None);
+        }
+        "zval_unpack" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Mixed;
+        }
+        "zval_type" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Int;
+        }
+        "zval_free" => {
+            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
+                *zval_ty = PhpType::Pointer(None);
+            }
+            sig.return_type = PhpType::Void;
+        }
+        // Preserves the legacy typed first-class signature: the registry param is
+        // Mixed by generality, but the wrapper must demand a buffer so first-class
+        // use keeps rejecting non-buffer arguments at check time instead of
+        // failing later in codegen.
+        "buffer_len" => {
+            if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
+                *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+            }
+            sig.return_type = PhpType::Int;
+        }
+        _ => {}
+    }
 }
 
 /// Returns the minimum and maximum arity for the named builtin.
@@ -300,9 +373,9 @@ mod tests {
 
     /// No-op lowering hook used by test probe builtins; does nothing and succeeds.
     fn noop_lower(
-        _c: &mut crate::codegen_ir::context::FunctionContext,
+        _c: &mut crate::codegen::context::FunctionContext,
         _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen_ir::CodegenIrError> {
+    ) -> Result<(), crate::codegen::CodegenIrError> {
         Ok(())
     }
 
@@ -315,6 +388,28 @@ mod tests {
         returns: Bool,
         lower: noop_lower,
         summary: "registry arity probe",
+        internal: true,
+    }
+
+    builtin! {
+        name: "__registry_probe_owned",
+        area: Internal,
+        params: [],
+        returns: Mixed,
+        returns_fresh_storage: true,
+        lower: noop_lower,
+        summary: "registry owned-result probe",
+        internal: true,
+    }
+
+    builtin! {
+        name: "__registry_probe_independent",
+        area: Internal,
+        params: [value: Str],
+        returns: Str,
+        returns_independent_storage: true,
+        lower: noop_lower,
+        summary: "registry independent-result probe",
         internal: true,
     }
 
@@ -399,6 +494,28 @@ mod tests {
     fn lookup_is_case_insensitive() {
         assert!(lookup("__MACRO_PROBE").is_some());
         assert!(lookup("__Macro_Probe").is_some());
+    }
+
+    /// Verifies fresh-result ownership metadata is available through case-insensitive lookup.
+    #[test]
+    fn fresh_result_storage_metadata_is_queryable() {
+        assert!(returns_fresh_storage("__REGISTRY_PROBE_OWNED"));
+        assert!(!returns_fresh_storage("__registry_probe_opt"));
+        assert!(!returns_fresh_storage("__registry_probe_variadic"));
+        assert!(!returns_fresh_storage("__not_a_real_builtin_xyz"));
+    }
+
+    /// Verifies fresh and explicitly independent results both reject argument aliasing.
+    #[test]
+    fn independent_result_storage_metadata_is_queryable() {
+        assert!(returns_independent_storage("__REGISTRY_PROBE_OWNED"));
+        assert!(returns_independent_storage("__registry_probe_independent"));
+        assert!(returns_independent_storage("htmlspecialchars"));
+        assert!(returns_independent_storage("htmlentities"));
+        assert!(returns_independent_storage("implode"));
+        assert!(returns_independent_storage("rawurldecode"));
+        assert!(!returns_independent_storage("__registry_probe_opt"));
+        assert!(!returns_independent_storage("__not_a_real_builtin_xyz"));
     }
 
     /// Verifies `is_supported` returns true for registered builtins.

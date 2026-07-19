@@ -213,7 +213,7 @@ impl Checker {
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
 
-                    if let Some(guard) = self.type_guard_narrowing(cond, env) {
+                    if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
                         // Remember the variable's pre-`if` type the first time we narrow it.
                         if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
@@ -543,6 +543,10 @@ impl Checker {
         body: &[Stmt],
         env: &mut TypeEnv,
     ) -> Vec<CompileError> {
+        // A loop body may observe a property write made by an earlier iteration (the write site
+        // is *after* the read site in source order), so property narrowings from outside the
+        // loop cannot be trusted inside it.
+        Self::purge_property_narrowings(env);
         self.break_continue_depth += 1;
         let errors = self.check_body(body, env);
         self.break_continue_depth -= 1;

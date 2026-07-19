@@ -9,8 +9,8 @@
 //! - The parameter is named `resource` (matching the PHP golden signature).
 //! - `lower` is a thin wrapper over the EIR types-module resource-id emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -25,5 +25,5 @@ builtin! {
 
 /// Lowers a `get_resource_id` call by dispatching to the EIR types-module emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::types::lower_get_resource_id(ctx, inst)
+    crate::codegen::lower_inst::builtins::types::lower_get_resource_id(ctx, inst)
 }

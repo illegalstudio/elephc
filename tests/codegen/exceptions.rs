@@ -62,6 +62,32 @@ fn test_builtin_exception_message_api() {
     assert_eq!(out, "boom:boom");
 }
 
+/// Verifies `getMessage()` returns a caller-owned string without consuming the
+/// builtin Throwable payload used by later reads and `__toString()`.
+#[test]
+fn test_builtin_exception_get_message_does_not_consume_payload() {
+    let out = compile_and_run(
+        "<?php $e = new Exception(\"boom\"); echo $e->getMessage(); echo \":\"; echo $e->getMessage(); echo \":\"; echo $e->__toString();",
+    );
+    assert_eq!(out, "boom:boom:boom");
+}
+
+/// Checks that Exception messages built from temporary string results survive the throw.
+#[test]
+fn test_builtin_exception_message_persists_concatenated_temporary() {
+    let out = compile_and_run(
+        r#"<?php
+$name = "dynamic";
+try {
+    throw new Exception($name . " boom");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "dynamic boom");
+}
+
 /// Verifies builtin throwable catches exception.
 #[test]
 fn test_builtin_throwable_catches_exception() {
@@ -75,8 +101,7 @@ fn test_builtin_throwable_catches_exception() {
 #[test]
 fn test_builtin_throwable_catches_error() {
     // Throwable (the root interface) catches a builtin Error.
-    let out =
-        compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
+    let out = compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
     assert_eq!(out, "13");
 }
 

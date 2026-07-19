@@ -238,7 +238,16 @@ impl Checker {
                     ));
                 }
                 let arg_ty = self.infer_type(&args[0], env)?;
-                if !self.type_accepts(backing_ty, &arg_ty) {
+                // PHP's int-backed enum `from()`/`tryFrom()` accepts a numeric string and
+                // coerces it to the integer backing value at runtime: a numeric string with
+                // no matching case throws `ValueError`, a non-numeric string throws
+                // `TypeError`. A `Mixed`/dynamic argument (e.g. a `foreach` value or untyped
+                // parameter) coerces on its runtime tag. Accept these here and defer the
+                // coercion and error to codegen instead of rejecting at compile time
+                // (issues #349, #449).
+                let accepts_runtime_coercion = matches!(backing_ty, PhpType::Int)
+                    && matches!(arg_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_));
+                if !accepts_runtime_coercion && !self.type_accepts(backing_ty, &arg_ty) {
                     return Err(CompileError::new(
                         span,
                         &format!(
@@ -365,14 +374,12 @@ impl Checker {
                 continue;
             }
 
-            let property_has_declared_type = class_info.declared_properties.contains(&prop_name);
+            let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
-                if let Some(prop) = class_info
-                    .properties
-                    .iter_mut()
-                    .find(|(name, _)| name == &prop_name)
-                {
-                    prop.1 = arg_ty.clone();
+                if let Some(slot) = class_info.visible_property_index(&prop_name) {
+                    if let Some(prop) = class_info.properties.get_mut(slot) {
+                        prop.1 = arg_ty.clone();
+                    }
                 }
             }
 

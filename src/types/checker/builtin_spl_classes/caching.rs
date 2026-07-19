@@ -23,6 +23,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
         "CachingIterator".to_string(),
         FlattenedClass {
             name: "CachingIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: vec![
                 "ArrayAccess".to_string(),
@@ -37,6 +38,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: caching_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

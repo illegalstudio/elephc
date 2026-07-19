@@ -2,7 +2,7 @@
 title: "fileperms() — internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 115
+  order: 119
 ---
 
 ## `fileperms()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileperms.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5484](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5484) (`lower_fileperms`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5484](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5484) (`lower_fileperms`)
 - **Function symbol**: `lower_fileperms()`
 
 
@@ -35,6 +35,11 @@ function fileperms(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

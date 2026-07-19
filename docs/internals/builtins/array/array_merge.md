@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_merge.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:850](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L850) (`lower_array_merge`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:846](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L846) (`lower_array_merge`)
 - **Function symbol**: `lower_array_merge()`
 
 
@@ -33,6 +33,12 @@ function array_merge(...$arrays): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+- **Variadic**: collects excess arguments into `$arrays`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$arrays`.
 
 ## Cross-references

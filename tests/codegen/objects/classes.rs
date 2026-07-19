@@ -69,9 +69,7 @@ echo $b->tag;
 #[test]
 fn test_class_dynamic_instantiation() {
     // `new $variable()` dispatches known class names through the same AOT
-    // allocation path as `new ClassName()`. A known name yields an object
-    // Mixed cell; an unknown name currently preserves the legacy PHP null
-    // fallback until the missing-class fatal path is tightened.
+    // allocation path as `new ClassName()`. Known names yield object Mixed cells.
     let out = compile_and_run(
         r#"<?php
 class Foo {}
@@ -80,12 +78,10 @@ $cls = "Foo";
 $obj = new $cls();
 $cls2 = "Bar";
 $obj2 = new $cls2();
-$missing = "NoSuchClass";
-$bad = new $missing();
-echo gettype($obj) . "|" . gettype($obj2) . "|" . gettype($bad);
+echo gettype($obj) . "|" . gettype($obj2);
 "#,
     );
-    assert_eq!(out, "object|object|NULL");
+    assert_eq!(out, "object|object");
 }
 
 /// Verifies a class-string variable can be instantiated without constructor parentheses.
@@ -178,24 +174,75 @@ echo gettype($o) . ":" . $o->x;
     assert_eq!(out, "object:12");
 }
 
-/// Verifies compiled PHP output for dynamic instantiation missing class skips propinit.
+/// Verifies `new ClassName();` is valid as a standalone expression statement and preserves
+/// constructor side effects.
 #[test]
-fn test_dynamic_instantiation_missing_class_skips_propinit() {
-    // An unknown class name must still return null and must NOT dispatch a
-    // property-init thunk for a missing class_id (regression for the
-    // _class_propinit_ptrs miss path).
+fn test_new_object_expression_statement_runs_constructor() {
     let out = compile_and_run(
+        r#"<?php
+class SideEffectNew {
+    public function __construct() { echo "constructed"; }
+}
+new SideEffectNew();
+"#,
+    );
+    assert_eq!(out, "constructed");
+}
+
+/// Verifies `new $className();` is valid as a standalone expression statement and preserves
+/// constructor side effects.
+#[test]
+fn test_dynamic_new_expression_statement_runs_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicSideEffectNew {
+    public function __construct() { echo "dynamic"; }
+}
+$className = "DynamicSideEffectNew";
+new $className();
+"#,
+    );
+    assert_eq!(out, "dynamic");
+}
+
+/// Verifies dynamic instantiation of an unknown class exits with PHP's class-not-found fatal.
+#[test]
+fn test_dynamic_instantiation_missing_class_is_fatal() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 class Has { public int $x = 9; }
 $missing = "Nope";
 $bad = new $missing();
-echo gettype($bad);
-$ok = "Has";
-$o = new $ok();
-echo "|" . $o->x;
 "#,
     );
-    assert_eq!(out, "NULL|9");
+    assert!(err.contains("Fatal error: Uncaught Error: Class \"Nope\" not found"), "{err}");
+}
+
+/// Verifies a standalone dynamic-new statement uses the same class-not-found fatal.
+#[test]
+fn test_dynamic_new_expression_statement_missing_class_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$missing = "Nope";
+new $missing();
+"#,
+    );
+    assert!(err.contains("Fatal error: Uncaught Error: Class \"Nope\" not found"), "{err}");
+}
+
+/// Verifies dynamic instantiation rejects non-string class expressions instead of returning null.
+#[test]
+fn test_dynamic_instantiation_non_string_class_name_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$missing = 123;
+$bad = new $missing();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Class name must be a valid object or a string"),
+        "{err}"
+    );
 }
 
 /// Verifies compiled PHP output for class object aliasing.
@@ -492,6 +539,36 @@ echo $s->reveal();
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies native `method_exists()` and `property_exists()` use AOT class metadata.
+#[test]
+fn test_class_member_exists_builtin_uses_native_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeMemberBase {
+    public $basePublic = 1;
+    private $baseSecret = 2;
+    private function baseHidden() { return 3; }
+    protected function inheritedProtected() { return 4; }
+}
+class NativeMemberChild extends NativeMemberBase {
+    public $childPublic = 5;
+    private $childSecret = 6;
+    public function run() { return 7; }
+    private function hidden() { return 8; }
+}
+$object = new NativeMemberChild();
+echo method_exists($object, "run") ? "M" : "m";
+echo method_exists($object, "baseHidden") ? "B" : "b";
+echo method_exists("NativeMemberChild", "baseHidden") ? "x" : "X";
+echo property_exists($object, "childPublic") ? "P" : "p";
+echo property_exists($object, "childSecret") ? "S" : "s";
+echo property_exists($object, "baseSecret") ? "y" : "Y";
+echo property_exists("NativeMemberChild", "basePublic") ? "A" : "a";
+"#,
+    );
+    assert_eq!(out, "MBXPSYA");
 }
 
 /// Verifies that a `readonly` property can be initialized in the constructor

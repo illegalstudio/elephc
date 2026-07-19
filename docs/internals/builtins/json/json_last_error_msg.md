@@ -2,7 +2,7 @@
 title: "json_last_error_msg() — internals"
 description: "Compiler internals for json_last_error_msg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 233
+  order: 237
 ---
 
 ## `json_last_error_msg()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_last_error_msg.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/json.rs`:85](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/json.rs#L85) (`lower_json_last_error_msg`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:85](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L85) (`lower_json_last_error_msg`)
 - **Function symbol**: `lower_json_last_error_msg()`
 
 
@@ -33,6 +33,11 @@ function json_last_error_msg(): string
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

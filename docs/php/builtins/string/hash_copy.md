@@ -2,7 +2,7 @@
 title: "hash_copy()"
 description: "Copies the state of an incremental hashing context."
 sidebar:
-  order: 349
+  order: 358
 ---
 
 ## hash_copy()
@@ -17,6 +17,11 @@ Copies the state of an incremental hashing context.
 - `$context` (`resource`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -59,6 +59,7 @@ pub fn packed_type_size(
         PhpType::Int
         | PhpType::Float
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Pointer(_)
         | PhpType::Resource(_) => Some(8),
         PhpType::Packed(name) => packed_classes.get(name).map(|info| info.total_size),

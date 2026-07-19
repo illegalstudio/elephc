@@ -250,7 +250,7 @@ pub(super) fn try_fold_short_ternary(value: &Expr, default: &Expr) -> Option<Exp
 }
 
 /// Folds an array literal access when the array and index are both scalar literals with a known result.
-pub(super) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKind> {
+pub(in crate::optimize) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKind> {
     match &array.kind {
         ExprKind::ArrayLiteral(items) => try_fold_indexed_array_access(items, index),
         ExprKind::ArrayLiteralAssoc(items) => try_fold_assoc_array_access(items, index),

@@ -12,8 +12,8 @@
 //! - Argument types are inferred by the common registry dispatch path before the hook fires.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -36,10 +36,10 @@ builtin! {
 /// Argument types are inferred by the common registry dispatch path before this hook fires;
 /// arity (exactly 1 arg) is pre-validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }
 
 /// Lowers an `ip2long` call by dispatching to the shared `lower_ip2long` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
 }

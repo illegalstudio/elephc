@@ -118,6 +118,58 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// Verifies that a static variable declared without an initializer defaults to null.
+#[test]
+fn test_static_without_initializer_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f() {
+    static $x;
+    var_dump($x);
+}
+f();
+f();
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}
+
+/// Verifies that `static $x;` behaves identically to the explicit `static $x = null;` form.
+#[test]
+fn test_static_without_initializer_matches_explicit_null_form() {
+    let implicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    let explicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n = null;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    assert_eq!(implicit, explicit);
+}
+
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
 fn test_closure_static_local_preserves_value_across_calls() {
@@ -284,6 +336,34 @@ echo $x;
 "#,
     );
     assert_eq!(out, "15");
+}
+
+/// Verifies by-reference variadic function and method element assignments mutate caller variables.
+#[test]
+fn test_by_ref_variadic_function_and_method_element_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function f(&...$items) {
+    $items[0] = $items[0] . "-f";
+    $items[1] = $items[1] . "-g";
+}
+class C {
+    public function m(&...$items) {
+        $items[0] = $items[0] . "-m";
+        $items[1] = $items[1] . "-n";
+    }
+}
+$a = "A";
+$b = "B";
+f($a, $b);
+echo $a . ":" . $b . "|";
+$c = "C";
+$d = "D";
+(new C())->m($c, $d);
+echo $c . ":" . $d;
+"#,
+    );
+    assert_eq!(out, "A-f:B-g|C-m:D-n");
 }
 
 // --- Variadic functions ---
@@ -709,4 +789,52 @@ echo sum(4, 5, 6);
 "#,
     );
     assert_eq!(out, "15");
+}
+
+// --- First-class callables over registry builtins with variadic/optional signatures ---
+
+/// Verifies `var_dump(...)` as a first-class callable exposes the registry's variadic
+/// signature (`value, ...values`): the wrapper accepts multiple arguments and dumps
+/// each independently in source order.
+#[test]
+fn test_first_class_callable_var_dump_variadic() {
+    let out = compile_and_run(
+        r#"<?php
+$dump = var_dump(...);
+$dump(1, "a");
+"#,
+    );
+    assert_eq!(out, "int(1)\nstring(1) \"a\"\n");
+}
+
+/// Verifies `print_r(...)` as a first-class callable exposes the optional `$return`
+/// flag from the registry signature. Through the wrapper the flag is a runtime
+/// parameter, so the call takes the runtime-selected mode path and returns the
+/// rendered string (boxed Mixed) without echoing.
+#[test]
+fn test_first_class_callable_print_r_return_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$r = $render("hi", true);
+echo "|$r";
+"#,
+    );
+    assert_eq!(out, "|hi");
+}
+
+/// Verifies `print_r(...)` as a first-class callable defaults the `$return` flag to
+/// `false` when called with one argument: the value is echoed and the wrapper
+/// returns true.
+#[test]
+fn test_first_class_callable_print_r_echo_default() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$ok = $render(42);
+echo "|";
+echo $ok ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "42|yes");
 }

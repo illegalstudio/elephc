@@ -2,7 +2,7 @@
 title: "stream_get_line() — internals"
 description: "Compiler internals for stream_get_line(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 207
 ---
 
 ## `stream_get_line()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_line.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1393](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1393) (`lower_stream_get_line`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1393](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1393) (`lower_stream_get_line`)
 - **Function symbol**: `lower_stream_get_line()`
 
 
@@ -31,6 +31,11 @@ function stream_get_line(resource $stream, int $length, string $ending = ''): st
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

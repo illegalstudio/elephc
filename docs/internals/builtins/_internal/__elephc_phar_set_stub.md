@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_stub() — internals"
 description: "Compiler internals for __elephc_phar_set_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 452
 ---
 
 ## `__elephc_phar_set_stub()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_stub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_stub.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3896](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3896) (`lower_elephc_phar_set_stub`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3896](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3896) (`lower_elephc_phar_set_stub`)
 - **Function symbol**: `lower_elephc_phar_set_stub()`
 
 
@@ -31,6 +31,10 @@ function __elephc_phar_set_stub(string $filename, string $stub): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_intersect_assoc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_intersect_assoc.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1352](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1352) (`lower_array_intersect_assoc`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1373](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1373) (`lower_array_intersect_assoc`)
 - **Function symbol**: `lower_array_intersect_assoc()`
 
 
@@ -36,6 +36,10 @@ function array_intersect_assoc(array $array, ...$arrays): mixed
 
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$arrays`.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

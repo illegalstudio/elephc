@@ -1,0 +1,12 @@
+{
+  "description": "One literal eval fragment containing a compute-heavy loop, isolating interpreter dispatch after a single parse.",
+  "eval_fragments": [
+    {
+      "label": "loop",
+      "source": "$sum = 0; $i = 0; while ($i < 6000) { $sum += ($i % 17) * 3; $i += 1; }",
+      "invocations": 1,
+      "source_kind": "literal",
+      "parse_cache_should_hit": false
+    }
+  ]
+}

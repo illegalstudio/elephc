@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1542](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1542) (`lower_array_walk_recursive`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1584](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1584) (`lower_array_walk_recursive`)
 - **Function symbol**: `lower_array_walk_recursive()`
 
 
@@ -35,6 +35,10 @@ function array_walk_recursive(array $array, callable $callback): void
 
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

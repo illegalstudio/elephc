@@ -11,14 +11,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{ClassMethod, Expr, Visibility};
+use crate::parser::ast::{
+    AttributeGroup, ClassMethod, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility,
+};
 use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
 
 /// Compile-time attribute argument value. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can materialize:
-/// scalars (string/int/bool/null/float), and nested arrays of the same.
+/// scalars (string/int/bool/null/float), `ClassName::class` strings, symbolic
+/// references, and nested arrays of the same.
 ///
 /// `Float` stores the IEEE-754 bit pattern (`f64::to_bits`) rather than an
 /// `f64` so the enum can keep deriving `Eq`/`Hash`/`Ord` (used by the
@@ -65,6 +68,120 @@ pub enum AttrKey {
     Str(String),
 }
 
+/// Collects attribute names from attribute groups while preserving source order.
+///
+/// Name resolution has already canonicalized fully-qualified names by the time
+/// checker/codegen metadata uses this helper, so returned names match
+/// `ReflectionAttribute::getName()` shape without synthetic leading slashes.
+pub(crate) fn collect_attribute_names(groups: &[AttributeGroup]) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            out.push(attr.name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Collects materializable positional, named, and array attribute arguments in source order.
+///
+/// Legal PHP attribute expressions outside the current literal subset are
+/// represented as `None` so compilation can proceed until a reflection query
+/// needs the missing payload and reports the unsupported metadata.
+pub(crate) fn collect_attribute_args(
+    groups: &[AttributeGroup],
+) -> Vec<Option<Vec<AttrArgEntry>>> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            let mut entries = Vec::new();
+            let mut supported = true;
+            for arg_expr in &attr.args {
+                let (key, value_expr) = match &arg_expr.kind {
+                    ExprKind::NamedArg { name, value } => {
+                        (Some(AttrKey::Str(name.clone())), value.as_ref())
+                    }
+                    _ => (None, arg_expr),
+                };
+                match fold_attr_value(value_expr) {
+                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                    None => {
+                        supported = false;
+                        break;
+                    }
+                }
+            }
+            out.push(if supported { Some(entries) } else { None });
+        }
+    }
+    out
+}
+
+/// Folds one attribute argument expression to retained reflection metadata.
+fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
+        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
+        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
+        ExprKind::Null => Some(AttrArgValue::Null),
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
+            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone())),
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => Some(AttrArgValue::Str(name.as_str().to_string())),
+        ExprKind::ClassConstant { .. } => None,
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-*n).to_bits())),
+            _ => None,
+        },
+        ExprKind::ArrayLiteral(elements) => {
+            let mut entries = Vec::with_capacity(elements.len());
+            for element in elements {
+                entries.push(AttrArgEntry {
+                    key: None,
+                    value: fold_attr_value(element)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut entries = Vec::with_capacity(pairs.len());
+            for (key_expr, value_expr) in pairs {
+                entries.push(AttrArgEntry {
+                    key: Some(fold_attr_key(key_expr)?),
+                    value: fold_attr_value(value_expr)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        _ => None,
+    }
+}
+
+/// Folds one supported associative attribute array key.
+fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
+            _ => None,
+        },
+        ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
+        _ => None,
+    }
+}
+
+/// Returns the canonical named receiver for class-constant attribute arguments.
+fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+    }
+}
+
 /// Property hook contract for `get`/`set` hook declarations in classes and interfaces.
 #[derive(Debug, Clone)]
 pub struct PropertyHookContract {
@@ -89,19 +206,41 @@ impl PartialEq for PropertyHookContract {
 }
 
 /// Interface metadata for resolved declarations. Tracks parents, properties,
-/// methods, constants, and vtable layout after name resolution and inheritance flattening.
+/// instance/static methods, constants, and instance vtable layout after name
+/// resolution and inheritance flattening.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
+    /// Source span of the interface declaration, or `Span::dummy()` for compiler-injected interfaces.
+    pub declaration_span: crate::span::Span,
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
+    /// Source declarations retained so Reflection can preserve lexical parameter-default names.
+    pub method_decls: Vec<crate::parser::ast::ClassMethod>,
+    /// Instance method contracts, keyed by PHP's case-insensitive method key.
+    ///
+    /// These entries are the only methods that participate in interface
+    /// dispatch tables and `method_slots`.
     pub methods: HashMap<String, FunctionSig>,
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    /// Static method contracts, keyed by PHP's case-insensitive method key.
+    ///
+    /// PHP requires implementors to provide matching public static methods, but
+    /// these entries never participate in instance interface dispatch tables.
+    pub static_methods: HashMap<String, FunctionSig>,
+    pub static_method_declaring_interfaces: HashMap<String, String>,
+    pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// PHP 8.3 declared types for visible interface constants.
+    pub constant_types: HashMap<String, TypeExpr>,
+    /// Declaring interface for each visible constant, keyed by case-sensitive constant name.
+    pub constant_declaring_interfaces: HashMap<String, String>,
+    /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.
+    pub final_constants: HashSet<String>,
 }
 
 /// Class metadata for resolved declarations. Tracks inheritance, properties,
@@ -109,6 +248,8 @@ pub struct InterfaceInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     pub class_id: u64,
+    /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
+    pub declaration_span: crate::span::Span,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
@@ -121,6 +262,12 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// PHP 8.3 declared types for constants declared directly on this class-like symbol.
+    pub constant_types: HashMap<String, TypeExpr>,
+    /// Class constant visibilities keyed by case-sensitive constant name.
+    pub constant_visibilities: HashMap<String, Visibility>,
+    /// Class constants declared with PHP 8.1+ `final`, keyed by constant name.
+    pub final_constants: HashSet<String>,
     /// Names of PHP 8 attributes attached to this class declaration, in
     /// source order. Name resolution stores canonical class-like text without
     /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.
@@ -143,8 +290,15 @@ pub struct ClassInfo {
     pub property_attribute_names: HashMap<String, Vec<String>>,
     /// Literal property-attribute args aligned with `property_attribute_names`.
     pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
+    /// Attribute names attached to class constants visible on this class.
+    /// Constant names are case-sensitive, so the source constant name is the key.
+    pub constant_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal class-constant-attribute args aligned with `constant_attribute_names`.
+    pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Trait names used directly by this class declaration, preserving source order.
     pub used_traits: Vec<String>,
+    /// Trait method aliases declared directly by this class, as `(alias, Trait::method)`.
+    pub trait_aliases: Vec<(String, String)>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -155,6 +309,13 @@ pub struct ClassInfo {
     /// use their `property_visibilities` entry for writes too.
     pub property_set_visibilities: HashMap<String, Visibility>,
     pub declared_properties: HashSet<String>,
+    /// Per-layout-slot typed-declaration flags for instance properties.
+    ///
+    /// The name-keyed `declared_properties` map describes the property currently
+    /// visible by name in this class. This vector follows `properties` by index
+    /// so hidden private parent slots keep their typed-property initialization
+    /// metadata when a child declares a same-named property.
+    pub property_declared_slots: Vec<bool>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
@@ -165,6 +326,13 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    pub promoted_properties: HashSet<String>,
+    /// Per-layout-slot by-reference flags for instance properties.
+    ///
+    /// The name-keyed `reference_properties` map describes the currently
+    /// visible property by name. Runtime GC descriptors need the original slot
+    /// flag even when a private parent slot is shadowed by a child property.
+    pub property_reference_slots: Vec<bool>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,
@@ -199,6 +367,64 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+impl ClassInfo {
+    /// Resolves the layout index of the property visible by name on this class.
+    ///
+    /// The result follows `property_offsets` when present so private parent
+    /// slots shadowed by child declarations do not win merely because they occur
+    /// earlier in the physical object layout.
+    pub fn visible_property_index(&self, property: &str) -> Option<usize> {
+        self.property_offsets
+            .get(property)
+            .and_then(|offset| property_index_from_offset(*offset, self.properties.len()))
+            .or_else(|| {
+                self.properties
+                    .iter()
+                    .rposition(|(name, _)| name == property)
+            })
+    }
+
+    /// Returns the property tuple visible by name on this class.
+    pub fn visible_property(&self, property: &str) -> Option<(usize, &(String, PhpType))> {
+        let index = self.visible_property_index(property)?;
+        self.properties.get(index).map(|entry| (index, entry))
+    }
+
+    /// Returns whether one physical property slot has a declared PHP type.
+    pub fn property_slot_is_declared(&self, index: usize, property: &str) -> bool {
+        self.property_declared_slots
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| self.declared_properties.contains(property))
+    }
+
+    /// Returns whether the property visible by name has a declared PHP type.
+    pub fn visible_property_is_declared(&self, property: &str) -> bool {
+        self.visible_property(property)
+            .is_some_and(|(index, (name, _))| self.property_slot_is_declared(index, name))
+    }
+
+    /// Returns whether one physical property slot stores a by-reference cell.
+    pub fn property_slot_is_reference(&self, index: usize, property: &str) -> bool {
+        self.property_reference_slots
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| self.reference_properties.contains(property))
+    }
+
+}
+
+/// Converts a property offset into a `properties` vector index when it points
+/// at a normal object-property slot.
+fn property_index_from_offset(offset: usize, property_count: usize) -> Option<usize> {
+    let payload_offset = offset.checked_sub(8)?;
+    if payload_offset % 16 != 0 {
+        return None;
+    }
+    let index = payload_offset / 16;
+    (index < property_count).then_some(index)
+}
+
 /// Enum case value, either an integer or a string (PHP 8.1+ backed enums).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumCaseValue {
@@ -212,6 +438,8 @@ pub enum EnumCaseValue {
 pub struct EnumCaseInfo {
     pub name: String,
     pub value: Option<EnumCaseValue>,
+    pub attribute_names: Vec<String>,
+    pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
 }
 
 /// Enum metadata for a resolved backed enum declaration (PHP 8.1+).

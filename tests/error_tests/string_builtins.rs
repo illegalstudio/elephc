@@ -27,6 +27,54 @@ expect_builtin_arity_error!(
     "base64_decode() takes exactly 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_ereg_match_wrong_args,
+    "<?php mb_ereg_match('ab');",
+    "mb_ereg_match() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_mb_strlen_wrong_args,
+    "<?php mb_strlen();",
+    "mb_strlen() takes 1 or 2 arguments"
+);
+
+/// Verifies that `mb_strlen()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_strlen_string_type() {
+    expect_error(
+        "<?php mb_strlen([1, 2]);",
+        "mb_strlen() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strlen()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strlen_encoding_type() {
+    expect_error(
+        "<?php mb_strlen('abc', 123);",
+        "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_ereg_match()` rejects a non-string pattern.
+#[test]
+fn test_error_mb_ereg_match_pattern_type() {
+    expect_error(
+        "<?php mb_ereg_match(123, 'abc');",
+        "mb_ereg_match() pattern argument must be string",
+    );
+}
+
+/// Verifies that `mb_ereg_match()` rejects non-string, non-null options.
+#[test]
+fn test_error_mb_ereg_match_options_type() {
+    expect_error(
+        "<?php mb_ereg_match('ab', 'abc', 1);",
+        "mb_ereg_match() options argument must be string or null",
+    );
+}
+
 /// Verifies that `grapheme_strrev()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_grapheme_strrev_wrong_args() {
@@ -101,7 +149,7 @@ function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects Int, got Union([Int, Bool])",
+        "Function 'pos' return type expects Int, got Union([Int, False])",
     );
 }
 
@@ -176,11 +224,13 @@ fn test_error_sha1_wrong_args() {
 }
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
+/// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
+/// reports 1 to 3 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes exactly 1 argument",
+        "htmlspecialchars() takes 1 to 3 arguments",
     );
 }
 

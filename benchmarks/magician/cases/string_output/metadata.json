@@ -1,0 +1,12 @@
+{
+  "description": "String concatenation in a repeated eval fragment with a final output check.",
+  "eval_fragments": [
+    {
+      "label": "concat",
+      "source": "$out = $out . \"ab\";",
+      "invocations": 1200,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

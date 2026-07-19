@@ -92,6 +92,13 @@ impl Checker {
 
         let provisional_sig = FunctionSig {
             params: param_types.clone(),
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),
@@ -102,7 +109,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic.clone(),
         };
@@ -122,6 +129,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
+        self.resolving_functions.insert(function_key.clone());
         let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
@@ -137,6 +145,7 @@ impl Checker {
             }
             Ok(())
         });
+        self.resolving_functions.remove(&function_key);
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
         body_check_result?;
@@ -227,6 +236,13 @@ impl Checker {
 
         let sig = FunctionSig {
             params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
             declared_return: decl.return_type.is_some(),
@@ -236,7 +252,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic.clone(),
             deprecation: crate::types::checker::schema::validation::extract_deprecation(
@@ -280,13 +296,16 @@ impl Checker {
 
 /// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
 ///
-/// Returns `Some(PhpType)` only when every non-void return in `return_types` is the same
-/// array type (including `array<T>` or `assocArray` shapes). Returns `None` if returns differ,
-/// include non-array types, or are all `void`.
+/// Returns `Some(PhpType)` only when every non-void, non-empty return in
+/// `return_types` is the same array type (including `array<T>` or `assocArray`
+/// shapes). An empty indexed array is neutral because it can be materialized in
+/// either concrete storage family at the return boundary. Returns `None` if
+/// non-empty returns differ, include non-array types, or are all `void`.
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {
     let mut specific: Option<PhpType> = None;
+    let mut empty_array: Option<PhpType> = None;
     for return_info in return_types {
         let return_ty = &return_info.ty;
         if matches!(return_ty, PhpType::Void) {
@@ -295,13 +314,17 @@ fn inferred_specific_array_type_from_infos(
         if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
             return None;
         }
+        if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
+            empty_array = Some(return_ty.clone());
+            continue;
+        }
         match &specific {
             None => specific = Some(return_ty.clone()),
             Some(existing) if existing == return_ty => {}
             _ => return None,
         }
     }
-    specific
+    specific.or(empty_array)
 }
 
 /// Returns true when a function return type is a homogeneous array of callables.

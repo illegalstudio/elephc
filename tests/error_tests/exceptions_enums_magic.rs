@@ -22,7 +22,9 @@ fn test_error_magic_method_contracts_collect_multiple_errors() {
     assert!(
         all.len() >= 2,
         "expected multiple magic method contract errors, got {:?}",
-        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+        all.iter()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -118,6 +120,51 @@ fn test_error_throw_expression_requires_object() {
     );
 }
 
+/// Verifies that `clone` rejects scalar operands during type checking.
+#[test]
+fn test_error_clone_requires_object() {
+    expect_error("<?php $copy = clone 123;", "clone requires an object value");
+}
+
+/// Verifies that a `static` `__clone` reports
+/// "Magic method must be non-static: User::__clone".
+#[test]
+fn test_error_magic_clone_must_be_non_static() {
+    expect_error(
+        "<?php class User { public static function __clone() { } }",
+        "Magic method must be non-static: User::__clone",
+    );
+}
+
+/// Verifies that `__clone` with a parameter reports
+/// "Magic method must take 0 arguments: User::__clone".
+#[test]
+fn test_error_magic_clone_must_take_zero_arguments() {
+    expect_error(
+        "<?php class User { public function __clone($x) { } }",
+        "Magic method must take 0 arguments: User::__clone",
+    );
+}
+
+/// Verifies that `__clone` with a non-void declared return type reports
+/// "Magic method must return void: User::__clone".
+#[test]
+fn test_error_magic_clone_must_return_void() {
+    expect_error(
+        "<?php class User { public function __clone(): int { return 1; } }",
+        "Magic method must return void: User::__clone",
+    );
+}
+
+/// Verifies that cloning from outside respects a private `__clone` hook's visibility.
+#[test]
+fn test_error_private_magic_clone_is_inaccessible_from_global_scope() {
+    expect_error(
+        "<?php class Locked { private function __clone() { } } $a = new Locked(); $b = clone $a;",
+        "Cannot access private method: Locked::__clone",
+    );
+}
+
 /// Verifies that a private `__toString` method reports
 /// "Magic method must be public: User::__toString".
 #[test]
@@ -198,6 +245,95 @@ fn test_error_magic_set_must_take_two_arguments() {
     );
 }
 
+/// Verifies that a `static` `__isset` reports
+/// "Magic method must be non-static: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __isset($name) { return true; } }",
+        "Magic method must be non-static: Bag::__isset",
+    );
+}
+
+/// Verifies that a private `__isset` method reports
+/// "Magic method must be public: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_be_public() {
+    expect_error(
+        "<?php class Bag { private function __isset($name) { return true; } }",
+        "Magic method must be public: Bag::__isset",
+    );
+}
+
+/// Verifies that `__isset` with no parameters reports
+/// "Magic method must take 1 argument: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __isset() { return true; } }",
+        "Magic method must take 1 argument: Bag::__isset",
+    );
+}
+
+/// Verifies that `__isset` with a non-bool declared return type reports
+/// "Magic method must return bool: Bag::__isset".
+#[test]
+fn test_error_magic_isset_declared_return_type_must_be_bool() {
+    expect_error(
+        "<?php class Bag { public function __isset($name): string { return \"yes\"; } }",
+        "Magic method must return bool: Bag::__isset",
+    );
+}
+
+/// Verifies that a `static` `__unset` reports
+/// "Magic method must be non-static: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __unset($name) { } }",
+        "Magic method must be non-static: Bag::__unset",
+    );
+}
+
+/// Verifies that a private `__unset` method reports
+/// "Magic method must be public: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_be_public() {
+    expect_error(
+        "<?php class Bag { private function __unset($name) { } }",
+        "Magic method must be public: Bag::__unset",
+    );
+}
+
+/// Verifies that `__unset` with no parameters reports
+/// "Magic method must take 1 argument: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __unset() { } }",
+        "Magic method must take 1 argument: Bag::__unset",
+    );
+}
+
+/// Verifies that `__unset` with a non-void declared return type reports
+/// "Magic method must return void: Bag::__unset".
+#[test]
+fn test_error_magic_unset_declared_return_type_must_be_void() {
+    expect_error(
+        "<?php class Bag { public function __unset($name): bool { return true; } }",
+        "Magic method must return void: Bag::__unset",
+    );
+}
+
+/// Verifies that unsetting an inaccessible property without `__unset` remains an access error.
+#[test]
+fn test_error_unset_private_property_without_magic_unset() {
+    expect_error(
+        "<?php class Bag { private $token = 1; } $bag = new Bag(); unset($bag->token);",
+        "Cannot access private property: Bag::token",
+    );
+}
+
 /// Verifies that `__call` with only one parameter reports
 /// "Magic method must take 2 arguments: Proxy::__call".
 #[test]
@@ -215,6 +351,36 @@ fn test_error_magic_call_must_be_public() {
     expect_error(
         "<?php class Proxy { private function __call($name, $args) { return 1; } }",
         "Magic method must be public: Proxy::__call",
+    );
+}
+
+/// Verifies that non-static `__callStatic` reports
+/// "Magic method must be static: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_be_static() {
+    expect_error(
+        "<?php class Proxy { public function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be static: Proxy::__callStatic",
+    );
+}
+
+/// Verifies that `__callStatic` with only one parameter reports
+/// "Magic method must take 2 arguments: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_take_two_arguments() {
+    expect_error(
+        "<?php class Proxy { public static function __callStatic($name) { return 1; } }",
+        "Magic method must take 2 arguments: Proxy::__callStatic",
+    );
+}
+
+/// Verifies that a private `__callStatic` method reports
+/// "Magic method must be public: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_be_public() {
+    expect_error(
+        "<?php class Proxy { private static function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be public: Proxy::__callStatic",
     );
 }
 
@@ -258,40 +424,10 @@ fn test_error_magic_callstatic_must_be_public() {
     );
 }
 
-/// Verifies that a `static` `__isset` reports
-/// "Magic method must be non-static: Bag::__isset".
-#[test]
-fn test_error_magic_isset_must_be_non_static() {
-    expect_error(
-        "<?php class Bag { public static function __isset($name) { return true; } }",
-        "Magic method must be non-static: Bag::__isset",
-    );
-}
-
-/// Verifies that `__isset` with no parameters reports
-/// "Magic method must take 1 argument: Bag::__isset".
-#[test]
-fn test_error_magic_isset_must_take_one_argument() {
-    expect_error(
-        "<?php class Bag { public function __isset() { return true; } }",
-        "Magic method must take 1 argument: Bag::__isset",
-    );
-}
-
-/// Verifies that a `static` `__unset` reports
-/// "Magic method must be non-static: Bag::__unset".
-#[test]
-fn test_error_magic_unset_must_be_non_static() {
-    expect_error(
-        "<?php class Bag { public static function __unset($name) { } }",
-        "Magic method must be non-static: Bag::__unset",
-    );
-}
-
 /// Verifies that `__unset` with two parameters reports
 /// "Magic method must take 1 argument: Bag::__unset".
 #[test]
-fn test_error_magic_unset_must_take_one_argument() {
+fn test_error_magic_unset_must_not_take_two_arguments() {
     expect_error(
         "<?php class Bag { public function __unset($name, $extra) { } }",
         "Magic method must take 1 argument: Bag::__unset",
@@ -388,12 +524,12 @@ fn test_error_case_outside_enum() {
     );
 }
 
-/// Verifies that using a trait inside an enum is rejected (not yet supported).
+/// Verifies that enum trait use rejects imported properties because PHP enums cannot have them.
 #[test]
-fn test_error_enum_using_trait() {
+fn test_error_enum_trait_with_property() {
     expect_error(
-        "<?php trait T {} enum E { use T; case A; }",
-        "Enums using traits are not supported yet",
+        "<?php trait T { public int $value; } enum E { use T; case A; }",
+        "Enums cannot use traits with properties",
     );
 }
 

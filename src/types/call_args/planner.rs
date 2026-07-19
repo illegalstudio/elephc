@@ -13,14 +13,13 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::FunctionSig;
 
-use super::matching::{regular_param_count, NamedParamMatch, NamedParamTracker};
+use super::matching::regular_param_count;
+use super::matching::{NamedParamMatch, NamedParamTracker};
 use super::plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, PlannedVariadicArg,
     SpreadBoundsCheck,
 };
-use super::static_spread::{
-    expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin,
-};
+use super::static_spread::{expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin};
 
 /// Validates and normalizes call-site arguments against `sig`, inferring the
 /// caller-visible regular parameter count from the signature.
@@ -261,8 +260,7 @@ fn plan_named_call_args(
                 });
             }
             _ => {
-                let is_static_tail_positional =
-                    origin == ExpandedArgOrigin::StaticTailPositional;
+                let is_static_tail_positional = origin == ExpandedArgOrigin::StaticTailPositional;
                 if seen_named && !is_static_tail_positional {
                     return Err(CallArgPlanError::PositionalAfterNamed { span: arg.span });
                 }
@@ -346,11 +344,15 @@ fn plan_named_call_args(
                     .then(|| sig.params.get(next_named_idx).map(|(name, _)| name.clone()))
                     .flatten();
                 let min_len = (positional_idx..next_named_idx)
-                    .rfind(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
+                    .rfind(|idx| {
+                        sig.defaults
+                            .get(*idx)
+                            .and_then(|default| default.as_ref())
+                            .is_none()
+                    })
                     .map(|idx| idx - positional_idx + 1)
                     .unwrap_or(0);
                 spread_bounds_checks.push(SpreadBoundsCheck {
-                    spread_expr: expr.clone(),
                     min_len,
                     max_len: upper_bound,
                     max_len_param_name: upper_bound_param_name,
@@ -483,10 +485,15 @@ enum PrefixSourceArg {
 /// This represents the dynamic named-prefix array that must fill remaining parameter
 /// slots when static analysis cannot determine which keys are present.
 fn dynamic_named_prefix_expr(prefix_args: &[PrefixSourceArg], _call_span: Span) -> Option<Expr> {
-    if let Some(PrefixSourceArg::Spread { expr, .. }) = prefix_args
-        .iter()
-        .find(|arg| matches!(arg, PrefixSourceArg::Spread { is_assoc_named_provider: true, .. }))
-    {
+    if let Some(PrefixSourceArg::Spread { expr, .. }) = prefix_args.iter().find(|arg| {
+        matches!(
+            arg,
+            PrefixSourceArg::Spread {
+                is_assoc_named_provider: true,
+                ..
+            }
+        )
+    }) {
         return Some(expr.clone());
     }
     None
@@ -513,7 +520,10 @@ fn expand_static_tail_spreads_after_unpack_named(
     let mut seen_direct_named = false;
 
     for (idx, arg) in args.into_iter().enumerate() {
-        let origin = origins.get(idx).copied().unwrap_or(ExpandedArgOrigin::Source);
+        let origin = origins
+            .get(idx)
+            .copied()
+            .unwrap_or(ExpandedArgOrigin::Source);
         let assoc_source = assoc_spread_sources.get(idx).copied().unwrap_or(false);
 
         match &arg.kind {

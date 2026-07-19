@@ -2,7 +2,7 @@
 title: "filetype() — internals"
 description: "Compiler internals for filetype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 117
+  order: 121
 ---
 
 ## `filetype()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filetype.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5516](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5516) (`lower_filetype`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5516](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5516) (`lower_filetype`)
 - **Function symbol**: `lower_filetype()`
 
 
@@ -34,6 +34,11 @@ function filetype(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

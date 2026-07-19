@@ -45,6 +45,10 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
+                env.insert(name.clone(), PhpType::Mixed);
+                Ok(PhpType::Mixed)
+            }
             ExprKind::Assignment {
                 target,
                 value,
@@ -52,14 +56,42 @@ impl Checker {
                 prelude,
                 ..
             } => {
-                self.check_assignment_expression(
+                let ty = self.check_assignment_expression(
                     target,
                     value,
                     result_target.as_deref(),
                     prelude,
                     expr.span,
                     env,
-                )
+                )?;
+                // A write through to a property (directly or via one of its elements)
+                // invalidates every property narrowing.
+                match &target.kind {
+                    ExprKind::Variable(name) => {
+                        Self::purge_property_narrowings_for_root(env, name)
+                    }
+                    _ if assignment_may_write_property(target) => {
+                        Self::purge_property_narrowings(env)
+                    }
+                    _ => {}
+                }
+                Ok(ty)
+            }
+            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
+                let old_ty = env.get(name).cloned();
+                let result_ty = self.infer_type(expr, env)?;
+                if matches!(old_ty, Some(PhpType::Int)) {
+                    env.insert(name.clone(), PhpType::Mixed);
+                }
+                Ok(result_ty)
+            }
+            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
+                let old_ty = env.get(name).cloned();
+                let result_ty = self.infer_type(expr, env)?;
+                if matches!(old_ty, Some(PhpType::Int)) {
+                    env.insert(name.clone(), PhpType::Mixed);
+                }
+                Ok(result_ty)
             }
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_type_with_assignment_effects(left, env)?;
@@ -105,9 +137,17 @@ impl Checker {
                 else_expr,
             } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
+                // Flow-narrowing across the branches (see guard_narrowing): `$x instanceof X`
+                // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
+                // single expression, so branch narrowing is write-invalidation-safe.
+                let guard = self.guard_narrowing(condition, env)?;
                 let mut then_env = env.clone();
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let mut else_env = env.clone();
+                if let Some(guard) = guard {
+                    then_env.insert(guard.var.clone(), guard.then_ty);
+                    else_env.insert(guard.var, guard.else_ty);
+                }
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 Ok(wider_type_syntactic(&then_ty, &else_ty))
             }
@@ -179,9 +219,14 @@ impl Checker {
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
                 // inference handles the operands (with magic routing).
-                let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
-                    || builtin_name.eq_ignore_ascii_case("unset");
-                if !is_lazy_construct {
+                if matches!(
+                    php_symbol_key(builtin_name).as_str(),
+                    "isset" | "unset"
+                ) {
+                    for arg in &expanded_args {
+                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
+                    }
+                } else if !builtin_name.eq_ignore_ascii_case("unset") {
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
                             continue;
@@ -205,6 +250,9 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
+                // The callee may mutate any reachable object; drop property narrowings. (The
+                // call's own argument checking above still saw them.)
+                Self::purge_property_narrowings(env);
                 if builtin_name.eq_ignore_ascii_case("preg_match") {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = preg_match_output_var(arg) {
@@ -217,6 +265,9 @@ impl Checker {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("eval") {
+                    self.mark_eval_barrier(env);
+                }
                 Ok(ty)
             }
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
@@ -224,7 +275,9 @@ impl Checker {
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                self.infer_type(expr, env)
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
@@ -236,7 +289,9 @@ impl Checker {
                     }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                self.infer_type(expr, env)
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
             }
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
@@ -249,7 +304,9 @@ impl Checker {
                     }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                self.infer_type(expr, env)
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
             }
             ExprKind::NamedArg { value, .. } => {
                 self.infer_type_with_assignment_effects(value, env)?;
@@ -273,6 +330,21 @@ impl Checker {
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
+            }
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(method, env)?;
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
+                    self.infer_type_with_assignment_effects(arg, env)?;
+                }
                 self.infer_type(expr, env)
             }
             ExprKind::BufferNew { len, .. } => {
@@ -284,9 +356,44 @@ impl Checker {
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                self.infer_type(expr, env)
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Infers effects for a language-construct operand without treating properties as reads.
+    fn infer_non_reading_arg_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        match &arg.kind {
+            ExprKind::PropertyAccess { object, .. }
+            | ExprKind::NullsafePropertyAccess { object, .. } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                Ok(())
+            }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(property, env)?;
+                Ok(())
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                self.infer_type_with_assignment_effects(array, env)?;
+                self.infer_type_with_assignment_effects(index, env)?;
+                Ok(())
+            }
+            ExprKind::NamedArg { value, .. } => {
+                self.infer_non_reading_arg_assignment_effects(value, env)
+            }
+            _ => {
+                self.infer_type_with_assignment_effects(arg, env)?;
+                Ok(())
+            }
         }
     }
 
@@ -307,6 +414,22 @@ impl Checker {
             .get(var_name)
             .is_some_and(callable_target_is_preg_replace_callback)
     }
+
+    /// Marks the active statement stream as having crossed eval and widens local facts.
+    fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
+        self.eval_barrier_active = true;
+        let local_names = env.keys().cloned().collect::<Vec<_>>();
+        for ty in env.values_mut() {
+            *ty = PhpType::Mixed;
+        }
+        for name in local_names {
+            self.closure_return_types.remove(&name);
+            self.callable_sigs.remove(&name);
+            self.callable_captures.remove(&name);
+            self.callable_array_targets.remove(&name);
+            self.first_class_callable_targets.remove(&name);
+        }
+    }
 }
 
 /// Returns true when a first-class callable target is PHP `preg_replace_callback`.
@@ -315,6 +438,17 @@ fn callable_target_is_preg_replace_callback(target: &CallableTarget) -> bool {
         target,
         CallableTarget::Function(name) if php_symbol_key(name.as_str()) == "preg_replace_callback"
     )
+}
+
+/// Returns true when an assignment target can write through to an object property — directly
+/// (`$obj->p = …`) or via an element of one (`$obj->p[0] = …`) — invalidating property
+/// narrowings. Plain variables (and elements of plain variables) cannot.
+fn assignment_may_write_property(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) => false,
+        ExprKind::ArrayAccess { array, .. } => assignment_may_write_property(array),
+        _ => true,
+    }
 }
 
 /// Returns the variable name used as `preg_match()`'s output `$matches` argument.

@@ -8,8 +8,8 @@
 //! - Pure-data builtin with no check hook; arity and arg inference are handled by the registry common path.
 //! - `lower` is a thin wrapper over the EIR is_numeric-module emitter.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers an `is_numeric` call by dispatching to the EIR is_numeric-module emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::is_numeric::lower_is_numeric(ctx, inst)
+    crate::codegen::lower_inst::builtins::is_numeric::lower_is_numeric(ctx, inst)
 }

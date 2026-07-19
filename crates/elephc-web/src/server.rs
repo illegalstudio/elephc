@@ -185,7 +185,8 @@ fn default_workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
-/// Forks one worker child that serves forever, returning the child pid in the
+/// Forks one worker child that serves until a planned `--max-requests` recycle
+/// (then exits with `worker::RECYCLE_EXIT_CODE`), returning the child pid in the
 /// master. The child restores default signal disposition and never returns. A
 /// fork failure aborts the whole process. Used for both initial spawn and respawn.
 fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> libc::pid_t {
@@ -197,10 +198,23 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
         0 => {
             reset_signal_handlers_to_default();
             worker::serve(listen, handler, cfg);
-            std::process::exit(0);
+            // serve() only returns when the worker stopped accepting on purpose
+            // after serving its --max-requests quota; exit with the recycle code
+            // so the reaper skips the crash-loop accounting for this death.
+            std::process::exit(worker::RECYCLE_EXIT_CODE);
         }
         pid => pid,
     }
+}
+
+/// Returns true when a reaped worker's `waitpid` status is a planned
+/// `--max-requests` recycle: a normal exit with `worker::RECYCLE_EXIT_CODE`.
+/// Signal deaths and every other exit code are real crashes and keep feeding
+/// the fast-death accounting. Without this distinction, sustained traffic with
+/// a small `--max-requests` recycles workers faster than `FAST_DEATH` and the
+/// master mistakes the healthy recycle churn for a startup crash loop.
+fn is_planned_recycle(status: libc::c_int) -> bool {
+    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == worker::RECYCLE_EXIT_CODE
 }
 
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
@@ -256,21 +270,26 @@ pub extern "C" fn elephc_web_run(
                 continue;
             }
             // Crash-loop guard: if workers keep dying immediately after spawn,
-            // stop respawning (otherwise a failed bind fork-loops forever).
-            if spawned_at.map(|t| t.elapsed() < FAST_DEATH).unwrap_or(false) {
-                fast_deaths += 1;
-                if fast_deaths >= MAX_FAST_DEATHS {
-                    eprintln!(
-                        "elephc-web: {} workers died on startup (likely a bad --listen or a \
-                         handler crashing every request); giving up",
-                        fast_deaths
-                    );
-                    break;
+            // stop respawning (otherwise a failed bind fork-loops forever). A
+            // planned --max-requests recycle is exempt: it neither increments
+            // nor resets the streak, so healthy recycle churn cannot trip the
+            // guard yet also cannot mask a real crash loop interleaved with it.
+            if !is_planned_recycle(status) {
+                if spawned_at.map(|t| t.elapsed() < FAST_DEATH).unwrap_or(false) {
+                    fast_deaths += 1;
+                    if fast_deaths >= MAX_FAST_DEATHS {
+                        eprintln!(
+                            "elephc-web: {} workers died on startup (likely a bad --listen or a \
+                             handler crashing every request); giving up",
+                            fast_deaths
+                        );
+                        break;
+                    }
+                } else {
+                    fast_deaths = 0;
                 }
-            } else {
-                fast_deaths = 0;
             }
-            // A worker died unexpectedly: replace it to keep the pool at N.
+            // The worker is gone (crash or recycle): replace it to keep the pool at N.
             let new_pid = spawn_worker(&args.listen, handler, args.worker_config());
             children.push((new_pid, Instant::now()));
         } else if pid == -1 {
@@ -290,4 +309,44 @@ pub extern "C" fn elephc_web_run(
         unsafe { libc::waitpid(pid, &mut status, 0); }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a `waitpid` status word for a normal exit with `code`. Both
+    /// supported unix families (Linux and macOS) encode a normal exit as
+    /// `code << 8` with zeroed low bits, which is what `WIFEXITED`/`WEXITSTATUS`
+    /// decode.
+    fn exited_status(code: i32) -> libc::c_int {
+        (code & 0xff) << 8
+    }
+
+    /// A normal exit with the recycle code must be classified as a planned
+    /// recycle so the crash-loop guard skips it (regression for issue #516:
+    /// sustained traffic with a small --max-requests shut the server down).
+    #[test]
+    fn recycle_exit_is_planned() {
+        assert!(is_planned_recycle(exited_status(worker::RECYCLE_EXIT_CODE)));
+    }
+
+    /// Clean exits and error exits are NOT planned recycles: they must keep
+    /// feeding the fast-death accounting so real crash loops still trip the guard.
+    #[test]
+    fn other_exit_codes_are_not_planned() {
+        assert!(!is_planned_recycle(exited_status(0)));
+        assert!(!is_planned_recycle(exited_status(1)));
+        assert!(!is_planned_recycle(exited_status(2)));
+    }
+
+    /// A signal death is never a planned recycle, even when the raw status bits
+    /// could coincide numerically: `WIFEXITED` must gate the exit-code check.
+    /// `waitpid` encodes "killed by signal N" as N in the low 7 bits.
+    #[test]
+    fn signal_death_is_not_planned() {
+        assert!(!is_planned_recycle(libc::SIGSEGV));
+        assert!(!is_planned_recycle(libc::SIGKILL));
+        assert!(!is_planned_recycle(libc::SIGTERM));
+    }
 }

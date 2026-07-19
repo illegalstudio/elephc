@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reduce.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L701) (`lower_array_reduce`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:695](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L695) (`lower_array_reduce`)
 - **Function symbol**: `lower_array_reduce()`
 
 
@@ -32,6 +32,11 @@ function array_reduce(array $array, callable $callback, mixed $initial = null): 
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_reduce.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

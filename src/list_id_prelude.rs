@@ -30,7 +30,7 @@ mod table;
 /// The `__elephc_list_identifiers` source, with `__ELEPHC_TZ_GROUPS_TABLE__` as a
 /// placeholder spliced with the baked table at injection time. `replace` is used
 /// rather than `format!` so the PHP body's `{`/`}` need no escaping.
-const LIST_ID_PRELUDE_TEMPLATE: &str = r#"<?php
+pub(crate) const LIST_ID_PRELUDE_TEMPLATE: &str = r#"<?php
 function __elephc_list_identifiers($timezoneGroup = 2047, $countryCode = "") {
     $table = "__ELEPHC_TZ_GROUPS_TABLE__";
     $rows = explode(";", $table);

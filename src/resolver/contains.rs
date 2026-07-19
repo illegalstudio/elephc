@@ -144,6 +144,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)
@@ -224,9 +225,19 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_includes(object) || args.iter().any(expr_has_includes)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_includes(object)
+                || expr_has_includes(method)
+                || args.iter().any(expr_has_includes)
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_has_includes(object)
         }
+        ExprKind::ObjectClassName { object } => expr_has_includes(object),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

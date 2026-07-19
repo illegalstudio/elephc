@@ -2,7 +2,7 @@
 title: "get_parent_class()"
 description: "Returns the name of the parent class of an object or class."
 sidebar:
-  order: 80
+  order: 84
 ---
 
 ## get_parent_class()
@@ -17,6 +17,11 @@ Returns the name of the parent class of an object or class.
 - `$object_or_class` (`mixed`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_parent_class.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_parent_class.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

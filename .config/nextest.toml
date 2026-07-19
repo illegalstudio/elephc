@@ -7,6 +7,37 @@ final-status-level = "slow"
 slow-timeout = { period = "60s", terminate-after = 1 }
 status-level = "slow"
 
+# `cargo nextest archive` captures the test binaries + the `elephc` bin, but NOT
+# the bridge staticlibs — the codegen test runner links compiled PHP programs
+# against libelephc_*.a at run time (via `ld`), so nextest can't discover them.
+# Include them explicitly so archived shards can run on a machine that never
+# rebuilt the workspace. Built into target/debug by `cargo build $BRIDGE_CRATES`
+# in the archive job before archiving.
+[[profile.ci.archive.include]]
+path = "debug/libelephc_tls.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_pdo.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_crypto.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_phar.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_tz.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_image.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_magician.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_web.a"
+relative-to = "target"
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
@@ -17,4 +48,65 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(parity_function_first_class_callable_dispatch)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# `lowers_examples_corpus` type-checks and lowers every program under examples/;
+# ~40s alone and past the global 60s cap on loaded runners.
+[[profile.default.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# These eval/codegen regression tests intentionally exercise several complete
+# compile-link-run programs in one test. They exceed the 60s global guard on
+# one or more supported runners without being hung.
+[[profile.default.overrides]]
+filter = 'test(ir_backend_handles_scalar_builtins)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(ir_backend_handles_scalar_builtins)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_method_return_type_values)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_method_return_type_values)'
 slow-timeout = { period = "180s", terminate-after = 1 }

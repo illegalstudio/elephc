@@ -9,8 +9,8 @@
 //! - A `check` hook is required to validate that the argument is an object; returns `Int`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -40,5 +40,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers `spl_object_id()` by delegating to the object-pointer identity emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::spl::lower_spl_object_id(ctx, inst)
+    crate::codegen::lower_inst::builtins::spl::lower_spl_object_id(ctx, inst)
 }

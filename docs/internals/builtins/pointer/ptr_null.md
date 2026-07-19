@@ -2,7 +2,7 @@
 title: "ptr_null() — internals"
 description: "Compiler internals for ptr_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 292
 ---
 
 ## `ptr_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_null.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/pointers.rs`:49](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/pointers.rs#L49) (`lower_ptr_null`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:44](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L44) (`lower_ptr_null`)
 - **Function symbol**: `lower_ptr_null()`
 
 
@@ -31,6 +31,11 @@ function ptr_null(): mixed
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_null.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_null.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

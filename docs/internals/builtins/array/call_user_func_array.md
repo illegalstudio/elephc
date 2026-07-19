@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/call_user_func_array.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:38](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L38) (`lower_call_user_func_builtin_escape`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:37](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L37) (`lower_call_user_func_builtin_escape`)
 - **Function symbol**: `lower_call_user_func_builtin_escape()`
 
 
@@ -33,6 +33,11 @@ function call_user_func_array(callable $callback, array $args): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

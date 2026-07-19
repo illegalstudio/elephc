@@ -21,6 +21,35 @@ expect_builtin_arity_error!(
     "exit() takes 0 or 1 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_eval_wrong_args,
+    "<?php eval();",
+    "eval() takes exactly 1 argument"
+);
+
+/// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
+#[test]
+fn test_eval_barrier_allows_dynamic_variable_read() {
+    check_source("<?php eval('$created = 1;'); echo $created;")
+        .expect("eval-created variable reads after the barrier should type-check");
+}
+
+/// Verifies an eval barrier allows later calls to functions that eval may declare dynamically.
+#[test]
+fn test_eval_barrier_allows_dynamic_function_call() {
+    check_source("<?php eval('function dyn_eval_error_test() { return 1; }'); echo dyn_eval_error_test();")
+        .expect("eval-declared function calls after the barrier should type-check");
+}
+
+/// Verifies eval does not hide undefined-variable reads that happen before the barrier.
+#[test]
+fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
+    expect_error(
+        "<?php echo $created; eval('$created = 1;');",
+        "Undefined variable: $created",
+    );
+}
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

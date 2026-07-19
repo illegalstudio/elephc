@@ -929,6 +929,50 @@ echo iterator_apply(new Range(), $callback, $args);
     assert_eq!(out, "2");
 }
 
+/// Verifies that iterator apply can dispatch dynamic string callbacks to `is_array`.
+#[test]
+fn test_iterator_apply_dynamic_string_is_array_callback_assoc_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+$callback = "is_array";
+$args = ["value" => [1]];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies that iterator apply can dispatch dynamic string callbacks to type predicate aliases.
+#[test]
+fn test_iterator_apply_dynamic_string_is_integer_callback_assoc_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+$callback = "is_integer";
+$args = ["value" => 1];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies that iterator apply dynamic args for by ref callback use temp cells.
 #[test]
 fn test_iterator_apply_dynamic_args_for_by_ref_callback_use_temp_cells() {

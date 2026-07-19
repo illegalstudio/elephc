@@ -2,7 +2,7 @@
 title: "explode()"
 description: "Splits a string by a separator into an array of substrings."
 sidebar:
-  order: 341
+  order: 350
 ---
 
 ## explode()
@@ -19,6 +19,11 @@ Splits a string by a separator into an array of substrings.
 - `$limit` (`int`), default `PHP_INT_MAX`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/explode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

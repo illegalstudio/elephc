@@ -2,7 +2,7 @@
 title: "putenv() — internals"
 description: "Compiler internals for putenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 136
+  order: 140
 ---
 
 ## `putenv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/putenv.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:657](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L657) (`lower_putenv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:657](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L657) (`lower_putenv`)
 - **Function symbol**: `lower_putenv()`
 
 
@@ -32,6 +32,11 @@ function putenv(string $assignment): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

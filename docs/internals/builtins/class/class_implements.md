@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_implements.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_implements.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/class_relations.rs`:32](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/class_relations.rs#L32) (`lower_class_relation`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/class_relations.rs`:32](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/class_relations.rs#L32) (`lower_class_relation`)
 - **Function symbol**: `lower_class_relation()`
 
 
@@ -31,6 +31,11 @@ function class_implements(mixed $object_or_class, bool $autoload = true): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_implements.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_implements.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

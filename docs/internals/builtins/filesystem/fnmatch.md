@@ -2,7 +2,7 @@
 title: "fnmatch() — internals"
 description: "Compiler internals for fnmatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 118
+  order: 122
 ---
 
 ## `fnmatch()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fnmatch.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4603](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4603) (`lower_fnmatch`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4603](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4603) (`lower_fnmatch`)
 - **Function symbol**: `lower_fnmatch()`
 
 
@@ -31,6 +31,11 @@ function fnmatch(string $pattern, string $filename, int $flags = 0): bool
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -113,3 +113,57 @@ fn test_function_no_args() {
 }
 
 // --- Logical operators ---
+
+/// EC-8 (#491): `if ($x === false) { throw; } return $x;` narrows an `int|false` value to `int`
+/// after the divergent guard, so the `: int` return matches. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_false_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php final class G { public static function requireInt(int|false $v): int { if ($v === false) { throw new \\RuntimeException('no'); } return $v; } } echo G::requireInt(42), ':', G::requireInt(7);",
+    );
+    assert_eq!(out, "42:7");
+}
+
+/// EC-8 (#491): `if ($x === null) { throw; } return $x;` narrows a nullable value to non-null
+/// after the divergent guard (elephc models `?T`'s null as Void), so `?string`→string and
+/// `?self`→self. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php function req(?string $x): string { if ($x === null) { throw new \\Exception('no'); } return $x; } echo req('hi');",
+    );
+    assert_eq!(out, "hi");
+}
+
+/// EC-8 (#491): `$this->prop instanceof X ? ... : <uses $this->prop>` narrows the PROPERTY in the
+/// ternary else-branch (Message|string → string), so `new Message($this->prop)` type-checks.
+/// Byte-parity vs PHP 8.5. Exercises property-access flow-narrowing across ternary branches.
+#[test]
+fn test_property_instanceof_ternary_narrowing() {
+    let out = compile_and_run(
+        "<?php final class Message { public function __construct(public string $key) {} } final class V { public function __construct(private Message|string $raw) {} public function msg(): Message { return $this->raw instanceof Message ? $this->raw : new Message($this->raw); } } echo (new V('hi'))->msg()->key, ':', (new V(new Message('k')))->msg()->key;",
+    );
+    assert_eq!(out, "hi:k");
+}
+
+/// EC-8 (#491): `if (is_null($x)) { throw; }` narrows ?int → int on the fall-through path — the
+/// same complement-stripping as `$x === null` (ward-schema ColumnNode::assertDecimalPrecision).
+/// Byte-parity vs PHP 8.5.
+#[test]
+fn test_is_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php function f(?int $p): int { if (is_null($p)) { throw new \\InvalidArgumentException('null'); } if ($p <= 0) { throw new \\InvalidArgumentException('non-positive'); } return $p; } echo f(5);",
+    );
+    assert_eq!(out, "5");
+}
+
+/// EC-8 (#491): a negated-instanceof throw-guard on a PROPERTY narrows it for the statements
+/// after the `if` (ward-forms StoreResult::ref pattern: `?StoredFileRef` → StoredFileRef on the
+/// fall-through return). Byte-parity vs PHP 8.5.
+#[test]
+fn test_property_throw_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
+    );
+    assert_eq!(out, "x");
+}

@@ -14,8 +14,8 @@
 //! - `lower` is a thin wrapper over the shared `arrays::lower_array_shift` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -47,5 +47,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers an `array_shift` call by dispatching to the shared array emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::arrays::lower_array_shift(ctx, inst)
+    crate::codegen::lower_inst::builtins::arrays::lower_array_shift(ctx, inst)
 }

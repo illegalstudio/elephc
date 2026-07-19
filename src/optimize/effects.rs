@@ -16,6 +16,8 @@ mod builtins;
 mod calls;
 
 use aliases::apply_stmt_callable_aliases;
+#[cfg(test)]
+pub(super) use builtins::is_pure_non_throwing_builtin;
 pub(super) use calls::{
     callable_alias_effect,
     expr_call_effect,
@@ -169,6 +171,10 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                     .unwrap_or(Effect::PURE),
             ),
         StmtKind::NamespaceBlock { body, .. } => block_effect(body),
+        // Declaring `global` conservatively counts as writing global storage
+        // (a declaration almost always precedes a write). The bit stays out of
+        // `is_observable`, so the declaration itself remains removable.
+        StmtKind::Global { .. } => Effect::PURE.with_writes_globals(),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -177,7 +183,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::InterfaceDecl { .. }
         | StmtKind::TraitDecl { .. }
-        | StmtKind::Global { .. }
         | StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
@@ -222,6 +227,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Clone(inner) => expr_effect(inner)
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))
@@ -258,6 +266,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(expr_call_effect(callee)),
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_effect(object)
+            .combine(expr_effect(method))
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
@@ -329,6 +346,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
+        ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

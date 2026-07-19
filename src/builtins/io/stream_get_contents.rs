@@ -14,8 +14,8 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::io::stream_support;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -46,10 +46,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(offset) = cx.args.get(2) {
         stream_support::ensure_int(cx.checker, cx.name, "offset", offset, cx.env)?;
     }
-    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool]))
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
 
 /// Lowers a `stream_get_contents` call by dispatching to the shared io emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::io::lower_stream_get_contents(ctx, inst)
+    crate::codegen::lower_inst::builtins::io::lower_stream_get_contents(ctx, inst)
 }

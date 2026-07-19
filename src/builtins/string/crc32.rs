@@ -10,8 +10,8 @@
 //!   bridge library is required (crc32 is a pure table-free computation in __rt_crc32).
 //! - Arity (exactly 1 arg) is validated by the registry.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -26,5 +26,5 @@ builtin! {
 
 /// Lowers a `crc32` call by dispatching to the shared `lower_crc32` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_crc32(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_crc32(ctx, inst)
 }

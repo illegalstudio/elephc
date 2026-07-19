@@ -2,7 +2,7 @@
 title: "die()"
 description: "die() — process builtin supported by Elephc."
 sidebar:
-  order: 300
+  order: 308
 ---
 
 ## die()
@@ -18,11 +18,9 @@ function die(int $status): void
 
 **Returns**: `void`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/die.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/die.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-

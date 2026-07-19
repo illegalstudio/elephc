@@ -2,7 +2,7 @@
 title: "time()"
 description: "Returns the current Unix timestamp."
 sidebar:
-  order: 97
+  order: 101
 ---
 
 ## time()
@@ -16,6 +16,11 @@ Returns the current Unix timestamp.
 **Parameters**: none.
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/time.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/time.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -2,7 +2,7 @@
 title: "clearstatcache() — internals"
 description: "Compiler internals for clearstatcache(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 103
+  order: 107
 ---
 
 ## `clearstatcache()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/clearstatcache.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:5578](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L5578) (`lower_clearstatcache`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5578](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5578) (`lower_clearstatcache`)
 - **Function symbol**: `lower_clearstatcache()`
 
 
@@ -32,6 +32,11 @@ function clearstatcache(bool $clear_realpath_cache = false, string $filename = '
 ## What the type checker enforces
 
 - **Arity**: takes 0–2 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/clearstatcache.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

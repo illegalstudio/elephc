@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1671](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1671) (`lower_array_multisort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1719](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1719) (`lower_array_multisort`)
 - **Function symbol**: `lower_array_multisort()`
 
 
@@ -23,8 +23,7 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_array_multisort`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 
@@ -36,6 +35,10 @@ function array_multisort(array $array1, int $array2): bool
 
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array1`, `$array2`.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

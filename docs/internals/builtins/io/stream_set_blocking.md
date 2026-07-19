@@ -2,7 +2,7 @@
 title: "stream_set_blocking() — internals"
 description: "Compiler internals for stream_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 211
+  order: 215
 ---
 
 ## `stream_set_blocking()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_blocking.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2142](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2142) (`lower_stream_set_blocking`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2142](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2142) (`lower_stream_set_blocking`)
 - **Function symbol**: `lower_stream_set_blocking()`
 
 
@@ -33,6 +33,11 @@ function stream_set_blocking(resource $stream, bool $enable): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

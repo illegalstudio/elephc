@@ -23,14 +23,14 @@
 //!   ref-cell/static/global/capture locals). The splice replaces `Return` with
 //!   `Br`, bypassing the callee's implicit epilogue cleanup, so correctness is
 //!   preserved two ways: (1) `transplant_callee_body` reproduces the callee's
-//!   per-slot cleanup decisions — parameter and directly-returned slots become
-//!   `HiddenTemp` (epilogue-excluded, as the callee excludes them), ordinary
-//!   refcounted internal locals stay `PhpLocal` so the host epilogue still frees
-//!   them; (2) the destructor-free restriction makes the only residual difference
-//!   — deferring those frees to the host epilogue — unobservable (no `__destruct`,
-//!   no object identity). Objects/closures/resources/`mixed`/`iterable` and by-ref
-//!   params are excluded because their cleanup timing or aliasing cannot be
-//!   reproduced by a value-copy splice.
+//!   per-slot cleanup decisions only when all direct-returning paths transfer the
+//!   same slot — parameter and uniformly directly-returned slots become
+//!   `BorrowedTemp` (epilogue-excluded), ordinary refcounted internal locals stay
+//!   `PhpLocal` so the host epilogue still frees them; (2) the destructor-free
+//!   restriction makes the only residual difference — deferring those frees to the
+//!   host epilogue — unobservable (no `__destruct`, no object identity).
+//!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
+//!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
 //! - String arguments add one more call-site condition: PHP concatenation builds
 //!   intermediates in a frame-relative scratch buffer that every function rewinds
 //!   at statement boundaries (`ConcatReset`). A real call's separate frame protects
@@ -123,6 +123,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
         | PhpType::Float
         | PhpType::Str
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Void
         | PhpType::Never
         | PhpType::Pointer(_)
@@ -151,8 +152,9 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 /// 2. `transplant_callee_body` replicates the callee's per-slot cleanup *decisions*:
 ///    parameter slots and directly-returned slots (which the callee epilogue excludes,
 ///    because the argument is borrowed and the return value's ownership is moved out) are
-///    transplanted as `HiddenTemp` so the host epilogue ignores them; ordinary refcounted
-///    internal locals stay `PhpLocal` so the host epilogue still frees them.
+///    transplanted as `BorrowedTemp` so the host epilogue ignores them; ordinary refcounted
+///    internal locals stay `PhpLocal` so the host epilogue still frees them. This
+///    is only allowed when direct-return cleanup is uniform across all return paths.
 ///
 /// By-ref/variadic parameters and special-kind locals (ref-cells, statics, globals,
 /// captures, iterator/generator state) are excluded because they need aliasing/persistence
@@ -172,13 +174,19 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
     for local in &callee.locals {
         if !matches!(
             local.kind,
-            LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::NamedArgTemp
+            LocalKind::PhpLocal
+                | LocalKind::HiddenTemp
+                | LocalKind::BorrowedTemp
+                | LocalKind::NamedArgTemp
         ) {
             return false;
         }
         if !is_destructor_free(&local.php_type) {
             return false;
         }
+    }
+    if !direct_return_cleanup_is_inline_safe(callee) {
+        return false;
     }
     true
 }
@@ -280,6 +288,19 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
 /// `direct_return_local_slot` so the inliner can identify slots the callee epilogue
 /// would have excluded from cleanup (their ownership is moved into the return value).
 fn trace_returned_slot(callee: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let mut visited = HashSet::new();
+    trace_returned_slot_inner(callee, value, &mut visited)
+}
+
+/// Recursively traces forwarding return values back to the local slot they load.
+fn trace_returned_slot_inner(
+    callee: &Function,
+    value: ValueId,
+    visited: &mut HashSet<ValueId>,
+) -> Option<LocalSlotId> {
+    if !visited.insert(value) {
+        return None;
+    }
     let value = callee.value(value)?;
     let ValueDef::Instruction { inst, .. } = value.def else {
         return None;
@@ -291,10 +312,36 @@ fn trace_returned_slot(callee: &Function, value: ValueId) -> Option<LocalSlotId>
             _ => None,
         },
         Op::ArrayToMixed | Op::HashToMixed => {
-            trace_returned_slot(callee, *inst.operands.first()?)
+            trace_returned_slot_inner(callee, *inst.operands.first()?, visited)
+        }
+        Op::Move | Op::Borrow => {
+            trace_returned_slot_inner(callee, *inst.operands.first()?, visited)
         }
         _ => None,
     }
+}
+
+/// Returns true when the inliner's coarse local-kind remap can model return cleanup.
+fn direct_return_cleanup_is_inline_safe(callee: &Function) -> bool {
+    let mut expected_slot: Option<LocalSlotId> = None;
+    let mut saw_non_slot_return = false;
+    for block in &callee.blocks {
+        let Some(Terminator::Return { value }) = &block.terminator else {
+            continue;
+        };
+        let returned_slot = value.and_then(|value| trace_returned_slot(callee, value));
+        match returned_slot {
+            Some(_) if saw_non_slot_return => return false,
+            Some(slot) => match expected_slot {
+                Some(expected) if expected != slot => return false,
+                Some(_) => {}
+                None => expected_slot = Some(slot),
+            },
+            None if expected_slot.is_some() => return false,
+            None => saw_non_slot_return = true,
+        }
+    }
+    true
 }
 
 /// Collects the callee local slots that are directly returned by some `Return`
@@ -556,10 +603,11 @@ fn transplant_callee_body(
 
     // Parameter slots and directly-returned slots are excluded from the callee's
     // epilogue cleanup (borrowed argument / ownership moved into the return value). The
-    // host epilogue keys cleanup off `LocalKind::PhpLocal`, so transplant these slots as
-    // `HiddenTemp` to reproduce that exclusion; ordinary refcounted internal locals keep
-    // their `PhpLocal` kind so the host epilogue still frees them (the only difference is
-    // deferred timing, which is unobservable for the destructor-free types we inline).
+    // host epilogue cleans owning local kinds, so transplant these slots as
+    // `BorrowedTemp` to reproduce that exclusion; ordinary refcounted internal locals
+    // keep their `PhpLocal` kind so the host epilogue still frees them (the only
+    // difference is deferred timing, which is unobservable for the destructor-free
+    // types we inline).
     let excluded_from_cleanup: HashSet<LocalSlotId> = callee_param_slots(callee)
         .into_iter()
         .chain(callee_directly_returned_slots(callee))
@@ -568,7 +616,7 @@ fn transplant_callee_body(
     // Clone locals first.
     for local in &callee.locals {
         let kind = if excluded_from_cleanup.contains(&local.id) {
-            LocalKind::HiddenTemp
+            LocalKind::BorrowedTemp
         } else {
             local.kind
         };

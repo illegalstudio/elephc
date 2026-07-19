@@ -1,0 +1,89 @@
+//! Purpose:
+//! Emits the `__rt_throw_current`, `__rt_throw_current_uncaught` runtime helper assembly for throw current.
+//! Keeps exception object matching, unwinding state, and target-specific ABI variants in one focused emitter.
+//!
+//! Called from:
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::exceptions`.
+//!
+//! Key details:
+//! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
+
+use crate::codegen_support::platform::Arch;
+use crate::codegen_support::try_handlers::TRY_HANDLER_JMP_BUF_OFFSET;
+use crate::codegen_support::{abi, emit::Emitter};
+
+/// Emits `__rt_throw_current`, the runtime helper that propagates an exception upward through
+/// the handler stack. Saves callee-saved registers, retrieves the top handler record from
+/// `_exc_handler_top`, runs `__rt_exception_cleanup_frames` to unwind all activation frames,
+/// then calls `longjmp` with return value 1 to resume at the nearest catch block. If no handler
+/// is registered, falls through to `__rt_throw_current_uncaught`, which writes a 32-byte fatal
+/// message to stderr and terminates the process with exit code 1.
+pub fn emit_throw_current(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_throw_current_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: throw_current ---");
+    emitter.label_global("__rt_throw_current");
+
+    // -- save callee-saved state while the throw helper inspects handler stacks --
+    emitter.instruction("sub sp, sp, #48");                                     // reserve stack space for handler state and frame linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address for the throw helper
+    emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve callee-saved registers that hold handler metadata
+    emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
+    emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
+    emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
+    emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
+    abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
+    emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
+    emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
+    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+
+    // -- uncaught exceptions terminate the process with a fatal message --
+    emitter.label("__rt_throw_current_uncaught");
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_msg"); // load page of the uncaught-exception error message
+    emitter.instruction("mov x2, #32");                                         // uncaught exception message length in bytes
+    emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal runtime diagnostics
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
+    emitter.syscall(1);
+}
+
+/// Emits `__rt_throw_current` for Linux x86_64. Uses the System V AMD64 ABI: preserves rbp as
+/// frame pointer, saves r12/r13 callee-saved registers, loads `_exc_handler_top` into r12,
+/// checks for null handler to branch to the uncaught path, calls
+/// `__rt_exception_cleanup_frames` for frame unwinding, then invokes `longjmp` to transfer
+/// control to the saved catch resume point. The uncaught path writes 32 bytes to stderr via
+/// syscall 1 (write) and terminates via syscall 60 (exit).
+fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: throw_current ---");
+    emitter.label_global("__rt_throw_current");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the throw helper inspects handler stacks
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
+    emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
+    emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
+    emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
+    emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
+    emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
+    emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
+    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
+    emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
+    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+
+    emitter.label("__rt_throw_current_uncaught");
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
+    emitter.instruction("mov edx, 32");                                         // uncaught exception message length in bytes
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for fatal runtime diagnostics
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // write the fatal uncaught-exception message to stderr
+    emitter.instruction("mov edi, 1");                                          // exit status 1 indicates abnormal termination
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate the process after reporting the uncaught exception
+}

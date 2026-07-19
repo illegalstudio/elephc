@@ -1,0 +1,16 @@
+//! Purpose:
+//! Groups declarative registry dispatch hooks for eval builtins.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::spec` re-exports used by `eval_builtin!`.
+//!
+//! Key details:
+//! - Direct expression dispatch and already-evaluated argument dispatch stay
+//!   split so each dispatcher remains focused.
+
+mod arity;
+mod direct;
+mod values;
+
+pub(in crate::interpreter) use direct::EvalDirectHook;
+pub(in crate::interpreter) use values::EvalValuesHook;

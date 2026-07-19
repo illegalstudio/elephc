@@ -2,7 +2,7 @@
 title: "is_scalar() — internals"
 description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 435
 ---
 
 ## `is_scalar()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_scalar.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1034](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1034) (`lower_is_scalar`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1648](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1648) (`lower_is_scalar`)
 - **Function symbol**: `lower_is_scalar()`
 
 
@@ -33,6 +33,11 @@ function is_scalar(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_scalar.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

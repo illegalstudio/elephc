@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_signature_hash() — internals"
 description: "Compiler internals for __elephc_phar_get_signature_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 434
+  order: 444
 ---
 
 ## `__elephc_phar_get_signature_hash()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_signature_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_signature_hash.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4192](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4192) (`lower_elephc_phar_get_signature_hash`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4192](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4192) (`lower_elephc_phar_get_signature_hash`)
 - **Function symbol**: `lower_elephc_phar_get_signature_hash()`
 
 
@@ -31,6 +31,10 @@ function __elephc_phar_get_signature_hash(string $path): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

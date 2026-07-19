@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_is_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_is_list.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1144](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1144) (`lower_array_is_list`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1150](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1150) (`lower_array_is_list`)
 - **Function symbol**: `lower_array_is_list()`
 
 
@@ -36,6 +36,10 @@ function array_is_list(mixed $array): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

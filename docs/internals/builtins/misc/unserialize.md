@@ -2,7 +2,7 @@
 title: "unserialize() — internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 282
+  order: 286
 ---
 
 ## `unserialize()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/serialize.rs`:164](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/serialize.rs#L164) (`lower_unserialize`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/serialize.rs`:164](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/serialize.rs#L164) (`lower_unserialize`)
 - **Function symbol**: `lower_unserialize()`
 
 
@@ -37,6 +37,10 @@ function unserialize(string $data, mixed $options = []): mixed
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

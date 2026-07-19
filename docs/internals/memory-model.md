@@ -2,7 +2,7 @@
 title: "Memory Model"
 description: "Stack frames, heap allocation, and memory management."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 elephc manages memory without calling `malloc`/`free` for PHP values directly. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator, reference counting, and a targeted cycle collector for array/hash/object graphs. The final binary still links the target platform's system C library for OS and libc services.
@@ -107,9 +107,9 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by
 `--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`). The tagged representation is the
-default; the sentinel is the legacy opt-out.
+default; the sentinel is the compatibility opt-out.
 
-#### The in-band sentinel (legacy opt-out)
+#### The in-band sentinel (compatibility opt-out)
 
 `null` is represented as the integer `0x7FFFFFFFFFFFFFFE` (`PHP_INT_MAX - 1`). Because every
 64-bit pattern is a valid PHP int, this sentinel collides with the real integer
@@ -150,9 +150,9 @@ cmp x1, #8                ; runtime tag 8 = PHP null
 b.eq value_is_null
 ```
 
-A tagged null carries the legacy sentinel as its payload word, so boxing it into a Mixed
-cell produces exactly the legacy `{tag 8, sentinel}` words and un-audited consumers degrade
-to the legacy behavior. `?int` parameters, returns, and properties keep their boxed Mixed
+A tagged null carries the sentinel as its payload word, so boxing it into a Mixed
+cell produces `{tag 8, sentinel}` words and un-audited consumers degrade
+to sentinel behavior. `?int` parameters, returns, and properties keep their boxed Mixed
 representation under both modes.
 
 ### Pointer values
@@ -278,7 +278,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 
 ### When memory is freed
 
-- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects)
+- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage (e.g. an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update), lowering emits a deferred `release_local_slot` and the backend decides against the slot's final widened storage type, so the previous iteration's box is still released
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: when decref reaches a container/object graph that may only be keeping itself alive, `__rt_gc_collect_cycles` counts heap-only incoming edges, marks externally reachable blocks, and deep-frees the remaining unreachable array/hash/object island
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_map.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:312](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L312) (`lower_array_map`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:326](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L326) (`lower_array_map`)
 - **Function symbol**: `lower_array_map()`
 
 
@@ -31,6 +31,12 @@ function array_map(callable $callback, array $array, ...$arrays): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+- **Variadic**: collects excess arguments into `$arrays`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_map.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$arrays`.
 
 ## Cross-references

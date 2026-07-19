@@ -9,8 +9,8 @@
 //! - Pure-data builtin: return type (`Str`) is fully determined by the declaration.
 //! - `lower` is a thin wrapper over `regex::lower_preg_replace` in the EIR backend.
 
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::ir::Instruction;
 
 builtin! {
@@ -24,5 +24,5 @@ builtin! {
 
 /// Lowers a `preg_replace` call by dispatching to the shared regex emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::regex::lower_preg_replace(ctx, inst)
+    crate::codegen::lower_inst::builtins::regex::lower_preg_replace(ctx, inst)
 }

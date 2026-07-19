@@ -13,8 +13,8 @@
 //! - Arity (exactly 1 arg) is validated by the registry's `check_arity` before the hook fires.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -42,5 +42,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `hash_copy` call by dispatching to the shared `lower_hash_copy` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_hash_copy(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_hash_copy(ctx, inst)
 }

@@ -39,6 +39,7 @@ impl IrType {
         match php {
             PhpType::Int
             | PhpType::Bool
+            | PhpType::False
             | PhpType::Callable
             | PhpType::Pointer(_)
             | PhpType::Resource(_) => IrType::I64,

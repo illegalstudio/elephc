@@ -203,6 +203,9 @@ fn move_instruction(
     if let Some(block) = function.block_mut(preheader) {
         block.instructions.push(inst_id);
     }
+    if let Some(inst) = function.instruction_mut(inst_id) {
+        inst.origin = Some(crate::ir::PassOrigin::Licm);
+    }
     def_block.insert(result, preheader);
 }
 

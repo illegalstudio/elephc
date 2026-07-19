@@ -162,3 +162,213 @@ fn test_propagate_constants_invalidates_multiple_unset_targets() {
         Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
     );
 }
+
+/// Builds an `ArrayAccess` expression.
+fn access(array: Expr, index: Expr) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(array),
+            index: Box::new(index),
+        },
+        Span::dummy(),
+    )
+}
+
+/// Builds an indexed array literal of integer elements.
+fn int_array(values: &[i64]) -> Expr {
+    Expr::new(
+        ExprKind::ArrayLiteral(values.iter().map(|value| Expr::int_lit(*value)).collect()),
+        Span::dummy(),
+    )
+}
+
+/// `$a = [1, 2, 3]; echo $a[1];` folds the element read to `2`.
+#[test]
+fn test_array_fact_folds_constant_index_access() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[1, 2, 3])),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[1], Stmt::echo(Expr::int_lit(2)));
+}
+
+/// An associative literal fact folds string-key reads.
+#[test]
+fn test_assoc_array_fact_folds_key_access() {
+    let program = vec![
+        Stmt::assign(
+            "a",
+            Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![(
+                    Expr::string_lit("k"),
+                    Expr::int_lit(7),
+                )]),
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(access(Expr::var("a"), Expr::string_lit("k"))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[1], Stmt::echo(Expr::int_lit(7)));
+}
+
+/// `$b = $a` snapshots the fact (COW value semantics): a later element write
+/// through `$b` kills only `$b`'s fact, and `$a` keeps folding.
+#[test]
+fn test_array_fact_copy_respects_cow() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[1, 2, 3])),
+        Stmt::assign("b", Expr::var("a")),
+        Stmt::new(
+            StmtKind::ArrayAssign {
+                array: "b".to_string(),
+                index: Expr::int_lit(0),
+                value: Expr::int_lit(9),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(1))),
+        Stmt::echo(access(Expr::var("b"), Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::int_lit(2)),
+        "writes through $b must not kill $a's fact (COW)"
+    );
+    assert_eq!(
+        propagated[4],
+        Stmt::echo(access(Expr::var("b"), Expr::int_lit(1))),
+        "$b's own fact dies at the element write"
+    );
+}
+
+/// A by-ref exposure (`sort($a)`) kills the array fact.
+#[test]
+fn test_array_fact_dies_at_by_ref_builtin() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[3, 1, 2])),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("sort"),
+                    args: vec![Expr::var("a")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(0))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(0))),
+        "sort($a) rewrites the array"
+    );
+}
+
+/// An out-of-range read keeps the runtime access (and its warning).
+#[test]
+fn test_array_fact_out_of_range_access_stays() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[1, 2, 3])),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(9))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(9))),
+        "out-of-range reads keep their runtime warning"
+    );
+}
+
+/// Oversized literals carry no fact (environment size cap).
+#[test]
+fn test_array_fact_size_cap() {
+    let values: Vec<i64> = (0..65).collect();
+    let program = vec![
+        Stmt::assign("a", int_array(&values)),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(1))),
+        "a 65-element literal is over the fact cap"
+    );
+}
+
+/// A by-value pass to a user function without by-ref params keeps the fact.
+#[test]
+fn test_array_fact_survives_by_value_user_call() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "reader".to_string(),
+                params: vec![("arr".to_string(), None, None, false)],
+                param_attributes: Vec::new(),
+                variadic: None,
+                variadic_by_ref: false,
+                variadic_type: None,
+                return_type: None,
+                by_ref_return: false,
+                body: vec![Stmt::echo(Expr::string_lit("r"))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::assign("a", int_array(&[1, 2, 3])),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("reader"),
+                    args: vec![Expr::var("a")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(access(Expr::var("a"), Expr::int_lit(2))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::int_lit(3)),
+        "a by-value pass copies the array (COW)"
+    );
+}
+
+/// `list($x, $y) = $a` with an array fact extracts element facts.
+#[test]
+fn test_list_unpack_from_array_fact() {
+    let program = vec![
+        Stmt::assign("a", int_array(&[4, 5])),
+        Stmt::new(
+            StmtKind::ListUnpack {
+                vars: vec!["x".to_string(), "y".to_string()],
+                value: Expr::var("a"),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::var("y"))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[2], Stmt::echo(Expr::int_lit(9)));
+}

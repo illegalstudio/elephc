@@ -2,7 +2,7 @@
 title: "strstr()"
 description: "Returns the portion of a string starting at the first occurrence of a substring."
 sidebar:
-  order: 392
+  order: 402
 ---
 
 ## strstr()
@@ -19,6 +19,11 @@ Returns the portion of a string starting at the first occurrence of a substring.
 - `$before_needle` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strstr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strstr.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

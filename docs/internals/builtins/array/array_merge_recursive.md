@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_merge_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_merge_recursive.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1366](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1366) (`lower_array_merge_recursive`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1387](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1387) (`lower_array_merge_recursive`)
 - **Function symbol**: `lower_array_merge_recursive()`
 
 
@@ -35,6 +35,10 @@ function array_merge_recursive(...$arrays): array
 
 - **Arity**: takes no arguments.
 - **Variadic**: collects excess arguments into `$arrays`.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

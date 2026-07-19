@@ -16,8 +16,8 @@
 //! - `lower` is a thin wrapper over the shared `lower_explode` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -45,5 +45,5 @@ fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers an `explode` call by dispatching to the shared `lower_explode` emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::strings::lower_explode(ctx, inst)
+    crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
 }

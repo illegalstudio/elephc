@@ -26,7 +26,7 @@ pub use ast::Program;
 use std::cell::{Cell, RefCell};
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
@@ -62,7 +62,7 @@ fn take_anonymous_classes() -> Vec<Stmt> {
 }
 
 /// Parses tokens into an AST program, returning the first error if any.
-pub fn parse(tokens: &[(Token, Span)]) -> Result<Program, CompileError> {
+pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     match parse_with_recovery(tokens) {
         Ok(program) => Ok(program),
         Err(errors) => Err(CompileError::from_many(errors)),
@@ -70,7 +70,7 @@ pub fn parse(tokens: &[(Token, Span)]) -> Result<Program, CompileError> {
 }
 
 /// Parses tokens with recovery, collecting all syntax errors encountered.
-pub fn parse_with_recovery(tokens: &[(Token, Span)]) -> Result<Program, Vec<CompileError>> {
+pub fn parse_with_recovery(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
@@ -83,7 +83,7 @@ pub fn parse_with_recovery(tokens: &[(Token, Span)]) -> Result<Program, Vec<Comp
         pos += 1;
     } else {
         let span = if pos < tokens.len() {
-            tokens[pos].1
+            tokens[pos].1.span
         } else {
             Span::dummy()
         };

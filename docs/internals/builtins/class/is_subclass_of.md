@@ -2,7 +2,7 @@
 title: "is_subclass_of() — internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 83
+  order: 87
 ---
 
 ## `is_subclass_of()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/is_subclass_of.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:369](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L369) (`lower_is_a_relation`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:369](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L369) (`lower_is_a_relation`)
 - **Function symbol**: `lower_is_a_relation()`
 
 
@@ -31,6 +31,11 @@ function is_subclass_of(mixed $object_or_class, string $class, bool $allow_strin
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

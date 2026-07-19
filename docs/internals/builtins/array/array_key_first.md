@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_key_first.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_key_first.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1155](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1155) (`lower_array_key_first`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1161](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1161) (`lower_array_key_first`)
 - **Function symbol**: `lower_array_key_first()`
 
 
@@ -33,6 +33,10 @@ function array_key_first(array $array): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

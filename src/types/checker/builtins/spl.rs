@@ -98,7 +98,12 @@ pub(crate) fn check_iterator_to_array_preserve_keys(
 /// Provides the Preserve keys type supported helper used by the SPL module.
 fn preserve_keys_type_supported(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void => true,
+        PhpType::Bool
+        | PhpType::False
+        | PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Void => true,
         PhpType::Union(members) => members.iter().all(preserve_keys_type_supported),
         _ => false,
     }

@@ -53,6 +53,28 @@ fn ownership_for_php_type_packed_is_borrowed() {
     );
 }
 
+/// Only owned and maybe-owned values may reach the backend release path.
+#[test]
+fn ownership_release_policy_skips_non_owning_states() {
+    for ownership in [Ownership::Owned, Ownership::MaybeOwned] {
+        assert!(
+            ownership.may_require_release(),
+            "{ownership:?} must remain eligible for release"
+        );
+    }
+    for ownership in [
+        Ownership::NonHeap,
+        Ownership::Borrowed,
+        Ownership::Persistent,
+        Ownership::Moved,
+    ] {
+        assert!(
+            !ownership.may_require_release(),
+            "{ownership:?} must remain a release no-op"
+        );
+    }
+}
+
 /// Value IDs are zero-based function-local table indexes.
 #[test]
 fn value_id_is_zero_indexed() {

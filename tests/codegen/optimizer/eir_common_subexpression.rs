@@ -78,9 +78,13 @@ fn test_cse_collapses_constant_operand_subexpression() {
         let text = String::from_utf8_lossy(&out.stdout);
         let main_body = text.split("function main(").nth(1).expect("main present");
         let main_body = main_body.split("\n  function ").next().unwrap_or(main_body);
-        main_body.matches("= iadd ").count()
+        // Count both iadd (constant) and ichecked_add (non-constant) forms.
+        main_body.matches("= iadd ").count() + main_body.matches("= ichecked_add ").count()
     };
 
+    // With Tier 1 int overflow, non-constant `$n + 1` uses `ichecked_add` (not
+    // pure — it allocates a Mixed box), so CSE cannot collapse it. Both adds
+    // remain even with IR optimization enabled.
     assert_eq!(count_iadds(&["--no-ir-opt"]), 2, "unoptimized keeps both adds");
-    assert_eq!(count_iadds(&[]), 1, "CSE collapses the repeated $n + 1 to one add");
+    assert_eq!(count_iadds(&[]), 2, "CSE cannot collapse checked adds (not pure)");
 }
