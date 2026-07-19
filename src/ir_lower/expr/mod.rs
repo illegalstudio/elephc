@@ -7142,7 +7142,7 @@ fn expand_static_indexed_spread_args(args: &[Expr]) -> Vec<Expr> {
 }
 
 /// Returns the best available return type for a function-like call.
-fn call_return_type(
+pub(super) fn call_return_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     operands: &[crate::ir::ValueId],
@@ -8462,7 +8462,7 @@ fn scoped_constant_value_type_for_ir(
 }
 
 /// Returns the element/value type for an array-access expression used inside a literal.
-fn array_access_expr_value_type_for_ir(
+pub(super) fn array_access_expr_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> Option<PhpType> {
@@ -8490,7 +8490,7 @@ fn array_access_expr_value_type_for_ir(
 }
 
 /// Returns the declared type for an object property expression used inside a literal.
-fn property_access_expr_type_for_ir(
+pub(super) fn property_access_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,
@@ -8509,6 +8509,18 @@ fn property_access_expr_type_for_ir(
         .iter()
         .find(|(name, _)| name == property)
         .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
+}
+
+/// Returns the declared result type for an instance method call before its receiver is lowered.
+pub(super) fn method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<PhpType> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let method_key = php_symbol_key(method);
+    class_method_signature(ctx, &class_name, &method_key)
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
 }
 
 /// Merges associative-array value types for EIR storage metadata.
@@ -14339,6 +14351,17 @@ fn static_method_implementation_signature<'a>(
     ctx.classes
         .get(impl_class)
         .and_then(|class_info| class_info.static_methods.get(&key))
+}
+
+/// Returns the declared result type for a static method call before its arguments are lowered.
+pub(super) fn static_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<PhpType> {
+    static_method_implementation_signature(ctx, receiver, method)
+        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
 }
 
 /// Returns the instance-method signature used by `self::method()` or `parent::method()`.

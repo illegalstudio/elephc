@@ -17,12 +17,12 @@
 //! - Only the widening-to-`mixed` transition is reported: it is the one that changes the
 //!   element representation (raw scalar slots vs boxed cells). Same-type growth and
 //!   `never -> T` keep their current lowering.
-//! - Concrete evidence comes from literals, casts, and loop-entry/literal-assigned
-//!   variables. Opaque sources (non-literal in-loop assignments, unknown call results,
-//!   property/array reads, …) do *not* force `mixed` alone — that would spuriously widen
-//!   same-typed rebuild loops such as `MultipleIterator::detachIterator`. Opaque evidence
-//!   *alongside* at least one concrete sibling type on the same array does force `mixed`,
-//!   because the back edge can promote storage while the opaque site still emits a raw write.
+//! - Concrete evidence comes from the caller's semantic expression inference, with a
+//!   literal/cast fallback for lowering-only contexts. Opaque sources do *not* force
+//!   `mixed` alone — that would spuriously widen same-typed rebuild loops such as
+//!   `MultipleIterator::detachIterator`. Opaque evidence alongside at least one concrete
+//!   sibling type on the same array does force `mixed`, because the back edge can promote
+//!   storage while the opaque site still emits a raw write.
 
 use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::PhpType;
@@ -35,24 +35,34 @@ enum PushEvidence {
     Opaque,
 }
 
+/// Source recorded for a local assignment that can feed a later array write.
+enum AssignedValue<'a> {
+    /// An ordinary assignment whose RHS can be inferred by the caller.
+    Expr(&'a Expr),
+    /// A binding without an RHS expression in this AST, such as a `foreach` variable.
+    Opaque,
+}
+
 /// Returns the names of locals that currently hold a non-`mixed` indexed array and whose
 /// element type joins to `mixed` across the local-array growth/write sites found in the
 /// loop body (and the optional `for` update statement). `lookup` supplies the current type
-/// of a local at loop entry; names it does not know are skipped as targets.
+/// of a local at loop entry; names it does not know are skipped as targets. `infer_value`
+/// supplies the caller's best semantic type for pushed values and assignment RHSs.
 pub fn loop_grown_mixed_array_pushes(
     body: &[Stmt],
     update: Option<&Stmt>,
     lookup: &dyn Fn(&str) -> Option<PhpType>,
+    infer_value: &mut dyn FnMut(&Expr) -> Option<PhpType>,
 ) -> Vec<String> {
     let mut pushes: Vec<(&str, &Expr)> = Vec::new();
     collect_array_pushes(body, &mut pushes);
     if let Some(stmt) = update {
         collect_array_push_stmt(stmt, &mut pushes);
     }
-    let mut literal_assignments: Vec<(&str, Option<PhpType>)> = Vec::new();
-    collect_literal_assignments(body, &mut literal_assignments);
+    let mut assignments: Vec<(&str, AssignedValue<'_>)> = Vec::new();
+    collect_value_assignments(body, &mut assignments);
     if let Some(stmt) = update {
-        collect_literal_assignment_stmt(stmt, &mut literal_assignments);
+        collect_value_assignment_stmt(stmt, &mut assignments);
     }
     let mut names: Vec<String> = Vec::new();
     for (name, _) in &pushes {
@@ -69,7 +79,7 @@ pub fn loop_grown_mixed_array_pushes(
         let mut saw_known = false;
         let mut saw_opaque = false;
         for (_, value) in pushes.iter().filter(|(n, _)| n == name) {
-            match resolve_pushed_value_evidence(value, lookup, &literal_assignments) {
+            match resolve_pushed_value_evidence(value, lookup, &assignments, infer_value) {
                 Some(PushEvidence::Known(pushed)) => {
                     saw_known = true;
                     joined = join_pushed_element_type(joined, pushed);
@@ -96,61 +106,57 @@ pub fn loop_grown_mixed_array_pushes(
 fn resolve_pushed_value_evidence(
     value: &Expr,
     lookup: &dyn Fn(&str) -> Option<PhpType>,
-    literal_assignments: &[(&str, Option<PhpType>)],
+    assignments: &[(&str, AssignedValue<'_>)],
+    infer_value: &mut dyn FnMut(&Expr) -> Option<PhpType>,
 ) -> Option<PushEvidence> {
     match &value.kind {
         ExprKind::Variable(name) => {
             let entry = lookup(name);
-            let body = joined_literal_assignment_type(name, literal_assignments);
+            let body = assigned_value_evidence(name, assignments, infer_value);
             match (entry, body) {
-                (Some(a), Some(b)) => Some(PushEvidence::Known(join_pushed_element_type(a, b))),
-                (Some(a), None) => Some(PushEvidence::Known(a)),
-                (None, Some(b)) => Some(PushEvidence::Known(b)),
-                (None, None) => {
-                    if variable_has_body_assignment(name, literal_assignments) {
-                        Some(PushEvidence::Opaque)
-                    } else {
-                        None
-                    }
+                (_, Some(PushEvidence::Opaque)) => Some(PushEvidence::Opaque),
+                (Some(a), Some(PushEvidence::Known(b))) => {
+                    Some(PushEvidence::Known(join_pushed_element_type(a, b)))
                 }
+                (Some(a), None) => Some(PushEvidence::Known(a)),
+                (None, Some(PushEvidence::Known(b))) => Some(PushEvidence::Known(b)),
+                (None, None) => None,
             }
         }
-        _ => match precise_scalar_expr_type(value) {
+        _ => match infer_value(value).or_else(|| precise_scalar_expr_type(value)) {
             Some(ty) => Some(PushEvidence::Known(ty)),
             None => Some(PushEvidence::Opaque),
         },
     }
 }
 
-/// Joins the recorded in-loop literal assignments for `name`. Returns `None` when the
-/// variable has no literal assignment or any of its assignments is non-literal (a poison
-/// entry) — partial literal evidence must not overrule the unknown non-literal sources.
-fn joined_literal_assignment_type(
+/// Joins the recorded in-loop assignment types for `name`, preserving opaque assignments
+/// as poison so stale loop-entry evidence cannot overrule an unknown reassignment.
+fn assigned_value_evidence(
     name: &str,
-    literal_assignments: &[(&str, Option<PhpType>)],
-) -> Option<PhpType> {
+    assignments: &[(&str, AssignedValue<'_>)],
+    infer_value: &mut dyn FnMut(&Expr) -> Option<PhpType>,
+) -> Option<PushEvidence> {
     let mut joined: Option<PhpType> = None;
-    for (candidate, ty) in literal_assignments {
+    for (candidate, source) in assignments {
         if *candidate != name {
             continue;
         }
+        let ty = match source {
+            AssignedValue::Expr(expr) => {
+                infer_value(expr).or_else(|| precise_scalar_expr_type(expr))
+            }
+            AssignedValue::Opaque => None,
+        };
         let Some(ty) = ty else {
-            return None;
+            return Some(PushEvidence::Opaque);
         };
         joined = Some(match joined {
-            Some(acc) => join_pushed_element_type(acc, ty.clone()),
-            None => ty.clone(),
+            Some(acc) => join_pushed_element_type(acc, ty),
+            None => ty,
         });
     }
-    joined
-}
-
-/// Returns true when `name` has any recorded in-loop assignment (literal or poison).
-fn variable_has_body_assignment(
-    name: &str,
-    literal_assignments: &[(&str, Option<PhpType>)],
-) -> bool {
-    literal_assignments.iter().any(|(candidate, _)| *candidate == name)
+    joined.map(PushEvidence::Known)
 }
 
 /// Returns a self-evident concrete scalar type, or `None` when the expression must be
@@ -184,23 +190,25 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
     }
 }
 
-/// Collects `$name = <literal>` assignments from every statement in `stmts`, recursively,
-/// recording a poison entry (`None` type) for non-literal assignments so partial evidence
-/// never overrules an unknown source.
-fn collect_literal_assignments<'a>(stmts: &'a [Stmt], out: &mut Vec<(&'a str, Option<PhpType>)>) {
+/// Collects local assignments from every statement in `stmts`, recursively.
+fn collect_value_assignments<'a>(
+    stmts: &'a [Stmt],
+    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+) {
     for stmt in stmts {
-        collect_literal_assignment_stmt(stmt, out);
+        collect_value_assignment_stmt(stmt, out);
     }
 }
 
-/// Collects literal assignments from one statement, mirroring the nested-statement
-/// recursion of `collect_array_push_stmt` (only bodies that execute within the loop
-/// iteration are descended into).
-fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Option<PhpType>)>) {
+/// Collects local assignments from one statement, mirroring the nested-statement recursion
+/// of `collect_array_push_stmt` for bodies that execute within the loop iteration.
+fn collect_value_assignment_stmt<'a>(
+    stmt: &'a Stmt,
+    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+) {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
-            // Precise scalar RHS is positive evidence; anything else poisons the name.
-            out.push((name.as_str(), precise_scalar_expr_type(value)));
+            out.push((name.as_str(), AssignedValue::Expr(value)));
         }
         StmtKind::If {
             then_body,
@@ -208,12 +216,12 @@ fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, O
             else_body,
             ..
         } => {
-            collect_literal_assignments(then_body, out);
+            collect_value_assignments(then_body, out);
             for (_, clause_body) in elseif_clauses {
-                collect_literal_assignments(clause_body, out);
+                collect_value_assignments(clause_body, out);
             }
             if let Some(else_body) = else_body {
-                collect_literal_assignments(else_body, out);
+                collect_value_assignments(else_body, out);
             }
         }
         StmtKind::IfDef {
@@ -221,14 +229,14 @@ fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, O
             else_body,
             ..
         } => {
-            collect_literal_assignments(then_body, out);
+            collect_value_assignments(then_body, out);
             if let Some(else_body) = else_body {
-                collect_literal_assignments(else_body, out);
+                collect_value_assignments(else_body, out);
             }
         }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => collect_literal_assignments(body, out),
+        | StmtKind::IncludeOnceGuard { body, .. } => collect_value_assignments(body, out),
         StmtKind::Foreach {
             key_var,
             value_var,
@@ -237,10 +245,10 @@ fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, O
         } => {
             // The foreach bindings assign non-literal values each iteration: poison them.
             if let Some(key_var) = key_var {
-                out.push((key_var.as_str(), None));
+                out.push((key_var.as_str(), AssignedValue::Opaque));
             }
-            out.push((value_var.as_str(), None));
-            collect_literal_assignments(body, out);
+            out.push((value_var.as_str(), AssignedValue::Opaque));
+            collect_value_assignments(body, out);
         }
         StmtKind::For {
             init,
@@ -249,19 +257,19 @@ fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, O
             ..
         } => {
             if let Some(init) = init {
-                collect_literal_assignment_stmt(init, out);
+                collect_value_assignment_stmt(init, out);
             }
             if let Some(update) = update {
-                collect_literal_assignment_stmt(update, out);
+                collect_value_assignment_stmt(update, out);
             }
-            collect_literal_assignments(body, out);
+            collect_value_assignments(body, out);
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, case_body) in cases {
-                collect_literal_assignments(case_body, out);
+                collect_value_assignments(case_body, out);
             }
             if let Some(default) = default {
-                collect_literal_assignments(default, out);
+                collect_value_assignments(default, out);
             }
         }
         StmtKind::Try {
@@ -269,15 +277,15 @@ fn collect_literal_assignment_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, O
             catches,
             finally_body,
         } => {
-            collect_literal_assignments(try_body, out);
+            collect_value_assignments(try_body, out);
             for catch in catches {
-                collect_literal_assignments(&catch.body, out);
+                collect_value_assignments(&catch.body, out);
             }
             if let Some(finally_body) = finally_body {
-                collect_literal_assignments(finally_body, out);
+                collect_value_assignments(finally_body, out);
             }
         }
-        StmtKind::Synthetic(stmts) => collect_literal_assignments(stmts, out),
+        StmtKind::Synthetic(stmts) => collect_value_assignments(stmts, out),
         _ => {}
     }
 }

@@ -1116,11 +1116,10 @@ echo $sum;
     assert_eq!(out, "6");
 }
 
-/// Regression for #452: a non-literal in-loop assignment (`$x = get_int()`) is opaque
-/// evidence, but alongside a concrete sibling push (`2.0`) the array must still widen
-/// to mixed — otherwise the opaque site keeps a raw write after promotion and crashes.
+/// Regression for #452: a typed call assigned inside the loop must contribute its return
+/// type before the pushed array's fixed-point element type is selected.
 #[test]
-fn test_loop_grown_mixed_array_via_opaque_local() {
+fn test_loop_grown_mixed_array_via_typed_local() {
     let out = compile_and_run(
         r#"<?php
 function get_int(): int { return 1; }
@@ -1134,6 +1133,84 @@ echo $vals[2];
 "#,
     );
     assert_eq!(out, "1");
+}
+
+/// Regression for #452: two differently typed call results must widen the array before
+/// either append is lowered; treating both calls as opaque left the first append raw and
+/// corrupted mixed storage on the loop back edge.
+#[test]
+fn test_loop_grown_mixed_array_via_typed_calls() {
+    let out = compile_and_run(
+        r#"<?php
+function get_int(): int { return 1; }
+function get_float(): float { return 2.0; }
+$vals = [];
+for ($i = 0; $i < 2; $i++) {
+    $vals[] = get_int();
+    $vals[] = get_float();
+}
+echo $vals[2];
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Regression for #452: declared member and array-element types must reach the EIR
+/// loop prescan, keeping its fixed-point decision aligned with the type checker.
+#[test]
+fn test_loop_grown_mixed_array_via_typed_member_and_element_reads() {
+    let out = compile_and_run(
+        r#"<?php
+class Values {
+    public int $intValue = 1;
+    public float $floatValue = 2.0;
+    public function getInt(): int { return 1; }
+    public function getFloat(): float { return 2.0; }
+    public static function staticInt(): int { return 1; }
+    public static function staticFloat(): float { return 2.0; }
+}
+
+$source = new Values();
+$methods = [];
+$statics = [];
+$properties = [];
+$elements = [];
+$ints = [1];
+$floats = [2.0];
+for ($i = 0; $i < 2; $i++) {
+    $methods[] = $source->getInt();
+    $methods[] = $source->getFloat();
+    $statics[] = Values::staticInt();
+    $statics[] = Values::staticFloat();
+    $properties[] = $source->intValue;
+    $properties[] = $source->floatValue;
+    $elements[] = $ints[0];
+    $elements[] = $floats[0];
+}
+echo $methods[2], $statics[2], $properties[2], $elements[2];
+"#,
+    );
+    assert_eq!(out, "1111");
+}
+
+/// Regression for #452: an in-loop typed reassignment must override stale loop-entry
+/// evidence when the assigned variable is appended to an array that later becomes mixed.
+#[test]
+fn test_loop_grown_mixed_array_via_reassigned_entry_local() {
+    let out = compile_and_run(
+        r#"<?php
+function get_float(): float { return 2.0; }
+$x = 0;
+$vals = [];
+for ($i = 0; $i < 2; $i++) {
+    $x = get_float();
+    $vals[] = $x;
+    $vals[] = 1;
+}
+echo intval($vals[2]);
+"#,
+    );
+    assert_eq!(out, "2");
 }
 
 /// Regression for #452: `array_push` is a growth site equivalent to `$a[] =` for the

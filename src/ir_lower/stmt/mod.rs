@@ -20,12 +20,15 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    array_access_element_result_type, array_access_expr_value_type_for_ir, call_return_type,
+    coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
+    method_call_expr_type_for_ir, property_access_expr_type_for_ir,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
-    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
+    static_method_call_expr_type_for_ir, string_op_uses_scratch_storage,
+    type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -529,7 +532,6 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
-/// Lowers a `while` loop.
 /// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
 /// push sites (issue #452) and materializes the promotion once before the loop. Loop bodies
 /// are lowered in a single pass, so without this an early `$a[] = <scalar>` site is emitted
@@ -561,7 +563,12 @@ fn widen_loop_grown_arrays(
             }
             Some(ctx.local_type(name))
         };
-        crate::types::checker::loop_grown_mixed_array_pushes(body, update, &lookup)
+        crate::types::checker::loop_grown_mixed_array_pushes(
+            body,
+            update,
+            &lookup,
+            &mut |expr| infer_loop_growth_value_type(ctx, expr),
+        )
     };
     for name in names {
         if !ctx.local_slots.contains_key(&name) {
@@ -584,6 +591,52 @@ fn widen_loop_grown_arrays(
     }
 }
 
+/// Returns the value type that EIR lowering already knows before it emits a loop body.
+fn infer_loop_growth_value_type(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<PhpType> {
+    match &expr.kind {
+        ExprKind::Variable(name) if ctx.local_slots.contains_key(name) => {
+            Some(ctx.local_type(name))
+        }
+        ExprKind::FunctionCall { name, .. } => {
+            Some(call_return_type(ctx, name.as_str(), &[]))
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array)
+        }
+        ExprKind::This => ctx.current_class.clone().map(PhpType::Object),
+        ExprKind::NewObject { class_name, .. } => {
+            Some(PhpType::Object(class_name.as_str().to_string()))
+        }
+        ExprKind::ErrorSuppress(inner) => infer_loop_growth_value_type(ctx, inner),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_ty = infer_loop_growth_value_type(ctx, then_expr)?;
+            let else_ty = infer_loop_growth_value_type(ctx, else_expr)?;
+            if then_ty == else_ty {
+                Some(then_ty)
+            } else {
+                Some(PhpType::Mixed)
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Mirrors the checker's `foreach` value binding for the loop-widening prescan: the element
 /// type for an indexed/associative array source variable, `mixed` otherwise.
 fn foreach_prescan_value_type(ctx: &LoweringContext<'_, '_>, array: &Expr) -> PhpType {
@@ -597,6 +650,7 @@ fn foreach_prescan_value_type(ctx: &LoweringContext<'_, '_>, array: &Expr) -> Ph
     }
 }
 
+/// Lowers a `while` loop.
 fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
     widen_loop_grown_arrays(ctx, body, None, &[], Some(condition.span));
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
