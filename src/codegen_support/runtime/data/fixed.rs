@@ -11,6 +11,11 @@
 use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
+    OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
+    OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
@@ -45,6 +50,94 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _print_r_mode, 8, 3\n");
     out.push_str(".comm _print_r_off, 8, 3\n");
     out.push_str(".comm _print_r_buf, 65536, 3\n");
+    // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
+    // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
+    // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
+    // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
+    // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
+    // written to the terminal sink by __rt_ob_flush_all at process exit.
+    out.push_str(".comm _ob_level, 8, 3\n");
+    out.push_str(".comm _ob_ptrs, 512, 3\n");
+    out.push_str(".comm _ob_lens, 512, 3\n");
+    out.push_str(".comm _ob_caps, 512, 3\n");
+    // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
+    // the user-handler invocation stub + env word (stub 0 = default handler; env
+    // is a retained callable-descriptor pointer for AOT handlers or a magician
+    // registry id for eval handlers), the persisted handler display name
+    // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
+    // started flag (set at the first handler invocation; feeds PHP started bits).
+    out.push_str(".comm _ob_handler_stubs, 512, 3\n");
+    out.push_str(".comm _ob_handler_envs, 512, 3\n");
+    out.push_str(".comm _ob_name_ptrs, 512, 3\n");
+    out.push_str(".comm _ob_name_lens, 512, 3\n");
+    out.push_str(".comm _ob_chunk_sizes, 512, 3\n");
+    out.push_str(".comm _ob_flags, 512, 3\n");
+    out.push_str(".comm _ob_started, 512, 3\n");
+    // _ob_in_handler: non-zero while a user output handler runs. Output produced
+    // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
+    // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
+    out.push_str(".comm _ob_in_handler, 8, 3\n");
+    // _ob_flushing: re-entry guard for the process-exit drain. A user handler
+    // running during __rt_ob_flush_all may call exit() again; the guard makes
+    // the nested drain a no-op instead of an infinite loop.
+    out.push_str(".comm _ob_flushing, 8, 3\n");
+    // _elephc_eval_ob_handler_fn: installed Rust callback (magician) that runs
+    // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
+    // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
+    out.push_str(".comm _elephc_eval_ob_handler_fn, 8, 3\n");
+    // "Closure::__invoke": PHP display name for closure / first-class-callable
+    // output handlers in ob_get_status()/ob_list_handlers().
+    out.push_str(&format!(
+        ".globl _ob_closure_invoke_name\n_ob_closure_invoke_name:\n    .ascii {OB_CLOSURE_INVOKE_NAME:?}\n"
+    ));
+    // ob_implicit_flush() stored flag. Semantically inert in elephc: terminal
+    // writes are unbuffered syscalls, so implicit flushing is always on.
+    out.push_str(".comm _ob_implicit_flush, 8, 3\n");
+    // ob_get_status()/ob_list_handlers() string constants: PHP's default handler
+    // name and the status-array key strings read by __rt_ob_get_status.
+    out.push_str(&format!(
+        ".globl _ob_handler_name\n_ob_handler_name:\n    .ascii {OB_DEFAULT_HANDLER_NAME:?}\n"
+    ));
+    for (sym, key) in [
+        ("_ob_k_name", "name"),
+        ("_ob_k_type", "type"),
+        ("_ob_k_flags", "flags"),
+        ("_ob_k_level", "level"),
+        ("_ob_k_chunk_size", "chunk_size"),
+        ("_ob_k_buffer_size", "buffer_size"),
+        ("_ob_k_buffer_used", "buffer_used"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // ob_* PHP-parity diagnostics (texts shared with the ob_* runtime emitters
+    // via runtime::data consts so byte lengths stay single-sourced). The
+    // no-buffer notices are complete lines; the flags-gated notices are
+    // prefixes completed at runtime with the handler display name and
+    // " (LEVEL)\n" via __rt_ob_notice_named. All are ordinary output routed
+    // through __rt_stdout_write, so active parent buffers capture them exactly
+    // like PHP with display_errors enabled.
+    for (label, message) in [
+        ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
+        ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
+        ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),
+        ("_ob_ntc_no_flush", OB_NTC_NO_FLUSH),
+        ("_ob_ntc_no_clean", OB_NTC_NO_CLEAN),
+        ("_ob_ntc_g_clean", OB_NTC_G_CLEAN),
+        ("_ob_ntc_g_flush", OB_NTC_G_FLUSH),
+        ("_ob_ntc_g_end_clean", OB_NTC_G_END_CLEAN),
+        ("_ob_ntc_g_get_clean", OB_NTC_G_GET_CLEAN),
+        ("_ob_ntc_g_end_flush", OB_NTC_G_END_FLUSH),
+        ("_ob_ntc_g_get_flush", OB_NTC_G_GET_FLUSH),
+        ("_ob_ntc_g_open", " ("),
+        ("_ob_ntc_g_close", ")\n"),
+        ("_ob_warn_bad_callback_prefix", OB_WARN_BAD_CALLBACK_PREFIX),
+        ("_ob_warn_bad_callback_suffix", OB_WARN_BAD_CALLBACK_SUFFIX),
+        ("_ob_warn_bad_callback_generic", OB_WARN_BAD_CALLBACK_GENERIC),
+        ("_ob_ntc_create_fail", OB_NTC_CREATE_FAIL),
+        ("_ob_fatal_in_handler", OB_FATAL_IN_HANDLER),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // serialize()/unserialize() reference tracking (PHP r:/R: back-references).
     // serialize: a global value counter (every serialized value consumes the next
     // index, keys excluded) plus a pointer->index map of already-serialized objects

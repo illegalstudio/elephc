@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/umask.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/umask.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4493](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4493) (`lower_umask`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4489](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4489) (`lower_umask`)
 - **Function symbol**: `lower_umask()`
 
 

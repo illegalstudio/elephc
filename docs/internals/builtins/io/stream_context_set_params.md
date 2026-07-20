@@ -2,7 +2,7 @@
 title: "stream_context_set_params() — internals"
 description: "Compiler internals for stream_context_set_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 214
 ---
 
 ## `stream_context_set_params()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_params.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_params.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1118](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1118) (`lower_stream_context_set_params`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1116](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1116) (`lower_stream_context_set_params`)
 - **Function symbol**: `lower_stream_context_set_params()`
 
 

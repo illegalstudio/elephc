@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/feof.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3121](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3121) (`lower_feof`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3117](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3117) (`lower_feof`)
 - **Function symbol**: `lower_feof()`
 
 

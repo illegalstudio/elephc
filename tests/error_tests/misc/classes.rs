@@ -313,6 +313,20 @@ fn test_error_typed_property_rejects_callable_type() {
     );
 }
 
+/// Verifies nullable and union spellings do not make PHP's forbidden `callable` property
+/// pseudo-type valid.
+#[test]
+fn test_error_typed_property_rejects_nested_callable_types() {
+    expect_error(
+        "<?php class Box { public ?callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+    expect_error(
+        "<?php class Box { public callable|null $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+}
+
 /// Verifies the error diagnostic for static property rejects readonly.
 #[test]
 fn test_error_static_property_rejects_readonly() {

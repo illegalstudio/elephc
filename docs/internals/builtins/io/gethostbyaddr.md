@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/gethostbyaddr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostbyaddr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3431](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3431) (`lower_gethostbyaddr`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3427](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3427) (`lower_gethostbyaddr`)
 - **Function symbol**: `lower_gethostbyaddr()`
 
 

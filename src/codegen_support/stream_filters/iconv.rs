@@ -27,8 +27,6 @@ use crate::codegen_support::emit::Emitter;
 
 /// Capacity of the shared `_stream_filter_buf` scratch, reused as the input slurp buffer.
 const FILTER_BUF_SIZE: i64 = 65536;
-/// x86_64 owned-heap kind word: the elephc heap marker in the high 32 bits.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// ARM64: 160-byte scratch frame.
 /// [0]=fd [8]=input len [16]=out buf [24]=out cap [32]=temp fd [40]=iconv cd
@@ -220,7 +218,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     )); // owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer

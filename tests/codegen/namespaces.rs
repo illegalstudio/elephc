@@ -125,6 +125,31 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
+/// Verifies PHP's generic `object` type remains namespace-independent and
+/// case-insensitive while accepting an instance of a concrete namespaced class.
+#[test]
+fn test_namespace_preserves_generic_object_type_hints_case_insensitively() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+class Payload {}
+
+function handle(object $value): string {
+    return is_object($value) ? "lower" : "bad";
+}
+
+function handle_upper(OBJECT $value): string {
+    return is_object($value) ? "upper" : "bad";
+}
+
+$value = new Payload();
+echo handle($value) . ":" . handle_upper($value);
+"#,
+    );
+    assert_eq!(out, "lower:upper");
+}
+
 /// Verifies that `buffer<Vertex>` works correctly when `Vertex` is a packed class declared
 /// in the same namespace. Tests buffer element access with typed buffer slots.
 #[test]

@@ -11,7 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_array_new` runtime helper for array allocation.
 ///
@@ -110,7 +109,7 @@ fn emit_array_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r11, 8");                                          // move the runtime value-type tag into the packed heap-kind byte lane
     emitter.instruction("or r11, 0x8000");                                      // mark the array allocation as a copy-on-write heap container
     emitter.instruction("add r11, 2");                                          // low byte 2 identifies the payload as an indexed array heap object
-    emitter.instruction(&format!("mov r10, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker in a scratch register before combining it with the packed array kind bits
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker in a scratch register before combining it with the packed array kind bits
     emitter.instruction("or r11, r10");                                         // add the x86_64 heap marker while preserving the packed array kind bits
     emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the allocated payload as an indexed array in the uniform heap header
     emitter.instruction("mov QWORD PTR [rax], 0");                              // header[0]: length = 0 (array starts empty)

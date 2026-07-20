@@ -438,7 +438,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // x86_64 heap-kind word: HE LP magic + kind 6 object
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_value_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store ValueError class id at object header
@@ -684,7 +684,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: HELP magic + kind 6 object
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store TypeError class id at object header
@@ -731,7 +731,7 @@ fn emit_throw_enum_from_type_error_x86_64(
 ) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // x86_64 heap-kind word: HELP magic + kind 6 object
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header

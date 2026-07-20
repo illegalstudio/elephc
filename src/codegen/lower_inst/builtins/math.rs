@@ -653,7 +653,7 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
     ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
-    ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // materialize the x86_64 object heap-kind header
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
     ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header

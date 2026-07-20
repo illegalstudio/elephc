@@ -2,7 +2,7 @@
 title: "stream_socket_sendto() — internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 226
+  order: 239
 ---
 
 ## `stream_socket_sendto()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_sendto.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2641](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2641) (`lower_stream_socket_sendto`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2639](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2639) (`lower_stream_socket_sendto`)
 - **Function symbol**: `lower_stream_socket_sendto()`
 
 

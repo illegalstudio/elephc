@@ -17,7 +17,6 @@ use crate::types::PhpType;
 use super::super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Lowers `intdiv()` for concrete integer-like numeric operands.
 pub(crate) fn lower_intdiv(
@@ -240,7 +239,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 6)); // materialize the x86_64 object heap-kind header
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the x86_64 object heap-kind header
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a runtime object
             ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"); // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header

@@ -18,7 +18,6 @@ use super::SPL_FIXED_STORAGE_OFFSET;
 const SPL_FIXED_OBJECT_SIZE: i64 = 16;
 const INT_TAG: i64 = 0;
 const NULL_TAG: i64 = 8;
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const SPL_FIXED_CONSTRUCT_SIZE_MSG_LEN: usize =
     "SplFixedArray::__construct(): Argument #1 ($size) must be greater than or equal to 0".len();
 const SPL_FIXED_SET_SIZE_MSG_LEN: usize =
@@ -765,7 +764,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested fixed size
     emitter.instruction(&format!("mov rax, {}", SPL_FIXED_OBJECT_SIZE));        // request fixed-array object payload size
     emitter.instruction("call __rt_heap_alloc");                                // allocate SplFixedArray object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize object heap kind with x86 marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize object heap kind with x86 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as an object instance
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
@@ -1448,7 +1447,7 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
     emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
     emitter.instruction("call __rt_heap_alloc");                                // allocate the exception object payload
-    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
     abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the exception class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header

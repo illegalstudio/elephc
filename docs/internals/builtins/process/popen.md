@@ -2,7 +2,7 @@
 title: "popen() — internals"
 description: "Compiler internals for popen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 313
+  order: 326
 ---
 
 ## `popen()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/popen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3602](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3602) (`lower_popen`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3598](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3598) (`lower_popen`)
 - **Function symbol**: `lower_popen()`
 
 

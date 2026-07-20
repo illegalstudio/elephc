@@ -82,7 +82,7 @@ impl Checker {
     }
 
     /// Resolves a property type hint from a `TypeExpr` to a `PhpType`, rejecting
-    /// `void`, `never`, and `callable`.
+    /// `void`, `never`, and the `callable` pseudo-type while allowing the `Closure` class.
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -102,7 +102,7 @@ impl Checker {
                 &format!("{} cannot use type never", context),
             ));
         }
-        if Self::type_contains_callable(&ty) {
+        if Self::type_expr_contains_callable_pseudo_type(type_expr) {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type callable", context),
@@ -111,15 +111,18 @@ impl Checker {
         Ok(ty)
     }
 
-    /// Returns true if `ty` is or contains a `PhpType::Callable` anywhere in its structure.
-    fn type_contains_callable(ty: &PhpType) -> bool {
-        match ty {
-            PhpType::Callable => true,
-            PhpType::Union(members) => members.iter().any(Self::type_contains_callable),
-            PhpType::Array(inner) | PhpType::Buffer(inner) => Self::type_contains_callable(inner),
-            PhpType::AssocArray { key, value } => {
-                Self::type_contains_callable(key) || Self::type_contains_callable(value)
+    /// Returns true if `type_expr` contains PHP's forbidden property pseudo-type `callable`.
+    /// The `Closure` class resolves to the same internal callable representation but remains a
+    /// valid property declaration, including inside nullable and union types.
+    fn type_expr_contains_callable_pseudo_type(type_expr: &TypeExpr) -> bool {
+        match type_expr {
+            TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("callable"),
+            TypeExpr::Array(inner) | TypeExpr::Nullable(inner) | TypeExpr::Buffer(inner) => {
+                Self::type_expr_contains_callable_pseudo_type(inner)
             }
+            TypeExpr::Union(members) | TypeExpr::Intersection(members) => members
+                .iter()
+                .any(Self::type_expr_contains_callable_pseudo_type),
             _ => false,
         }
     }

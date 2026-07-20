@@ -21,5 +21,7 @@ mod assignments;
 mod nulls;
 #[path = "control_flow/ternary.rs"]
 mod ternary;
+#[path = "control_flow/match_expressions.rs"]
+mod match_expressions;
 #[path = "control_flow/closures.rs"]
 mod closures;

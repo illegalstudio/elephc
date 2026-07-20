@@ -2,7 +2,7 @@
 title: "is_float() — internals"
 description: "Compiler internals for is_float(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 428
+  order: 441
 ---
 
 ## `is_float()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_float.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_float.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1350](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1350) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1354](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1354) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 

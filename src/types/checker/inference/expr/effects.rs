@@ -36,8 +36,9 @@ impl Checker {
     /// - Assignment expressions call `check_assignment_expression` to properly register the binding.
     /// - Binary `&&`/`||` clone the environment before the right branch to prevent assignments
     ///   in the left branch from leaking into the right branch (PHP semantics).
-    /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
-    ///   the wider of all branch types via `wider_type_syntactic`.
+    /// - Ternary, null coalesce, and match clone the environment per branch so assignments
+    ///   do not leak across arms; match/ternary result types then reuse `infer_type`'s
+    ///   Mixed-aware branch merge (not the Str-absorbing syntactic join).
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -123,13 +124,14 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                let default_ty = if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?
+                if value_ty == PhpType::Void {
+                    self.infer_type_with_assignment_effects(default, env)?;
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
-                };
-                Ok(wider_type_syntactic(&value_ty, &default_ty))
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                }
+                // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::Ternary {
                 condition,
@@ -147,9 +149,10 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                Ok(wider_type_syntactic(&then_ty, &else_ty))
+                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -170,28 +173,20 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
-                let mut result_ty = None;
                 for (conditions, result) in arms {
                     let mut arm_env = env.clone();
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
-                    let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &arm_ty),
-                        None => arm_ty,
-                    });
+                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &default_ty),
-                        None => default_ty,
-                    });
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
                 }
-                Ok(result_ty.unwrap_or(PhpType::Void))
+                // Result type comes from the Mixed-aware match merge in `infer_type`
+                // (assignment effects must not reintroduce the Str-absorbing syntactic join).
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;

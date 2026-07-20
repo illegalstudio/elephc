@@ -2,7 +2,7 @@
 title: "ptr_write8() — internals"
 description: "Compiler internals for ptr_write8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 315
 ---
 
 ## `ptr_write8()` — internals

@@ -13,7 +13,6 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 use crate::types::PhpType;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Returns the runtime value tag byte for a PhpType.
 pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
@@ -238,7 +237,7 @@ fn emit_box_current_owned_string_as_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve the owned string length while allocating the Mixed cell
             emitter.instruction("mov rax, 24");                                 // mixed cells store tag plus two payload words
             emitter.instruction("call __rt_heap_alloc");                        // allocate a fresh Mixed cell payload
-            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the Mixed heap marker
+            emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the Mixed heap marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the Mixed heap header
             emitter.instruction("mov QWORD PTR [rax], 1");                      // store runtime tag 1 = string
             emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the transferred string pointer

@@ -32,6 +32,10 @@ mod system;
 mod zval;
 
 pub(crate) use data::emit_runtime_data_fixed;
+pub(crate) use data::{
+    OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_NTC_CREATE_FAIL,
+    OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
+};
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
 pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};

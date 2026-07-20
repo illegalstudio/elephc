@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_writeable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5624](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5624) (`lower_is_writeable`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5620](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5620) (`lower_is_writeable`)
 - **Function symbol**: `lower_is_writeable()`
 
 

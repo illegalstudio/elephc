@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/glob.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4463](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4463) (`lower_glob`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4459](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4459) (`lower_glob`)
 - **Function symbol**: `lower_glob()`
 
 

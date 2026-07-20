@@ -358,6 +358,9 @@ fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>) -> 
                     .is_some_and(|expr| expr_exposes_dynamic_param(expr, dynamic_params))
         }
         ExprKind::ErrorSuppress(inner) => expr_exposes_dynamic_param(inner, dynamic_params),
+        ExprKind::Assignment { value, .. } => {
+            expr_exposes_dynamic_param(value, dynamic_params)
+        }
         _ => false,
     }
 }

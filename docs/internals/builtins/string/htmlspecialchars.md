@@ -2,7 +2,7 @@
 title: "htmlspecialchars() — internals"
 description: "Compiler internals for htmlspecialchars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 367
+  order: 380
 ---
 
 ## `htmlspecialchars()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/htmlspecialchars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/htmlspecialchars.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:93](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L93) (`lower_html_escape`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:92](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L92) (`lower_html_escape`)
 - **Function symbol**: `lower_html_escape()`
 
 

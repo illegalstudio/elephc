@@ -321,7 +321,7 @@ fn emit_stream_socket_accept_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ssa_empty_peer_x86");
     emitter.instruction("mov rax, 1");                                          // alloc one byte so the heap header is well-formed
     emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
-    emitter.instruction("mov r10, 0x454C504800000001");                         // owned-string heap-kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string heap-kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("xor edx, edx");                                        // empty address length
 

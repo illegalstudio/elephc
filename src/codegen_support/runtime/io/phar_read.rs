@@ -30,7 +30,6 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const PHAR_FLAG_GZIP: u32 = 0x0000_1000;
 const PHAR_FLAG_BZIP2: u32 = 0x0000_2000;
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits `__rt_phar_read_entry` and `__rt_fopen_maybe_phar` for the active target.
 pub fn emit_phar_read(emitter: &mut Emitter) {
@@ -846,7 +845,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed entry buffer
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     )); // materialize the owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the decompressed buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 136], rax");                      // save the destination buffer pointer
@@ -928,7 +927,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed entry buffer
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     )); // materialize the owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the decompressed buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 24], rax");                       // save the destination buffer pointer

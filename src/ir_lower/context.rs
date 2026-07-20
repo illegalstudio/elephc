@@ -2250,6 +2250,7 @@ fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::Array(Box::new(PhpType::Mixed)),
         "callable" => PhpType::Callable,
+        "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "object" => PhpType::Object(String::new()),
         _ => PhpType::Object(name.to_string()),

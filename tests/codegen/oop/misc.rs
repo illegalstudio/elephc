@@ -25,6 +25,31 @@ echo accepts_object(new GenericObjectParam());
     assert_eq!(out, "object");
 }
 
+/// Verifies lowercase and mixed-case `object` hints remain generic object types inside a
+/// namespace instead of being rewritten to namespace-local class names.
+#[test]
+fn test_namespaced_generic_object_parameter_type_is_not_prefixed() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+class NamespacedObjectValue {}
+
+function accepts_lower_object(object $value): string {
+    return is_object($value) ? "lower" : "bad";
+}
+
+function accepts_mixed_case_object(Object $value): string {
+    return is_object($value) ? "upper" : "bad";
+}
+
+$value = new NamespacedObjectValue();
+echo accepts_lower_object($value) . "|" . accepts_mixed_case_object($value);
+"#,
+    );
+    assert_eq!(out, "lower|upper");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.

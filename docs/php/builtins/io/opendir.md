@@ -2,7 +2,7 @@
 title: "opendir()"
 description: "Open directory handle."
 sidebar:
-  order: 189
+  order: 202
 ---
 
 ## opendir()

@@ -162,7 +162,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 56");                                         // size = class_id + message + code + previous slots
     emitter.instruction("call __rt_heap_alloc");                                // allocate the JsonException payload (rax = payload ptr)
-    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 (object)
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the allocation as an object in the uniform header
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)

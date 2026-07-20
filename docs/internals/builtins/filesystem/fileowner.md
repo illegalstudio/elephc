@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileowner.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5492](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5492) (`lower_fileowner`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5488](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5488) (`lower_fileowner`)
 - **Function symbol**: `lower_fileowner()`
 
 
