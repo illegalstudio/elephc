@@ -621,10 +621,10 @@ MIT
 
 ## Star History
 
-<a href="https://star-history.com/#illegalstudio/elephc&Date">
+<a href="https://www.star-history.com/?type=date&repos=illegalstudio%2Felephc">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=illegalstudio/elephc&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&theme=dark&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
  </picture>
 </a>
