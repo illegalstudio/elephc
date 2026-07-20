@@ -852,9 +852,30 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
         return nullable_match_arm_type(acc);
     }
     if object_match_arm_type(&acc) && object_match_arm_type(&next) {
-        return checker.normalize_union_type(vec![acc, next]);
+        return merge_object_match_arm_types(checker, acc, next);
     }
     PhpType::Mixed
+}
+
+/// Joins object-only branch types at their existing compatible supertype when
+/// one accepts the other, otherwise retaining a normalized object union. A
+/// null member from either side is restored after comparing the object types.
+fn merge_object_match_arm_types(checker: &Checker, acc: PhpType, next: PhpType) -> PhpType {
+    let nullable = Checker::union_contains_void(&acc) || Checker::union_contains_void(&next);
+    let acc_object = checker.strip_void_from_union(&acc);
+    let next_object = checker.strip_void_from_union(&next);
+    let merged = if checker.type_accepts(&acc_object, &next_object) {
+        acc_object
+    } else if checker.type_accepts(&next_object, &acc_object) {
+        next_object
+    } else {
+        checker.normalize_union_type(vec![acc_object, next_object])
+    };
+    if nullable {
+        nullable_match_arm_type(merged)
+    } else {
+        merged
+    }
 }
 
 /// Returns whether a branch type contains only concrete objects plus an
