@@ -2072,8 +2072,14 @@ fn registry_builtin_result_type(
     };
     let resolved = match def.spec.semantics.result_type {
         crate::builtins::semantics::BuiltinResultType::Checked => {
-            if let Some(checked) = ctx.builtin_call_types.get(&span) {
-                return Some(normalize_value_php_type(checked.clone()));
+            // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
+            // span, so the checker map cannot identify an individual call there.
+            // Use the typed runtime target's representation-safe fallback instead
+            // of accepting whichever synthetic call last occupied that key.
+            if span.line != 0 {
+                if let Some(checked) = ctx.builtin_call_types.get(&span) {
+                    return Some(normalize_value_php_type(checked.clone()));
+                }
             }
             let crate::builtins::semantics::BuiltinLowering::Runtime(
                 crate::ir::RuntimeCallTarget::Function(target),

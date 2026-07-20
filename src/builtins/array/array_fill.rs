@@ -36,6 +36,15 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
     let val_ty = cx.checker.infer_type(&cx.args[2], cx.env)?;
+    // `Void` is also the storage marker used for an empty indexed-array element,
+    // so an `array<void>` result would let a later append replace the null element
+    // type instead of widening the existing payload. Null fills therefore use
+    // boxed Mixed slots, which preserve the stored null across later writes.
+    let val_ty = if val_ty.codegen_repr() == PhpType::Void {
+        PhpType::Mixed
+    } else {
+        val_ty
+    };
     let start_is_literal_zero =
         matches!(cx.args[0].kind, crate::parser::ast::ExprKind::IntLiteral(0));
     if !start_is_literal_zero {

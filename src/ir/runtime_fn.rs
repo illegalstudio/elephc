@@ -533,6 +533,7 @@ impl RuntimeFnId {
             },
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
+            | RuntimeFnId::Fgetcsv
             | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir
@@ -898,7 +899,8 @@ impl RuntimeFnId {
         use crate::builtins::semantics::BuiltinResultOwnership;
         if matches!(
             self,
-            RuntimeFnId::ArrayChunk
+            RuntimeFnId::Abs
+                | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
                 | RuntimeFnId::ArrayDiff
@@ -918,6 +920,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
                 | RuntimeFnId::Explode
+                | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
                 | RuntimeFnId::IteratorToArray
                 | RuntimeFnId::ObGetClean
