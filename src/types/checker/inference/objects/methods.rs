@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -286,7 +286,15 @@ impl Checker {
             env,
             &format!("Method {}::{}", interface_name, method),
         )?;
-        Ok(sig.return_type)
+        let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
+        match late_static_return {
+            Some(return_type) => self.resolve_late_static_return_type_hint(
+                &return_type,
+                interface_name,
+                expr.span,
+            ),
+            None => Ok(sig.return_type),
+        }
     }
 
     /// Infers the type of a method call on a class type.
@@ -333,6 +341,12 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        let late_static_return_type = self
+            .instance_method_late_static_return(class_name, &method_key)
+            .map(|return_type| {
+                self.resolve_late_static_return_type_hint(&return_type, class_name, expr.span)
+            })
+            .transpose()?;
         let mut normalized_args = args.to_vec();
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
@@ -380,7 +394,9 @@ impl Checker {
                                 },
                             },
                         );
-                        return Ok(sig.return_type.clone());
+                        return Ok(late_static_return_type
+                            .clone()
+                            .unwrap_or_else(|| sig.return_type.clone()));
                     }
                 }
                 let declared_flags =
@@ -534,10 +550,29 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                return Ok(late_static_return_type
+                    .clone()
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns preserved late-static return syntax for an instance method.
+    fn instance_method_late_static_return(
+        &self,
+        receiver_type: &str,
+        method_key: &str,
+    ) -> Option<TypeExpr> {
+        if let Some(class_info) = self.classes.get(receiver_type) {
+            if let Some(return_type) = class_info.late_static_method_returns.get(method_key) {
+                return Some(return_type.clone());
+            }
+        }
+        self.interfaces
+            .get(receiver_type)
+            .and_then(|interface_info| interface_info.late_static_method_returns.get(method_key))
+            .cloned()
     }
 
     /// Returns true for builtin method array params whose accepted shape must remain broad.
@@ -766,6 +801,36 @@ impl Checker {
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
         let method_key = php_symbol_key(method);
+        let late_static_receiver_type = if parent_call {
+            self.current_class
+                .clone()
+                .unwrap_or_else(|| class_name.to_string())
+        } else {
+            class_name.to_string()
+        };
+        let late_static_static_return_type = self
+            .static_method_late_static_return(class_name, &method_key)
+            .map(|return_type| {
+                self.resolve_late_static_return_type_hint(
+                    &return_type,
+                    &late_static_receiver_type,
+                    expr.span,
+                )
+            })
+            .transpose()?;
+        let late_static_instance_return_type = if parent_call || self_call {
+            self.instance_method_late_static_return(class_name, &method_key)
+                .map(|return_type| {
+                    self.resolve_late_static_return_type_hint(
+                        &return_type,
+                        &late_static_receiver_type,
+                        expr.span,
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let normalized_args: Vec<Expr>;
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
@@ -1050,7 +1115,9 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                return Ok(late_static_static_return_type
+                    .clone()
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
         if parent_call || self_call {
@@ -1107,10 +1174,28 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                return Ok(late_static_instance_return_type
+                    .clone()
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns preserved late-static return syntax for a static method.
+    fn static_method_late_static_return(
+        &self,
+        receiver_type: &str,
+        method_key: &str,
+    ) -> Option<TypeExpr> {
+        self.classes
+            .get(receiver_type)
+            .and_then(|class_info| {
+                class_info
+                    .late_static_static_method_returns
+                    .get(method_key)
+            })
+            .cloned()
     }
 }
 
