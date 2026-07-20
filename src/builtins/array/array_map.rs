@@ -31,6 +31,7 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
+    lazy_check: true,
     lower: lower,
     summary: "Applies a callback to the elements of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
@@ -39,26 +40,24 @@ builtin! {
 /// Returns the mapped array type for an `array_map` call.
 ///
 /// Validates that the second argument is an indexed array, checks the callback
-/// with a dummy element argument, and derives the result element type from the
-/// callback return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
+/// with its contextual element type, and derives the result element type from the callback
+/// return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    for arg in cx.args {
-        cx.checker.infer_type(arg, cx.env)?;
-    }
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            let arr_ty = PhpType::Array(elem_ty.clone());
-            let dummy_args = vec![
-                crate::types::checker::builtins::dummy_arg_for_array_scalar_elem(
-                    &arr_ty, cx.span,
-                ),
-            ];
+            if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
+                return Err(CompileError::new(
+                    cx.span,
+                    "array_map() does not yet support object array elements",
+                ));
+            }
+            let callback_arg_types = [elem_ty.as_ref().clone()];
             let callback_ret_ty =
-                crate::types::checker::builtins::check_callback_builtin_call(
+                crate::types::checker::builtins::check_array_callback_builtin_call(
                     cx.checker,
                     &cx.args[0],
-                    &dummy_args,
+                    &callback_arg_types,
                     cx.span,
                     cx.env,
                     "array_map() callback",

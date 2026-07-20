@@ -116,6 +116,24 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
+/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
+#[test]
+fn test_error_mixed_rejected_at_object_parameter_boundary() {
+    expect_error(
+        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
+        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
+    );
+}
+
+/// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
+#[test]
+fn test_error_mixed_rejected_at_array_return_boundary() {
+    expect_error(
+        "<?php function relay(mixed $value): array { return $value; }",
+        "Function 'relay' return type expects Array(Mixed), got Mixed",
+    );
+}
+
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
 #[test]
 fn test_error_undefined_variable() {
