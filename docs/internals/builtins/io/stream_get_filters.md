@@ -2,7 +2,7 @@
 title: "stream_get_filters() — internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 219
 ---
 
 ## `stream_get_filters()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_filters.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1493](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1493) (`lower_stream_get_filters`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1491](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1491) (`lower_stream_get_filters`)
 - **Function symbol**: `lower_stream_get_filters()`
 
 
@@ -31,6 +31,11 @@ function stream_get_filters(): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -80,6 +80,11 @@ impl Ownership {
         matches!(ty, PhpType::Str | PhpType::Callable | PhpType::Buffer(_)) || ty.is_refcounted()
     }
 
+    /// Returns whether a release operation may decrement this value's runtime ownership.
+    pub(crate) fn may_require_release(self) -> bool {
+        matches!(self, Ownership::Owned | Ownership::MaybeOwned)
+    }
+
     /// Merges two ownership states at a CFG join.
     pub fn merge(self, other: Self) -> Self {
         use Ownership::*;

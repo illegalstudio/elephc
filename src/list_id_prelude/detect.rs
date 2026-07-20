@@ -36,6 +36,16 @@ fn name_is_listid_fn(name: &Name) -> bool {
         .is_some_and(|segment| segment.eq_ignore_ascii_case("timezone_identifiers_list"))
 }
 
+/// Returns whether a function name is PHP's `eval` construct.
+///
+/// Runtime eval can call `timezone_identifiers_list()` from a string that this
+/// prelude detector cannot inspect statically, so an `eval(...)` call is treated
+/// as a potential identifier-listing use.
+fn name_is_eval_fn(name: &Name) -> bool {
+    name.last_segment()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
+}
+
 /// Returns whether a method name is `listIdentifiers`, compared case-insensitively
 /// as PHP method names are.
 fn method_is_listid(method: &str) -> bool {
@@ -128,7 +138,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_listid_fn(name) || args.iter().any(expr_refs_listid)
+            name_is_eval_fn(name) || name_is_listid_fn(name) || args.iter().any(expr_refs_listid)
         }
         ExprKind::MethodCall {
             object,
@@ -140,6 +150,15 @@ fn expr_refs_listid(expr: &Expr) -> bool {
             method,
             args,
         } => method_is_listid(method) || expr_refs_listid(object) || args.iter().any(expr_refs_listid),
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_refs_listid(object)
+                || expr_refs_listid(method)
+                || args.iter().any(expr_refs_listid)
+        }
         ExprKind::StaticMethodCall { method, args, .. } => {
             method_is_listid(method) || args.iter().any(expr_refs_listid)
         }
@@ -155,6 +174,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
@@ -230,6 +250,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_listid(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::ObjectClassName { object } => expr_refs_listid(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_listid),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_listid)
@@ -457,6 +478,15 @@ mod tests {
     fn detects_case_insensitive() {
         assert!(program_uses_list_identifiers(&parse(
             r#"<?php $z = TIMEZONE_IDENTIFIERS_LIST();"#
+        )));
+    }
+
+    /// A runtime `eval(...)` call is detected because the eval fragment can call
+    /// `timezone_identifiers_list()` dynamically.
+    #[test]
+    fn detects_eval_call() {
+        assert!(program_uses_list_identifiers(&parse(
+            r#"<?php eval('$z = timezone_identifiers_list(DateTimeZone::EUROPE);');"#
         )));
     }
 

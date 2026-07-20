@@ -2,7 +2,7 @@
 title: "settype()"
 description: "Sets the type of a variable."
 sidebar:
-  order: 432
+  order: 450
 ---
 
 ## settype()
@@ -18,6 +18,11 @@ Sets the type of a variable.
 - `$type` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/settype.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

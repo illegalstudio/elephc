@@ -2,7 +2,7 @@
 title: "unlink() — internals"
 description: "Compiler internals for unlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 152
+  order: 156
 ---
 
 ## `unlink()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/unlink.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4407](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4407) (`lower_unlink`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4403](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4403) (`lower_unlink`)
 - **Function symbol**: `lower_unlink()`
 
 
@@ -34,6 +34,11 @@ function unlink(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

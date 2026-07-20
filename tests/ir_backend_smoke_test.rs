@@ -764,7 +764,7 @@ try {
     );
 }
 
-/// Verifies Fiber::throw delivers exceptions into suspended EIR fibers.
+/// Verifies Fiber::throw retains caught exceptions while delivering them into suspended EIR fibers.
 #[test]
 fn ir_backend_throws_into_suspended_fibers() {
     let source = r#"<?php
@@ -2672,6 +2672,32 @@ echo is_null($box->a[5]) ? "N" : "bad";
     assert_eq!(
         compile_and_run_ir_backend("array_object_property_defaults", object_source),
         "3:1:N:ok:6:7:G:N"
+    );
+
+    let assoc_object_source = r#"<?php
+class AssocBox {
+    public array $a = ["name" => "Ada", "1" => "one", false => "zero"];
+}
+$box = new AssocBox();
+echo count($box->a);
+echo ":";
+echo $box->a["name"];
+echo ":";
+echo $box->a[1];
+echo ":";
+echo $box->a[0];
+$box->a["extra"] = "E";
+echo ":";
+echo count($box->a);
+echo ":";
+echo $box->a["extra"];
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend(
+            "assoc_array_object_property_defaults",
+            assoc_object_source
+        ),
+        "3:Ada:one:zero:4:E"
     );
 
     let static_source = r#"<?php

@@ -2,7 +2,7 @@
 title: "stream_copy_to_stream()"
 description: "Copies data from one stream to another."
 sidebar:
-  order: 198
+  order: 215
 ---
 
 ## stream_copy_to_stream()
@@ -20,6 +20,11 @@ Copies data from one stream to another.
 - `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

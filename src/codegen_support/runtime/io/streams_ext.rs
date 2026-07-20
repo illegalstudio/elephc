@@ -107,10 +107,9 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x10, [sp, #{}]", total_off));             // current total
     emitter.instruction("add x10, x10, x9");                                    // accumulate total
     emitter.instruction(&format!("str x10, [sp, #{}]", total_off));             // persist updated total
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
     emitter.instruction("mov x2, x9");                                          // length to write
-    emitter.syscall(4);                                                         // write(1, buf, n)
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("b __rt_readfile_loop");                                // continue copying
 
     emitter.label("__rt_readfile_done");
@@ -168,10 +167,9 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x10, [sp, #{}]", total_off));             // current total
     emitter.instruction("add x10, x10, x9");                                    // accumulate total
     emitter.instruction(&format!("str x10, [sp, #{}]", total_off));             // persist total
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
     emitter.instruction("mov x2, x9");                                          // length
-    emitter.syscall(4);                                                         // write(1, buf, n)
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("b __rt_fpassthru_loop");                               // continue
 
     emitter.label("__rt_fpassthru_done");
@@ -331,9 +329,8 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_readfile_done_x86");                           // EOF → stop
     emitter.instruction("add QWORD PTR [rbp - 16], rax");                       // total += bytes read
     emitter.instruction("mov rdx, rax");                                        // count to write
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
-    emitter.instruction("call write");                                          // libc write(1, buf, n)
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("jmp __rt_readfile_loop_x86");                          // continue
 
     emitter.label("__rt_readfile_done_x86");
@@ -378,9 +375,8 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_fpassthru_done_x86");                          // EOF → stop
     emitter.instruction("add QWORD PTR [rbp - 16], rax");                       // accumulate total bytes copied
     emitter.instruction("mov rdx, rax");                                        // count to write
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
-    emitter.instruction("call write");                                          // libc write
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("jmp __rt_fpassthru_loop_x86");                         // continue
 
     emitter.label("__rt_fpassthru_done_x86");

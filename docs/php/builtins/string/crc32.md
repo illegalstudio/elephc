@@ -2,7 +2,7 @@
 title: "crc32()"
 description: "Calculates the CRC32 polynomial of a string."
 sidebar:
-  order: 345
+  order: 362
 ---
 
 ## crc32()
@@ -17,6 +17,11 @@ Calculates the CRC32 polynomial of a string.
 - `$string` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/crc32.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

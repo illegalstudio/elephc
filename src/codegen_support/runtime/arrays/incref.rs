@@ -11,7 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_incref` runtime helper.
 ///
@@ -84,7 +83,7 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_incref_skip");                                // non-heap values above the managed heap are not refcounted
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
     emitter.instruction("jne __rt_incref_skip");                                // skip static strings or foreign pointers that do not carry elephc heap headers
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_debug_enabled");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the heap-debug enabled flag before mutating the x86_64 refcount

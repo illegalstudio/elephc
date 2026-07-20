@@ -26,6 +26,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns a raw pointer to the given variable.",
+    extension: true,
 }
 
 /// Validates that the argument is a variable and returns `PhpType::Pointer(None)`.

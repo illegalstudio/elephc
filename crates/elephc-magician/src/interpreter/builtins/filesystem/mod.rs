@@ -1,0 +1,179 @@
+//! Purpose:
+//! Groups filesystem, path, glob, stat, stream, socket, and fnmatch builtins for eval.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins` filesystem-related dispatch.
+//!
+//! Key details:
+//! - Per-builtin leaf files register metadata and expose small dispatch wrappers.
+//! - Shared helpers stay in focused owner modules for path, stream, socket, and
+//!   wrapper behavior.
+
+mod basename;
+mod chdir;
+mod chgrp;
+mod chmod;
+mod chown;
+mod clearstatcache;
+mod closedir;
+mod copy;
+mod direct_dispatch;
+mod dirname;
+mod disk_free_space;
+mod disk_total_space;
+mod fclose;
+mod fdatasync;
+mod feof;
+mod fflush;
+mod fgetc;
+mod fgetcsv;
+mod fgets;
+mod file;
+mod file_exists;
+mod file_get_contents;
+mod file_put_contents;
+mod fileatime;
+mod filectime;
+mod filegroup;
+mod fileinode;
+mod filemtime;
+mod fileowner;
+mod fileperms;
+mod filesize;
+mod filetype;
+mod flock;
+mod fnmatch;
+mod fopen;
+mod fpassthru;
+mod fprintf;
+mod fputcsv;
+mod fread;
+mod fscanf;
+mod fseek;
+mod fsockopen;
+mod fstat;
+mod fsync;
+mod ftell;
+mod ftruncate;
+mod fwrite;
+mod getcwd;
+mod glob;
+mod is_dir;
+mod is_executable;
+mod is_file;
+mod is_link;
+mod is_readable;
+mod is_writable;
+mod is_writeable;
+mod lchgrp;
+mod lchown;
+mod link;
+mod linkinfo;
+mod lstat;
+mod mkdir;
+mod opendir;
+mod path;
+mod pathinfo;
+mod pclose;
+mod pfsockopen;
+mod popen;
+mod readdir;
+mod readfile;
+mod readline;
+mod readlink;
+mod realpath;
+mod realpath_cache_get;
+mod realpath_cache_size;
+mod rename;
+mod rewind;
+mod rewinddir;
+mod rmdir;
+mod scandir;
+mod stat;
+mod stream_bucket_append;
+mod stream_bucket_make_writeable;
+mod stream_bucket_new;
+mod stream_bucket_prepend;
+mod stream_context_create;
+mod stream_context_get_default;
+mod stream_context_get_options;
+mod stream_context_get_params;
+mod stream_context_set_default;
+mod stream_context_set_option;
+mod stream_context_set_params;
+mod stream_copy_to_stream;
+mod stream_filter_append;
+mod stream_filter_prepend;
+mod stream_filter_register;
+mod stream_filter_remove;
+mod stream_get_contents;
+mod stream_get_line;
+mod stream_get_meta_data;
+mod stream_isatty;
+mod stream_resolve_include_path;
+mod stream_select;
+mod stream_set_blocking;
+mod stream_set_chunk_size;
+mod stream_set_read_buffer;
+mod stream_set_timeout;
+mod stream_set_write_buffer;
+mod stream_socket_accept;
+mod stream_socket_client;
+mod stream_socket_enable_crypto;
+mod stream_socket_get_name;
+mod stream_socket_pair;
+mod stream_socket_recvfrom;
+mod stream_socket_sendto;
+mod stream_socket_server;
+mod stream_socket_shutdown;
+mod stream_wrapper_register;
+mod stream_wrapper_restore;
+mod stream_wrapper_unregister;
+mod streams;
+mod symlink;
+mod sys_get_temp_dir;
+mod tempnam;
+mod tmpfile;
+mod touch;
+mod umask;
+mod unlink;
+mod user_wrapper_cast;
+mod user_wrapper_controls;
+mod user_wrapper_directories;
+mod user_wrapper_file_io;
+mod user_wrapper_lines;
+mod user_wrapper_metadata;
+mod user_wrapper_options;
+mod user_wrapper_path_ops;
+mod user_wrapper_stat;
+mod user_wrapper_streams;
+mod values_dispatch;
+mod vfprintf;
+
+pub(in crate::interpreter) use path::*;
+pub(in crate::interpreter) use streams::*;
+pub(in crate::interpreter) use user_wrapper_cast::*;
+pub(in crate::interpreter) use user_wrapper_controls::*;
+pub(in crate::interpreter) use user_wrapper_directories::*;
+pub(in crate::interpreter) use user_wrapper_file_io::*;
+pub(in crate::interpreter) use user_wrapper_lines::*;
+pub(in crate::interpreter) use user_wrapper_metadata::*;
+pub(in crate::interpreter) use user_wrapper_options::*;
+pub(in crate::interpreter) use user_wrapper_path_ops::*;
+pub(in crate::interpreter) use user_wrapper_stat::*;
+pub(in crate::interpreter) use user_wrapper_streams::*;
+pub(in crate::interpreter) use direct_dispatch::eval_builtin_filesystem_call;
+pub(in crate::interpreter) use values_dispatch::eval_filesystem_values_result;
+pub(in crate::interpreter) use flock::{eval_builtin_flock, eval_flock_result};
+pub(in crate::interpreter) use fsockopen::{
+    eval_builtin_fsockopen_call, eval_fsockopen_with_error_result,
+};
+pub(in crate::interpreter) use stream_select::{
+    eval_builtin_stream_select_call, eval_stream_select_result,
+};
+pub(in crate::interpreter) use stream_socket_accept::{
+    eval_builtin_stream_socket_accept_call, eval_stream_socket_accept_with_peer_result,
+};
+pub(in crate::interpreter) use stream_socket_recvfrom::{
+    eval_builtin_stream_socket_recvfrom_call, eval_stream_socket_recvfrom_with_address_result,
+};

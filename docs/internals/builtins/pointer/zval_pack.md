@@ -2,7 +2,7 @@
 title: "zval_pack() — internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 301
+  order: 318
 ---
 
 ## `zval_pack()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_pack.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:541](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L541) (`lower_zval_pack`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:533](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L533) (`lower_zval_pack`)
 - **Function symbol**: `lower_zval_pack()`
 
 
@@ -41,6 +41,10 @@ function zval_pack(mixed $value): pointer
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

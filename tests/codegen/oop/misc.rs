@@ -9,6 +9,47 @@
 
 use super::*;
 
+/// Verifies PHP's generic `object` parameter type accepts concrete objects and
+/// preserves object-shaped ABI lowering.
+#[test]
+fn test_generic_object_parameter_type_accepts_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+class GenericObjectParam {}
+function accepts_object(object $value): string {
+    return is_object($value) ? "object" : "bad";
+}
+echo accepts_object(new GenericObjectParam());
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
+/// Verifies lowercase and mixed-case `object` hints remain generic object types inside a
+/// namespace instead of being rewritten to namespace-local class names.
+#[test]
+fn test_namespaced_generic_object_parameter_type_is_not_prefixed() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+class NamespacedObjectValue {}
+
+function accepts_lower_object(object $value): string {
+    return is_object($value) ? "lower" : "bad";
+}
+
+function accepts_mixed_case_object(Object $value): string {
+    return is_object($value) ? "upper" : "bad";
+}
+
+$value = new NamespacedObjectValue();
+echo accepts_lower_object($value) . "|" . accepts_mixed_case_object($value);
+"#,
+    );
+    assert_eq!(out, "lower|upper");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.
@@ -101,4 +142,23 @@ echo match($value) {
 fn test_example_v017_trio_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/v017-trio/main.php"));
     assert_eq!(out, "health:[ok]:missing");
+}
+
+/// EC-10: `enum` is only a soft keyword — `class Enum {}` / `interface Enum` / `new Enum`
+/// are legal PHP (vendor precedent: marc-mabe/php-enum). Byte-parity vs PHP 8.5.
+#[test]
+fn test_class_named_enum_declares() {
+    let out = compile_and_run(
+        "<?php class Enum { public function tag(): string { return 'e'; } } echo (new Enum())->tag();",
+    );
+    assert_eq!(out, "e");
+}
+
+/// Soft-keyword `enum` is also legal as an interface name.
+#[test]
+fn test_interface_named_enum_declares() {
+    let out = compile_and_run(
+        "<?php interface Enum { public function tag(): string; } class C implements Enum { public function tag(): string { return 'i'; } } echo (new C())->tag();",
+    );
+    assert_eq!(out, "i");
 }

@@ -2,7 +2,7 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 317
+  order: 334
 ---
 
 ## `preg_match_all()` — internals
@@ -33,6 +33,12 @@ function preg_match_all(string $pattern, string $subject): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$matches`.
 
 ## Cross-references
 

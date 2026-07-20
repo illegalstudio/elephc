@@ -2,7 +2,7 @@
 title: "min() — internals"
 description: "Compiler internals for min(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 258
+  order: 275
 ---
 
 ## `min()` — internals
@@ -31,6 +31,12 @@ function min(mixed $value, ...$values): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/min.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/min.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

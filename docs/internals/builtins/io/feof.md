@@ -2,7 +2,7 @@
 title: "feof() — internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 160
 ---
 
 ## `feof()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/feof.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3121](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3121) (`lower_feof`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3117](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3117) (`lower_feof`)
 - **Function symbol**: `lower_feof()`
 
 
@@ -33,6 +33,11 @@ function feof(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

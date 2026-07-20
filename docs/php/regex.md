@@ -2,7 +2,7 @@
 title: "Regex"
 description: "PCRE2-backed regular expressions, preg_* functions, SPL regex iterators, and native library requirements."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 elephc implements PHP regular expressions with PCRE2 through PCRE2's

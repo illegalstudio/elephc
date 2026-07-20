@@ -2,7 +2,7 @@
 title: "is_executable() — internals"
 description: "Compiler internals for is_executable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 123
+  order: 127
 ---
 
 ## `is_executable()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_executable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_executable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5632](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5632) (`lower_is_executable`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5628](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5628) (`lower_is_executable`)
 - **Function symbol**: `lower_is_executable()`
 
 
@@ -35,6 +35,11 @@ function is_executable(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

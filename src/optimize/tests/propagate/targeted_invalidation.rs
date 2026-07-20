@@ -33,7 +33,9 @@ fn noisy_function(name: &str) -> Stmt {
         StmtKind::FunctionDecl {
             name: name.to_string(),
             params: vec![("p".to_string(), None, None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -242,6 +244,7 @@ fn test_closure_by_ref_capture_kills_existing_fact() {
         ExprKind::Closure {
             params: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             body: Vec::new(),

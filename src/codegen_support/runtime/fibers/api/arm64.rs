@@ -356,6 +356,8 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
 /// resume. The Throwable is parked in `pending_throw`; the resume side of
 /// `__rt_fiber_suspend` checks it, clears it, and re-raises via
 /// `__rt_throw_current` so the fiber's local try/catch frames see it.
+/// The pending slot retains its own reference after state validation, leaving
+/// the caller's argument ownership unchanged.
 /// Input:  x0 = fiber*, x1 = Throwable*
 /// Output: x0 = the value the fiber yields back (or 0 if it terminates without
 ///         further suspends; the exception itself unwinds inside the fiber).
@@ -381,7 +383,9 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #43");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
     emitter.label("__rt_fiber_throw_state_ok");
-    emitter.instruction("mov x1, x20");                                         // restore the Throwable into the second argument register
+    emitter.instruction("mov x0, x20");                                         // move the Throwable into the retain helper input register
+    emitter.instruction("bl __rt_incref");                                      // retain an owned reference for the Fiber pending-throw slot
+    emitter.instruction("mov x1, x0");                                          // restore the retained Throwable into the second argument register
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
     emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = Throwable* to raise on resume

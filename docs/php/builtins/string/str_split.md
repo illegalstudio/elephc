@@ -2,7 +2,7 @@
 title: "str_split()"
 description: "Converts a string into an array of chunks of the given length."
 sidebar:
-  order: 388
+  order: 406
 ---
 
 ## str_split()
@@ -18,6 +18,11 @@ Converts a string into an array of chunks of the given length.
 - `$length` (`int`), default `1`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_split.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

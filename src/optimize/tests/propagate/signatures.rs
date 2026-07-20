@@ -25,7 +25,9 @@ fn function_with_params(name: &str, params: Vec<(&str, bool)>) -> Stmt {
                 .into_iter()
                 .map(|(param, is_ref)| (param.to_string(), None, None, is_ref))
                 .collect(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -48,7 +50,9 @@ fn method_with_params(name: &str, params: Vec<(&str, bool)>) -> ClassMethod {
             .into_iter()
             .map(|(param, is_ref)| (param.to_string(), None, None, is_ref))
             .collect(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: None,
         by_ref_return: false,
@@ -90,6 +94,7 @@ fn by_ref_property(name: &str) -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: true,
+        is_promoted: false,
         default: None,
         span: Span::dummy(),
         attributes: Vec::new(),
@@ -110,6 +115,30 @@ fn test_user_function_by_ref_params_collected() {
         assert!(is_user_function("f"));
         assert!(!is_user_function("sort"));
         assert!(!is_user_function("nope_missing"));
+    });
+}
+
+/// A user function's by-ref variadic parameter is exposed as the trailing
+/// by-ref slot used by targeted call invalidation.
+#[test]
+fn test_user_function_by_ref_variadic_param_collected() {
+    let mut function = function_with_params("f", Vec::new());
+    if let StmtKind::FunctionDecl {
+        variadic,
+        variadic_by_ref,
+        ..
+    } = &mut function.kind
+    {
+        *variadic = Some("items".to_string());
+        *variadic_by_ref = true;
+    }
+    let sigs = collect_by_ref_signatures(&[function]);
+
+    with_by_ref_signatures(sigs, || {
+        assert_eq!(
+            function_by_ref_params("f"),
+            Some(vec![("items".to_string(), true)])
+        );
     });
 }
 

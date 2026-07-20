@@ -2,7 +2,7 @@
 title: "str_repeat()"
 description: "Repeats a string a given number of times."
 sidebar:
-  order: 386
+  order: 404
 ---
 
 ## str_repeat()
@@ -18,6 +18,11 @@ Repeats a string a given number of times.
 - `$times` (`int`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

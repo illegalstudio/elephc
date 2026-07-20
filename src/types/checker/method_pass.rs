@@ -115,11 +115,16 @@ impl Checker {
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
+                        let fallback_ty = if method.variadic_by_ref {
+                            PhpType::Array(Box::new(PhpType::Mixed))
+                        } else {
+                            PhpType::Array(Box::new(PhpType::Int))
+                        };
                         let ty = sig_params
                             .as_ref()
                             .and_then(|p| p.get(method.params.len()))
                             .map(|(_, t)| t.clone())
-                            .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                            .unwrap_or(fallback_ty);
                         method_env.insert(variadic_name.clone(), ty);
                     }
                     if method_key == "__construct" {
@@ -190,10 +195,10 @@ impl Checker {
                     continue;
                 }
                 if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
-                    if ci.declared_properties.contains(prop_name) {
+                    if ci.visible_property_is_declared(prop_name) {
                         continue;
                     }
-                    if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == prop_name) {
+                    if let Some((_, (_, ty))) = ci.visible_property(prop_name) {
                         method_env.insert(pname.clone(), ty.clone());
                         if let Some(ci_mut) = self.classes.get_mut(&class.name) {
                             if let Some(sig) = ci_mut.methods.get_mut("__construct") {

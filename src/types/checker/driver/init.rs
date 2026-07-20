@@ -14,9 +14,11 @@ use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -24,11 +26,11 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream
-    /// resources, `LOCK_*` constants), array constants, JSON integer constants, and preg flag
-    /// constants. All other tables (function declarations, classes, interfaces, enums, etc.)
-    /// are initialized empty.
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
+    /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
+    /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
+    /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -39,6 +41,9 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // Deprecated session-id constant; elephc is cookie-only so it always
+        // resolves to the empty string (see `codegen::prescan::collect_constants`).
+        constants.insert("SID".to_string(), PhpType::Str);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
@@ -73,6 +78,30 @@ impl Checker {
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in SESSION_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in ERROR_LEVEL_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
+        // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
+        constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
+        constants.insert("PHP_INT_MIN".to_string(), PhpType::Int);
+        constants.insert("PHP_FLOAT_MAX".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_MIN".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_EPSILON".to_string(), PhpType::Float);
+        constants.insert("INF".to_string(), PhpType::Float);
+        constants.insert("NAN".to_string(), PhpType::Float);
+        constants.insert("M_PI".to_string(), PhpType::Float);
+        constants.insert("M_E".to_string(), PhpType::Float);
+        constants.insert("M_SQRT2".to_string(), PhpType::Float);
+        constants.insert("M_PI_2".to_string(), PhpType::Float);
+        constants.insert("M_PI_4".to_string(), PhpType::Float);
+        constants.insert("M_LOG2E".to_string(), PhpType::Float);
+        constants.insert("M_LOG10E".to_string(), PhpType::Float);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target_platform,
@@ -91,11 +120,15 @@ impl Checker {
             callable_captures: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
+            reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
+            declared_traits: HashSet::new(),
+            declared_trait_methods: HashMap::new(),
+            declared_trait_constants: HashMap::new(),
             current_class: None,
             current_method: None,
             current_method_is_static: false,
@@ -111,6 +144,7 @@ impl Checker {
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
+            eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),

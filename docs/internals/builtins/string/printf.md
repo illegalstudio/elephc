@@ -2,7 +2,7 @@
 title: "printf() — internals"
 description: "Compiler internals for printf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 393
 ---
 
 ## `printf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/printf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/printf.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:535](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L535) (`lower_printf`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:579](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L579) (`lower_printf`)
 - **Function symbol**: `lower_printf()`
 
 
@@ -32,6 +32,12 @@ function printf(string $format, ...$values): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

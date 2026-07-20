@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_file_metadata() — internals"
 description: "Compiler internals for __elephc_phar_get_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 437
+  order: 455
 ---
 
 ## `__elephc_phar_get_file_metadata()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_file_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_file_metadata.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4074](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4074) (`lower_elephc_phar_get_file_metadata`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4070](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4070) (`lower_elephc_phar_get_file_metadata`)
 - **Function symbol**: `lower_elephc_phar_get_file_metadata()`
 
 
@@ -31,6 +31,10 @@ function __elephc_phar_get_file_metadata(string $url): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

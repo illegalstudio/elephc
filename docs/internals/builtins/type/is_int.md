@@ -2,7 +2,7 @@
 title: "is_int() — internals"
 description: "Compiler internals for is_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 424
+  order: 442
 ---
 
 ## `is_int()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_int.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_int.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:737](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L737) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1354](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1354) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 
@@ -31,6 +31,11 @@ function is_int(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_int.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

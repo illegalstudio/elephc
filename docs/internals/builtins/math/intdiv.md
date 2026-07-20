@@ -2,7 +2,7 @@
 title: "intdiv() — internals"
 description: "Compiler internals for intdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 250
+  order: 267
 ---
 
 ## `intdiv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/intdiv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L23) (`lower_intdiv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L22) (`lower_intdiv`)
 - **Function symbol**: `lower_intdiv()`
 
 
@@ -31,6 +31,11 @@ function intdiv(int $num1, int $num2): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

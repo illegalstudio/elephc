@@ -2,7 +2,7 @@
 title: "System & I/O"
 description: "System functions, date/time, JSON, filesystem utilities, process execution, and debugging utilities."
 sidebar:
-  order: 12
+  order: 13
 ---
 
 ## System functions
@@ -156,8 +156,8 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 | Symbol | Kind | Description |
 |---|---|---|
 | `JsonSerializable` | Interface | Implementing classes can override `jsonSerialize(): mixed`; `json_encode()` dispatches to it instead of walking public properties. |
-| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. `FiberError` extends this class. |
-| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. |
+| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. `FiberError` extends this class. |
+| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. |
 | `RuntimeException` | Class | `extends Exception`. Standard PHP "runtime errors" base class. |
 | `JsonException` | Class | `extends RuntimeException`. Carries the originating `JSON_ERROR_*` code; `getCode()` returns it (e.g. 4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN). |
 | `stdClass` | Class | Dynamic-property container. `$obj = new stdClass(); $obj->name = "x";` works for any property name; storage is a backing hash on the instance. `json_decode($json)` returns stdClass by default (PHP semantics); pass `assoc: true` to get an associative array. |
@@ -370,3 +370,54 @@ var_export(['a' => 1, 'b' => [2, 3]]);
 //   ),
 // )
 ```
+
+## Output buffering
+
+Output buffering captures everything a piece of code prints — `echo`, `print`,
+`printf()`, `print_r()`, `var_dump()`, `readfile()`, `fpassthru()` — into an
+in-memory buffer instead of writing it to stdout. Buffers nest: flushing an
+inner buffer folds its contents into the enclosing one. Buffers still active at
+script end (including `exit()`/`die()`) are flushed to stdout automatically,
+matching PHP.
+
+| Function | Signature | Description |
+|---|---|---|
+| `ob_start()` | `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = 112): bool` | Start a new output buffer (nesting supported, up to 64 levels). Output-handler callbacks are supported: closures, first-class callables, function-name strings, and boxed callables run on flush/clean with PHP's phase bits (`WRITE`/`CLEAN`/`FLUSH`/`FINAL`, plus `START` on the first run); returning `false` passes the raw contents through, any other return is cast to a string. A non-zero `$chunk_size` auto-flushes the buffer whenever it reaches that many bytes, and `$flags` gate cleanability/flushability/removability exactly like PHP (refusals raise PHP's notices). An unknown function name raises PHP's warning and returns `false`; array-pair callables (`[$obj, 'method']`) are rejected at compile time |
+| `ob_get_contents()` | `ob_get_contents(): string\|false` | Return the active buffer's contents without consuming them; `false` when no buffer is active |
+| `ob_get_clean()` | `ob_get_clean(): string\|false` | Return the active buffer's contents, then discard the buffer and pop it |
+| `ob_get_flush()` | `ob_get_flush(): string\|false` | Return the active buffer's contents, then flush them to the parent sink and pop the buffer |
+| `ob_get_length()` | `ob_get_length(): int\|false` | Byte length of the active buffer's contents; `false` when no buffer is active |
+| `ob_get_level()` | `ob_get_level(): int` | Current nesting depth (0 = no buffering) |
+| `ob_clean()` | `ob_clean(): bool` | Erase the active buffer's contents while keeping the buffer active |
+| `ob_end_clean()` | `ob_end_clean(): bool` | Discard the active buffer's contents and pop the buffer |
+| `ob_end_flush()` | `ob_end_flush(): bool` | Flush the active buffer's contents to the parent sink (enclosing buffer or stdout) and pop the buffer |
+| `ob_flush()` | `ob_flush(): bool` | Flush the active buffer's contents to the parent sink while keeping the buffer active |
+| `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Status of the active buffer (or an empty array without one): `name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`. With `$full_status = true`, one entry per nesting level |
+| `ob_implicit_flush()` | `ob_implicit_flush(bool $enable = true): bool` | Stores the flag and returns `true`. Semantically inert: elephc terminal writes are unbuffered syscalls, so implicit flushing is always effectively on |
+| `ob_list_handlers()` | `ob_list_handlers(): array` | One `"default output handler"` entry per active buffer level |
+
+```php
+<?php
+ob_start();
+echo "hello";
+$captured = ob_get_clean();
+echo strtoupper($captured);   // HELLO
+
+ob_start();
+echo "outer:";
+ob_start();
+echo "inner";
+ob_end_flush();               // "inner" flows into the outer buffer
+echo ob_get_clean(), "\n";    // outer:inner
+```
+
+Output buffering state is shared between statically compiled code and
+`eval()`'d code: a buffer started inside `eval()` captures static echoes and
+vice versa, and handlers registered inside `eval()` run on flushes triggered
+from static code or at script end. Output produced inside a handler is
+discarded and calling `ob_start()` from inside a handler is a fatal error,
+matching PHP. `fwrite(STDOUT, ...)` writes to the real file descriptor and
+bypasses output buffers, matching PHP. Known divergences: the first-class
+callable of a named function reports that function's name (PHP reports
+`Closure::__invoke`), and `ob_get_status()` omits PHP's internal 0x2000
+disabled bit.

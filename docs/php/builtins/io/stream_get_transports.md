@@ -2,7 +2,7 @@
 title: "stream_get_transports()"
 description: "Retrieves list of registered socket transports."
 sidebar:
-  order: 205
+  order: 222
 ---
 
 ## stream_get_transports()
@@ -16,6 +16,11 @@ Retrieves list of registered socket transports.
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

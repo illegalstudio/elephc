@@ -66,7 +66,7 @@ fn test_unterminated_string() {
 #[test]
 fn test_span_tracking() {
     let spanned = tokenize("<?php\necho \"hi\";").unwrap();
-    let echo_span = spanned[1].1;
+    let echo_span = spanned[1].1.span;
     assert_eq!(echo_span.line, 2);
     assert_eq!(echo_span.col, 1);
 }
@@ -75,7 +75,7 @@ fn test_span_tracking() {
 #[test]
 fn test_span_multiline() {
     let spanned = tokenize("<?php\n\n\n$x").unwrap();
-    let var_span = spanned[1].1;
+    let var_span = spanned[1].1.span;
     assert_eq!(var_span.line, 4);
 }
 

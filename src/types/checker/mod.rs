@@ -8,7 +8,6 @@
 //! Key details:
 //! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
 
-pub(crate) mod builtins;
 mod builtin_enums;
 mod builtin_interfaces;
 mod builtin_iterators;
@@ -19,17 +18,19 @@ mod builtin_spl_exceptions;
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
 mod builtin_user_filter;
+pub(crate) mod builtins;
 mod callables;
-/// yield_validation
-pub(crate) mod yield_validation;
 mod driver;
 mod extern_decl;
 mod functions;
 mod inference;
+mod loop_widening;
 mod method_pass;
 mod schema;
 mod stmt_check;
 mod type_compat;
+/// yield_validation
+pub(crate) mod yield_validation;
 
 use std::collections::{HashMap, HashSet};
 
@@ -40,11 +41,13 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 use crate::types::{
-    CheckResult, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PhpType, ThrowAccessInfo, TypeEnv,
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, EnumInfo,
+    ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ThrowAccessInfo, TypeEnv,
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use loop_widening::loop_grown_mixed_array_pushes;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
@@ -97,6 +100,8 @@ pub(crate) struct Checker {
     pub callable_array_targets: HashMap<String, CallableTarget>,
     /// Tracks first-class callable targets assigned to variables, keyed by variable name.
     pub first_class_callable_targets: HashMap<String, CallableTarget>,
+    /// Tracks `ReflectionClass` locals whose reflected class is statically known.
+    pub reflection_class_targets: HashMap<String, String>,
     /// Interface definitions collected during the first pass, keyed by canonical name.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during the first pass, keyed by canonical name.
@@ -109,6 +114,13 @@ pub(crate) struct Checker {
     /// Canonical interface names declared in the program, available for forward references
     /// before the full interface definitions are available.
     pub declared_interfaces: HashSet<String>,
+    /// Canonical trait names declared in the program, available for reflection
+    /// and class-like metadata probes that accept traits.
+    pub declared_traits: HashSet<String>,
+    /// Reflection-visible method signatures declared directly on each trait.
+    pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
+    /// Reflection-visible class constant names declared directly on each trait.
+    pub declared_trait_constants: HashMap<String, HashSet<String>>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
@@ -150,6 +162,11 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// Whether the active local statement stream has crossed an `eval()` call.
+    ///
+    /// Once set, unknown local reads are treated as dynamic `Mixed` values because
+    /// eval fragments can create caller-scope variables at runtime.
+    pub eval_barrier_active: bool,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
@@ -176,9 +193,13 @@ pub(crate) struct Checker {
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
     pub param_types: Vec<Option<TypeExpr>>,
+    /// Attribute groups aligned with the declared parameters plus the variadic parameter, if any.
+    pub param_attributes: Vec<Vec<crate::parser::ast::AttributeGroup>>,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    /// Whether the variadic parameter was declared by reference (`&...$args`).
+    pub variadic_by_ref: bool,
     /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
     pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
@@ -195,7 +216,10 @@ pub(crate) struct FnDecl {
 /// a `CheckResult` on success or a `CompileError` on failure. The checker validates
 /// types, resolves declarations, infers return types, and collects warnings. Abstract
 /// return types are propagated from concrete implementations before returning.
-pub fn check_types(program: &Program, target_platform: Platform) -> Result<CheckResult, CompileError> {
+pub fn check_types(
+    program: &Program,
+    target_platform: Platform,
+) -> Result<CheckResult, CompileError> {
     let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
 
     propagate_abstract_return_types(&mut checker);
@@ -204,12 +228,26 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);
+    let function_attribute_names = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), collect_attribute_names(&decl.attributes)))
+        .collect();
+    let function_attribute_args = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), collect_attribute_args(&decl.attributes)))
+        .collect();
+    let return_alias_summaries = crate::types::collect_return_alias_summaries(program);
     dedupe_warnings(&mut warnings);
 
     Ok(CheckResult {
         global_env,
         functions: checker.functions,
+        function_attribute_names,
+        function_attribute_args,
         callable_param_sigs: checker.callable_param_sigs,
+        return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,
         interfaces: checker.interfaces,
@@ -301,6 +339,11 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             }
             info.reference_properties.insert(prop.clone());
             info.owned_reference_properties.insert(prop.clone());
+            if let Some(slot) = info.visible_property_index(&prop) {
+                if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
+                    *slot_reference = true;
+                }
+            }
         }
     }
 }

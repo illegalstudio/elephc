@@ -2,7 +2,7 @@
 title: "fsync() — internals"
 description: "Compiler internals for fsync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 173
+  order: 177
 ---
 
 ## `fsync()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fsync.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fsync.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3261](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3261) (`lower_fsync`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3257](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3257) (`lower_fsync`)
 - **Function symbol**: `lower_fsync()`
 
 
@@ -33,6 +33,11 @@ function fsync(resource $stream): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fsync.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fsync.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

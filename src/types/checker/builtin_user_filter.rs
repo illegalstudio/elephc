@@ -37,6 +37,7 @@ pub(crate) fn inject_builtin_user_filter(
         "php_user_filter".to_string(),
         FlattenedClass {
             name: "php_user_filter".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -47,6 +48,7 @@ pub(crate) fn inject_builtin_user_filter(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -67,6 +69,7 @@ fn params_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(ExprKind::Null, Span::dummy())),
         span: Span::dummy(),
         attributes: Vec::new(),

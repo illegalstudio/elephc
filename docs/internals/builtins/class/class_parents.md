@@ -32,6 +32,11 @@ function class_parents(mixed $object_or_class, bool $autoload = true): mixed
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_parents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_parents.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `class_parents()`](../../../php/builtins/class/class_parents.md)

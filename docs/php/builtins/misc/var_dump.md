@@ -2,7 +2,7 @@
 title: "var_dump()"
 description: "Dumps information about a variable, including its type and value."
 sidebar:
-  order: 284
+  order: 301
 ---
 
 ## var_dump()
@@ -18,6 +18,11 @@ Dumps information about a variable, including its type and value.
 - `...$values` — variadic: collects excess arguments into `$values`.
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -22,7 +22,6 @@ use super::super::{
     FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
 };
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits `__rt_fiber_throw_state_error` which constructs a FiberError from a static message
 /// string and unwinds through `__rt_throw_current`. Takes rdi=message bytes pointer, rsi=byte length.
@@ -41,7 +40,7 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 24");                                         // FiberError object size (8 class_id + 16 message property)
     emitter.instruction("call __rt_heap_alloc");                                // rax = freshly allocated payload pointer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the kind in the uniform heap header
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_error_class_id", 0);   // r10 = runtime class id of FiberError
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store FiberError class id at the object header
@@ -79,7 +78,7 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", FIBER_OBJECT_SIZE));            // size in bytes for the Fiber object payload
     emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to the object payload
     emitter.instruction("mov r14, rax");                                        // r14 = Fiber object pointer kept until return
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
     emitter.instruction("mov QWORD PTR [r14 - 8], r10");                        // stamp the allocation as an object instance
     emitter.instruction("mov QWORD PTR [r14], r13");                            // store the runtime class_id at the object header
 
@@ -269,6 +268,7 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
 /// Returns the yielded or terminated transfer value as a Mixed in rax.
 /// Validates the fiber is in Suspended state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
 /// The Throwable is parked in `pending_throw` so the fiber's try/catch machinery raises it on resume.
+/// The pending slot retains its own reference after state validation, leaving the caller's argument ownership unchanged.
 pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_throw ---");
@@ -287,7 +287,9 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 43");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_throw_state_ok");
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = Throwable*
+    emitter.instruction("mov rax, r13");                                        // move the Throwable into the retain helper input register
+    emitter.instruction("call __rt_incref");                                    // retain an owned reference for the Fiber pending-throw slot
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = retained Throwable*
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_current", 0);          // r10 = current execution context
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", FIBER_CALLER_OFFSET)); // fiber->caller = current context
     emitter.instruction("mov rdi, r12");                                        // pass fiber* as the switch target

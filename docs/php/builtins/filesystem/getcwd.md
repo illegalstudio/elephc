@@ -2,7 +2,7 @@
 title: "getcwd()"
 description: "Gets the current working directory."
 sidebar:
-  order: 119
+  order: 123
 ---
 
 ## getcwd()
@@ -16,6 +16,11 @@ Gets the current working directory.
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

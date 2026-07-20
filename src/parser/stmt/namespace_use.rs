@@ -9,12 +9,15 @@
 //! - Namespace and use syntax remains syntactic here; canonical resolution happens in `crate::name_resolver`.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseItem, UseKind};
 use crate::span::Span;
 
-use super::{expect_semicolon, expect_token, parse_name, parse_stmt, recover_to_statement_boundary};
+use super::{
+    expect_semicolon, expect_token, name_part_from_token, parse_name, parse_stmt,
+    recover_to_statement_boundary,
+};
 
 /// Parses a `namespace` declaration or block.
 ///
@@ -25,7 +28,7 @@ use super::{expect_semicolon, expect_token, parse_name, parse_stmt, recover_to_s
 /// Collects parse errors during block parsing and reports them all if the block
 /// closes successfully.
 pub(super) fn parse_namespace_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -86,7 +89,7 @@ pub(super) fn parse_namespace_stmt(
 ///
 /// Emits a `StmtKind::UseDecl` containing the complete list of `UseItem`s.
 pub(super) fn parse_use_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -102,7 +105,13 @@ pub(super) fn parse_use_stmt(
         UseKind::Class
     };
 
-    let prefix = parse_use_prefix(tokens, pos, span)?;
+    let prefix = parse_use_name(
+        tokens,
+        pos,
+        span,
+        "Expected imported name after 'use'",
+        true,
+    )?;
 
     let imports = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         parse_group_use_items(tokens, pos, span, prefix, default_kind.clone())?
@@ -128,11 +137,12 @@ pub(super) fn parse_use_stmt(
         } else {
             default_kind.clone()
         };
-        let name = parse_name(
+        let name = parse_use_name(
             tokens,
             pos,
             span,
             "Expected imported name after ',' in use declaration",
+            false,
         )?;
         all_imports.push(parse_single_use_item_after_name(
             tokens, pos, span, name, item_kind,
@@ -150,18 +160,24 @@ pub(super) fn parse_use_stmt(
 
 /// Parses an optional `as Alias` clause after a use item name.
 ///
-/// Returns `None` if no `as` keyword is present. Otherwise consumes `as` and the
-/// following identifier, returning the alias name.
-fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<String> {
+/// Returns `Ok(None)` if no `as` keyword is present. Otherwise consumes `as` and
+/// the following ordinary or soft-keyword name, returning an error when it is absent.
+fn parse_optional_alias(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<String>, CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::As {
         *pos += 1;
-        if let Some(Token::Identifier(alias)) = tokens.get(*pos).map(|(t, _)| t) {
-            let alias = alias.clone();
-            *pos += 1;
-            return Some(alias);
-        }
+        let Some((token, metadata)) = tokens.get(*pos) else {
+            return Err(CompileError::new(span, "Expected alias after 'as'"));
+        };
+        let alias = name_part_from_token(token, metadata)
+            .ok_or_else(|| CompileError::new(span, "Expected alias after 'as'"))?;
+        *pos += 1;
+        return Ok(Some(alias));
     }
-    None
+    Ok(None)
 }
 
 /// Builds a `UseItem` from an already-parsed name and kind.
@@ -169,13 +185,13 @@ fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<Str
 /// If an explicit `as Alias` clause follows, that alias is used; otherwise the
 /// last segment of `name` becomes the alias. Returns an error if the name is empty.
 fn parse_single_use_item_after_name(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     name: Name,
     kind: UseKind,
 ) -> Result<UseItem, CompileError> {
-    let alias = parse_optional_alias(tokens, pos)
+    let alias = parse_optional_alias(tokens, pos, span)?
         .or_else(|| name.last_segment().map(str::to_string))
         .ok_or_else(|| CompileError::new(span, "Imported name cannot be empty"))?;
     Ok(UseItem { kind, name, alias })
@@ -187,7 +203,7 @@ fn parse_single_use_item_after_name(
 /// to `prefix`. Each item may override the `default_kind` with `function` or `const`.
 /// Fully-qualified items inside the group are rejected. Returns the list of `UseItem`s.
 fn parse_group_use_items(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     prefix: Name,
@@ -220,11 +236,12 @@ fn parse_group_use_items(
             default_kind.clone()
         };
 
-        let suffix = parse_name(
+        let suffix = parse_use_name(
             tokens,
             pos,
             span,
             "Expected imported name inside group use declaration",
+            false,
         )?;
         if suffix.is_fully_qualified() {
             return Err(CompileError::new(
@@ -248,16 +265,49 @@ fn parse_group_use_items(
     Ok(imports)
 }
 
-/// Parses the name prefix before the optional grouped-use `{`.
+/// Canonical import spelling for constant-like tokens the lexer eagerly tokenizes.
 ///
-/// Reads a sequence of identifiers separated by `\`. If the sequence begins with `\`,
-/// the name kind is `FullyQualified`; otherwise it is `Unqualified` or `Qualified`
-/// depending on whether an intermediate `\ ` was seen. Stops when a trailing `\`
-/// followed by `{` is encountered (the opening brace is consumed by the caller).
-fn parse_use_prefix(
-    tokens: &[(Token, Span)],
+/// `use const PHP_INT_MAX;` is legal PHP, but `PHP_INT_MAX` never reaches the parser as an
+/// identifier — the lexer emits a dedicated token. Accepting them here keeps such use
+/// declarations parseable; aliases resolve through the normal constant import table because
+/// the same names are seeded in the checker/prescan constant maps.
+fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+    match token {
+        Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::Inf
+        | Token::Nan
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
+        | Token::Stdin
+        | Token::Stdout
+        | Token::Stderr
+        | Token::PhpEol
+        | Token::PhpOs
+        | Token::DirectorySeparator => token.word_spelling(metadata).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Parses one imported name, including lexer-tokenized predefined constants.
+///
+/// When `allow_group_prefix` is true, a trailing namespace separator before `{`
+/// terminates the shared prefix without consuming the brace. Other callers require
+/// a complete name and reject a trailing separator.
+fn parse_use_name(
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
+    first_error: &str,
+    allow_group_prefix: bool,
 ) -> Result<Name, CompileError> {
     let mut kind = NameKind::Unqualified;
     if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
@@ -267,22 +317,33 @@ fn parse_use_prefix(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                parts.push(name.clone());
+        match tokens.get(*pos) {
+            Some((token, metadata))
+                if name_part_from_token(token, metadata).is_some()
+                    || token_as_import_name(token, metadata).is_some() =>
+            {
+                let part = name_part_from_token(token, metadata)
+                    .or_else(|| token_as_import_name(token, metadata))
+                    .expect("import name part was checked immediately above");
+                parts.push(part);
                 *pos += 1;
             }
             _ if parts.is_empty() => {
+                return Err(CompileError::new(span, first_error))
+            }
+            _ => {
                 return Err(CompileError::new(
                     span,
-                    "Expected imported name after 'use'",
+                    "Expected identifier after '\\' in imported name",
                 ))
             }
-            _ => break,
         }
 
         if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
-            if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::LBrace {
+            if allow_group_prefix
+                && *pos + 1 < tokens.len()
+                && tokens[*pos + 1].0 == Token::LBrace
+            {
                 *pos += 1;
                 break;
             }

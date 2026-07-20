@@ -152,4 +152,32 @@ fn test_parse_class_class_parent() {
     );
 }
 
+/// Verifies that `$object::class` keeps the object expression as a dedicated runtime class-name receiver.
+#[test]
+fn test_parse_object_class_name() {
+    let stmts = parse_source("<?php echo $pippo::class;");
+    match echoed_expr(&stmts) {
+        ExprKind::ObjectClassName { object } => {
+            assert_eq!(object.kind, ExprKind::Variable("pippo".to_string()));
+        }
+        other => panic!("expected ObjectClassName, got {:?}", other),
+    }
+}
+
+/// Verifies that `::class` accepts a call expression receiver without duplicating it in the AST.
+#[test]
+fn test_parse_call_expression_object_class_name() {
+    let stmts = parse_source("<?php echo make()::class;");
+    match echoed_expr(&stmts) {
+        ExprKind::ObjectClassName { object } => match &object.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "make");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected FunctionCall receiver, got {:?}", other),
+        },
+        other => panic!("expected ObjectClassName, got {:?}", other),
+    }
+}
+
 // --- new self() / new static() / new parent() ---

@@ -27,6 +27,22 @@ fn test_effect_analysis_recognizes_pure_builtin_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
+/// Verifies that `eval` is modeled as an observable, throwing dynamic barrier.
+#[test]
+fn test_effect_analysis_treats_eval_as_dynamic_barrier() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("eval"),
+            args: vec![Expr::string_lit("$x = 5;")],
+        },
+        Span::dummy(),
+    );
+
+    assert!(expr_has_side_effects(&expr));
+    assert!(expr_effect(&expr).may_throw);
+    assert!(expr_is_observable(&expr));
+}
+
 /// Verifies that property accesses (`.`) are pure (no side effects) but may
 /// throw (uninitialized typed property guard), while array accesses (`[]`)
 /// are observable and may throw (e.g., undefined index).
@@ -62,7 +78,9 @@ fn test_program_function_effects_recognize_pure_user_functions() {
         StmtKind::FunctionDecl {
             name: "len3".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -95,7 +113,9 @@ fn test_program_function_effects_propagate_throwing_calls() {
             StmtKind::FunctionDecl {
                 name: "boom".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,
@@ -116,7 +136,9 @@ fn test_program_function_effects_propagate_throwing_calls() {
             StmtKind::FunctionDecl {
                 name: "wrapper".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
+                variadic_by_ref: false,
                 variadic_type: None,
                 return_type: None,
                 by_ref_return: false,

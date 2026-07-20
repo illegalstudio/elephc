@@ -2,7 +2,7 @@
 title: "stat() — internals"
 description: "Compiler internals for stat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 145
+  order: 149
 ---
 
 ## `stat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stat.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5529](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5529) (`lower_stat`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5525](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5525) (`lower_stat`)
 - **Function symbol**: `lower_stat()`
 
 
@@ -34,6 +34,11 @@ function stat(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stat.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -21,7 +21,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{Immediate, Module, Op};
+use crate::ir::{Function, Immediate, Module, Op};
 use crate::ir_lower::function;
 use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, PhpType};
@@ -71,6 +71,7 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
+    lower_eval_date_alias_methods_if_needed(module, check_result, constants, fiber_return_sigs);
     loop {
         let mut methods = referenced_builtin_datetime_methods(module);
         methods.sort();
@@ -97,6 +98,153 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
             break;
         }
     }
+}
+
+/// Lowers DateTime-family methods that runtime eval aliases may call dynamically.
+fn lower_eval_date_alias_methods_if_needed(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
+) {
+    if !module_uses_eval(module) {
+        return;
+    }
+    let mut methods = eval_date_alias_builtin_datetime_methods(module);
+    methods.sort();
+    methods.dedup();
+    for (class_name, method_key) in methods {
+        lower_builtin_datetime_method(
+            &class_name,
+            &method_key,
+            module,
+            check_result,
+            constants,
+            fiber_return_sigs,
+        );
+    }
+}
+
+/// Returns the builtin DateTime-family methods reachable from eval alias dispatch.
+fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
+    let mut methods = Vec::new();
+    for class_name in ["DateTime", "DateTimeImmutable", "DateTimeZone", "DateInterval"] {
+        push_constructor_and_interface_methods(&mut methods, module, class_name);
+    }
+    for method_name in [
+        "createFromFormat",
+        "getLastErrors",
+        "__elephc_date_parse_from_format",
+        "__elephc_date_parse",
+        "__elephc_date_sun_info",
+        "__elephc_date_sunfunc",
+        "__elephc_strptime",
+        "__elephc_timezone_name_from_abbr",
+        "__elephc_cal_to_jd",
+        "__elephc_cal_from_jd",
+        "__elephc_cal_days_in_month",
+        "__elephc_cal_info",
+        "__elephc_gregoriantojd",
+        "__elephc_jdtogregorian",
+        "__elephc_juliantojd",
+        "__elephc_jdtojulian",
+        "__elephc_frenchtojd",
+        "__elephc_jdtofrench",
+        "__elephc_jewishtojd",
+        "__elephc_jdtojewish",
+        "__elephc_jddayofweek",
+        "__elephc_jdmonthname",
+        "__elephc_jdtounix",
+        "__elephc_unixtojd",
+        "__elephc_easter_days",
+        "__elephc_easter_date",
+        "__elephc_gettimeofday",
+        "__elephc_strftime",
+        "diff",
+        "format",
+        "add",
+        "sub",
+        "modify",
+        "getTimestamp",
+        "setTimestamp",
+        "getTimezone",
+        "setTimezone",
+        "getOffset",
+        "setDate",
+        "setISODate",
+        "setTime",
+    ] {
+        methods.push(("DateTime".to_string(), php_method_key(method_name)));
+        methods.push(("DateTimeImmutable".to_string(), php_method_key(method_name)));
+    }
+    for method_name in ["createFromDateString", "format"] {
+        methods.push(("DateInterval".to_string(), php_method_key(method_name)));
+    }
+    for method_name in [
+        "getName",
+        "getOffset",
+        "listIdentifiers",
+        "getLocation",
+        "getTransitions",
+        "listAbbreviations",
+    ] {
+        methods.push(("DateTimeZone".to_string(), php_method_key(method_name)));
+    }
+    methods
+}
+
+/// Returns true when the lowered module has any dependency on the eval bridge.
+fn module_uses_eval(module: &Module) -> bool {
+    module.required_runtime_features.eval_bridge
+        || module
+            .functions
+            .iter()
+            .chain(module.class_methods.iter())
+            .chain(module.closures.iter())
+            .chain(module.fiber_wrappers.iter())
+            .chain(module.callback_wrappers.iter())
+            .chain(module.extern_callback_trampolines.iter())
+            .chain(module.runtime_callable_invokers.iter())
+            .any(|function| function_uses_eval(module, function))
+}
+
+/// Returns true when one lowered function contains an eval bridge instruction.
+fn function_uses_eval(module: &Module, function: &Function) -> bool {
+    function
+        .instructions
+        .iter()
+        .any(|inst| instruction_uses_eval(module, inst))
+}
+
+/// Returns true when one instruction requires eval runtime support.
+fn instruction_uses_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.op,
+        Op::EvalLiteralCall
+            | Op::EvalFunctionCall
+            | Op::EvalFunctionCallArray
+            | Op::EvalObjectNew
+            | Op::EvalStaticMethodCall
+            | Op::EvalFunctionExists
+            | Op::EvalClassExists
+            | Op::EvalConstantExists
+            | Op::EvalConstantFetch
+    ) || builtin_call_is_eval(module, inst)
+}
+
+/// Returns true when one lowered builtin call is PHP's `eval` construct.
+fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    if inst.op != Op::BuiltinCall {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    module
+        .data
+        .function_names
+        .get(data.as_raw() as usize)
+        .is_some_and(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == "eval")
 }
 
 /// Finds builtin date/time methods whose symbols are required by already-lowered EIR.

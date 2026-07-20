@@ -104,6 +104,8 @@ try {
 
 // Encoding
 echo "\n--- Encoding ---\n";
+echo "mb_strlen UTF-8: " . mb_strlen("héllo", "UTF-8") . "\n";
+echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";

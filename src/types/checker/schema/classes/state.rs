@@ -34,9 +34,12 @@ pub(super) struct ClassBuildState {
     pub(super) property_visibilities: HashMap<String, Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
+    pub(super) property_declared_slots: Vec<bool>,
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
+    pub(super) promoted_properties: HashSet<String>,
+    pub(super) property_reference_slots: Vec<bool>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
@@ -100,8 +103,29 @@ impl ClassBuildState {
         constructor_param_to_prop: Vec<Option<String>>,
     ) -> Result<ClassInfo, CompileError> {
         let attribute_args = collect_attribute_args(&class.attributes);
+        let constant_attribute_names = class
+            .constants
+            .iter()
+            .map(|constant| {
+                (
+                    constant.name.clone(),
+                    collect_attribute_names(&constant.attributes),
+                )
+            })
+            .collect();
+        let constant_attribute_args = class
+            .constants
+            .iter()
+            .map(|constant| {
+                (
+                    constant.name.clone(),
+                    collect_attribute_args(&constant.attributes),
+                )
+            })
+            .collect();
         Ok(ClassInfo {
             class_id,
+            declaration_span: class.span,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
             is_final: class.is_final,
@@ -118,13 +142,37 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
+            constant_types: class
+                .constants
+                .iter()
+                .filter_map(|constant| {
+                    constant
+                        .type_expr
+                        .clone()
+                        .map(|type_expr| (constant.name.clone(), type_expr))
+                })
+                .collect(),
+            constant_visibilities: class
+                .constants
+                .iter()
+                .map(|constant| (constant.name.clone(), constant.visibility.clone()))
+                .collect(),
+            final_constants: class
+                .constants
+                .iter()
+                .filter(|constant| constant.is_final)
+                .map(|constant| constant.name.clone())
+                .collect(),
             attribute_names: collect_attribute_names(&class.attributes),
             attribute_args,
             method_attribute_names: self.method_attribute_names,
             method_attribute_args: self.method_attribute_args,
             property_attribute_names: self.property_attribute_names,
             property_attribute_args: self.property_attribute_args,
+            constant_attribute_names,
+            constant_attribute_args,
             used_traits: class.used_traits.clone(),
+            trait_aliases: class.trait_aliases.clone(),
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
@@ -132,10 +180,13 @@ impl ClassBuildState {
             property_visibilities: self.property_visibilities,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
+            property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),
+            promoted_properties: self.promoted_properties,
+            property_reference_slots: self.property_reference_slots,
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
             static_properties: self.static_prop_types,
@@ -165,14 +216,13 @@ impl ClassBuildState {
             constructor_param_to_prop,
         })
     }
-
 }
 
 /// Collect attribute names from a class's attribute groups, preserving source
 /// order. Name resolution has already canonicalised fully-qualified names by
 /// the time this runs, so names are emitted in ReflectionAttribute::getName()
 /// shape without a synthetic leading backslash.
-pub(super) fn collect_attribute_names(
+pub(in crate::types::checker::schema) fn collect_attribute_names(
     groups: &[crate::parser::ast::AttributeGroup],
 ) -> Vec<String> {
     let mut out = Vec::new();
@@ -195,7 +245,7 @@ pub(super) fn collect_attribute_names(
 /// `#[Status(-1)]` survives parsing. Unsupported metadata is marked as
 /// `None` so legal PHP attribute syntax can still compile until a runtime
 /// reflection helper needs the missing argument payload.
-pub(super) fn collect_attribute_args(
+pub(in crate::types::checker::schema) fn collect_attribute_args(
     groups: &[crate::parser::ast::AttributeGroup],
 ) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
     use crate::parser::ast::ExprKind;
@@ -257,6 +307,12 @@ fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::Attr
             scoped_receiver_type_name(receiver)
                 .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone()))
         }
+        // `Foo::class` folds to the class-name string, mirroring the
+        // module-level attribute capture in `src/types/schema.rs`.
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => Some(AttrArgValue::Str(name.as_str().to_string())),
+        ExprKind::ClassConstant { .. } => None,
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
             ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
@@ -339,6 +395,20 @@ impl ClassBuildState {
             self.prop_types.push((name.clone(), ty.clone()));
             self.property_offsets.insert(name.clone(), 8 + index * 16);
             self.defaults.push(parent.defaults[index].clone());
+            self.property_declared_slots.push(
+                parent
+                    .property_declared_slots
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| parent.declared_properties.contains(name)),
+            );
+            self.property_reference_slots.push(
+                parent
+                    .property_reference_slots
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| parent.reference_properties.contains(name)),
+            );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities
                     .insert(name.clone(), visibility.clone());
@@ -370,6 +440,9 @@ impl ClassBuildState {
             }
             if parent.reference_properties.contains(name) {
                 self.reference_properties.insert(name.clone());
+            }
+            if parent.promoted_properties.contains(name) {
+                self.promoted_properties.insert(name.clone());
             }
             if parent.abstract_properties.contains(name) {
                 self.abstract_properties.insert(name.clone());

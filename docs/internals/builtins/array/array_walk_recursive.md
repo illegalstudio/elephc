@@ -36,6 +36,10 @@ function array_walk_recursive(array $array, callable $callback): void
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_walk_recursive()`](../../../php/builtins/array/array_walk_recursive.md)

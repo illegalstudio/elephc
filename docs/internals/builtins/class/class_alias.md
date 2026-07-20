@@ -32,6 +32,11 @@ function class_alias(string $class, string $alias, bool $autoload = true): bool
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_alias.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_alias.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `class_alias()`](../../../php/builtins/class/class_alias.md)

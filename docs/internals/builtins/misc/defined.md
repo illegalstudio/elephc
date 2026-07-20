@@ -2,7 +2,7 @@
 title: "defined() — internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 290
 ---
 
 ## `defined()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/defined.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:261](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L261) (`lower_defined`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L553) (`lower_defined`)
 - **Function symbol**: `lower_defined()`
 
 
@@ -31,6 +31,11 @@ function defined(string $constant_name): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/defined.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

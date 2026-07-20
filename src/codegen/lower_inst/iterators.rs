@@ -194,6 +194,7 @@ pub(super) fn lower_iter_current_value(
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
+            retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
         }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
@@ -221,6 +222,17 @@ fn iter_current_result_type(ctx: &FunctionContext<'_>, inst: &Instruction) -> Re
         return Ok(PhpType::Void);
     };
     Ok(ctx.value_php_type(result)?.codegen_repr())
+}
+
+/// Retains concrete indexed-array foreach values that are returned without Mixed boxing.
+fn retain_current_indexed_value_if_unboxed(
+    emitter: &mut crate::codegen::emit::Emitter,
+    elem: &PhpType,
+    result_ty: &PhpType,
+) {
+    if elem.codegen_repr() == result_ty.codegen_repr() {
+        abi::emit_incref_if_refcounted(emitter, &elem.codegen_repr());
+    }
 }
 
 /// Boxes an indexed iterator element only when the EIR result expects `Mixed`.
@@ -267,6 +279,7 @@ pub(super) fn lower_iter_current_value_ref(
             ))
         }
     }
+    ctx.mark_promoted_ref_cell(slot);
     Ok(())
 }
 
@@ -833,11 +846,26 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
 /// Snapshots the indexed-array length into the iterator state so `IterNext` compares
 /// against the original length rather than re-reading it each iteration. PHP snapshots
 /// the array length at loop entry, so elements appended during iteration are not visited.
+/// A null/sentinel source (a missed outer array read) snapshots length zero so the loop
+/// body never runs instead of dereferencing the sentinel as an array header.
 fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
     let array_reg = abi::int_result_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let null_label = ctx.next_label("iter_len_null_source");
+    let done_label = ctx.next_label("iter_len_done");
     abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    // -- guard the source: a missed outer read carries a null/sentinel container --
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        len_reg,
+        &null_label,
+    );
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done_label);
     abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
 }
 

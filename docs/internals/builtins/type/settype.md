@@ -2,7 +2,7 @@
 title: "settype() — internals"
 description: "Compiler internals for settype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 432
+  order: 450
 ---
 
 ## `settype()` — internals
@@ -31,6 +31,12 @@ function settype(mixed $var, string $type): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+- **By-reference parameters**: `$var`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/settype.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
 - **By-reference parameters**: `$var`.
 
 ## Cross-references

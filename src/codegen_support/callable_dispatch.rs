@@ -113,6 +113,9 @@ pub(crate) fn runtime_builtin_wrapper_supported(
         "strtolower" | "strtoupper" | "trim" => source_arg_ty.is_none_or(|source_arg_ty| {
             matches!(source_arg_ty, PhpType::Str)
         }),
+        // Type predicates take a Mixed wrapper param; concrete source types
+        // fold to a static boolean in the predicate lowering.
+        "is_array" | "is_integer" => true,
         "gettype" => true,
         _ => false,
     }
@@ -127,6 +130,8 @@ fn runtime_builtin_name_supported(name: &str) -> bool {
             | "floatval"
             | "gettype"
             | "intval"
+            | "is_array"
+            | "is_integer"
             | "strlen"
             | "strtolower"
             | "strtoupper"

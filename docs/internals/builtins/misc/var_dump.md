@@ -2,7 +2,7 @@
 title: "var_dump() — internals"
 description: "Compiler internals for var_dump(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 284
+  order: 301
 ---
 
 ## `var_dump()` — internals
@@ -32,6 +32,12 @@ function var_dump(mixed $value, ...$values): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$values`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_dump.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

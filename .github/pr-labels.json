@@ -1,0 +1,329 @@
+{
+  "maxAreaLabels": 3,
+  "managedPrefixes": [
+    "type:",
+    "area:",
+    "target:",
+    "size:",
+    "scope:"
+  ],
+  "domainAreas": [
+    "area:web",
+    "area:magician"
+  ],
+  "typePrefixes": {
+    "feat": "type:feature",
+    "feature": "type:feature",
+    "fix": "type:fix",
+    "docs": "type:docs",
+    "refactor": "type:refactor",
+    "chore": "type:chore",
+    "test": "type:test",
+    "tests": "type:test"
+  },
+  "labels": {
+    "type:feature": {
+      "color": "2DA44E",
+      "description": "Introduces new user-visible behavior or capabilities."
+    },
+    "type:fix": {
+      "color": "D73A4A",
+      "description": "Corrects broken or incompatible behavior."
+    },
+    "type:docs": {
+      "color": "0075CA",
+      "description": "Changes documentation only."
+    },
+    "type:refactor": {
+      "color": "8250DF",
+      "description": "Restructures code without intended behavior changes."
+    },
+    "type:chore": {
+      "color": "6E7781",
+      "description": "Updates maintenance, tooling, dependencies, or housekeeping."
+    },
+    "type:test": {
+      "color": "BF8700",
+      "description": "Changes tests or test infrastructure only."
+    },
+    "type:triage": {
+      "color": "FBCA04",
+      "description": "Needs a conventional title or branch prefix before review."
+    },
+    "area:lexer": {
+      "color": "F9D0C4",
+      "description": "Touches tokenization or lexical analysis."
+    },
+    "area:parser": {
+      "color": "F9D0C4",
+      "description": "Touches parsing or AST construction."
+    },
+    "area:resolver": {
+      "color": "F9D0C4",
+      "description": "Touches include, namespace, name, or autoload resolution."
+    },
+    "area:types": {
+      "color": "D4C5F9",
+      "description": "Touches type checking, inference, or compatibility."
+    },
+    "area:optimizer": {
+      "color": "D4C5F9",
+      "description": "Touches AST or EIR optimization passes."
+    },
+    "area:eir": {
+      "color": "C5DEF5",
+      "description": "Touches EIR definitions, lowering, validation, or passes."
+    },
+    "area:codegen": {
+      "color": "1D76DB",
+      "description": "Touches target-aware assembly or backend lowering."
+    },
+    "area:runtime": {
+      "color": "0052CC",
+      "description": "Touches runtime helpers, GC, ownership, or bridge runtimes."
+    },
+    "area:builtins": {
+      "color": "A2EEEF",
+      "description": "Touches PHP builtin declarations or emitters."
+    },
+    "area:web": {
+      "color": "0E8A16",
+      "description": "Touches --web mode, its prelude, or elephc-web."
+    },
+    "area:magician": {
+      "color": "0E8A16",
+      "description": "Touches eval, include execution, or elephc-magician."
+    },
+    "area:platform": {
+      "color": "5319E7",
+      "description": "Touches targets, object formats, linking, or platform support."
+    },
+    "area:tooling-ci": {
+      "color": "EDEDED",
+      "description": "Touches CI, development tooling, Docker, or repository scripts."
+    },
+    "area:docs": {
+      "color": "0075CA",
+      "description": "Touches documentation without changing code."
+    },
+    "area:triage": {
+      "color": "FBCA04",
+      "description": "No primary component could be inferred from changed paths."
+    },
+    "target:linux-x86_64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the Linux x86_64 target."
+    },
+    "target:linux-aarch64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the Linux AArch64 target."
+    },
+    "target:macos-aarch64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the macOS AArch64 target."
+    },
+    "target:windows-x86_64": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the Windows x86_64 target."
+    },
+    "target:wasm32-wasi": {
+      "color": "5319E7",
+      "description": "Contains behavior specific to the wasm32-wasi target."
+    },
+    "size:xs": {
+      "color": "EDEDED",
+      "description": "Very small pull request."
+    },
+    "size:s": {
+      "color": "D4E5FF",
+      "description": "Small pull request."
+    },
+    "size:m": {
+      "color": "BFDADC",
+      "description": "Medium-sized pull request."
+    },
+    "size:l": {
+      "color": "FBCA04",
+      "description": "Large pull request."
+    },
+    "size:xl": {
+      "color": "B60205",
+      "description": "Very large pull request that needs deliberate review planning."
+    },
+    "scope:multi-area": {
+      "color": "B60205",
+      "description": "Touches more compiler areas than the automatic area-label cap."
+    },
+    "topic:php-compat": {
+      "color": "D73A4A",
+      "description": "Changes PHP compatibility or observable PHP semantics."
+    },
+    "topic:ownership-gc": {
+      "color": "B60205",
+      "description": "Changes ownership, refcounting, cleanup, COW, or GC behavior."
+    },
+    "topic:performance": {
+      "color": "FBCA04",
+      "description": "Primarily concerns performance, latency, or resource usage."
+    },
+    "topic:abi": {
+      "color": "FBCA04",
+      "description": "Changes calling conventions, registers, frames, or binary ABI behavior."
+    },
+    "topic:arrays": {
+      "color": "BFD4F2",
+      "description": "Concerns PHP arrays, hashes, indexing, or array operations."
+    },
+    "topic:strings": {
+      "color": "F9D0C4",
+      "description": "Concerns strings, encodings, offsets, or string operations."
+    },
+    "topic:closures": {
+      "color": "BFD4F2",
+      "description": "Concerns closures, callables, or anonymous functions."
+    },
+    "topic:generators": {
+      "color": "A2EEEF",
+      "description": "Concerns generators or yield semantics."
+    },
+    "topic:fibers": {
+      "color": "A2EEEF",
+      "description": "Concerns PHP Fibers or cooperative coroutines."
+    },
+    "topic:regex": {
+      "color": "C2E0C6",
+      "description": "Concerns regular expressions or preg_* behavior."
+    },
+    "topic:magic-methods": {
+      "color": "F9D0C4",
+      "description": "Concerns PHP magic methods."
+    },
+    "topic:control-flow": {
+      "color": "F9D0C4",
+      "description": "Concerns branching, loops, match, switch, or exceptions."
+    },
+    "topic:numeric-literals": {
+      "color": "E8F0FE",
+      "description": "Concerns integer or floating-point literal handling."
+    },
+    "topic:json": {
+      "color": "C5DEF5",
+      "description": "Concerns JSON encoding or decoding."
+    },
+    "topic:errors": {
+      "color": "D876E3",
+      "description": "Concerns diagnostics, exceptions, or PHP Error classes."
+    },
+    "priority:high": {
+      "color": "B60205",
+      "description": "Maintainer-assigned high-priority work."
+    }
+  },
+  "areas": [
+    {
+      "label": "area:lexer",
+      "patterns": ["^src/lexer(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:parser",
+      "patterns": ["^src/parser(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:resolver",
+      "patterns": ["^src/(?:resolver|name_resolver|autoload)(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:types",
+      "patterns": ["^src/types(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:optimizer",
+      "patterns": ["^src/(?:optimize|ir_passes)(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:eir",
+      "patterns": ["^src/(?:ir|ir_lower|ir_passes|codegen_ir)(?:/|\\.rs$)"]
+    },
+    {
+      "label": "area:codegen",
+      "patterns": [
+        "^src/codegen(?:/|\\.rs$)",
+        "^src/codegen_support/(?!runtime(?:/|\\.rs$))"
+      ]
+    },
+    {
+      "label": "area:runtime",
+      "patterns": [
+        "^src/codegen_support/runtime(?:/|\\.rs$)",
+        "^src/codegen/runtime(?:/|\\.rs$)",
+        "^src/runtime_cache\\.rs$",
+        "^crates/elephc-(?!web(?:/|$)|magician(?:/|$))"
+      ]
+    },
+    {
+      "label": "area:builtins",
+      "patterns": [
+        "^src/builtins/",
+        "^src/codegen/lower_inst/builtins/"
+      ]
+    },
+    {
+      "label": "area:web",
+      "patterns": [
+        "^crates/elephc-web/",
+        "^src/web(?:_|/|\\.rs$)"
+      ]
+    },
+    {
+      "label": "area:magician",
+      "patterns": [
+        "^crates/elephc-magician/",
+        "^benchmarks/magician/",
+        "^src/magician(?:_|/|\\.rs$)"
+      ]
+    },
+    {
+      "label": "area:platform",
+      "patterns": [
+        "^src/codegen_wasm/",
+        "^src/linker\\.rs$",
+        "^src/codegen_support/(?:target|object|link|platform)(?:_|/|\\.rs$)"
+      ]
+    },
+    {
+      "label": "area:tooling-ci",
+      "patterns": [
+        "^\\.github/",
+        "^\\.config/",
+        "^Dockerfile",
+        "^scripts/"
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "label": "target:windows-x86_64",
+      "patterns": ["windows", "win32", "mingw", "pe32", "coff"]
+    },
+    {
+      "label": "target:wasm32-wasi",
+      "patterns": ["wasm32", "wasi", "codegen_wasm", "\\.wat(?:$|/)"]
+    },
+    {
+      "label": "target:linux-x86_64",
+      "patterns": [
+        "linux[-_/](?:x86_64|amd64)",
+        "(?:^|[^a-z0-9])x86_64(?:$|[^a-z0-9])"
+      ],
+      "unless": ["target:windows-x86_64"]
+    },
+    {
+      "label": "target:linux-aarch64",
+      "patterns": ["linux[-_/](?:aarch64|arm64)"]
+    },
+    {
+      "label": "target:macos-aarch64",
+      "patterns": ["(?:macos|darwin)[-_/](?:aarch64|arm64)"]
+    }
+  ]
+}

@@ -122,6 +122,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -138,6 +139,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 })
                 .collect(),
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: apply_stmts(body, defines),
@@ -210,6 +212,18 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         } => ExprKind::NullsafeMethodCall {
             object: Box::new(rewrite_expr(*object, defines)),
             method,
+            args: args
+                .into_iter()
+                .map(|arg| rewrite_expr(arg, defines))
+                .collect(),
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(rewrite_expr(*object, defines)),
+            method: Box::new(rewrite_expr(*method, defines)),
             args: args
                 .into_iter()
                 .map(|arg| rewrite_expr(arg, defines))

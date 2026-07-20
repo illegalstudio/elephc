@@ -23,6 +23,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveIteratorIterator".to_string(),
         FlattenedClass {
             name: "RecursiveIteratorIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["OuterIterator".to_string()],
             is_abstract: false,
@@ -33,6 +34,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: recursive_iterator_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

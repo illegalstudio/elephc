@@ -2,7 +2,7 @@
 title: "stream_set_read_buffer() — internals"
 description: "Compiler internals for stream_set_read_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 230
 ---
 
 ## `stream_set_read_buffer()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_read_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_read_buffer.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2254](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2254) (`lower_stream_set_buffer`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2252](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2252) (`lower_stream_set_buffer`)
 - **Function symbol**: `lower_stream_set_buffer()`
 
 
@@ -31,6 +31,11 @@ function stream_set_read_buffer(resource $stream, int $size): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_read_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_read_buffer.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

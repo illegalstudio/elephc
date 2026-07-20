@@ -30,7 +30,7 @@ This produces a native binary called `hello` in the same directory. Run it:
 Hello, World!
 ```
 
-That's it — a standalone native binary, no PHP interpreter needed.
+That's it — a standalone native binary, with no external PHP interpreter needed.
 
 ## A slightly bigger example
 

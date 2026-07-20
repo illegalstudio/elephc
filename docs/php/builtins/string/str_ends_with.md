@@ -2,7 +2,7 @@
 title: "str_ends_with()"
 description: "Checks if a string ends with a given substring."
 sidebar:
-  order: 383
+  order: 401
 ---
 
 ## str_ends_with()
@@ -18,6 +18,11 @@ Checks if a string ends with a given substring.
 - `$needle` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_ends_with.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_ends_with.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

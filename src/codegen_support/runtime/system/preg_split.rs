@@ -15,7 +15,6 @@ const PREG_SPLIT_NO_EMPTY: i64 = 1;
 const PREG_SPLIT_DELIM_CAPTURE: i64 = 2;
 const PREG_SPLIT_OFFSET_CAPTURE: i64 = 4;
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_preg_split` runtime helper.
 ///
@@ -914,7 +913,7 @@ fn emit_build_offset_capture_row_x86_64(
 /// Emits x86_64 code that stamps an indexed array as boxed-Mixed slots.
 fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str) {
     emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg));    // load indexed-array packed kind word
-    emitter.instruction(&format!("mov r8, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 0x80ff)); // preserve heap magic, indexed kind, and COW flag
+    emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x80ff))); // preserve heap magic, indexed kind, and COW flag
     emitter.instruction("and r10, r8");                                         // clear stale value_type bits
     emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
     emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg));    // store boxed-Mixed indexed-array metadata

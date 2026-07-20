@@ -57,12 +57,12 @@ pub(crate) fn build_method_sig(
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
-    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
+    let mut ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     for ((param_name, type_ann, default, _), (_, resolved_ty)) in
         method.params.iter().zip(params.iter())
     {
         if type_ann.is_some() {
-            checker.validate_schema_declared_default_type(
+            checker.validate_schema_parameter_default_type(
                 resolved_ty,
                 default.as_ref(),
                 method.span,
@@ -78,8 +78,18 @@ pub(crate) fn build_method_sig(
         )?,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
+    if method.variadic.is_some() {
+        ref_params.push(method.variadic_by_ref);
+    }
     let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
+        param_type_exprs: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+            .collect(),
+        param_attributes: method.param_attributes.clone(),
         defaults,
         return_type,
         declared_return: method.return_type.is_some(),
@@ -89,7 +99,12 @@ pub(crate) fn build_method_sig(
             .params
             .iter()
             .map(|(_, type_ann, _, _)| type_ann.is_some())
-            .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
+            .chain(
+                method
+                    .variadic
+                    .iter()
+                    .map(|_| method.variadic_type.is_some()),
+            )
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: extract_deprecation(&method.attributes),
@@ -97,17 +112,19 @@ pub(crate) fn build_method_sig(
     // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
     // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the
     // declared element type so call validation enforces it.
-    if let Some(variadic_type) = &method.variadic_type {
-        let elem_ty = checker.resolve_declared_param_type_hint(
-            variadic_type,
-            method.span,
-            &format!(
-                "Method variadic parameter ${}",
-                method.variadic.as_deref().unwrap_or_default()
-            ),
-        )?;
-        if let Some((_, ty)) = sig.params.last_mut() {
-            *ty = PhpType::Array(Box::new(elem_ty));
+    if !method.variadic_by_ref {
+        if let Some(variadic_type) = &method.variadic_type {
+            let elem_ty = checker.resolve_declared_param_type_hint(
+                variadic_type,
+                method.span,
+                &format!(
+                    "Method variadic parameter ${}",
+                    method.variadic.as_deref().unwrap_or_default()
+                ),
+            )?;
+            if let Some((_, ty)) = sig.params.last_mut() {
+                *ty = PhpType::Array(Box::new(elem_ty));
+            }
         }
     }
     Ok(sig)
@@ -117,9 +134,7 @@ pub(crate) fn build_method_sig(
 /// marker, with `reason` set to the attribute's first string argument (or an
 /// empty string if absent). Match is case-insensitive on the last segment of
 /// the attribute name.
-pub(crate) fn extract_deprecation(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Option<String> {
+pub(crate) fn extract_deprecation(groups: &[crate::parser::ast::AttributeGroup]) -> Option<String> {
     for group in groups {
         for attr in &group.attributes {
             if !matches_global_builtin_attribute(attr, "Deprecated") {
@@ -296,12 +311,13 @@ pub(crate) fn declared_return_type_compatible(
 /// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
-    class_name: &str,
+    class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
+    let class_name = class.name.as_str();
     let child_sig = build_method_sig(checker, method)?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
@@ -325,7 +341,19 @@ pub(crate) fn validate_override_signature(
         ));
     }
     if parent_sig.declared_return
-        && !declared_return_type_compatible(checker, &parent_sig.return_type, &child_sig.return_type)
+        && !declared_return_type_compatible(
+            checker,
+            &parent_sig.return_type,
+            &child_sig.return_type,
+        )
+        && !covariant_self_return_compatible(
+            checker,
+            class_name,
+            class.extends.as_deref(),
+            &class.implements,
+            parent_sig,
+            &child_sig,
+        )
     {
         return Err(CompileError::new(
             method.span,
@@ -336,4 +364,41 @@ pub(crate) fn validate_override_signature(
         ));
     }
     Ok(())
+}
+
+/// Returns true when a child method may return the child class itself against a wider parent return.
+///
+/// Covers PHP covariant returns (`parent::w(): Base` overridden as `w(): static` / `w(): Child`)
+/// while the child is mid-construction — `type_accepts` cannot see the subclass edge yet because
+/// `checker.classes` lacks the child, but the parent class is already registered.
+fn covariant_self_return_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    parent_sig: &FunctionSig,
+    child_sig: &FunctionSig,
+) -> bool {
+    match (&parent_sig.return_type, &child_sig.return_type) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name))
+            if actual_name == class_name =>
+        {
+            if expected_name == class_name {
+                return true;
+            }
+            if let Some(parent) = extends {
+                if parent == expected_name
+                    || checker.is_subclass_of(parent, expected_name)
+                    || checker.class_implements_interface(parent, expected_name)
+                {
+                    return true;
+                }
+            }
+            implements.iter().any(|iface| {
+                iface == expected_name
+                    || checker.interface_extends_interface(iface, expected_name)
+            })
+        }
+        _ => false,
+    }
 }

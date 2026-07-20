@@ -73,8 +73,21 @@ fn emit_tagged_scalar_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) 
 pub(super) fn emit_array_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     ctx.load_value_to_result(value)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("array_truthy_null");
+    let done_label = ctx.next_label("array_truthy_done");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
     emit_int_result_nonzero_bool(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -107,11 +120,58 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_container_bool(ctx);
+            Ok(())
+        }
+        PhpType::Str => emit_string_null_bool(ctx, value),
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
         }
     }
+}
+
+/// Treats the dedicated string-pointer sentinel used by miss fallbacks as PHP null.
+fn emit_string_null_bool(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x1, x9");                              // distinguish a missing string from a real empty string
+            ctx.emitter.instruction("cset x0, eq");                             // materialize true only for the null string representation
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(value, "rax", "rdx")?;
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r10");                            // distinguish a missing string from a real empty string
+            ctx.emitter.instruction("sete al");                                 // materialize true only for the null string representation
+            ctx.emitter.instruction("movzx rax, al");                           // widen the null predicate byte
+        }
+    }
+    Ok(())
+}
+
+/// Compares the loaded container pointer against PHP's null representations — a zero
+/// pointer or the in-band null-container sentinel produced by missed reads of refcounted
+/// slots — and materializes the boolean result.
+fn emit_int_result_null_container_bool(ctx: &mut FunctionContext<'_>) {
+    let null_label = ctx.next_label("is_null_container");
+    let done_label = ctx.next_label("is_null_container_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    ctx.emitter.label(&done_label);
 }
 
 /// Compares the loaded tagged-scalar tag register against PHP's null tag.

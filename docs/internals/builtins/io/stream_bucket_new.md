@@ -2,7 +2,7 @@
 title: "stream_bucket_new() — internals"
 description: "Compiler internals for stream_bucket_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 190
+  order: 207
 ---
 
 ## `stream_bucket_new()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_new.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_new.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1970](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1970) (`lower_stream_bucket_new`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1968](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1968) (`lower_stream_bucket_new`)
 - **Function symbol**: `lower_stream_bucket_new()`
 
 
@@ -31,6 +31,11 @@ function stream_bucket_new(resource $stream, string $buffer): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_new.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_new.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

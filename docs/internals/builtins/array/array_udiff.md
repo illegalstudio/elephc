@@ -32,6 +32,10 @@ function array_udiff(array $array1, array $array2, callable $callback): array
 
 - **Arity**: takes exactly 3 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_udiff()`](../../../php/builtins/array/array_udiff.md)

@@ -1,0 +1,47 @@
+//! Purpose:
+//! Object, method, class-metadata, and identity fake runtime operations for interpreter tests.
+//!
+//! Called from:
+//! - `crate::interpreter::tests::support::runtime_ops`.
+//!
+//! Key details:
+//! - These helpers model only the object and class behavior needed by eval tests.
+
+use super::*;
+
+mod class_runtime;
+mod method_dispatch;
+mod properties;
+mod reflection_construction;
+mod reflection_helpers;
+mod relations;
+mod static_dispatch;
+
+use relations::*;
+
+const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
+const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
+const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
+const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
+const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
+const EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED: u64 = 16384;
+const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
+const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
+const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
+const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
+const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
+const EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT: u64 = 128;
+const EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE: u64 = 256;
+const EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE: u64 = 512;

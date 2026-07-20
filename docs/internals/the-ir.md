@@ -2,15 +2,13 @@
 title: "The EIR Design"
 description: "Specification for elephc's default intermediate representation between AST optimization and assembly emission."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 **Status:** EIR is the canonical compiler IR and backend contract for v1.0.
 The diagnostic `--emit-ir` path lowers the checked and optimized AST into
 validated textual EIR, and normal executable/cdylib builds lower that same EIR
 into assembly.
-
-**Implementation phases:** `.plans/eir-*.md`
 
 **Authoritative source audit for this spec:**
 
@@ -251,17 +249,27 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    BorrowedTemp,
+    OwnedTemp,
     TryHandler,
     ClosureCapture,
     NamedArgTemp,
     IteratorState,
     GeneratorState,
+    EvalContext,
+    EvalScope,
+    EvalGlobalScope,
 }
 ```
 
 `LocalSlot` exists even in SSA form because PHP locals, globals, statics,
 references, try handlers, and hidden temporaries have addressable storage or
-observable lifetime behavior.
+observable lifetime behavior. `BorrowedTemp` is transform-only storage that
+never owns the value written into it and is therefore excluded from epilogue
+cleanup; `OwnedTemp` carries cleanup-owning temporaries. The three eval slot
+kinds hold the optional interpreter context, activation scope, and
+program-global scope. Fully native literal eval paths do not declare those
+slots.
 
 ## Value Ownership
 
@@ -313,6 +321,31 @@ Ownership operations:
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
+
+Borrowed property and indexed-read results may be stabilized with a provisional
+`Acquire` before an owning receiver is released. Its consumer must either
+transfer that owner or emit a matching `Release`; scalar casts and calls with a
+proven-independent result cannot alias the input and therefore release it after
+consumption. The retain must not be removed merely because final slot typing
+prunes the receiver release: a later call argument can still mutate the receiver
+local before the read is consumed. ABI materialization follows the same balance
+rule. Mixed-to-string parameters are converted into owned EIR values before the
+backend, allowing the call's alias summary to transfer or release them normally;
+the conversion must not stay hidden inside register materialization because a
+string result can be an interior slice of its argument. ABI-created boxed-Mixed
+arguments use explicit post-call cleanup slots, including for constructors, and
+an exact pointer check transfers the box when a passthrough result reuses it.
+
+Before lowering releases an owning call-argument temporary, the checker provides
+a conservative return-to-parameter alias summary for each source function and
+method. A proven-fresh result permits cleanup of unrelated arguments; a direct
+passthrough protects only the returned parameter. Unknown calls, indirect
+storage reads, and every possible descendant override merge to the conservative
+result, so a type-compatible true alias remains live. Builtins and extern calls
+continue to use their separate ownership contracts and conservative fallback.
+The builtin registry can additionally declare result storage independent from
+all arguments, including scratch-backed results that are not fresh heap blocks;
+that contract feeds both direct-call cleanup and summaries for source wrappers.
 
 ## Effects
 
@@ -564,6 +597,26 @@ observable order:
 3. Store required hidden temporaries before ABI materialization.
 4. Materialize ABI parameters in callee signature order in the backend.
 5. Avoid temp preevaluation for ref-like and mutating parameters.
+
+### Eval and Dynamic Symbols
+
+| Op | Operands | Result | Effects |
+|---|---|---|---|
+| `EvalLiteralCall` | literal data id plus lowered call operands | `Heap(Mixed)` | conservative call effects until literal planning refines the path |
+| `EvalScopeGet` | scope handle plus global-name immediate | boxed value | `reads_heap`, `may_fatal` |
+| `EvalScopeSet` | scope handle and value plus global-name immediate | `Void` | `reads_heap`, `writes_heap`, `refcount_op`, `may_fatal` |
+| `EvalFunctionCall` | normalized positional values plus dynamic-function metadata | `Heap(Mixed)` | conservative dynamic-call effects |
+| `EvalFunctionCallArray` | argument-array value plus function-name data id | `Heap(Mixed)` | conservative dynamic-call effects |
+| `EvalFunctionExists`, `EvalClassExists`, `EvalConstantExists` | symbol-name data id | `I64` bool | `reads_global` |
+| `EvalConstantFetch` | constant-name data id | `Heap(Mixed)` | global/heap reads, heap/refcount writes, `may_fatal` |
+| `EvalObjectNew` | constructor arguments plus dynamic-class metadata | object or `Mixed` | conservative construction/call effects |
+| `EvalStaticMethodCall` | normalized arguments plus target data id | typed or `Mixed` | conservative dynamic-call effects |
+
+`EvalLiteralCall` does not by itself require the interpreter. The target-
+independent planner in `src/eval_aot.rs` can lower the fragment to an internal
+EIR function, synchronize supported locals directly, use only the core
+eval-scope helpers, or retain interpreter fallback. See
+[Eval Runtime Architecture](eval-runtime.md).
 
 ### Externs, Pointers, Buffers, and Packed Data
 
@@ -893,12 +946,12 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   keeps them correct if it ever does.)
 - **Load/store forwarding and dead stores** — a per-block value-numbering tracks
   the value resident in each scalar (`NonHeap`) `PhpLocal`/`HiddenTemp`/
-  `NamedArgTemp` slot. A `load_local` of a slot with a known resident value folds
-  to it; a `store_local` of the resident value is dropped. Any instruction naming
-  the slot (unset, ref-cell promote/alias/release/store) invalidates it, and state
-  resets at block boundaries — writes through aliases are never crossed. By-ref
-  locals use ref cells, not plain load/store, so plain scalar slots are not
-  aliased.
+  `BorrowedTemp`/`NamedArgTemp` slot. A `load_local` of a slot with a known
+  resident value folds to it; a `store_local` of the resident value is dropped.
+  Any instruction naming the slot (unset, ref-cell promote/alias/release/store)
+  invalidates it, and state resets at block boundaries — writes through aliases
+  are never crossed. By-ref locals use ref cells, not plain load/store, so plain
+  scalar slots are not aliased.
 - **Paired acquire/release cancellation** — an `acquire` whose result is used
   exactly once, by its `release`, drops both. The single-use guard makes this
   refcount-neutral on every path regardless of distance between the two ops.
@@ -1108,7 +1161,7 @@ ref-cell/static/global/capture locals).
 Correctness across the boundary is preserved without an explicit epilogue: the
 splice replaces `return` with `br`, bypassing the callee's implicit codegen
 epilogue cleanup, so the transplant reproduces that cleanup's per-slot decisions —
-parameter slots and directly-returned slots become epilogue-excluded `HiddenTemp`
+parameter slots and directly-returned slots become epilogue-excluded `BorrowedTemp`
 (matching the callee, whose argument is borrowed and whose return ownership is
 moved to the caller), while ordinary refcounted internal locals stay `PhpLocal` and
 are still freed by the host epilogue. The destructor-free restriction makes the one
@@ -1232,7 +1285,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `PostIncrement` | Load local, save old value, increment, store, return old value. |
 | `PreDecrement` | Load local, decrement, store, return new value. |
 | `PostDecrement` | Load local, save old value, decrement, store, return old value. |
-| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. |
+| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. Literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
 | `ArrayLiteral` | Allocate indexed array and insert elements in source order, including spread handling. |
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
@@ -1358,10 +1411,13 @@ Runtime effect categories:
 | I/O | streams, filesystem, stat/path helpers |
 | pointers | C string conversion and pointer string helpers |
 | fibers | stack allocation, switch, start/resume/suspend/throw/getters |
+| eval scope | materialized boxed scope access without requiring the interpreter |
+| eval bridge | Magician context, dynamic parsing/execution, symbol registration, and native callback hooks |
 
 `RuntimeFeatures` remains the mechanism for optional runtime categories such as
-regex. EIR lowering must set required runtime features when it emits operations
-that need optional helpers.
+regex, `eval_scope`, and `eval_bridge`. EIR lowering must set required runtime
+features when it emits operations that need optional helpers. A literal eval
+that is fully lowered to native EIR leaves both eval runtime features disabled.
 
 ## Target-Aware Backend Boundary
 

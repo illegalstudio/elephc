@@ -48,6 +48,15 @@ fn test_error_first_class_callable_rejects_unsupported_builtin() {
     );
 }
 
+/// Verifies `eval` remains a language construct and is rejected as a first-class callable.
+#[test]
+fn test_error_eval_first_class_callable_is_rejected() {
+    expect_error(
+        "<?php $f = eval(...);",
+        "does not support builtin 'eval' yet",
+    );
+}
+
 /// Verifies that a by-reference parameter on a first-class callable must be passed a
 /// variable at the call site; passing a literal produces an error.
 #[test]
@@ -74,6 +83,43 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
         "Function 'foo' parameter $x expects Int, got Str",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects integer arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_int() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object(1);",
+        "expects Object(\"\"), got Int",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects string arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_string() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object(\"no\");",
+        "expects Object(\"\"), got Str",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects array arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_array() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object([]);",
+        "expects Object(\"\"), got Array",
+    );
+}
+
+/// Verifies an unqualified `Closure` hint inside a namespace remains namespace-relative
+/// instead of silently referring to PHP's global `\Closure` class.
+#[test]
+fn test_error_namespaced_unqualified_closure_does_not_resolve_globally() {
+    expect_error(
+        "<?php namespace App; function consume(Closure $callback): void {}",
+        "Unknown type: App\\Closure",
     );
 }
 

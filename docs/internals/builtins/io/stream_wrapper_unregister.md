@@ -2,7 +2,7 @@
 title: "stream_wrapper_unregister() — internals"
 description: "Compiler internals for stream_wrapper_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 228
+  order: 245
 ---
 
 ## `stream_wrapper_unregister()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_wrapper_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_wrapper_unregister.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1030](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1030) (`lower_stream_wrapper_unregister`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1028](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1028) (`lower_stream_wrapper_unregister`)
 - **Function symbol**: `lower_stream_wrapper_unregister()`
 
 
@@ -32,6 +32,11 @@ function stream_wrapper_unregister(string $protocol): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

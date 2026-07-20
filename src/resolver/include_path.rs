@@ -83,6 +83,9 @@ fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
         ExprKind::MethodCall { method, .. } | ExprKind::NullsafeMethodCall { method, .. } => {
             Some(format!("method call `->{}` is resolved at runtime", method))
         }
+        ExprKind::NullsafeDynamicMethodCall { .. } => {
+            Some("dynamic method call is resolved at runtime".to_string())
+        }
         ExprKind::StaticMethodCall { method, .. } => {
             Some(format!("static method call `::{}` is resolved at runtime", method))
         }

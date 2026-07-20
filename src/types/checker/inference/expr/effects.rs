@@ -36,8 +36,9 @@ impl Checker {
     /// - Assignment expressions call `check_assignment_expression` to properly register the binding.
     /// - Binary `&&`/`||` clone the environment before the right branch to prevent assignments
     ///   in the left branch from leaking into the right branch (PHP semantics).
-    /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
-    ///   the wider of all branch types via `wider_type_syntactic`.
+    /// - Ternary, null coalesce, and match clone the environment per branch so assignments
+    ///   do not leak across arms; match/ternary result types then reuse `infer_type`'s
+    ///   Mixed-aware branch merge (not the Str-absorbing syntactic join).
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -45,6 +46,10 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
+                env.insert(name.clone(), PhpType::Mixed);
+                Ok(PhpType::Mixed)
+            }
             ExprKind::Assignment {
                 target,
                 value,
@@ -119,13 +124,14 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                let default_ty = if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?
+                if value_ty == PhpType::Void {
+                    self.infer_type_with_assignment_effects(default, env)?;
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
-                };
-                Ok(wider_type_syntactic(&value_ty, &default_ty))
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                }
+                // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::Ternary {
                 condition,
@@ -143,9 +149,10 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                Ok(wider_type_syntactic(&then_ty, &else_ty))
+                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -166,28 +173,20 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
-                let mut result_ty = None;
                 for (conditions, result) in arms {
                     let mut arm_env = env.clone();
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
-                    let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &arm_ty),
-                        None => arm_ty,
-                    });
+                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &default_ty),
-                        None => default_ty,
-                    });
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
                 }
-                Ok(result_ty.unwrap_or(PhpType::Void))
+                // Result type comes from the Mixed-aware match merge in `infer_type`
+                // (assignment effects must not reintroduce the Str-absorbing syntactic join).
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
@@ -215,9 +214,14 @@ impl Checker {
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
                 // inference handles the operands (with magic routing).
-                let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
-                    || builtin_name.eq_ignore_ascii_case("unset");
-                if !is_lazy_construct {
+                if matches!(
+                    php_symbol_key(builtin_name).as_str(),
+                    "isset" | "unset"
+                ) {
+                    for arg in &expanded_args {
+                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
+                    }
+                } else if !builtin_name.eq_ignore_ascii_case("unset") {
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
                             continue;
@@ -255,6 +259,9 @@ impl Checker {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
+                }
+                if builtin_name.eq_ignore_ascii_case("eval") {
+                    self.mark_eval_barrier(env);
                 }
                 Ok(ty)
             }
@@ -322,6 +329,19 @@ impl Checker {
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(method, env)?;
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
+                    self.infer_type_with_assignment_effects(arg, env)?;
+                }
+                self.infer_type(expr, env)
+            }
             ExprKind::BufferNew { len, .. } => {
                 self.infer_type_with_assignment_effects(len, env)?;
                 self.infer_type(expr, env)
@@ -336,6 +356,39 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Infers effects for a language-construct operand without treating properties as reads.
+    fn infer_non_reading_arg_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        match &arg.kind {
+            ExprKind::PropertyAccess { object, .. }
+            | ExprKind::NullsafePropertyAccess { object, .. } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                Ok(())
+            }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(property, env)?;
+                Ok(())
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                self.infer_type_with_assignment_effects(array, env)?;
+                self.infer_type_with_assignment_effects(index, env)?;
+                Ok(())
+            }
+            ExprKind::NamedArg { value, .. } => {
+                self.infer_non_reading_arg_assignment_effects(value, env)
+            }
+            _ => {
+                self.infer_type_with_assignment_effects(arg, env)?;
+                Ok(())
+            }
         }
     }
 
@@ -355,6 +408,22 @@ impl Checker {
         self.first_class_callable_targets
             .get(var_name)
             .is_some_and(callable_target_is_preg_replace_callback)
+    }
+
+    /// Marks the active statement stream as having crossed eval and widens local facts.
+    fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
+        self.eval_barrier_active = true;
+        let local_names = env.keys().cloned().collect::<Vec<_>>();
+        for ty in env.values_mut() {
+            *ty = PhpType::Mixed;
+        }
+        for name in local_names {
+            self.closure_return_types.remove(&name);
+            self.callable_sigs.remove(&name);
+            self.callable_captures.remove(&name);
+            self.callable_array_targets.remove(&name);
+            self.first_class_callable_targets.remove(&name);
+        }
     }
 }
 

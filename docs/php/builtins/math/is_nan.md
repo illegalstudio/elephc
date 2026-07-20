@@ -2,7 +2,7 @@
 title: "is_nan()"
 description: "Checks whether a float is NAN."
 sidebar:
-  order: 253
+  order: 270
 ---
 
 ## is_nan()
@@ -17,6 +17,11 @@ Checks whether a float is NAN.
 - `$num` (`float`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

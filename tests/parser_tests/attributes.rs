@@ -24,9 +24,20 @@ fn first_class_decl_name(stmts: &[Stmt]) -> &str {
 
 /// Extracts attribute groups, properties, and methods from the first ClassDecl in a parsed program.
 /// Panics if no ClassDecl is found.
-fn class_decl<'a>(stmts: &'a [Stmt]) -> (&'a Vec<AttributeGroup>, &'a Vec<ClassProperty>, &'a Vec<ClassMethod>) {
+fn class_decl<'a>(
+    stmts: &'a [Stmt],
+) -> (
+    &'a Vec<AttributeGroup>,
+    &'a Vec<ClassProperty>,
+    &'a Vec<ClassMethod>,
+) {
     for stmt in stmts {
-        if let StmtKind::ClassDecl { properties, methods, .. } = &stmt.kind {
+        if let StmtKind::ClassDecl {
+            properties,
+            methods,
+            ..
+        } = &stmt.kind
+        {
             return (&stmt.attributes, properties, methods);
         }
     }
@@ -48,9 +59,8 @@ fn test_class_attribute_is_accepted_and_does_not_alter_decl() {
 fn test_method_attribute_is_accepted() {
     // `#[Required]` on a class method parses without error.
     // Persistence is verified by test_method_attribute_is_persisted.
-    let _ = parse_source(
-        "<?php class Service { #[Required] public function setX(int $x): void {} }",
-    );
+    let _ =
+        parse_source("<?php class Service { #[Required] public function setX(int $x): void {} }");
 }
 
 /// Verifies property attribute is accepted.
@@ -85,9 +95,7 @@ fn test_stacked_attribute_groups() {
 fn test_attribute_on_interface_method() {
     // `#[Pure]` on an interface method parses without error.
     // Persistence is verified by test_method_attribute_is_persisted.
-    let _ = parse_source(
-        "<?php interface I { #[Pure] public function f(): int; }",
-    );
+    let _ = parse_source("<?php interface I { #[Pure] public function f(): int; }");
 }
 
 /// Verifies attribute on function decl.
@@ -104,9 +112,7 @@ fn test_attribute_on_function_decl() {
 fn test_attribute_on_enum_case() {
     // `#[Primary]` on an enum case parses without error.
     // Persistence is verified by test_attribute_on_enum_case_is_persisted.
-    let _ = parse_source(
-        "<?php enum Color: int { #[Primary] case Red = 1; case Blue = 2; }",
-    );
+    let _ = parse_source("<?php enum Color: int { #[Primary] case Red = 1; case Blue = 2; }");
 }
 
 /// Verifies qualified attribute name parses.
@@ -114,61 +120,71 @@ fn test_attribute_on_enum_case() {
 fn test_qualified_attribute_name_parses() {
     // Fully-qualified names with leading and inner backslashes must be
     // accepted by the attribute parser.
-    let stmts = parse_source(
-        "<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}",
-    );
+    let stmts =
+        parse_source("<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}");
     assert_eq!(first_class_decl_name(&stmts), "C");
 }
 
 /// Verifies attribute on function parameter.
 #[test]
 fn test_attribute_on_function_parameter() {
-    // PHP 8 allows `#[Sensitive]` immediately before a function parameter.
-    // The attribute parses without error and does not alter the AST.
-    let with_attr = parse_source(
-        "<?php function f(#[Sensitive] string $s): void {}",
-    );
-    let without = parse_source("<?php function f(string $s): void {}");
-    assert_eq!(with_attr, without);
+    let with_attr = parse_source("<?php function f(#[Sensitive] string $s): void {}");
+    match &with_attr[0].kind {
+        StmtKind::FunctionDecl {
+            param_attributes, ..
+        } => {
+            assert_eq!(param_attributes.len(), 1);
+            assert_eq!(
+                param_attributes[0][0].attributes[0].name.as_str(),
+                "Sensitive"
+            );
+        }
+        other => panic!("expected FunctionDecl, got {:?}", other),
+    }
 }
 
 /// Verifies attribute on method parameter.
 #[test]
 fn test_attribute_on_method_parameter() {
-    // `#[Sensitive]` on a method parameter parses without error and does not alter the AST.
-    let with_attr = parse_source(
-        "<?php class S { public function call(#[Sensitive] string $s): void {} }",
+    let stmts = parse_source(
+        "<?php class S { public function call(#[Sensitive] string $s, int $id): void {} }",
     );
-    let without = parse_source(
-        "<?php class S { public function call(string $s): void {} }",
+    let (_, _, methods) = class_decl(&stmts);
+    assert_eq!(methods[0].param_attributes.len(), 2);
+    assert_eq!(
+        methods[0].param_attributes[0][0].attributes[0]
+            .name
+            .as_str(),
+        "Sensitive"
     );
-    assert_eq!(with_attr, without);
+    assert!(methods[0].param_attributes[1].is_empty());
 }
 
 /// Verifies attribute on promoted constructor property.
 #[test]
 fn test_attribute_on_promoted_constructor_property() {
-    // `#[Inject]` precedes the visibility keyword of a promoted constructor property.
-    // Parses without error and does not alter the AST compared to the bare promoted property.
-    let with_attr = parse_source(
+    let stmts = parse_source(
         "<?php class S { public function __construct(#[Inject] public Logger $l) {} }",
     );
-    let without = parse_source(
-        "<?php class S { public function __construct(public Logger $l) {} }",
+    let (_, properties, methods) = class_decl(&stmts);
+    assert_eq!(
+        methods[0].param_attributes[0][0].attributes[0]
+            .name
+            .as_str(),
+        "Inject"
     );
-    assert_eq!(with_attr, without);
+    assert_eq!(
+        properties[0].attributes[0].attributes[0].name.as_str(),
+        "Inject"
+    );
 }
 
 /// Verifies attribute on closure expression.
 #[test]
 fn test_attribute_on_closure_expression() {
     // `#[Pure]` on a closure expression parses without error and does not alter the AST.
-    let with_attr = parse_source(
-        "<?php $f = #[Pure] function (int $x): int { return $x + 1; };",
-    );
-    let without = parse_source(
-        "<?php $f = function (int $x): int { return $x + 1; };",
-    );
+    let with_attr = parse_source("<?php $f = #[Pure] function (int $x): int { return $x + 1; };");
+    let without = parse_source("<?php $f = function (int $x): int { return $x + 1; };");
     assert_eq!(with_attr, without);
 }
 
@@ -185,12 +201,9 @@ fn test_attribute_on_arrow_function() {
 #[test]
 fn test_attribute_on_static_closure() {
     // `#[Pure]` on a static closure parses without error and does not alter the AST.
-    let with_attr = parse_source(
-        "<?php $f = #[Pure] static function (int $x): int { return $x; };",
-    );
-    let without = parse_source(
-        "<?php $f = static function (int $x): int { return $x; };",
-    );
+    let with_attr =
+        parse_source("<?php $f = #[Pure] static function (int $x): int { return $x; };");
+    let without = parse_source("<?php $f = static function (int $x): int { return $x; };");
     assert_eq!(with_attr, without);
 }
 
@@ -207,12 +220,8 @@ fn test_attribute_on_static_arrow_function() {
 #[test]
 fn test_attribute_on_closure_parameter() {
     // `#[Sensitive]` on a closure parameter parses without error and does not alter the AST.
-    let with_attr = parse_source(
-        "<?php $f = function (#[Sensitive] string $s): void { };",
-    );
-    let without = parse_source(
-        "<?php $f = function (string $s): void { };",
-    );
+    let with_attr = parse_source("<?php $f = function (#[Sensitive] string $s): void { };");
+    let without = parse_source("<?php $f = function (string $s): void { };");
     assert_eq!(with_attr, without);
 }
 
@@ -228,12 +237,19 @@ fn test_attribute_on_arrow_function_parameter() {
 /// Verifies stacked attributes on parameter.
 #[test]
 fn test_stacked_attributes_on_parameter() {
-    // Stacked `#[A] #[B]` on a parameter parse without error and do not alter the AST.
-    let with_attr = parse_source(
-        "<?php function f(#[A] #[B] int $x): void {}",
-    );
-    let without = parse_source("<?php function f(int $x): void {}");
-    assert_eq!(with_attr, without);
+    // Stacked `#[A] #[B]` on a parameter persist as two ordered attribute groups.
+    let with_attr = parse_source("<?php function f(#[A] #[B] int $x): void {}");
+    match &with_attr[0].kind {
+        StmtKind::FunctionDecl {
+            param_attributes, ..
+        } => {
+            assert_eq!(param_attributes.len(), 1);
+            assert_eq!(param_attributes[0].len(), 2);
+            assert_eq!(param_attributes[0][0].attributes[0].name.as_str(), "A");
+            assert_eq!(param_attributes[0][1].attributes[0].name.as_str(), "B");
+        }
+        other => panic!("expected FunctionDecl, got {:?}", other),
+    }
 }
 
 // -- Persistence: attributes are now captured in the AST --
@@ -265,11 +281,12 @@ fn test_attribute_args_are_captured() {
 #[test]
 fn test_method_attribute_is_persisted() {
     // `#[Required]` on method `setX` is persisted as a nested attribute group on the method node.
-    let stmts = parse_source(
-        "<?php class S { #[Required] public function setX(int $x): void {} }",
-    );
+    let stmts = parse_source("<?php class S { #[Required] public function setX(int $x): void {} }");
     let (_, _props, methods) = class_decl(&stmts);
-    let method = methods.iter().find(|m| m.name == "setX").expect("setX method");
+    let method = methods
+        .iter()
+        .find(|m| m.name == "setX")
+        .expect("setX method");
     assert_eq!(method.attributes.len(), 1);
     assert_eq!(method.attributes[0].attributes[0].name.as_str(), "Required");
 }
@@ -278,9 +295,7 @@ fn test_method_attribute_is_persisted() {
 #[test]
 fn test_property_attribute_is_persisted() {
     // `#[Slot]` on property `$n` is persisted as a nested attribute group on the property node.
-    let stmts = parse_source(
-        "<?php class C { #[Slot] public int $n = 0; }",
-    );
+    let stmts = parse_source("<?php class C { #[Slot] public int $n = 0; }");
     let (_, props, _) = class_decl(&stmts);
     let prop = props.iter().find(|p| p.name == "n").expect("n property");
     assert_eq!(prop.attributes.len(), 1);
@@ -292,9 +307,8 @@ fn test_property_attribute_is_persisted() {
 fn test_qualified_attribute_name_preserves_parts() {
     // Fully-qualified attribute name `#[\Symfony\...\Required]` is stored with
     // `is_fully_qualified() == true` and the raw string preserved minus the leading backslash.
-    let stmts = parse_source(
-        "<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}",
-    );
+    let stmts =
+        parse_source("<?php #[\\Symfony\\Contracts\\Service\\Attribute\\Required] class C {}");
     let (groups, _, _) = class_decl(&stmts);
     let name = &groups[0].attributes[0].name;
     assert!(name.is_fully_qualified(), "expected fully-qualified name");
@@ -319,9 +333,7 @@ fn test_attribute_on_non_declaration_is_rejected() {
 fn test_attribute_on_enum_case_is_persisted() {
     // `#[Primary]` on enum case `Red` is persisted as an attribute on that case node.
     // `Blue` (no attribute) verifies that only the targeted case received the attribute.
-    let stmts = parse_source(
-        "<?php enum Color: int { #[Primary] case Red = 1; case Blue = 2; }",
-    );
+    let stmts = parse_source("<?php enum Color: int { #[Primary] case Red = 1; case Blue = 2; }");
     let cases = match &stmts[0].kind {
         StmtKind::EnumDecl { cases, .. } => cases,
         other => panic!("expected EnumDecl, got {:?}", other),

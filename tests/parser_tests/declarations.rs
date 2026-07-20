@@ -143,6 +143,25 @@ fn test_parse_backed_enum_decl() {
     }
 }
 
+/// Verifies keyword-named enum cases retain source spelling, including two names that differ
+/// only by case; PHP enum-case identity and `->name` use these exact case-sensitive names.
+#[test]
+fn test_parse_keyword_named_enum_cases_preserve_spelling() {
+    let stmts = parse_source(
+        "<?php enum KeywordCase { case Default; case DEFAULT; case Match; case MATCH; case Print; }",
+    );
+    let StmtKind::EnumDecl { cases, .. } = &stmts[0].kind else {
+        panic!("Expected EnumDecl");
+    };
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Default", "DEFAULT", "Match", "MATCH", "Print"]
+    );
+}
+
 /// Verifies that `<?php echo Color::Red;` parses to an `Echo` containing a `ScopedConstantAccess`
 /// with receiver "Color" and member "Red". The parser emits `ScopedConstantAccess`; the type
 /// checker disambiguates between enum cases and class constants.
@@ -163,6 +182,20 @@ fn test_parse_enum_case_expr() {
         },
         other => panic!("Expected Echo, got {:?}", other),
     }
+}
+
+/// Verifies `enum` remains a soft keyword in declarations, type hints, and scoped expressions.
+#[test]
+fn test_parse_enum_named_enum_across_name_contexts() {
+    let stmts = parse_source(
+        "<?php enum Enum { case X; } function pick(Enum $value): Enum { return Enum::X; } Enum::X;",
+    );
+    assert!(matches!(
+        &stmts[0].kind,
+        StmtKind::EnumDecl { name, .. } if name == "Enum"
+    ));
+    assert!(matches!(&stmts[1].kind, StmtKind::FunctionDecl { .. }));
+    assert!(matches!(&stmts[2].kind, StmtKind::ExprStmt(_)));
 }
 
 /// Verifies that `<?php [$a, $b] = [1, 2];` parses to a `ListUnpack` with vars `["a", "b"]`.

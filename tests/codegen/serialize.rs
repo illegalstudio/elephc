@@ -166,6 +166,23 @@ echo serialize(unserialize(serialize(["k" => "v", "n" => [1, 2, 3]]))), "\n";
     );
 }
 
+/// Regression: deeply nested `php_serialize` session upload-progress data must
+/// retain its array-valued Mixed cell when the nested entry is read and re-encoded.
+#[test]
+fn test_unserialize_session_upload_progress_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$raw = 'a:1:{s:21:"upload_progress_mykey";a:5:{s:10:"start_time";i:1784207462;s:14:"content_length";i:266;s:15:"bytes_processed";i:266;s:4:"done";b:1;s:5:"files";a:1:{i:0;a:7:{s:10:"field_name";s:1:"f";s:4:"name";s:5:"x.bin";s:8:"tmp_name";s:0:"";s:5:"error";i:0;s:4:"done";b:1;s:10:"start_time";i:1784207462;s:15:"bytes_processed";i:20;}}}}}';
+$decoded = unserialize($raw);
+echo serialize($decoded['upload_progress_mykey']);
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:5:{s:10:\"start_time\";i:1784207462;s:14:\"content_length\";i:266;s:15:\"bytes_processed\";i:266;s:4:\"done\";b:1;s:5:\"files\";a:1:{i:0;a:7:{s:10:\"field_name\";s:1:\"f\";s:4:\"name\";s:5:\"x.bin\";s:8:\"tmp_name\";s:0:\"\";s:5:\"error\";i:0;s:4:\"done\";b:1;s:10:\"start_time\";i:1784207462;s:15:\"bytes_processed\";i:20;}}}"
+    );
+}
+
 /// Verifies non-finite floats serialize to PHP's INF/-INF/NAN spellings and round-trip.
 #[test]
 fn test_serialize_non_finite_floats() {

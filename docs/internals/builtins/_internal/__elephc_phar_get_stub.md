@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_stub() — internals"
 description: "Compiler internals for __elephc_phar_get_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 441
+  order: 459
 ---
 
 ## `__elephc_phar_get_stub()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_stub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_stub.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3873](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3873) (`lower_elephc_phar_get_stub`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3869](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3869) (`lower_elephc_phar_get_stub`)
 - **Function symbol**: `lower_elephc_phar_get_stub()`
 
 
@@ -31,6 +31,10 @@ function __elephc_phar_get_stub(string $filename): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

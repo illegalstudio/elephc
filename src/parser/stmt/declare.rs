@@ -10,7 +10,7 @@
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::span::Span;
 
@@ -20,7 +20,7 @@ use super::{
 
 /// Parses `declare(directive=literal, ...)` and lowers its effective body to `Synthetic`.
 pub(super) fn parse_declare(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -75,7 +75,7 @@ pub(super) fn parse_declare(
 
 /// Parses one or more directive/literal pairs and reports whether `strict_types` occurred.
 fn parse_directives(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     declare_span: Span,
 ) -> Result<bool, CompileError> {
@@ -83,7 +83,7 @@ fn parse_directives(
 
     loop {
         let (name, name_span) = match tokens.get(*pos) {
-            Some((Token::Identifier(name), span)) => (name.clone(), *span),
+            Some((Token::Identifier(name), metadata)) => (name.clone(), metadata.span),
             _ => {
                 return Err(CompileError::new(
                     declare_span,
@@ -132,7 +132,7 @@ fn parse_directives(
 
 /// Consumes a PHP declare literal and returns its integer value when it is an integer.
 fn parse_literal_value(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     directive: &str,
     directive_span: Span,
@@ -156,7 +156,7 @@ fn parse_literal_value(
 
 /// Parses `: ... enddeclare;`, collecting nested statement errors before closing the block.
 fn parse_alternative_body(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Vec<Stmt>, CompileError> {
     *pos += 1;
