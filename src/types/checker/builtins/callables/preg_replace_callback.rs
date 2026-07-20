@@ -107,7 +107,7 @@ fn contextual_closure_sig(
                         &format!("Closure parameter ${}", name),
                     )?;
                     let specialized_ty =
-                        Checker::specialize_generic_array_hint(&declared_ty, actual_ty);
+                        Checker::specialize_generic_array_param_hint(&declared_ty, actual_ty);
                     (specialized_ty.clone(), specialized_ty, true)
                 } else {
                     (declared_ty.clone(), declared_ty, true)

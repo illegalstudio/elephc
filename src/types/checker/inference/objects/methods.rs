@@ -495,7 +495,8 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape so method `array` params keep their associative shape, matching
                         // how free-function `array` parameters are specialized (issue #406).
-                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                        sig.params[i].1 =
+                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
                     }
                     if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
@@ -1011,7 +1012,8 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape so static-method `array` params keep their associative shape,
                         // matching free-function specialization (issue #406).
-                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                        sig.params[i].1 =
+                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
                     }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
@@ -1078,7 +1080,8 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape on `parent::`/`self::` instance dispatch, matching free-function
                         // specialization (issue #406).
-                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                        sig.params[i].1 =
+                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
                     }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)

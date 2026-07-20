@@ -80,16 +80,6 @@ impl Checker {
                 }
                 PhpType::Array(actual_elem) => {
                     self.type_accepts(expected_elem.as_ref(), actual_elem.as_ref())
-                        // PHP `array` parameters carry no element-type enforcement (there
-                        // are no generics), so a declared `array<Object>` accepts an array
-                        // of ANY object — a sibling or a subtype alike. Both sides share the
-                        // same run representation (a boxed object pointer), so there is no
-                        // element re-typing and the callee reads them through the class
-                        // table regardless of the static element name.
-                        || matches!(
-                            (expected_elem.as_ref(), actual_elem.as_ref()),
-                            (PhpType::Object(_), PhpType::Object(_))
-                        )
                 }
                 PhpType::AssocArray { .. } => matches!(expected_elem.as_ref(), PhpType::Mixed),
                 _ => false,
@@ -290,6 +280,44 @@ impl Checker {
             actual_ty.clone()
         } else {
             declared_ty.clone()
+        }
+    }
+
+    /// Specializes a bare PHP `array` parameter without pinning object elements to one class.
+    ///
+    /// PHP does not expose array element generics, so a concrete object element inferred from
+    /// one call site is not a valid contract for later calls. Indexed object arrays therefore
+    /// stay `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an
+    /// object value to `Mixed`. Scalar element types remain specialized for existing inference.
+    pub(crate) fn specialize_generic_array_param_hint(
+        declared_ty: &PhpType,
+        actual_ty: &PhpType,
+    ) -> PhpType {
+        if !Self::is_generic_array_hint(declared_ty) {
+            return declared_ty.clone();
+        }
+        match actual_ty {
+            PhpType::Array(element)
+                if matches!(element.as_ref(), PhpType::Object(_))
+                    || matches!(element.as_ref(), PhpType::Union(members) if members
+                        .iter()
+                        .any(|member| matches!(member, PhpType::Object(_)))) =>
+            {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value }
+                if matches!(value.as_ref(), PhpType::Object(_))
+                    || matches!(value.as_ref(), PhpType::Union(members) if members
+                        .iter()
+                        .any(|member| matches!(member, PhpType::Object(_)))) =>
+            {
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } => actual_ty.clone(),
+            _ => declared_ty.clone(),
         }
     }
 }

@@ -2666,7 +2666,6 @@ fn lower_mixed_load_prop_ref_cell(
     }
     let done_label = ctx.next_label("mixed_propref_done");
     let null_label = ctx.next_label("mixed_propref_null");
-    let stdclass_label = ctx.next_label("mixed_propref_stdclass");
     let match_labels = candidates
         .iter()
         .map(|candidate| {
@@ -2677,9 +2676,14 @@ fn lower_mixed_load_prop_ref_cell(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    // stdClass has no declared reference property; route it to the null fallback.
-    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &null_label);
-    let _ = stdclass_label;
+    // stdClass and classes without this reference property have no matching cell.
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &null_label,
+        &null_label,
+    );
 
     let int_reg = abi::int_result_reg(ctx.emitter);
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -2920,6 +2924,7 @@ fn lower_declared_mixed_prop_get(
     candidates: Vec<MixedPropertyCandidate>,
 ) -> Result<()> {
     let null_label = ctx.next_label("mixed_prop_null");
+    let miss_label = ctx.next_label("mixed_prop_miss");
     let done_label = ctx.next_label("mixed_prop_done");
     let stdclass_label = ctx.next_label("mixed_prop_stdclass");
     let match_labels = candidates
@@ -2935,7 +2940,13 @@ fn lower_declared_mixed_prop_get(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &stdclass_label);
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
@@ -2950,6 +2961,11 @@ fn lower_declared_mixed_prop_get(
 
     ctx.emitter.label(&stdclass_label);
     emit_stdclass_get_from_loaded_object(ctx, property);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_boxed_null(ctx);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -3029,12 +3045,13 @@ fn emit_mixed_object_payload_or_null(ctx: &mut FunctionContext<'_>, null_label: 
     }
 }
 
-/// Emits class-id dispatch for declared property candidates and stdClass fallback.
+/// Emits class-id dispatch for declared property candidates, stdClass, and a real miss branch.
 fn emit_mixed_property_class_dispatch(
     ctx: &mut FunctionContext<'_>,
     candidates: &[MixedPropertyCandidate],
     match_labels: &[String],
     stdclass_label: &str,
+    miss_label: &str,
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -3045,6 +3062,7 @@ fn emit_mixed_property_class_dispatch(
                 ctx.emitter.instruction(&format!("b.eq {}", label)); // read the declared property when the class id matches
             }
             emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
+            abi::emit_jump(ctx.emitter, miss_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r11, QWORD PTR [rax]"); // load the receiver class id for Mixed property dispatch
@@ -3054,6 +3072,7 @@ fn emit_mixed_property_class_dispatch(
                 ctx.emitter.instruction(&format!("je {}", label)); // read the declared property when the class id matches
             }
             emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
+            abi::emit_jump(ctx.emitter, miss_label);
         }
     }
 }
@@ -3195,6 +3214,39 @@ fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Emits `Warning: Undefined property: Class::$name` for an object already in the result register.
+fn emit_undefined_property_warning_for_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    property: &str,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the missing-property receiver class id
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
+            ctx.emitter.instruction("ldr x1, [x10]");                           // load the receiver class-name pointer
+            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the receiver class-name byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the missing-property receiver class id
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9]");           // load the receiver class-name pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r9 + 8]");       // load the receiver class-name byte length
+        }
+    }
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_property_warning_fragment(ctx, b"Warning: Undefined property: ");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi"),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_property_warning_fragment(ctx, format!("::${}\n", property).as_bytes());
 }
 
 /// Lowers a nullsafe declared-property read for nullable object receivers.
