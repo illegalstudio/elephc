@@ -12,6 +12,8 @@
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
 //! - The trampoline preserves the callee-saved registers it scratches (issue #487), including on
 //!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
+//! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
+//!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
@@ -244,14 +246,15 @@ fn emit_invoker_exception_boundary_push(
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction(&format!("stur x10, [x29, #-{}]", handler_base)); // save the previous native exception-handler head
+            abi::store_at_offset(emitter, "x10", handler_base);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-            emitter.instruction(&format!("stur x10, [x29, #-{}]", handler_base - 8)); // preserve the caller activation frame across callable unwinding
+            abi::store_at_offset(emitter, "x10", handler_base - 8);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(
-                "stur x10, [x29, #-{}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // save diagnostic suppression depth for restoration
+            abi::store_at_offset(
+                emitter,
+                "x10",
+                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            );
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
@@ -289,12 +292,13 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
     emitter.comment("pop eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldur x10, [x29, #-{}]", handler_base)); // reload the previous native exception-handler head
+            abi::load_at_offset(emitter, "x10", handler_base);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
-                "ldur x10, [x29, #-{}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // reload the saved diagnostic suppression depth
+            abi::load_at_offset(
+                emitter,
+                "x10",
+                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            );
             abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
         }
         Arch::X86_64 => {
@@ -2470,5 +2474,38 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
             emitter.instruction("syscall");
             abi::emit_exit(emitter, 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
+    #[test]
+    fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+
+        emit_invoker_exception_boundary_push(
+            &mut emitter,
+            INVOKER_BOUNDARY_BASE_OFFSET,
+            "invoker_escape",
+        );
+        emit_invoker_exception_boundary_pop(&mut emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+
+        let output = emitter.output();
+        assert!(INVOKER_BOUNDARY_BASE_OFFSET > 255);
+        for offset in [
+            INVOKER_BOUNDARY_BASE_OFFSET,
+            INVOKER_BOUNDARY_BASE_OFFSET - 8,
+            INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+        ] {
+            assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
+        }
+        assert!(output.contains("    str x10, [x9]\n"));
+        assert!(output.contains("    ldr x10, [x9]\n"));
+        assert!(!output.contains("stur x10, [x29, #-3"));
+        assert!(!output.contains("ldur x10, [x29, #-3"));
     }
 }
