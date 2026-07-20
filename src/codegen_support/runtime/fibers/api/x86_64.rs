@@ -268,6 +268,7 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
 /// Returns the yielded or terminated transfer value as a Mixed in rax.
 /// Validates the fiber is in Suspended state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
 /// The Throwable is parked in `pending_throw` so the fiber's try/catch machinery raises it on resume.
+/// The pending slot retains its own reference after state validation, leaving the caller's argument ownership unchanged.
 pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_throw ---");
@@ -286,7 +287,9 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 43");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_throw_state_ok");
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = Throwable*
+    emitter.instruction("mov rax, r13");                                        // move the Throwable into the retain helper input register
+    emitter.instruction("call __rt_incref");                                    // retain an owned reference for the Fiber pending-throw slot
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = retained Throwable*
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_current", 0);          // r10 = current execution context
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", FIBER_CALLER_OFFSET)); // fiber->caller = current context
     emitter.instruction("mov rdi, r12");                                        // pass fiber* as the switch target

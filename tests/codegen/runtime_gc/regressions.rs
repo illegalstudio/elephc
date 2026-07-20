@@ -1936,6 +1936,34 @@ echo "done";
     );
 }
 
+/// Regression for #448: `Fiber::throw($caught)` must retain a separate in-flight
+/// reference before the suspended fiber consumes it, while both catch bindings
+/// continue to own and release their local references.
+#[test]
+fn test_regression_fiber_throw_balances_caught_exception_references() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 20; $n++) {
+    $fiber = new Fiber(function (): void {
+        try { Fiber::suspend(); } catch (\Throwable $inside) {}
+    });
+    $fiber->start();
+    try { throw new LogicException("fiber"); }
+    catch (\Throwable $caught) { $fiber->throw($caught); }
+    $fiber = null;
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Fiber::throw catch transfers to keep a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #538: growing one function-local array from indexed
 /// `[]` storage into a string-keyed hash must release every replaced COW generation.
 #[test]
