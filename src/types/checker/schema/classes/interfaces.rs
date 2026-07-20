@@ -19,7 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, validate_signature_compatibility,
+    declared_return_type_compatible, late_static_return_compatible,
+    validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
 
@@ -234,6 +235,14 @@ fn validate_static_interface_method(
             state
                 .static_sigs
                 .insert(method_name.to_string(), required_sig.clone());
+            if let Some(return_type) = interface_info
+                .late_static_static_method_returns
+                .get(method_name)
+            {
+                state
+                    .late_static_static_method_returns
+                    .insert(method_name.to_string(), return_type.clone());
+            }
             state
                 .static_method_visibilities
                 .insert(method_name.to_string(), Visibility::Public);
@@ -298,20 +307,34 @@ fn validate_static_interface_method(
             )?;
         }
     }
-    if required_sig.declared_return
-        && !interface_self_return_conforms(
+    let late_static_compatible = late_static_return_compatible(
+        checker,
+        interface_info
+            .late_static_static_method_returns
+            .get(method_name),
+        state
+            .late_static_static_method_returns
+            .get(method_name),
+        &actual_sig.return_type,
+        &class.name,
+        actual_method
+            .map(|method| method.span)
+            .unwrap_or_else(crate::span::Span::dummy),
+    )?;
+    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+        interface_self_return_conforms(
             checker,
             class,
             interface_name,
             &required_sig.return_type,
             &actual_sig.return_type,
-        )
-        && !declared_return_type_compatible(
+        ) || declared_return_type_compatible(
             checker,
             &required_sig.return_type,
             &actual_sig.return_type,
         )
-    {
+    });
+    if required_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -434,6 +457,11 @@ fn validate_interface_method(
             state
                 .method_sigs
                 .insert(method_name.to_string(), required_sig.clone());
+            if let Some(return_type) = interface_info.late_static_method_returns.get(method_name) {
+                state
+                    .late_static_method_returns
+                    .insert(method_name.to_string(), return_type.clone());
+            }
             state
                 .method_visibilities
                 .insert(method_name.to_string(), Visibility::Public);
@@ -496,20 +524,30 @@ fn validate_interface_method(
             )?;
         }
     }
-    if required_sig.declared_return
-        && !interface_self_return_conforms(
+    let late_static_compatible = late_static_return_compatible(
+        checker,
+        interface_info.late_static_method_returns.get(method_name),
+        state.late_static_method_returns.get(method_name),
+        &actual_sig.return_type,
+        &class.name,
+        actual_method
+            .map(|method| method.span)
+            .unwrap_or_else(crate::span::Span::dummy),
+    )?;
+    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+        interface_self_return_conforms(
             checker,
             class,
             interface_name,
             &required_sig.return_type,
             &actual_sig.return_type,
-        )
-        && !declared_return_type_compatible(
+        ) || declared_return_type_compatible(
             checker,
             &required_sig.return_type,
             &actual_sig.return_type,
         )
-    {
+    });
+    if required_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

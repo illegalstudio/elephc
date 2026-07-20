@@ -389,3 +389,48 @@ fn test_class_covariant_self_return_override() {
     );
     assert_eq!(out, "ok");
 }
+
+/// Verifies an inherited interface method returning `static` stays typed as the child interface.
+#[test]
+fn test_interface_late_static_return_stays_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface Message {
+    public function withHeader(string $value): static;
+}
+interface Request extends Message {
+    public function withMethod(string $method): static;
+    public function method(): string;
+}
+final class Req implements Request {
+    public function __construct(private string $method = 'GET') {}
+    public function withHeader(string $value): static { return new static($this->method); }
+    public function withMethod(string $method): static { return new static($method); }
+    public function method(): string { return $this->method; }
+}
+function chain(Request $request): string {
+    return $request->withHeader('x-trace')->withMethod('POST')->method();
+}
+echo chain(new Req());
+"#,
+    );
+    assert_eq!(out, "POST");
+}
+
+/// Verifies an implementation may covariantly narrow `static|false` to `static`.
+#[test]
+fn test_interface_late_static_union_can_narrow_to_static() {
+    let out = compile_and_run(
+        r#"<?php
+interface MaybeCopyable {
+    public function copy(): static|false;
+}
+final class AlwaysCopyable implements MaybeCopyable {
+    public function copy(): static { return $this; }
+    public function label(): string { return "copy"; }
+}
+echo (new AlwaysCopyable())->copy()->label();
+"#,
+    );
+    assert_eq!(out, "copy");
+}

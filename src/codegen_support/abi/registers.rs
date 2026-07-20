@@ -67,6 +67,15 @@ pub(crate) fn float_arg_reg_name(target: Target, idx: usize) -> &'static str {
     }
 }
 
+/// Returns the caller-saved floating-point scratch register reserved for ABI spill staging.
+/// AArch64 uses d31 so staging never clobbers the callee-saved d8-d15 range; x86_64 uses xmm15.
+pub(crate) fn float_spill_scratch_reg(target: Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "d31",
+        Arch::X86_64 => "xmm15",
+    }
+}
+
 /// Returns the register used to hold integer/pointer function results.
 /// AArch64: x0. x86_64: rax.
 pub(crate) fn int_result_reg(emitter: &Emitter) -> &'static str {

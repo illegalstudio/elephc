@@ -263,6 +263,44 @@ fn test_property_throw_guard_narrowing() {
     assert_eq!(out, "x");
 }
 
+/// Verifies boxed `mixed` values can cross scalar boundaries handled by the runtime cast funnels.
+#[test]
+fn test_mixed_value_into_typed_boundary() {
+    let out = compile_and_run(
+        "<?php function takesStr(string $s): string { return strtoupper($s); } function relay(mixed $m): string { return takesStr($m); } function giveInt(mixed $m): int { return $m; } echo relay('hi'), ':', giveInt(42);",
+    );
+    assert_eq!(out, "HI:42");
+}
+
+/// Verifies `fseek()` has PHP's plain integer result type and can cross an `int` boundary.
+#[test]
+fn test_fseek_int_result_into_typed_param() {
+    let out = compile_and_run(
+        "<?php function requireZero(int $value, string $message): int { if ($value !== 0) { throw new \\RuntimeException($message); } return $value; } function main(): void { $f = fopen('php://temp', 'r+b'); fwrite($f, 'abcdef'); $r = requireZero(fseek($f, 2), 'seek failed'); echo $r, ':', fread($f, 3); } main();",
+    );
+    assert_eq!(out, "0:cde");
+}
+
+/// Verifies a boxed associative-array element can cross supported scalar call boundaries.
+#[test]
+fn test_mixed_assoc_element_into_scalar_typed_params() {
+    let out = compile_and_run(
+        "<?php function firstMode(string $mode, array $allowed): bool { return in_array($mode, $allowed); } function main(): void { $meta = ['mode' => 'r+', 'seekable' => true]; $mode = $meta['mode']; $ok = firstMode($mode, ['r+', 'w+']) ? 'ok' : 'no'; echo $ok, ':', strtoupper($mode); } main();",
+    );
+    assert_eq!(out, "ok:R+");
+}
+
+/// A typed comparator over an `array`-hinted parameter keeps its declared parameter contract —
+/// usort checks the closure against its own declarations (via the element-type binding)
+/// instead of a fabricated Int placeholder. Byte-parity vs PHP 8.5.
+#[test]
+fn test_typed_callback_over_array_hinted_param() {
+    let out = compile_and_run(
+        "<?php final class Box { public function __construct(public int $n) {} } function sorted(array $items): string { usort($items, static fn (Box $a, Box $b): int => $a->n <=> $b->n); $out = ''; foreach ($items as $b) { $out .= $b->n; } return $out; } function main(): void { echo sorted([new Box(3), new Box(1), new Box(2)]); } main();",
+    );
+    assert_eq!(out, "123");
+}
+
 /// foreach KEYS over an unknown-element array (an `array`-hinted param — elements known only
 /// to phpdoc) are Mixed, not Int: the value may be associative at runtime (header-map shape
 /// with string keys into a `string $name` parameter). Byte-parity vs PHP 8.5.

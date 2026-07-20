@@ -17,7 +17,9 @@ use crate::types::{InterfaceInfo, PhpType, PropertyHookContract};
 
 use super::super::Checker;
 use super::super::InterfaceDeclInfo;
-use super::validation::{build_method_sig, validate_signature_compatibility};
+use super::validation::{
+    build_method_sig, late_static_return_compatible, validate_signature_compatibility,
+};
 use crate::types::traits::FlattenedClass;
 
 /// Recursively builds interface metadata by flattening inheritance and collecting methods,
@@ -66,10 +68,12 @@ pub(crate) fn build_interface_info_recursive(
     })?;
 
     let mut methods = HashMap::new();
+    let mut late_static_method_returns = HashMap::new();
     let mut method_declaring_interfaces = HashMap::new();
     let mut method_order = Vec::new();
     let mut method_slots = HashMap::new();
     let mut static_methods = HashMap::new();
+    let mut late_static_static_method_returns = HashMap::new();
     let mut static_method_declaring_interfaces = HashMap::new();
     let mut static_method_order = Vec::new();
     let mut properties = HashMap::new();
@@ -125,9 +129,22 @@ pub(crate) fn build_interface_info_recursive(
                     "method",
                     "combining interface parent",
                 )?;
+                if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
+                    methods.insert(method_name.clone(), parent_sig.clone());
+                    late_static_method_returns.insert(method_name.clone(), return_type.clone());
+                    let declaring = parent_info
+                        .method_declaring_interfaces
+                        .get(method_name)
+                        .cloned()
+                        .unwrap_or_else(|| parent_name.clone());
+                    method_declaring_interfaces.insert(method_name.clone(), declaring);
+                }
                 continue;
             }
             methods.insert(method_name.clone(), parent_sig.clone());
+            if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
+                late_static_method_returns.insert(method_name.clone(), return_type.clone());
+            }
             let declaring = parent_info
                 .method_declaring_interfaces
                 .get(method_name)
@@ -160,9 +177,30 @@ pub(crate) fn build_interface_info_recursive(
                     "static method",
                     "combining interface parent",
                 )?;
+                if let Some(return_type) = parent_info
+                    .late_static_static_method_returns
+                    .get(method_name)
+                {
+                    static_methods.insert(method_name.clone(), parent_sig.clone());
+                    late_static_static_method_returns
+                        .insert(method_name.clone(), return_type.clone());
+                    let declaring = parent_info
+                        .static_method_declaring_interfaces
+                        .get(method_name)
+                        .cloned()
+                        .unwrap_or_else(|| parent_name.clone());
+                    static_method_declaring_interfaces.insert(method_name.clone(), declaring);
+                }
                 continue;
             }
             static_methods.insert(method_name.clone(), parent_sig.clone());
+            if let Some(return_type) = parent_info
+                .late_static_static_method_returns
+                .get(method_name)
+            {
+                late_static_static_method_returns
+                    .insert(method_name.clone(), return_type.clone());
+            }
             let declaring = parent_info
                 .static_method_declaring_interfaces
                 .get(method_name)
@@ -262,7 +300,7 @@ pub(crate) fn build_interface_info_recursive(
             ));
         }
 
-        let sig = build_method_sig(checker, method)?;
+        let sig = build_method_sig(checker, method, &interface.name)?;
         if method.is_static {
             if methods.contains_key(&method_key) {
                 return Err(interface_method_kind_conflict(
@@ -281,8 +319,35 @@ pub(crate) fn build_interface_info_recursive(
                     "static method",
                     "redeclaring interface",
                 )?;
+                if late_static_return_compatible(
+                    checker,
+                    late_static_static_method_returns.get(&method_key),
+                    method.return_type.as_ref(),
+                    &sig.return_type,
+                    &interface.name,
+                    method.span,
+                )? == Some(false)
+                {
+                    return Err(CompileError::new(
+                        method.span,
+                        &format!(
+                            "Cannot redeclare interface static method {}::{} without a compatible late-static return type",
+                            interface.name, method.name
+                        ),
+                    ));
+                }
             }
             static_methods.insert(method_key.clone(), sig);
+            if let Some(return_type) = method
+                .return_type
+                .as_ref()
+                .filter(|return_type| return_type.contains_late_static())
+            {
+                late_static_static_method_returns
+                    .insert(method_key.clone(), return_type.clone());
+            } else {
+                late_static_static_method_returns.remove(&method_key);
+            }
             static_method_declaring_interfaces
                 .insert(method_key.clone(), interface.name.clone());
             if !static_method_order.contains(&method_key) {
@@ -307,8 +372,34 @@ pub(crate) fn build_interface_info_recursive(
                 "method",
                 "redeclaring interface",
             )?;
+            if late_static_return_compatible(
+                checker,
+                late_static_method_returns.get(&method_key),
+                method.return_type.as_ref(),
+                &sig.return_type,
+                &interface.name,
+                method.span,
+            )? == Some(false)
+            {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot redeclare interface method {}::{} without a compatible late-static return type",
+                        interface.name, method.name
+                    ),
+                ));
+            }
         }
         methods.insert(method_key.clone(), sig);
+        if let Some(return_type) = method
+            .return_type
+            .as_ref()
+            .filter(|return_type| return_type.contains_late_static())
+        {
+            late_static_method_returns.insert(method_key.clone(), return_type.clone());
+        } else {
+            late_static_method_returns.remove(&method_key);
+        }
         method_declaring_interfaces.insert(method_key.clone(), interface.name.clone());
         if !method_slots.contains_key(&method_key) {
             let slot = method_order.len();
@@ -380,10 +471,12 @@ pub(crate) fn build_interface_info_recursive(
             property_order,
             method_decls: interface.methods.clone(),
             methods,
+            late_static_method_returns,
             method_declaring_interfaces,
             method_order,
             method_slots,
             static_methods,
+            late_static_static_method_returns,
             static_method_declaring_interfaces,
             static_method_order,
             constants: iface_constants,

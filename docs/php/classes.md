@@ -600,7 +600,7 @@ class Child extends Base {
 
 ## Relative class types (`self`, `static`, `parent`)
 
-`self`, `static`, and `parent` may be used as type declarations on method parameters, method return types, and properties. They resolve to the enclosing class (`self`, `static`) or its parent (`parent`):
+`self`, `static`, and `parent` may be used as type declarations on method parameters, method return types, and properties. `self` and `parent` resolve lexically; a method return declared as `static` is late-bound to the call-site receiver:
 
 ```php
 <?php
@@ -619,7 +619,7 @@ class Node {
 }
 
 trait Fluent {
-    // In a trait, `static` resolves to the class that uses the trait.
+    // In a trait, `static` stays late-bound within the using class hierarchy.
     public function self(): static {
         return $this;
     }
@@ -628,11 +628,13 @@ trait Fluent {
 
 Rules:
 
-- `self` and `static` resolve to the class the member is declared in; `parent` resolves to that class's parent.
+- `self` resolves to the class the member is declared in; `parent` resolves to that class's parent.
+- A method return declared as `static` binds to the receiver class or interface at each call site, including inherited methods and fluent chains.
+- Overrides and interface implementations must preserve a required late-bound `static`; replacing it with the current concrete class is rejected. Covariant narrowing such as `static|false` to `static` remains valid.
 - They are accepted in parameter, return, and property type positions, and may be combined with the nullable shorthand (`?self`) or unions (`self|null`).
-- Used inside a trait, `self`/`static` resolve to the class that uses the trait, not the trait itself.
+- Used inside a trait, `self` resolves to the using class and a return `static` remains late-bound within that class hierarchy.
 - Using `self`, `static`, or `parent` as a type outside of a class is rejected.
-- For type checking, `static` is treated as the declaring class. A `static` return type chained directly on its declaring class works as expected; when a `static`-returning method is inherited and called on a subclass, the result is typed as the declaring class rather than the subclass.
+- PHPDoc return annotations are not parsed for typing. A fluent API that needs late-static refinement must declare the native PHP return type `: static`; `@return static` alone does not change the inferred type.
 
 ## Dynamic instantiation (`new $variable()`)
 

@@ -60,7 +60,48 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
+        if type_expr.contains_late_static() {
+            if let Some(current_class) = self.current_class.as_deref() {
+                let parent = self
+                    .classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.as_deref());
+                let resolved =
+                    type_expr.substitute_relative_class_types(current_class, parent);
+                return self.resolve_type_expr(&resolved, span);
+            }
+        }
         self.resolve_type_expr(type_expr, span)
+    }
+
+    /// Resolves a method return contract to its declaring type for schema and ABI metadata.
+    ///
+    /// The parsed `static` marker remains on the method declaration for call-site refinement;
+    /// this nominal type is the concrete declaring class or interface used for compatibility.
+    pub(crate) fn resolve_method_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        declaring_type: &str,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let nominal = type_expr.substitute_relative_class_types(declaring_type, None);
+        self.resolve_declared_return_type_hint(&nominal, span, context)
+    }
+
+    /// Resolves preserved late-static return syntax against a concrete call-site receiver.
+    pub(crate) fn resolve_late_static_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        receiver_type: &str,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        let parent = self
+            .classes
+            .get(receiver_type)
+            .and_then(|class_info| class_info.parent.as_deref());
+        let bound = type_expr.substitute_relative_class_types(receiver_type, parent);
+        self.resolve_declared_return_type_hint(&bound, span, "Late-static method return")
     }
 
     /// Resolves a local variable type hint from a `TypeExpr` to a `PhpType`, rejecting

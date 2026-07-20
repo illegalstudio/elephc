@@ -116,6 +116,24 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
+/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
+#[test]
+fn test_error_mixed_rejected_at_object_parameter_boundary() {
+    expect_error(
+        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
+        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
+    );
+}
+
+/// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
+#[test]
+fn test_error_mixed_rejected_at_array_return_boundary() {
+    expect_error(
+        "<?php function relay(mixed $value): array { return $value; }",
+        "Function 'relay' return type expects Array(Mixed), got Mixed",
+    );
+}
+
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
 #[test]
 fn test_error_undefined_variable() {
@@ -142,6 +160,102 @@ fn test_error_arithmetic_on_string() {
     expect_error(
         "<?php $x = \"hi\"; echo $x + 1;",
         "Arithmetic operators require numeric operands",
+    );
+}
+
+/// Verifies a name beginning with `with` does not imply a late-static fluent return.
+#[test]
+fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
+    expect_error(
+        r#"<?php
+interface Account {
+    public function withdraw(int $amount): Account;
+}
+interface Savings extends Account {
+    public function interestRate(): int;
+}
+final class SavingsAccount implements Savings {
+    public function withdraw(int $amount): Account { return $this; }
+    public function interestRate(): int { return 4; }
+}
+function rate(Savings $account): int {
+    return $account->withdraw(10)->interestRate();
+}
+echo rate(new SavingsAccount());
+"#,
+        "Undefined method: Account::interestRate",
+    );
+}
+
+/// Verifies that binding `static` preserves distinct explicit union members.
+///
+/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
+/// subclass-only method is not safe on the result even though one branch is late-bound.
+#[test]
+fn test_error_late_static_union_keeps_explicit_ancestor_member() {
+    expect_error(
+        r#"<?php
+class Choice {
+    public function choose(bool $same): static|Choice {
+        return $same ? $this : new Choice();
+    }
+}
+class SpecialChoice extends Choice {
+    public function special(): string { return "special"; }
+}
+function render(SpecialChoice $choice): string {
+    return $choice->choose(false)->special();
+}
+"#,
+        "Undefined method",
+    );
+}
+
+/// Verifies an interface `static` contract cannot be implemented as the concrete class name.
+#[test]
+fn test_error_interface_static_return_requires_late_static_implementation() {
+    expect_error(
+        r#"<?php
+interface CreatesLateBound {
+    public function create(): static;
+}
+class ConcreteCreator implements CreatesLateBound {
+    public function create(): ConcreteCreator { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies overriding `static` with the immediate child name is rejected for future subclasses.
+#[test]
+fn test_error_static_return_override_cannot_become_concrete_child() {
+    expect_error(
+        r#"<?php
+class LateBoundBase {
+    public function copy(): static { return $this; }
+}
+class ConcreteCopy extends LateBoundBase {
+    public function copy(): ConcreteCopy { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies a child interface must preserve its parent's late-static return contract.
+#[test]
+fn test_error_interface_redeclaration_cannot_replace_static_with_child_name() {
+    expect_error(
+        r#"<?php
+interface LateBoundContract {
+    public function copy(): static;
+}
+interface ConcreteContract extends LateBoundContract {
+    public function copy(): ConcreteContract;
+}
+"#,
+        "compatible late-static return type",
     );
 }
 

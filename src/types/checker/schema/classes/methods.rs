@@ -97,7 +97,7 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let sig = build_method_sig(checker, method)?;
+    let sig = build_method_sig(checker, method, &class.name)?;
     if state.final_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -133,7 +133,16 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
-        validate_override_signature(checker, class, method, parent_sig, true)?;
+        validate_override_signature(
+            checker,
+            class,
+            method,
+            parent_sig,
+            state
+                .late_static_static_method_returns
+                .get(&method_key),
+            true,
+        )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
     {
@@ -149,6 +158,19 @@ fn apply_static_method(
         ));
     }
     state.static_sigs.insert(method_key.clone(), sig);
+    if let Some(return_type) = method
+        .return_type
+        .as_ref()
+        .filter(|return_type| return_type.contains_late_static())
+    {
+        state
+            .late_static_static_method_returns
+            .insert(method_key.clone(), return_type.clone());
+    } else {
+        state
+            .late_static_static_method_returns
+            .remove(&method_key);
+    }
     state
         .static_method_visibilities
         .insert(method_key.clone(), method.visibility.clone());
@@ -194,7 +216,7 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let sig = build_method_sig(checker, method)?;
+    let sig = build_method_sig(checker, method, &class.name)?;
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -230,7 +252,14 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        validate_override_signature(checker, class, method, parent_sig, false)?;
+        validate_override_signature(
+            checker,
+            class,
+            method,
+            parent_sig,
+            state.late_static_method_returns.get(&method_key),
+            false,
+        )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
     {
@@ -246,6 +275,17 @@ fn apply_instance_method(
         ));
     }
     state.method_sigs.insert(method_key.clone(), sig);
+    if let Some(return_type) = method
+        .return_type
+        .as_ref()
+        .filter(|return_type| return_type.contains_late_static())
+    {
+        state
+            .late_static_method_returns
+            .insert(method_key.clone(), return_type.clone());
+    } else {
+        state.late_static_method_returns.remove(&method_key);
+    }
     state
         .method_visibilities
         .insert(method_key.clone(), method.visibility.clone());

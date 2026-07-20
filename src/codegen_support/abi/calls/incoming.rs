@@ -8,13 +8,13 @@
 //! Key details:
 //! - Incoming cursor state must match outgoing assignment rules or calls will corrupt frame slots.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::emit::Emitter;
 use crate::types::PhpType;
 
 use super::super::frame::{load_from_caller_stack, store_at_offset};
 use super::super::registers::{
-    float_arg_reg_limit, float_arg_reg_name, int_arg_reg_limit, int_arg_reg_name,
-    secondary_scratch_reg, tertiary_scratch_reg, IncomingArgCursor,
+    float_arg_reg_limit, float_arg_reg_name, float_spill_scratch_reg, int_arg_reg_limit,
+    int_arg_reg_name, secondary_scratch_reg, tertiary_scratch_reg, IncomingArgCursor,
 };
 
 /// Stores a function parameter from the next available ABI register or caller stack slot
@@ -34,10 +34,7 @@ pub fn emit_store_incoming_param(
     cursor: &mut IncomingArgCursor,
 ) {
     let ty = ty.codegen_repr();
-    let float_spill_reg = match emitter.target.arch {
-        Arch::AArch64 => "d15",
-        Arch::X86_64 => "xmm15",
-    };
+    let float_spill_reg = float_spill_scratch_reg(emitter.target);
     let int_spill_reg = secondary_scratch_reg(emitter);
     let int_hi_spill_reg = tertiary_scratch_reg(emitter);
     let int_reg_limit = int_arg_reg_limit(emitter.target);

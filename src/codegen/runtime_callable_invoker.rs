@@ -10,6 +10,10 @@
 //! - Capture values are loaded from the callable descriptor, not caller frame state.
 //! - Argument materialization supports indexed arrays, associative arrays, defaults, variadics,
 //!   by-reference marker cells, and target-aware ABI calls without depending on `Context`.
+//! - The trampoline preserves the callee-saved registers it scratches (issue #487), including on
+//!   the eval exception-boundary escape path, so allocator-parked caller values survive the invoke.
+//! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
+//!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
@@ -28,10 +32,48 @@ use crate::types::{FunctionSig, PhpType};
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
-const INVOKER_FRAME_SIZE: usize = 32;
+/// Spill slot for the boxed argument container across the eval exception-boundary `setjmp`.
 const INVOKER_ARG_ARRAY_OFFSET: usize = 24;
+/// First frame slot of the callee-saved register save area (issue #487).
+/// Placed after descriptor/concat/arg-array so the eval boundary path can reuse those slots.
+const INVOKER_SAVED_REGS_OFFSET: usize = 32;
+/// AArch64 save-area width (8 callee-saved scratch regs × 8 bytes); sizes the shared frame.
+const INVOKER_CALLEE_SAVE_BYTES: usize = 8 * 8;
+/// Exclusive end of the callee-saved save area (`INVOKER_SAVED_REGS_OFFSET` … end-8).
+const INVOKER_SAVED_REGS_END: usize = INVOKER_SAVED_REGS_OFFSET + INVOKER_CALLEE_SAVE_BYTES;
+/// Frame size covering the footer plus every local slot through the save area.
+/// `frame_size - 16` must cover the last save offset; rounded up to 16 for ABI `sp` alignment.
+const INVOKER_FRAME_SIZE: usize = ((INVOKER_SAVED_REGS_END - 8) + 16 + 15) & !15;
 const INVOKER_BOUNDARY_FRAME_SIZE: usize = INVOKER_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE + 16;
 const INVOKER_BOUNDARY_BASE_OFFSET: usize = INVOKER_BOUNDARY_FRAME_SIZE - 16;
+
+/// Callee-saved registers the invoker body uses as scratch. Must stay in sync with the
+/// hard-coded scratch choices in the indexed/assoc/mixed argument loaders and
+/// `abi::nested_call_reg` (`x19` / `r12`). The register allocator parks caller values in
+/// these registers across `callable_descriptor_invoke`, so the trampoline must preserve
+/// them like any compiled function prologue (issue #487).
+fn invoker_saved_callee_regs(arch: Arch) -> &'static [&'static str] {
+    match arch {
+        Arch::AArch64 => &["x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26"],
+        Arch::X86_64 => &["r12", "rbx", "r13", "r14", "r15"],
+    }
+}
+
+/// Stores the caller's callee-saved registers the invoker body is about to scratch.
+fn emit_invoker_callee_saved_saves(emitter: &mut Emitter) {
+    for (index, reg) in invoker_saved_callee_regs(emitter.target.arch).iter().enumerate() {
+        abi::store_at_offset(emitter, reg, INVOKER_SAVED_REGS_OFFSET + index * 8);
+    }
+}
+
+/// Reloads the caller's callee-saved registers after the invoker body finishes.
+///
+/// The boxed Mixed result travels in the return registers, which these loads never touch.
+fn emit_invoker_callee_saved_restores(emitter: &mut Emitter) {
+    for (index, reg) in invoker_saved_callee_regs(emitter.target.arch).iter().enumerate() {
+        abi::load_at_offset(emitter, reg, INVOKER_SAVED_REGS_OFFSET + index * 8);
+    }
+}
 
 /// Runtime invoker metadata emitted beside callable descriptors.
 pub(super) struct RuntimeCallableInvoker<'a> {
@@ -116,6 +158,10 @@ fn emit_runtime_callable_invoker_impl(
     emitter.raw(".align 2");
     emitter.label_global(invoker.label);
     abi::emit_frame_prologue(emitter, frame_size);
+    // Preserve the caller's callee-saved registers before the body scratches them: the
+    // register allocator keeps values live across the indirect invoke in these registers
+    // (issue #487).
+    emit_invoker_callee_saved_saves(emitter);
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -156,12 +202,16 @@ fn emit_runtime_callable_invoker_impl(
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }
+    // Restore before tearing down the frame (and on the escape path below): the boxed
+    // Mixed result travels in return registers, which these loads never touch.
+    emit_invoker_callee_saved_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
     if catch_native_throws {
         emitter.label(&escape_label);
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
         emit_null_invoker_result(emitter);
+        emit_invoker_callee_saved_restores(emitter);
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
     }
@@ -196,22 +246,23 @@ fn emit_invoker_exception_boundary_push(
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction(&format!("stur x10, [x29, #-{}]", handler_base)); // save the previous native exception-handler head
+            abi::store_at_offset(emitter, "x10", handler_base);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-            emitter.instruction(&format!("stur x10, [x29, #-{}]", handler_base - 8)); // preserve the caller activation frame across callable unwinding
+            abi::store_at_offset(emitter, "x10", handler_base - 8);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(
-                "stur x10, [x29, #-{}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // save diagnostic suppression depth for restoration
-            emitter.instruction(&format!("sub x10, x29, #{}", handler_base)); // compute the boundary handler record address
+            abi::store_at_offset(
+                emitter,
+                "x10",
+                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            );
+            emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             )); // pass the boundary jmp_buf to setjmp
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
-            emitter.instruction(&format!("cbnz x0, {}", escape_label)); // non-zero setjmp result means a callable Throwable escaped
+            emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
@@ -230,8 +281,8 @@ fn emit_invoker_exception_boundary_push(
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             )); // pass the boundary jmp_buf to setjmp
             emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
-            emitter.instruction("test eax, eax"); // did control arrive through longjmp?
-            emitter.instruction(&format!("jne {}", escape_label)); // non-zero setjmp result means a callable Throwable escaped
+            emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
+            emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
         }
     }
 }
@@ -241,12 +292,13 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
     emitter.comment("pop eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldur x10, [x29, #-{}]", handler_base)); // reload the previous native exception-handler head
+            abi::load_at_offset(emitter, "x10", handler_base);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
-                "ldur x10, [x29, #-{}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // reload the saved diagnostic suppression depth
+            abi::load_at_offset(
+                emitter,
+                "x10",
+                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            );
             abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
         }
         Arch::X86_64 => {
@@ -265,10 +317,10 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
 fn emit_null_invoker_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, xzr"); // return null so magician takes the pending Throwable
+            emitter.instruction("mov x0, xzr");                                 // return null so magician takes the pending Throwable
         }
         Arch::X86_64 => {
-            emitter.instruction("xor eax, eax"); // return null so magician takes the pending Throwable
+            emitter.instruction("xor eax, eax");                                // return null so magician takes the pending Throwable
         }
     }
 }
@@ -2422,5 +2474,38 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
             emitter.instruction("syscall");
             abi::emit_exit(emitter, 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
+    #[test]
+    fn arm64_invoker_boundary_uses_large_offset_frame_helpers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+
+        emit_invoker_exception_boundary_push(
+            &mut emitter,
+            INVOKER_BOUNDARY_BASE_OFFSET,
+            "invoker_escape",
+        );
+        emit_invoker_exception_boundary_pop(&mut emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+
+        let output = emitter.output();
+        assert!(INVOKER_BOUNDARY_BASE_OFFSET > 255);
+        for offset in [
+            INVOKER_BOUNDARY_BASE_OFFSET,
+            INVOKER_BOUNDARY_BASE_OFFSET - 8,
+            INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+        ] {
+            assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
+        }
+        assert!(output.contains("    str x10, [x9]\n"));
+        assert!(output.contains("    ldr x10, [x9]\n"));
+        assert!(!output.contains("stur x10, [x29, #-3"));
+        assert!(!output.contains("ldur x10, [x29, #-3"));
     }
 }

@@ -27,11 +27,11 @@ pub(crate) use catalog::{
     supported_builtin_function_names,
 };
 pub(crate) use callables::{
-    array_element_type, array_filter_callback_dummy_args, callback_supports_complex_descriptor_env,
-    check_call_user_func, check_call_user_func_array,
+    array_element_type, array_filter_callback_arg_types, callback_supports_complex_descriptor_env,
+    check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
     check_callback_builtin_call, check_function_exists,
     check_preg_replace_callback_first_class_call,
-    comparator_dummy_arg_for_elem, dummy_arg_for_array_scalar_elem, runtime_callable_array_type,
+    runtime_callable_array_type,
 };
 
 impl Checker {

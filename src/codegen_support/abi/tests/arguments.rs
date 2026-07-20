@@ -32,6 +32,32 @@ fn test_emit_store_incoming_param_uses_registers_then_caller_stack() {
     assert!(out.contains("    ldr x10, [x29, #32]\n"));
 }
 
+/// Verifies that an incoming AArch64 float overflow uses caller-saved d31 rather than d15.
+#[test]
+fn test_emit_store_incoming_float_overflow_uses_volatile_scratch() {
+    let mut emitter = test_emitter();
+    let mut cursor = IncomingArgCursor::default();
+
+    for (index, name) in ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+        .iter()
+        .enumerate()
+    {
+        emit_store_incoming_param(
+            &mut emitter,
+            name,
+            &PhpType::Float,
+            (index + 1) * 8,
+            false,
+            &mut cursor,
+        );
+    }
+
+    let out = emitter.output();
+    assert!(out.contains("    ; param $i from caller stack +32\n"));
+    assert!(out.contains("    ldr d31, [x29, #32]\n"));
+    assert!(!out.contains("d15"));
+}
+
 /// Tests that `emit_frame_slot_address` correctly handles offsets larger than
 /// a single immediate instruction can encode by emitting multiple sub instructions
 /// to reach offsets like 5000 on ARM64.
@@ -121,6 +147,26 @@ fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     assert!(out.contains("    ldr x10, [sp]\n"));
     assert!(out.contains("    str x10, [sp, #160]\n"));
     assert!(out.contains("    add sp, sp, #160\n"));
+}
+
+/// Verifies that outgoing AArch64 float overflow staging never clobbers callee-saved d15.
+#[test]
+fn test_materialize_outgoing_float_overflow_uses_volatile_scratch() {
+    let mut emitter = test_emitter();
+    let arg_types = vec![PhpType::Float; 9];
+    let assignments = build_outgoing_arg_assignments_for_target(
+        Target::new(Platform::MacOS, Arch::AArch64),
+        &arg_types,
+        0,
+    );
+
+    let overflow_bytes = materialize_outgoing_args(&mut emitter, &assignments);
+    let out = emitter.output();
+
+    assert_eq!(overflow_bytes, 16);
+    assert!(out.contains("    ldr d31, [sp, #32]\n"));
+    assert!(out.contains("    str d31, [sp]\n"));
+    assert!(!out.contains("d15"));
 }
 
 /// Tests that `emit_store_local_slot_to_symbol` handles string slots with large

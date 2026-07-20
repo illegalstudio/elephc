@@ -1396,10 +1396,7 @@ fn store_descriptor_entry_incoming_arg(
                     emitter,
                     stack_offset.expect("stack offset"),
                 );
-                let spill_reg = match emitter.target.arch {
-                    Arch::AArch64 => "d15",
-                    Arch::X86_64 => "xmm15",
-                };
+                let spill_reg = abi::float_spill_scratch_reg(emitter.target);
                 abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
                 spill_reg
             };
@@ -1474,10 +1471,7 @@ fn load_descriptor_entry_actual_arg(
             let reg = if assignment.in_register() {
                 abi::float_arg_reg_name(emitter.target, assignment.start_reg)
             } else {
-                match emitter.target.arch {
-                    Arch::AArch64 => "d15",
-                    Arch::X86_64 => "xmm15",
-                }
+                abi::float_spill_scratch_reg(emitter.target)
             };
             abi::load_at_offset(emitter, reg, offset);
             if let Some(out_offset) = stack_offset {
