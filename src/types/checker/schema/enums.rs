@@ -314,6 +314,7 @@ pub(crate) fn insert_enum_metadata(
     );
 
     let mut static_methods = HashMap::new();
+    let mut late_static_static_method_returns = HashMap::new();
     let mut static_method_visibilities = HashMap::new();
     let mut static_method_declaring_classes = HashMap::new();
     let mut static_method_impl_classes = HashMap::new();
@@ -372,8 +373,9 @@ pub(crate) fn insert_enum_metadata(
     checker.declared_classes.insert(name.to_string());
 
     // User-declared enum methods. Enum cases are singleton objects, so instance methods dispatch
-    // on the case like a class. `self`/`static` hints resolve to the enum.
+    // on the case like a class. Lexical hints resolve to the enum while return `static` is retained.
     let mut methods = HashMap::new();
+    let mut late_static_method_returns = HashMap::new();
     let mut method_decls = Vec::new();
     let mut method_visibilities = HashMap::new();
     let mut method_declaring_classes = HashMap::new();
@@ -384,15 +386,26 @@ pub(crate) fn insert_enum_metadata(
         let mut method = method.clone();
         method.substitute_relative_class_types(name, None);
 
-        let sig = build_method_sig(checker, &method)?;
+        let sig = build_method_sig(checker, &method, name)?;
         let key = php_symbol_key(&method.name);
+        let late_static_return = method
+            .return_type
+            .as_ref()
+            .filter(|return_type| return_type.contains_late_static())
+            .cloned();
         if method.is_static {
             static_methods.insert(key.clone(), sig);
+            if let Some(return_type) = late_static_return {
+                late_static_static_method_returns.insert(key.clone(), return_type);
+            }
             static_method_visibilities.insert(key.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(key.clone(), name.to_string());
             static_method_impl_classes.insert(key, name.to_string());
         } else {
             methods.insert(key.clone(), sig);
+            if let Some(return_type) = late_static_return {
+                late_static_method_returns.insert(key.clone(), return_type);
+            }
             method_visibilities.insert(key.clone(), method.visibility.clone());
             method_declaring_classes.insert(key.clone(), name.to_string());
             method_impl_classes.insert(key, name.to_string());
@@ -489,6 +502,8 @@ pub(crate) fn insert_enum_metadata(
             method_decls,
             methods,
             static_methods,
+            late_static_method_returns,
+            late_static_static_method_returns,
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
             method_visibilities,

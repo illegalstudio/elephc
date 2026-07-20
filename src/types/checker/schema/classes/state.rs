@@ -50,6 +50,8 @@ pub(super) struct ClassBuildState {
     pub(super) final_static_properties: HashSet<String>,
     pub(super) method_sigs: HashMap<String, FunctionSig>,
     pub(super) static_sigs: HashMap<String, FunctionSig>,
+    pub(super) late_static_method_returns: HashMap<String, crate::parser::ast::TypeExpr>,
+    pub(super) late_static_static_method_returns: HashMap<String, crate::parser::ast::TypeExpr>,
     pub(super) method_visibilities: HashMap<String, Visibility>,
     pub(super) final_methods: HashSet<String>,
     pub(super) method_declaring_classes: HashMap<String, String>,
@@ -198,6 +200,8 @@ impl ClassBuildState {
             method_decls: class.methods.clone(),
             methods: self.method_sigs,
             static_methods: self.static_sigs,
+            late_static_method_returns: self.late_static_method_returns,
+            late_static_static_method_returns: self.late_static_static_method_returns,
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
             method_visibilities: self.method_visibilities,
@@ -497,6 +501,10 @@ impl ClassBuildState {
                 continue;
             }
             self.method_sigs.insert(name.clone(), sig.clone());
+            if let Some(return_type) = parent.late_static_method_returns.get(name) {
+                self.late_static_method_returns
+                    .insert(name.clone(), return_type.clone());
+            }
             if let Some(visibility) = parent.method_visibilities.get(name) {
                 self.method_visibilities
                     .insert(name.clone(), visibility.clone());
@@ -534,6 +542,10 @@ impl ClassBuildState {
                 continue;
             }
             self.static_sigs.insert(name.clone(), sig.clone());
+            if let Some(return_type) = parent.late_static_static_method_returns.get(name) {
+                self.late_static_static_method_returns
+                    .insert(name.clone(), return_type.clone());
+            }
             if let Some(visibility) = parent.static_method_visibilities.get(name) {
                 self.static_method_visibilities
                     .insert(name.clone(), visibility.clone());

@@ -14136,36 +14136,46 @@ fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
-    // Fluent `with*` wither (@return static): a method declared to return a strict
-    // ANCESTOR interface of the receiver interface actually returns `clone $this`
-    // (the receiver's concrete type). Resolve the IR value to the receiver so a
-    // descendant-only chained call dispatches — e.g. `withHeader(): Message` on a
-    // `Request` receiver must stay `Request` for the following `->withMethod()`.
-    // This MUST agree with the checker's infer_method_call_on_interface_type (#547):
-    // if the IR value kept the ancestor type, the EIR backend rejects the chained
-    // call as "interface method call to unknown method Message::withMethod".
-    let fluent_receiver = if let (Some((recv_name, _)), PhpType::Object(return_name)) =
-        (singular_object_class(&object_ty), &return_ty)
-    {
-        if php_symbol_key(method).starts_with("with")
-            && ctx.interfaces.contains_key(recv_name.trim_start_matches('\\'))
-            && php_symbol_key(return_name.trim_start_matches('\\'))
-                != php_symbol_key(recv_name.trim_start_matches('\\'))
-            && interface_extends_interface_for_ir(ctx, recv_name, return_name)
-        {
-            Some(recv_name.to_string())
-        } else {
-            None
-        }
+    let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
+        instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
+            .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
+            .unwrap_or(return_ty)
     } else {
-        None
+        return_ty
     };
-    let return_ty = fluent_receiver.map(PhpType::Object).unwrap_or(return_ty);
     if op == Op::NullsafeMethodCall && nullable {
         nullable_result_type(return_ty)
     } else {
         return_ty
     }
+}
+
+/// Returns preserved late-static return syntax for EIR instance dispatch.
+fn instance_method_late_static_return_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver_type: &str,
+    method_key: &str,
+) -> Option<TypeExpr> {
+    let normalized = receiver_type.trim_start_matches('\\');
+    if let Some(class_info) = ctx.classes.get(normalized) {
+        if let Some(return_type) = class_info.late_static_method_returns.get(method_key) {
+            return Some(return_type.clone());
+        }
+    }
+    ctx.interfaces
+        .get(normalized)
+        .and_then(|interface_info| interface_info.late_static_method_returns.get(method_key))
+        .cloned()
+}
+
+/// Binds preserved late-static return syntax to an EIR call-site receiver type.
+fn late_static_return_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    return_type: &TypeExpr,
+    receiver_type: &str,
+) -> PhpType {
+    let bound = return_type.substitute_relative_class_types(receiver_type, None);
+    normalize_value_php_type(ctx.type_expr_to_php_type_for_value(&bound))
 }
 
 /// Returns a common method signature for dynamic receivers when every candidate agrees.
@@ -14268,6 +14278,16 @@ fn lower_static_method_call(
                 fallback_expr_type(expr)
             }
         });
+    let late_static_receiver_type = static_late_binding_receiver_type_for_ir(ctx, receiver);
+    let result_type = match (
+        static_method_late_static_return_for_ir(ctx, receiver, dispatch_method),
+        late_static_receiver_type.as_deref(),
+    ) {
+        (Some(return_type), Some(receiver_type)) => {
+            late_static_return_type_for_ir(ctx, &return_type, receiver_type)
+        }
+        _ => result_type,
+    };
     let call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
@@ -14286,6 +14306,38 @@ fn lower_static_method_call(
         expr.span,
     );
     call
+}
+
+/// Returns preserved late-static return syntax for EIR static dispatch.
+fn static_method_late_static_return_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<TypeExpr> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let method_key = php_symbol_key(method);
+    let class_info = ctx.classes.get(&class_name)?;
+    if static_method_implementation_signature(ctx, receiver, method).is_some() {
+        return class_info
+            .late_static_static_method_returns
+            .get(&method_key)
+            .cloned();
+    }
+    lexical_instance_static_call_signature(ctx, receiver, method)?;
+    class_info.late_static_method_returns.get(&method_key).cloned()
+}
+
+/// Resolves the receiver type used to bind `static` for an EIR static-style call.
+fn static_late_binding_receiver_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
+            ctx.current_class.clone()
+        }
+    }
 }
 
 /// PHP coerces a numeric string to the integer backing value for an int-backed enum's
@@ -14525,9 +14577,20 @@ pub(super) fn static_method_call_expr_type_for_ir(
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<PhpType> {
-    static_method_implementation_signature(ctx, receiver, method)
+    let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+    match (
+        static_method_late_static_return_for_ir(ctx, receiver, method),
+        static_late_binding_receiver_type_for_ir(ctx, receiver),
+    ) {
+        (Some(return_type), Some(receiver_type)) => Some(late_static_return_type_for_ir(
+            ctx,
+            &return_type,
+            &receiver_type,
+        )),
+        _ => Some(nominal),
+    }
 }
 
 /// Returns the instance-method signature used by `self::method()` or `parent::method()`.
