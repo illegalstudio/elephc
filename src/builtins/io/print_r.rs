@@ -8,10 +8,8 @@
 //! - `check` refines the return type from the literal `$return` flag:
 //!   `print_r($v, true)` returns `Str` (the rendered output), `print_r($v)` /
 //!   `print_r($v, false)` echo and return `Bool` (true), and a runtime flag returns
-//!   `Mixed` (`string|bool`, boxed). The EIR-side return typing lives in
-//!   `crate::ir_lower::expr::print_r_builtin_return_type_for_args` and the codegen
-//!   dispatch in `debug::lower_print_r` follows the same result type — the three
-//!   must stay aligned.
+//!   `Mixed` (`string|bool`, boxed). The checked call-site result flows through
+//!   registry semantics into EIR, and `debug::lower_print_r` follows that type.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;

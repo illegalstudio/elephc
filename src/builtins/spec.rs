@@ -157,17 +157,9 @@ pub struct BuiltinSpec {
     /// gate are unaffected.
     pub arity_error: Option<&'static str>,
 
-    /// The PHP-level return type used by the type CHECKER when no `check` hook is
-    /// present (a `check` hook, when present, overrides this — see `check`).
-    ///
-    /// NOTE: this drives the *type checker* only. The EIR backend derives call
-    /// return types independently in `call_return_type`
-    /// (`src/ir_lower/expr/mod.rs`) from `sig.return_type` plus the
-    /// `*_builtin_return_type` override chain; it does NOT consult `returns` or
-    /// `check`. A builtin declared `returns: Mixed` with a precise `check` hook
-    /// (the standard pattern for non-scalar returns) therefore also needs a
-    /// matching EIR return-type arm, or the checker and EIR will disagree on the
-    /// value's type at the use site.
+    /// The declared PHP-level return type. The shared semantic descriptor decides
+    /// whether checker and EIR consumers use this declaration, a checked call-site
+    /// type, or one shared argument-sensitive resolver.
     pub returns: TypeSpec,
     /// Whether the function returns by reference.
     pub by_ref_return: bool,

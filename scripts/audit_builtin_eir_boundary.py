@@ -5,10 +5,9 @@ The default report is a deterministic summary of the current architecture.
 Use ``--json`` for the complete per-builtin inventory and
 ``--enforce-target-architecture`` for the final legacy-removal gate.
 
-The inventory is derived from the live ``builtin!``/``eval_builtin!`` registries
-and source references. It is deliberately not a hand-maintained builtin list.
-Once the target semantic fields exist in ``BuiltinSpec``, this audit must read
-those exported fields directly and stop inferring them from legacy source shape.
+The inventory is derived from the live ``builtin!``/``eval_builtin!`` registries,
+their exported semantic metadata, and source references. It is deliberately not
+a hand-maintained builtin list.
 """
 
 from __future__ import annotations
@@ -338,6 +337,11 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
                     f"{path.relative_to(REPO)}:{line_number}: checker-side requirement mutation"
                 )
 
+    for path in sorted((REPO / "src").rglob("*.rs")):
+        source = read(path)
+        if re.search(r"\bOp::BuiltinCall\b|\bBuiltinCall\b", source):
+            errors.append(f"{path.relative_to(REPO)}: opaque builtin EIR opcode remains")
+
     required_absences = {
         "src/ir/instr.rs": [r"\bBuiltinCall\b"],
         "src/types/signatures.rs": [r"\blegacy_builtin_call_sig\b"],
@@ -349,7 +353,10 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             r"pub\s+returns_independent_storage\s*:",
             r"pub\s+check\s*:",
             r"pub\s+lazy_check\s*:",
+            r"\*_builtin_return_type",
         ],
+        "src/types/checker/builtins/mod.rs": [r"legacy per-area dispatch"],
+        "src/types/checker/builtins/catalog.rs": [r"legacy static list", r"legacy catalog"],
         "src/ir_lower/expr/mod.rs": [
             r"fn\s+builtin_return_type_override\s*\(",
             r'"count"\s*=>\s*lower_count_args',

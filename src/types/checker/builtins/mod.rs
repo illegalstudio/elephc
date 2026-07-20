@@ -106,9 +106,9 @@ impl Checker {
             return Ok(Some(PhpType::Mixed));
         }
 
-        // Registry-first: if the builtin is registered, use its spec to check arity
-        // and consume its shared semantic validator/result resolver when migrated.
-        // Falls through to the legacy per-area dispatch when the name is not registered.
+        // Registry-backed builtins use their spec for arity, requirements,
+        // validation, and result typing. Only compiler-resident language
+        // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
