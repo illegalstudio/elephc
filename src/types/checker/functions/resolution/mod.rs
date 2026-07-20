@@ -371,7 +371,8 @@ impl Checker {
                         arg.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    let specialized_ty = Self::specialize_generic_array_hint(&declared_ty, &ty);
+                    let specialized_ty =
+                        Self::specialize_generic_array_param_hint(&declared_ty, &ty);
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;
                     continue;

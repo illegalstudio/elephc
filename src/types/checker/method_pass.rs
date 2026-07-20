@@ -85,7 +85,9 @@ impl Checker {
                                             PhpType::Array(_) | PhpType::AssocArray { .. }
                                         )
                                     })
-                                    .map(|t| Self::specialize_generic_array_hint(&declared, &t))
+                                    .map(|t| {
+                                        Self::specialize_generic_array_param_hint(&declared, &t)
+                                    })
                                     .unwrap_or(declared)
                             } else {
                                 declared
