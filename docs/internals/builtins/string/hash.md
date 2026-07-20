@@ -2,7 +2,7 @@
 title: "hash() — internals"
 description: "Compiler internals for hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 352
+  order: 369
 ---
 
 ## `hash()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:227](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L227) (`lower_hash`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:226](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L226) (`lower_hash`)
 - **Function symbol**: `lower_hash()`
 
 
@@ -32,6 +32,11 @@ function hash(string $algo, string $data, bool $binary = false): string
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

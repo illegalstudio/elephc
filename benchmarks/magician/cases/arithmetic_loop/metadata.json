@@ -1,0 +1,12 @@
+{
+  "description": "Arithmetic-only loop through a repeated dynamic eval fragment.",
+  "eval_fragments": [
+    {
+      "label": "arithmetic-step",
+      "source": "$value = ($value * 3 + $i) % 1000003;",
+      "invocations": 4000,
+      "source_kind": "dynamic",
+      "parse_cache_should_hit": true
+    }
+  ]
+}

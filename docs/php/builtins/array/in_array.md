@@ -20,6 +20,11 @@ Checks if a value exists in an array.
 
 **Returns**: `bool`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/in_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/in_array.rs)).
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

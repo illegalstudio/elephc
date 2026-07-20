@@ -2,7 +2,7 @@
 title: "fgetcsv() — internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 159
+  order: 163
 ---
 
 ## `fgetcsv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetcsv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2993](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2993) (`lower_fgetcsv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2991](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2991) (`lower_fgetcsv`)
 - **Function symbol**: `lower_fgetcsv()`
 
 
@@ -33,6 +33,11 @@ function fgetcsv(resource $stream, int $length = null, string $separator = ','):
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

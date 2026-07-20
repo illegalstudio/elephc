@@ -5,6 +5,10 @@ sidebar:
   order: 8
 ---
 
+> **Strict mode:** the `zval_*` builtins are an elephc extension with no PHP
+> equivalent. Compiling with
+> [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects them.
+
 The zval bridge is a compiler extension that converts native elephc runtime
 values into PHP-shaped `zval` structures and back. It is the foundation for
 linking a compiled program against a real PHP extension shared library: the

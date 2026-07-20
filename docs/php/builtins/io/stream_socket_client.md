@@ -2,7 +2,7 @@
 title: "stream_socket_client()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 217
+  order: 234
 ---
 
 ## stream_socket_client()
@@ -17,6 +17,11 @@ Open Internet or Unix domain socket connection.
 - `$address` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

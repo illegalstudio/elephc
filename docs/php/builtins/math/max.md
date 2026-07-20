@@ -2,7 +2,7 @@
 title: "max()"
 description: "Find highest value."
 sidebar:
-  order: 257
+  order: 274
 ---
 
 ## max()
@@ -18,6 +18,11 @@ Find highest value.
 - `...$values` — variadic: collects excess arguments into `$values`.
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/max.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

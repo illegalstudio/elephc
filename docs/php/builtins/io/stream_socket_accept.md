@@ -2,7 +2,7 @@
 title: "stream_socket_accept()"
 description: "Accept a connection on a socket created by stream_socket_server()."
 sidebar:
-  order: 216
+  order: 233
 ---
 
 ## stream_socket_accept()
@@ -19,6 +19,11 @@ Accept a connection on a socket created by stream_socket_server().
 - `$peer_name` (`string`), passed by reference, default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

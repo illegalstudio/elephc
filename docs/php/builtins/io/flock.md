@@ -2,7 +2,7 @@
 title: "flock()"
 description: "Portable advisory file locking."
 sidebar:
-  order: 164
+  order: 168
 ---
 
 ## flock()
@@ -19,6 +19,11 @@ Portable advisory file locking.
 - `$would_block` (`bool`), passed by reference, default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

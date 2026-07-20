@@ -34,6 +34,11 @@ function range(mixed $start, mixed $end): array
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/range.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/range.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `range()`](../../../php/builtins/array/range.md)

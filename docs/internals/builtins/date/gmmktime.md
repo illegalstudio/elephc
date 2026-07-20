@@ -2,7 +2,7 @@
 title: "gmmktime() — internals"
 description: "Compiler internals for gmmktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 91
+  order: 95
 ---
 
 ## `gmmktime()` — internals
@@ -36,6 +36,11 @@ function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 6 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/gmmktime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/gmmktime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

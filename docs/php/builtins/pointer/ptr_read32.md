@@ -2,7 +2,7 @@
 title: "ptr_read32()"
 description: "Reads one unsigned 32-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 291
+  order: 308
 ---
 
 ## ptr_read32()
@@ -17,6 +17,12 @@ Reads one unsigned 32-bit word through a raw pointer and returns it as an intege
 - `$pointer` (`pointer`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_read32.rs)).
+- **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

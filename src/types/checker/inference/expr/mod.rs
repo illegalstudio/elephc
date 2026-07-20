@@ -9,7 +9,9 @@
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
 };
@@ -43,9 +45,7 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => env.get(name).cloned().ok_or_else(|| {
-                CompileError::new(expr.span, &format!("Undefined variable: ${}", name))
-            }),
+            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
@@ -100,6 +100,7 @@ impl Checker {
                     expr.span,
                     &format!("Cannot increment/decrement ${} of type {:?}", name, other),
                 )),
+                None if self.eval_barrier_active => Ok(PhpType::Int),
                 None => Err(CompileError::new(
                     expr.span,
                     &format!("Undefined variable: ${}", name),
@@ -138,21 +139,23 @@ impl Checker {
                 default,
             } => {
                 self.infer_type(subject, env)?;
-                let mut result_ty = None;
+                let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.infer_type(result, env)?;
-                    if result_ty.is_none() {
-                        result_ty = Some(ty);
-                    }
+                    let ty = self.match_arm_result_type(result, env)?;
+                    result_ty = Some(match result_ty {
+                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
+                        None => ty,
+                    });
                 }
                 if let Some(d) = default {
-                    let ty = self.infer_type(d, env)?;
-                    if result_ty.is_none() {
-                        result_ty = Some(ty);
-                    }
+                    let ty = self.match_arm_result_type(d, env)?;
+                    result_ty = Some(match result_ty {
+                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
+                        None => ty,
+                    });
                 }
                 Ok(result_ty.unwrap_or(PhpType::Void))
             }
@@ -335,36 +338,23 @@ impl Checker {
                     let mut else_env = env.clone();
                     else_env.insert(guard.var, guard.else_ty);
                     (
-                        self.infer_type(then_expr, &then_env)?,
-                        self.infer_type(else_expr, &else_env)?,
+                        self.match_arm_result_type(then_expr, &then_env)?,
+                        self.match_arm_result_type(else_expr, &else_env)?,
                     )
                 } else {
-                    (self.infer_type(then_expr, env)?, self.infer_type(else_expr, env)?)
+                    (
+                        self.match_arm_result_type(then_expr, env)?,
+                        self.match_arm_result_type(else_expr, env)?,
+                    )
                 };
-                let result_ty = if then_ty == else_ty {
-                    then_ty
-                } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
-                    PhpType::Str
-                } else if then_ty == PhpType::Float || else_ty == PhpType::Float {
-                    PhpType::Float
-                } else {
-                    then_ty
-                };
-                Ok(result_ty)
+                // Same Mixed/nullable merge as match arms: heterogeneous heap
+                // types must not collapse through the Str-absorbing syntactic join.
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ShortTernary { value, default } => {
-                let value_ty = self.infer_type(value, env)?;
-                let default_ty = self.infer_type(default, env)?;
-                let result_ty = if value_ty == default_ty {
-                    value_ty
-                } else if value_ty == PhpType::Str || default_ty == PhpType::Str {
-                    PhpType::Str
-                } else if value_ty == PhpType::Float || default_ty == PhpType::Float {
-                    PhpType::Float
-                } else {
-                    value_ty
-                };
-                Ok(result_ty)
+                let value_ty = self.match_arm_result_type(value, env)?;
+                let default_ty = self.match_arm_result_type(default, env)?;
+                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
@@ -463,9 +453,13 @@ impl Checker {
                 )
             }
             ExprKind::ConstRef(name) => {
-                self.constants.get(name.as_str()).cloned().ok_or_else(|| {
-                    CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                })
+                self.constants
+                    .get(name.as_str())
+                    .cloned()
+                    .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+                    .ok_or_else(|| {
+                        CompileError::new(expr.span, &format!("Undefined constant: {}", name))
+                    })
             }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;
@@ -474,6 +468,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_by_ref,
                 variadic_type: _,
                 return_type,
                 body,
@@ -489,6 +484,7 @@ impl Checker {
                 self.infer_closure_type(
                     params,
                     variadic,
+                    *variadic_by_ref,
                     return_type,
                     body,
                     captures,
@@ -523,6 +519,16 @@ impl Checker {
             }
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
+            }
+            ExprKind::Clone(inner) => {
+                let ty = self.infer_type(inner, env)?;
+                match ty {
+                    PhpType::Object(class_name) => {
+                        self.check_clone_visibility(&class_name, expr.span)?;
+                        Ok(PhpType::Object(class_name))
+                    }
+                    _ => Err(CompileError::new(expr.span, "clone requires an object value")),
+                }
             }
             ExprKind::NewDynamic { name_expr, args } => {
                 // The class is named at runtime; without a literal class
@@ -578,6 +584,11 @@ impl Checker {
                 method,
                 args,
             } => self.infer_nullsafe_method_call_type(object, method, args, expr, env),
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => self.infer_nullsafe_dynamic_method_call_type(object, method, args, expr, env),
             ExprKind::StaticMethodCall {
                 receiver,
                 method,
@@ -590,6 +601,24 @@ impl Checker {
             } => self.infer_ptr_cast_type(target_type, inner, expr, env),
             ExprKind::ClassConstant { receiver } => {
                 self.validate_class_constant_receiver(receiver, expr.span)?;
+                Ok(PhpType::Str)
+            }
+            ExprKind::ObjectClassName { object } => {
+                let object_type = self.infer_type(object, env)?;
+                let object_only = match &object_type {
+                    PhpType::Object(_) => true,
+                    PhpType::Union(members) => {
+                        !members.is_empty()
+                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                    }
+                    _ => false,
+                };
+                if !object_only {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot use \"::class\" on {}", object_type),
+                    ));
+                }
                 Ok(PhpType::Str)
             }
             ExprKind::ScopedConstantAccess { receiver, name } => {
@@ -671,6 +700,19 @@ impl Checker {
         }
     }
 
+    /// Returns a variable type, allowing dynamic eval-created locals after an eval barrier.
+    fn variable_type_or_eval_dynamic(
+        &self,
+        name: &str,
+        span: Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        env.get(name)
+            .cloned()
+            .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
+    }
+
     /// Returns the element type of an array literal that contains at least one
     /// spread of an associative array.
     ///
@@ -721,6 +763,54 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
+    /// Infers a match/ternary arm result type for branch merging. Throw arms
+    /// produce no value, so their checker type (`Void`, shared with `null`) is
+    /// normalized to `Never` here: the merge must distinguish "arm never yields"
+    /// (defer to the other arms) from "arm yields null" (keep the merge nullable).
+    fn match_arm_result_type(
+        &mut self,
+        result: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.infer_type(result, env)?;
+        if matches!(result.kind, ExprKind::Throw(_)) {
+            return Ok(PhpType::Never);
+        }
+        Ok(ty)
+    }
+}
+
+impl Checker {
+    /// Checks whether the current scope may invoke a class's `__clone` hook.
+    ///
+    /// PHP permits `__clone` to be non-public, but the actual `clone $object`
+    /// expression must obey the hook's visibility when a hook exists.
+    fn check_clone_visibility(&self, class_name: &str, span: Span) -> Result<(), CompileError> {
+        let normalized = class_name.trim_start_matches('\\');
+        let Some(class_info) = self.classes.get(normalized) else {
+            return Ok(());
+        };
+        let key = php_symbol_key("__clone");
+        let Some(visibility) = class_info.method_visibilities.get(&key) else {
+            return Ok(());
+        };
+        let declaring_class = class_info
+            .method_declaring_classes
+            .get(&key)
+            .map(String::as_str)
+            .unwrap_or(normalized);
+        if self.can_access_member(declaring_class, visibility) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot access {} method: {}::__clone",
+                Self::visibility_label(visibility),
+                normalized
+            ),
+        ))
+    }
 }
 
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
@@ -735,4 +825,86 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Merges two match arm result types: identical arms keep their type,
+/// `Never`-typed arms (`throw`, normalized at the call site) defer to the
+/// other arm's type, `Void`-typed arms (checker `null`) keep the merge
+/// nullable so the null arm's value survives return-type-driven coercion.
+/// Object pairs, including supported `false`/null sentinels, retain a normalized
+/// union so declared object-union returns and member validation remain precise;
+/// every other heterogeneous pair widens to `Mixed` so each arm's runtime value
+/// survives instead of being coerced to the first arm's type.
+fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -> PhpType {
+    if acc == next {
+        return acc;
+    }
+    if acc == PhpType::Never {
+        return next;
+    }
+    if next == PhpType::Never {
+        return acc;
+    }
+    if acc == PhpType::Void {
+        return nullable_match_arm_type(next);
+    }
+    if next == PhpType::Void {
+        return nullable_match_arm_type(acc);
+    }
+    if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
+        return merge_object_union_match_arm_types(checker, acc, next);
+    }
+    PhpType::Mixed
+}
+
+/// Joins object/sentinel branch types at their existing compatible supertype
+/// when one accepts the other, otherwise retaining a normalized union. A null
+/// member from either side is restored after comparing the non-null members.
+fn merge_object_union_match_arm_types(
+    checker: &Checker,
+    acc: PhpType,
+    next: PhpType,
+) -> PhpType {
+    let nullable = Checker::union_contains_void(&acc) || Checker::union_contains_void(&next);
+    let acc_object = checker.strip_void_from_union(&acc);
+    let next_object = checker.strip_void_from_union(&next);
+    let merged = if checker.type_accepts(&acc_object, &next_object) {
+        acc_object
+    } else if checker.type_accepts(&next_object, &acc_object) {
+        next_object
+    } else {
+        checker.normalize_union_type(vec![acc_object, next_object])
+    };
+    if nullable {
+        nullable_match_arm_type(merged)
+    } else {
+        merged
+    }
+}
+
+/// Returns whether a branch type contains only concrete objects plus supported
+/// `false`/null sentinel members, which can be preserved as a checker-level
+/// union even though codegen materializes it through boxed `Mixed` storage.
+fn object_union_match_arm_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::False => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| matches!(member, PhpType::Object(_) | PhpType::False | PhpType::Void)),
+        _ => false,
+    }
+}
+
+/// Widens a match arm type to also admit PHP null, for merges where another
+/// arm is a `null` literal.
+fn nullable_match_arm_type(ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Union(members) if members.contains(&PhpType::Void) => PhpType::Union(members),
+        PhpType::Union(mut members) => {
+            members.push(PhpType::Void);
+            PhpType::Union(members)
+        }
+        other => PhpType::Union(vec![other, PhpType::Void]),
+    }
 }

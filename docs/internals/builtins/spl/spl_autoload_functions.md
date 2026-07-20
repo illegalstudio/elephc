@@ -2,7 +2,7 @@
 title: "spl_autoload_functions() — internals"
 description: "Compiler internals for spl_autoload_functions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 327
+  order: 344
 ---
 
 ## `spl_autoload_functions()` — internals
@@ -31,6 +31,11 @@ function spl_autoload_functions(): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_functions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_functions.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

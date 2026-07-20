@@ -82,7 +82,9 @@ pub(super) fn resolve_type_expr(
         }
         TypeExpr::Named(name) => {
             let raw = name.as_str();
-            if matches!(raw, "array" | "mixed" | "callable" | "void") {
+            if matches!(raw, "array" | "mixed" | "callable" | "void")
+                || raw.eq_ignore_ascii_case("object")
+            {
                 TypeExpr::Named(name.clone())
             } else {
                 TypeExpr::Named(resolved_name(resolve_special_or_class_name(
@@ -288,7 +290,7 @@ pub(super) fn resolve_function_name(
 }
 
 /// Resolves a constant name to its canonical form using imports, current namespace,
-/// the symbol table, and builtin globals (e.g., PHP_OS, STDIN, STDOUT, STDERR).
+/// the symbol table, and builtin globals (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR).
 pub(super) fn resolve_constant_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -299,7 +301,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS") {
+        if matches!(name.as_str(), "PHP_OS" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -346,32 +348,51 @@ pub(super) fn resolve_constant_name(
 }
 
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
-/// resolution (e.g., PHP_OS, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
+/// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-    if matches!(
-        name,
-        "PHP_OS"
-            | "PATHINFO_DIRNAME"
-            | "PATHINFO_BASENAME"
-            | "PATHINFO_EXTENSION"
-            | "PATHINFO_FILENAME"
-            | "PATHINFO_ALL"
-            | "FNM_NOESCAPE"
-            | "FNM_PATHNAME"
-            | "FNM_PERIOD"
-            | "FNM_CASEFOLD"
-            | "ARRAY_FILTER_USE_VALUE"
-            | "ARRAY_FILTER_USE_BOTH"
-            | "ARRAY_FILTER_USE_KEY"
-            | "STDIN"
-            | "STDOUT"
-            | "STDERR"
-    ) {
-        return true;
-    }
-    // Shared source-of-truth slices for JSON and stream/socket constants.
+        if matches!(
+            name,
+            "PHP_OS"
+                | "SID"
+                | "PATHINFO_DIRNAME"
+                | "PATHINFO_BASENAME"
+                | "PATHINFO_EXTENSION"
+                | "PATHINFO_FILENAME"
+                | "PATHINFO_ALL"
+                | "FNM_NOESCAPE"
+                | "FNM_PATHNAME"
+                | "FNM_PERIOD"
+                | "FNM_CASEFOLD"
+                | "ARRAY_FILTER_USE_VALUE"
+                | "ARRAY_FILTER_USE_BOTH"
+                | "ARRAY_FILTER_USE_KEY"
+                | "STDIN"
+                | "STDOUT"
+                | "STDERR"
+                | "PHP_INT_MAX"
+                | "PHP_INT_MIN"
+                | "PHP_FLOAT_MAX"
+                | "PHP_FLOAT_MIN"
+                | "PHP_FLOAT_EPSILON"
+                | "INF"
+                | "NAN"
+                | "M_PI"
+                | "M_E"
+                | "M_SQRT2"
+                | "M_PI_2"
+                | "M_PI_4"
+                | "M_LOG2E"
+                | "M_LOG10E"
+                | "PHP_EOL"
+                | "DIRECTORY_SEPARATOR"
+        ) {
+            return true;
+        }
+    // Shared source-of-truth slices for JSON, stream/socket, and session constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
+        .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
+        .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

@@ -53,7 +53,9 @@ impl Checker {
             if let StmtKind::FunctionDecl {
                 name,
                 params,
+                param_attributes,
                 variadic,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 by_ref_return,
@@ -83,15 +85,20 @@ impl Checker {
                     params.iter().map(|(_, t, _, _)| t.clone()).collect();
                 let defaults: Vec<Option<Expr>> =
                     params.iter().map(|(_, _, d, _)| d.clone()).collect();
-                let ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
+                let mut ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
+                if variadic.is_some() {
+                    ref_flags.push(*variadic_by_ref);
+                }
                 self.fn_decls.insert(
                     name.clone(),
                     FnDecl {
                         params: param_names,
                         param_types: param_type_anns,
+                        param_attributes: param_attributes.clone(),
                         defaults,
                         ref_params: ref_flags,
                         variadic: variadic.clone(),
+                        variadic_by_ref: *variadic_by_ref,
                         variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
                         by_ref_return: *by_ref_return,
@@ -270,6 +277,13 @@ impl Checker {
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
         Ok(Some(FunctionSig {
             params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults,
             return_type: crate::types::PhpType::Int,
             declared_return: decl.return_type.is_some(),
@@ -279,7 +293,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic,
             deprecation: None,

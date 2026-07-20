@@ -2,7 +2,7 @@
 title: "rad2deg() — internals"
 description: "Compiler internals for rad2deg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 262
+  order: 279
 ---
 
 ## `rad2deg()` — internals
@@ -31,6 +31,11 @@ function rad2deg(float $num): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

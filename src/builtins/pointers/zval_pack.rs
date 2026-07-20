@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Packs an elephc runtime value into a heap-allocated PHP zval pointer.",
+    extension: true,
 }
 
 /// Accepts any value and returns an untyped raw pointer to the allocated zval.

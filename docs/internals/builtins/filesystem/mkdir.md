@@ -2,7 +2,7 @@
 title: "mkdir() — internals"
 description: "Compiler internals for mkdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 134
+  order: 138
 ---
 
 ## `mkdir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/mkdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4428](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4428) (`lower_mkdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4424](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4424) (`lower_mkdir`)
 - **Function symbol**: `lower_mkdir()`
 
 
@@ -36,6 +36,11 @@ function mkdir(string $directory): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/mkdir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

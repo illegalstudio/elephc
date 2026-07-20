@@ -33,6 +33,10 @@ function array_any(mixed $array, mixed $callback): bool
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_any()`](../../../php/builtins/array/array_any.md)

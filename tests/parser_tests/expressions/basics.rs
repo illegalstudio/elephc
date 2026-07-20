@@ -51,6 +51,25 @@ fn test_parse_error_control_expression_statement() {
     }
 }
 
+/// Verifies that `clone $obj` parses as a unary clone expression over the receiver expression.
+#[test]
+fn test_parse_clone_expression() {
+    let stmts = parse_source("<?php $copy = clone $obj;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "copy");
+            match &value.kind {
+                ExprKind::Clone(inner) => {
+                    assert_eq!(inner.kind, ExprKind::Variable("obj".into()));
+                }
+                other => panic!("expected clone expression, got {:?}", other),
+            }
+        }
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php echo @$x + 1;` parses as `(@$x) + 1` (not `@($x + 1)`).
 /// Error suppression has higher precedence than addition, so the `@` applies only to `$x`.
 #[test]

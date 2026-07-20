@@ -2,7 +2,7 @@
 title: "chmod() — internals"
 description: "Compiler internals for chmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 105
 ---
 
 ## `chmod()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chmod.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4468](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4468) (`lower_chmod`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4464](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4464) (`lower_chmod`)
 - **Function symbol**: `lower_chmod()`
 
 
@@ -31,6 +31,11 @@ function chmod(string $filename, int $permissions): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/chmod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chmod.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

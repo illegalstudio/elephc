@@ -32,6 +32,10 @@ function array_uintersect(array $array1, array $array2, callable $callback): arr
 
 - **Arity**: takes exactly 3 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_uintersect()`](../../../php/builtins/array/array_uintersect.md)

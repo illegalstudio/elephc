@@ -2,7 +2,7 @@
 title: "tmpfile() — internals"
 description: "Compiler internals for tmpfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 149
+  order: 153
 ---
 
 ## `tmpfile()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/tmpfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tmpfile.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5416](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5416) (`lower_tmpfile`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5412](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5412) (`lower_tmpfile`)
 - **Function symbol**: `lower_tmpfile()`
 
 
@@ -34,6 +34,11 @@ function tmpfile(): mixed
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/tmpfile.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tmpfile.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

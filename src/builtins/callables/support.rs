@@ -31,17 +31,10 @@ pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpTyp
             &format!("{}() first argument must be a string literal in AOT mode", cx.name),
         ));
     }
-    if let Some(autoload_arg) = cx.args.get(1) {
-        if !matches!(
-            autoload_arg.kind,
-            ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
-        ) {
-            return Err(CompileError::new(
-                cx.span,
-                &format!("{}() autoload argument must be a literal bool or int in AOT mode", cx.name),
-            ));
-        }
-    }
+    // The optional autoload flag may be dynamic: it never contributes an AOT
+    // autoload demand (the demand walker treats non-literals as false), and
+    // existence still folds from the literal class name. The registry common
+    // path has already inferred it.
     Ok(PhpType::Bool)
 }
 
@@ -53,8 +46,11 @@ pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpTyp
 /// This hook is called with `lazy_check: true` so inference happens here, not in the common path.
 pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let first_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let dynamic_eval_target = cx.checker.eval_barrier_active
+        && matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
     if !matches!(first_ty, PhpType::Object(_))
         && !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
+        && !dynamic_eval_target
     {
         return Err(CompileError::new(
             cx.span,

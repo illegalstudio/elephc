@@ -19,6 +19,11 @@ Replaces elements from passed arrays into the first array recursively.
 
 **Returns**: `mixed`
 
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
+
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 

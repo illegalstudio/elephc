@@ -25,6 +25,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Returns a new pointer offset from the given pointer by the given byte count.",
+    extension: true,
 }
 
 /// Validates pointer and integer-compatible offset arguments and returns the pointer type.

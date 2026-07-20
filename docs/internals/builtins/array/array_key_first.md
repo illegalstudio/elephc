@@ -34,6 +34,10 @@ function array_key_first(array $array): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_key_first()`](../../../php/builtins/array/array_key_first.md)

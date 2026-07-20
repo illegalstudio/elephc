@@ -908,27 +908,29 @@ fn test_class_exists_with_int_nonzero_triggers_autoload() {
 /// Verifies class exists dynamic autoload arg does not trigger aot autoload.
 #[test]
 fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
-    // class_exists with a variable (non-literal) second arg must not trigger AOT autoload; panics.
-    let result = std::panic::catch_unwind(|| {
-        compile_and_run_files(
-            &[
-                (
-                    "composer.json",
-                    r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
-                ),
-                (
-                    "src/DynamicFlag.php",
-                    "<?php\nnamespace App;\nclass DynamicFlag {}\n",
-                ),
-                (
-                    "main.php",
-                    "<?php\n$autoload = true;\nclass_exists(\"App\\\\DynamicFlag\", $autoload);\n$d = new App\\DynamicFlag();\necho \"loaded\";\n",
-                ),
-            ],
-            "main.php",
-        )
-    });
-    assert!(result.is_err());
+    // class_exists with a variable second arg must not be guessed as an AOT
+    // autoload demand.
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/DynamicFlag.php",
+                "<?php\nnamespace App;\nclass DynamicFlag {}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+$autoload = true;
+echo class_exists("App\\DynamicFlag", $autoload) ? "exists" : "missing";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "missing");
 }
 
 /// Verifies interface exists literal triggers autoload.

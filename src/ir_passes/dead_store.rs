@@ -42,8 +42,8 @@ impl IrPass for DeadStore {
     /// Neutralizes dead scalar `store_local` instructions and reports whether any
     /// store changed. The literal pool is unused because the pass never
     /// materializes new constants.
-    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
-        let eligible = eligible_slots(function);
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
+        let eligible = eligible_slots(function, data);
         if eligible.is_empty() {
             return false;
         }
@@ -70,7 +70,7 @@ impl IrPass for DeadStore {
 /// `unset_local`, static-local or global access, list unpack, …) makes the slot
 /// ineligible because it could read or alias the slot in a way this pass does not
 /// model.
-fn eligible_slots(function: &Function) -> HashSet<LocalSlotId> {
+fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
         .iter()
@@ -95,7 +95,48 @@ fn eligible_slots(function: &Function) -> HashSet<LocalSlotId> {
     }
 
     exclude_address_escaping_slots(function, &mut eligible);
+    exclude_eval_literal_read_slots(function, data, &mut eligible);
     eligible
+}
+
+/// Drops slots read implicitly by literal `eval` calls from dead-store eligibility.
+///
+/// Direct eval AOT read-param lowering materializes those slot loads in codegen
+/// rather than as explicit EIR `LoadLocal` instructions, so the liveness scan
+/// cannot see them. Excluding the known read names keeps stores that feed the
+/// eval fragment alive while leaving ordinary scalar locals eligible.
+fn exclude_eval_literal_read_slots(
+    function: &Function,
+    data: &DataPool,
+    eligible: &mut HashSet<LocalSlotId>,
+) {
+    let slots_by_name: HashMap<String, LocalSlotId> = function
+        .locals
+        .iter()
+        .filter(|local| eligible.contains(&local.id))
+        .filter_map(|local| local.name.as_ref().map(|name| (name.clone(), local.id)))
+        .collect();
+    if slots_by_name.is_empty() {
+        return;
+    }
+
+    for inst in &function.instructions {
+        if inst.op != Op::EvalLiteralCall {
+            continue;
+        }
+        let Some(Immediate::Data(data_id)) = inst.immediate else {
+            continue;
+        };
+        let Some(fragment) = data.strings.get(data_id.as_raw() as usize) else {
+            continue;
+        };
+        let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(fragment, |_, _| false);
+        for name in plan.reads() {
+            if let Some(slot) = slots_by_name.get(name) {
+                eligible.remove(slot);
+            }
+        }
+    }
 }
 
 /// Drops slots whose loaded value can be reinterpreted as the slot's address.
@@ -188,7 +229,11 @@ fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {
 }
 
 /// Returns the eligible local slot loaded or stored by an instruction, if any.
-fn instruction_slot(function: &Function, inst_id: InstId, eligible: &HashSet<LocalSlotId>) -> Option<(Op, LocalSlotId)> {
+fn instruction_slot(
+    function: &Function,
+    inst_id: InstId,
+    eligible: &HashSet<LocalSlotId>,
+) -> Option<(Op, LocalSlotId)> {
     let inst = function.instruction(inst_id)?;
     let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
         return None;

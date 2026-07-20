@@ -29,6 +29,7 @@ builtin! {
     params: [separator: Str, array: Mixed = DefaultSpec::Null],
     max_args: 2,
     returns: Str,
+    returns_independent_storage: true,
     check: check,
     lower: lower,
     summary: "Joins array elements into a single string using a separator.",

@@ -2,7 +2,7 @@
 title: "cos() — internals"
 description: "Compiler internals for cos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 242
+  order: 259
 ---
 
 ## `cos()` — internals
@@ -31,6 +31,11 @@ function cos(float $num): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/cos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/cos.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

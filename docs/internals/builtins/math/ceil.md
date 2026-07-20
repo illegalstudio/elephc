@@ -2,7 +2,7 @@
 title: "ceil() — internals"
 description: "Compiler internals for ceil(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 240
+  order: 257
 ---
 
 ## `ceil()` — internals
@@ -31,6 +31,11 @@ function ceil(float $num): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/ceil.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/ceil.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

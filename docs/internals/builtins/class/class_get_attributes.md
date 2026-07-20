@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_get_attributes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_get_attributes.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:68](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L68) (`lower_class_get_attributes`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:77](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L77) (`lower_class_get_attributes`)
 - **Function symbol**: `lower_class_get_attributes()`
 
 
@@ -31,6 +31,11 @@ function class_get_attributes(string $class_name): array
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_get_attributes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_get_attributes.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

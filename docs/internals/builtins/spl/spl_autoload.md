@@ -2,7 +2,7 @@
 title: "spl_autoload() — internals"
 description: "Compiler internals for spl_autoload(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 341
 ---
 
 ## `spl_autoload()` — internals
@@ -31,6 +31,11 @@ function spl_autoload(string $class, string $file_extensions = null): void
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

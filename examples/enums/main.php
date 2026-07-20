@@ -21,6 +21,19 @@ foreach (Color::cases() as $color) {
 }
 echo PHP_EOL;
 
+// PHP permits keywords as case names. Their source spelling is preserved and
+// case-sensitive, so Match and MATCH are two distinct cases.
+enum ParserOutcome: string {
+    case Default = "default";
+    case Match = "match";
+    case MATCH = "upper-match";
+}
+
+foreach (ParserOutcome::cases() as $outcome) {
+    echo $outcome->name, "=", $outcome->value, " ";
+}
+echo PHP_EOL;
+
 function sql_sort_keyword(SortDirection $direction): string {
     return match ($direction) {
         SortDirection::Ascending => "ASC",

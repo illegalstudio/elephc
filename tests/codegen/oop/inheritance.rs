@@ -635,3 +635,78 @@ echo $c->value;
     );
     assert_eq!(out, "42:42");
 }
+
+/// Verifies a child property can shadow a private parent property with a fresh
+/// slot: parent methods keep reading the private slot while child/global reads
+/// see the child property.
+#[test]
+fn test_private_parent_property_shadowing_uses_separate_slots() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private int $value;
+
+    public function __construct() {
+        $this->value = 2;
+    }
+
+    public function parentValue() {
+        return $this->value;
+    }
+}
+
+class Child extends Base {
+    public $value = "child";
+
+    public function childValue() {
+        return $this->value;
+    }
+}
+
+$c = new Child();
+echo $c->parentValue();
+echo ":";
+echo $c->childValue();
+echo ":";
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "2:child:child");
+}
+
+/// Verifies a later non-private redeclaration updates the visible parent slot,
+/// while an older private grandparent slot stays separate for grandparent methods.
+#[test]
+fn test_private_grandparent_property_shadowing_survives_later_redeclaration() {
+    let out = compile_and_run(
+        r#"<?php
+class GrandParentBox {
+    private int $value = 1;
+
+    public function grandParentValue() {
+        return $this->value;
+    }
+}
+
+class ParentBox extends GrandParentBox {
+    public int $value = 2;
+
+    public function parentValue() {
+        return $this->value;
+    }
+}
+
+class ChildBox extends ParentBox {
+    public int $value = 3;
+}
+
+$c = new ChildBox();
+echo $c->grandParentValue();
+echo ":";
+echo $c->parentValue();
+echo ":";
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "1:3:3");
+}

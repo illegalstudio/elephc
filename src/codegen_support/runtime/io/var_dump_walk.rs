@@ -234,20 +234,17 @@ pub fn emit_var_dump_emit_indexed_key(emitter: &mut Emitter) {
     // Emit "  ["
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_indent_open");
     emitter.instruction("mov x2, #3");                                          // len("  [") = 3
-    emitter.instruction("mov x0, #1");                                          // fd=stdout
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // itoa(index) → x1/x2
     emitter.instruction("mov x0, x11");                                         // x11 holds the index from the caller's loop
     emitter.instruction("bl __rt_itoa");                                        // call runtime helper
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit "]=>\n"
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_arrow");
     emitter.instruction("mov x2, #4");                                          // len("]=>\n") = 4
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release runtime stack frame
@@ -268,24 +265,18 @@ fn emit_var_dump_emit_indexed_key_linux_x86_64(emitter: &mut Emitter) {
     // Emit "  ["
     abi::emit_symbol_address(emitter, "rsi", "_vd_indent_open");                // load runtime data address
     emitter.instruction("mov edx, 3");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     // itoa(index)
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // prepare runtime result value
     emitter.instruction("call __rt_itoa");                                      // call runtime helper
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     // Emit "]=>\n"
     abi::emit_symbol_address(emitter, "rsi", "_vd_close_arrow");                // load runtime data address
     emitter.instruction("mov edx, 4");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -312,20 +303,17 @@ pub fn emit_var_dump_emit_int_line(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_int_prefix");
     emitter.instruction("mov x2, #6");                                          // len("  int(") = 6
     emitter.instruction("mov x9, x0");                                          // preserve value
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // itoa(value)
     emitter.instruction("mov x0, x9");                                          // prepare AArch64 call argument
     emitter.instruction("bl __rt_itoa");                                        // call runtime helper
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ")\n"
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_paren");
     emitter.instruction("mov x2, #2");                                          // len(")\n") = 2
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release runtime stack frame
@@ -345,22 +333,16 @@ fn emit_var_dump_emit_int_line_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_int_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 6");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // prepare runtime result value
     emitter.instruction("call __rt_itoa");                                      // call runtime helper
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -387,32 +369,27 @@ pub fn emit_var_dump_emit_string_line(emitter: &mut Emitter) {
     // Emit "  string("
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_str_prefix");
     emitter.instruction("mov x2, #9");                                          // len("  string(") = 9
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // itoa(len)
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload len
     emitter.instruction("bl __rt_itoa");                                        // call runtime helper
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ") "
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_paren_space");
     emitter.instruction("mov x2, #3");                                          // len(") \"") = 3 — includes the opening quote
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Write the actual bytes
     emitter.instruction("ldr x1, [sp, #0]");                                    // ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // len
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit "\"\n"
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_quote");
     emitter.instruction("mov x2, #2");                                          // len("\"\n") = 2
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
@@ -433,34 +410,24 @@ fn emit_var_dump_emit_string_line_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_str_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 9");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // prepare runtime result value
     emitter.instruction("call __rt_itoa");                                      // call runtime helper
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren_space");          // load runtime data address
     emitter.instruction("mov edx, 3");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_close_quote");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -490,9 +457,7 @@ pub fn emit_var_dump_emit_bool_line(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_bool_false_line");
     emitter.instruction("mov x2, #14");                                         // len("  bool(false)\n") = 14
     emitter.label(done_label);
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("b __rt_vd_write");                                     // tail-call the ob/web-aware stdout sink; it returns to our caller
 }
 
 /// Emits the Linux x86_64 stream runtime helper for var dump emit bool line.
@@ -512,10 +477,7 @@ fn emit_var_dump_emit_bool_line_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rsi", "_vd_bool_false_line");            // load runtime data address
     emitter.instruction("mov edx, 14");                                         // prepare SysV call argument
     emitter.label(done_label);
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // invoke kernel service
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("jmp __rt_vd_write");                                   // tail-call the ob/web-aware stdout sink; it returns to our caller
 }
 
 /// `__rt_var_dump_array_bool`: walk an indexed `bool[]` array and emit
@@ -582,19 +544,16 @@ pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     // Emit "  float("
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_float_prefix");
     emitter.instruction("mov x2, #8");                                          // len("  float(") = 8
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // ftoa(d0) → x1=ptr, x2=len
     emitter.instruction("bl __rt_ftoa");                                        // call runtime helper
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ")\n"
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_paren");
     emitter.instruction("mov x2, #2");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x0, #1");                                          // prepare AArch64 call argument
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release runtime stack frame
@@ -614,22 +573,16 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_float_prefix");               // load runtime data address
     emitter.instruction("mov edx, 8");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload xmm0 for ftoa
     emitter.instruction("call __rt_ftoa");                                      // rax=ptr, rdx=len
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
-    emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
-    emitter.instruction("mov eax, 1");                                          // prepare runtime result value
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -728,10 +681,7 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
         emitter.label_global("__rt_var_dump_emit_null_line");
         abi::emit_symbol_address(emitter, "rsi", "_vd_null_line");              // load runtime data address
         emitter.instruction("mov edx, 7");                                      // len("  NULL\n") = 7
-        emitter.instruction("mov edi, 1");                                      // prepare SysV call argument
-        emitter.instruction("mov eax, 1");                                      // prepare runtime result value
-        emitter.instruction("syscall");                                         // invoke kernel service
-        emitter.instruction("ret");                                             // return to caller
+        emitter.instruction("jmp __rt_vd_write");                               // tail-call the ob/web-aware stdout sink; it returns to our caller
         return;
     }
     emitter.blank();
@@ -739,9 +689,7 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
     emitter.label_global("__rt_var_dump_emit_null_line");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_null_line");
     emitter.instruction("mov x2, #7");                                          // len("  NULL\n") = 7
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("b __rt_vd_write");                                     // tail-call the ob/web-aware stdout sink; it returns to our caller
 }
 
 /// `__rt_var_dump_array_mixed`: walk an indexed array of Mixed cell
@@ -976,20 +924,17 @@ pub fn emit_var_dump_emit_string_key(emitter: &mut Emitter) {
     // Emit `  ["`
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_str_key_open");
     emitter.instruction("mov x2, #4");                                          // len("  [\"") = 4
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Write the raw key bytes
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload key ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload key len
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit `"]=>\n`
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_str_key_close");
     emitter.instruction("mov x2, #5");                                          // len("\"]=>\n") = 5
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
@@ -1010,21 +955,15 @@ fn emit_var_dump_emit_string_key_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_str_key_open");               // load runtime data address
     emitter.instruction("mov edx, 4");                                          // len("  [\"") = 4
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload key ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload key len
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     abi::emit_symbol_address(emitter, "rsi", "_vd_str_key_close");              // load runtime data address
     emitter.instruction("mov edx, 5");                                          // len("\"]=>\n") = 5
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // sys_write
-    emitter.instruction("syscall");                                             // invoke kernel service
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1241,4 +1180,74 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the hash-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to the var_dump caller
+}
+
+/// Emits `__rt_vd_write`: the var_dump walker terminal-write indirection.
+///
+/// Inputs match the walkers' pre-syscall register layout (AArch64 `x1`=buf,
+/// `x2`=len / x86_64 `rsi`=buf, `rdx`=len). Routes the bytes through
+/// `__rt_stdout_write` so output-buffering (`ob_*`), print_r return-mode, and
+/// `--web` capture all see var_dump output, while preserving every register the
+/// walkers expect a raw `write` syscall to leave untouched (AArch64 `x3`-`x15`
+/// plus the float walker's pending `d0`; x86_64 `rdi`/`rsi`/`rdx`/`r8`/`r9`/`r10`).
+pub fn emit_var_dump_write(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_var_dump_write_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: vd_write ---");
+    emitter.label_global("__rt_vd_write");
+    emitter.instruction("sub sp, sp, #128");                                    // allocate the register-preserving vd_write frame
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish the vd_write frame pointer
+    emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve walker state the raw syscall left untouched
+    emitter.instruction("stp x5, x6, [sp, #16]");                               // preserve walker state the raw syscall left untouched
+    emitter.instruction("stp x7, x8, [sp, #32]");                               // preserve walker state the raw syscall left untouched
+    emitter.instruction("stp x9, x10, [sp, #48]");                              // preserve walker state the raw syscall left untouched
+    emitter.instruction("stp x11, x12, [sp, #64]");                             // preserve walker state the raw syscall left untouched
+    emitter.instruction("stp x13, x14, [sp, #80]");                             // preserve walker state the raw syscall left untouched
+    emitter.instruction("str x15, [sp, #96]");                                  // preserve walker state the raw syscall left untouched
+    emitter.instruction("str d0, [sp, #104]");                                  // preserve the float walker's pending d0 across the funnel call
+    emitter.instruction("mov x0, x1");                                          // __rt_stdout_write buf arg = incoming buf pointer
+    emitter.instruction("mov x1, x2");                                          // __rt_stdout_write len arg = incoming length
+    emitter.instruction("bl __rt_stdout_write");                                // write through the ob/print_r/web-aware stdout funnel
+    emitter.instruction("ldp x3, x4, [sp, #0]");                                // restore preserved walker state
+    emitter.instruction("ldp x5, x6, [sp, #16]");                               // restore preserved walker state
+    emitter.instruction("ldp x7, x8, [sp, #32]");                               // restore preserved walker state
+    emitter.instruction("ldp x9, x10, [sp, #48]");                              // restore preserved walker state
+    emitter.instruction("ldp x11, x12, [sp, #64]");                             // restore preserved walker state
+    emitter.instruction("ldp x13, x14, [sp, #80]");                             // restore preserved walker state
+    emitter.instruction("ldr x15, [sp, #96]");                                  // restore preserved walker state
+    emitter.instruction("ldr d0, [sp, #104]");                                  // restore the float walker's pending d0
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release the vd_write frame
+    emitter.instruction("ret");                                                 // return to the walker
+}
+
+/// Emits the Linux x86_64 variant of `__rt_vd_write`.
+fn emit_var_dump_write_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: vd_write ---");
+    emitter.label_global("__rt_vd_write");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the vd_write frame pointer
+    emitter.instruction("push rdi");                                            // preserve walker state the raw syscall left untouched
+    emitter.instruction("push rsi");                                            // preserve walker state the raw syscall left untouched
+    emitter.instruction("push rdx");                                            // preserve walker state the raw syscall left untouched
+    emitter.instruction("push r8");                                             // preserve walker state the raw syscall left untouched
+    emitter.instruction("push r9");                                             // preserve walker state the raw syscall left untouched
+    emitter.instruction("push r10");                                            // preserve walker state the raw syscall left untouched
+    emitter.instruction("mov rdi, rsi");                                        // __rt_stdout_write buf arg = incoming buf pointer
+    emitter.instruction("mov rsi, rdx");                                        // __rt_stdout_write len arg = incoming length
+    emitter.instruction("call __rt_stdout_write");                              // write through the ob/print_r/web-aware stdout funnel
+    emitter.instruction("pop r10");                                             // restore preserved walker state
+    emitter.instruction("pop r9");                                              // restore preserved walker state
+    emitter.instruction("pop r8");                                              // restore preserved walker state
+    emitter.instruction("pop rdx");                                             // restore preserved walker state
+    emitter.instruction("pop rsi");                                             // restore preserved walker state
+    emitter.instruction("pop rdi");                                             // restore preserved walker state
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the walker
 }

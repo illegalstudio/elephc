@@ -9,7 +9,7 @@
 //! Key details:
 //! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, TypeExpr};
 use crate::span::Span;
 
 use super::PhpType;
@@ -22,6 +22,8 @@ use super::PhpType;
 /// named arguments, callable aliases, and mutation semantics.
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>,
+    pub param_attributes: Vec<Vec<AttributeGroup>>,
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
     pub declared_return: bool,
@@ -59,13 +61,37 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         }
     }
 
+    let variadic_index = wrapper_sig.params.len();
+    let variadic_type_expr = if wrapper_sig.param_type_exprs.len() > variadic_index {
+        wrapper_sig.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_attributes = if wrapper_sig.param_attributes.len() > variadic_index {
+        wrapper_sig.param_attributes.remove(variadic_index)
+    } else {
+        Vec::new()
+    };
+    let variadic_ref = if wrapper_sig.ref_params.len() > variadic_index {
+        wrapper_sig.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if wrapper_sig.declared_params.len() > variadic_index {
+        wrapper_sig.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
+
     wrapper_sig.params.push((
         variadic_name.clone(),
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
     wrapper_sig.defaults.push(None);
-    wrapper_sig.ref_params.push(false);
-    wrapper_sig.declared_params.push(false);
+    wrapper_sig.ref_params.push(variadic_ref);
+    wrapper_sig.declared_params.push(variadic_declared);
+    wrapper_sig.param_type_exprs.push(variadic_type_expr);
+    wrapper_sig.param_attributes.push(variadic_attributes);
     wrapper_sig
 }
 
@@ -99,6 +125,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 /// longer needed.
 pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
+        "eval" => Some(fixed(&["code"])),
+
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
         | "date_default_timezone_get" => Some(fixed(&[])),
@@ -127,8 +155,9 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(fixed(&["text"]))
         }
 
-        "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
-        | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
+        "intval" | "floatval" | "boolval" | "strval" | "gettype" | "is_bool"
+        | "is_null" | "is_float" | "is_double" | "is_real" | "is_int" | "is_integer"
+        | "is_long" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
         | "empty" => {
             Some(fixed(&["value"]))
@@ -166,6 +195,14 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             &["object_or_class", "autoload"],
             1,
             vec![bool_lit(true)],
+        )),
+        "method_exists" => Some(with_return(
+            fixed(&["object_or_class", "method"]),
+            PhpType::Bool,
+        )),
+        "property_exists" => Some(with_return(
+            fixed(&["object_or_class", "property"]),
+            PhpType::Bool,
         )),
         "iterator_to_array" => Some(optional(
             &["iterator", "preserve_keys"],
@@ -702,6 +739,8 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "strlen" => Some(FunctionSig {
             params: vec![("string".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -719,6 +758,8 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
                     value: Box::new(PhpType::Mixed),
                 },
             )],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -730,6 +771,8 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }),
         "buffer_len" => Some(FunctionSig {
             params: vec![("buffer".to_string(), PhpType::Buffer(Box::new(PhpType::Int)))],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -773,14 +816,20 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Mixed],
             PhpType::Float,
         )),
+        "strval" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Str,
+        )),
         // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
         // No runtime callable wrapper is emitted for these three predicates, so listing
         // them here would emit an undefined `_fn_is_*` invoker reference in any program
         // using dynamic string callbacks.
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
-        "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
-        | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
-        | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+        "boolval" | "is_bool" | "is_null" | "is_float" | "is_double" | "is_real"
+        | "is_int" | "is_integer" | "is_long" | "is_iterable" | "is_string"
+        | "is_numeric" | "is_nan" | "is_finite" | "is_infinite" | "ctype_alpha"
+        | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
         "defined" => Some(typed_first_class_builtin_sig(
@@ -788,6 +837,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Bool,
         )),
+        "method_exists" | "property_exists" => {
+            return_typed_first_class_builtin_sig(name, PhpType::Bool)
+        }
         "gettype" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed],
@@ -1112,6 +1164,13 @@ fn variadic(regular_params: &[&str], variadic_name: &str) -> FunctionSig {
     make_sig(&params, defaults, Some(variadic_name))
 }
 
+/// Sets the declared return type for a signature while preserving its parameter contract.
+fn with_return(mut sig: FunctionSig, return_type: PhpType) -> FunctionSig {
+    sig.return_type = return_type;
+    sig.declared_return = true;
+    sig
+}
+
 /// Marks the first parameter of a signature as by-reference.
 fn first_param_ref(mut sig: FunctionSig) -> FunctionSig {
     if let Some(first_ref) = sig.ref_params.first_mut() {
@@ -1130,6 +1189,8 @@ fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>
             .iter()
             .map(|name| ((*name).to_string(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: vec![Vec::new(); params.len()],
         defaults,
         return_type: PhpType::Mixed,
         declared_return: false,
@@ -1169,6 +1230,8 @@ mod tests {
     fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
         FunctionSig {
             defaults: vec![None; params.len()],
+            param_type_exprs: vec![None; params.len()],
+            param_attributes: vec![Vec::new(); params.len()],
             return_type: PhpType::Mixed,
             declared_return: false,
             by_ref_return: false,

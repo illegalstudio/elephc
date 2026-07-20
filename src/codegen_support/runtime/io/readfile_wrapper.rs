@@ -65,8 +65,7 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // current byte total
     emitter.instruction("add x9, x9, x2");                                      // add this chunk's length
     emitter.instruction("str x9, [sp, #24]");                                   // store the updated total
-    emitter.instruction("mov x0, #1");                                          // fd = stdout (x1=ptr, x2=len already in place)
-    emitter.syscall(4);                                                         // write(1, chunk, len)
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the chunk ptr
     emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk, then loop
     emitter.instruction("b __rt_rfw_loop");                                     // stream the next chunk
@@ -127,8 +126,7 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, rdx");                                         // add this chunk's length
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // store the updated total
     emitter.instruction("mov rsi, rax");                                        // buffer = chunk ptr
-    emitter.instruction("mov edi, 1");                                          // fd = stdout (rdx=len already in place)
-    emitter.instruction("call write");                                          // write(1, chunk, len) via libc
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the chunk ptr
     emitter.instruction("call __rt_decref_any");                                // release the owned chunk, then loop
     emitter.instruction("jmp __rt_rfw_loop_x86");                               // stream the next chunk

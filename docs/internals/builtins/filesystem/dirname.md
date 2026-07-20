@@ -2,7 +2,7 @@
 title: "dirname() — internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 105
+  order: 109
 ---
 
 ## `dirname()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/dirname.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4575](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4575) (`lower_dirname`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4571](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4571) (`lower_dirname`)
 - **Function symbol**: `lower_dirname()`
 
 
@@ -33,6 +33,11 @@ function dirname(string $path, int $levels = 1): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

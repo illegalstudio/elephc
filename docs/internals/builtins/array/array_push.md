@@ -34,6 +34,13 @@ function array_push(array $array, ...$values): void
 - **By-reference parameters**: `$array`.
 - **Variadic**: collects excess arguments into `$values`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_push.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+- **Variadic**: collects excess arguments into `$values`.
+
 ## Cross-references
 
 - [User reference for `array_push()`](../../../php/builtins/array/array_push.md)

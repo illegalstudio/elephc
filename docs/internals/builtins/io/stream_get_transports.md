@@ -2,7 +2,7 @@
 title: "stream_get_transports() — internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 222
 ---
 
 ## `stream_get_transports()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_transports.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1477](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1477) (`lower_stream_get_transports`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1475](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1475) (`lower_stream_get_transports`)
 - **Function symbol**: `lower_stream_get_transports()`
 
 
@@ -31,6 +31,11 @@ function stream_get_transports(): array
 ## What the type checker enforces
 
 - **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "spl_object_hash() — internals"
 description: "Compiler internals for spl_object_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 331
+  order: 348
 ---
 
 ## `spl_object_hash()` — internals
@@ -32,6 +32,11 @@ function spl_object_hash(object $object): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

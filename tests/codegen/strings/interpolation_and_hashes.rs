@@ -72,6 +72,20 @@ fn test_string_interpolation_complex_property() {
     assert_eq!(out, "5");
 }
 
+/// Verifies complex interpolation retains a keyword-spelled property's exact source casing while
+/// re-tokenizing the expression between braces.
+#[test]
+fn test_string_interpolation_keyword_property_preserves_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+        class KeywordProperty { public string $Match = "ok"; }
+        $object = new KeywordProperty();
+        echo "{$object->Match}";
+        "#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies simple `$arr[key]` interpolation with a bareword key (treated as a string key).
 #[test]
 fn test_string_interpolation_simple_array_bareword() {

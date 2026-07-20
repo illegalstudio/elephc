@@ -2,7 +2,7 @@
 title: "gzuncompress()"
 description: "Uncompress a compressed string."
 sidebar:
-  order: 351
+  order: 368
 ---
 
 ## gzuncompress()
@@ -18,6 +18,11 @@ Uncompress a compressed string.
 - `$max_length` (`int`), default `0`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

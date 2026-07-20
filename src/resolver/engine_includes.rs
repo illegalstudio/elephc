@@ -86,6 +86,9 @@ pub(super) fn resolve_include_stmt(
     let included_stmts = parse_file(&resolved, stmt.span)?;
     let included_stmts =
         crate::magic_constants::substitute_file_and_scope_constants(included_stmts, &resolved);
+    // Strict-PHP audit of the included user file on its freshly parsed AST,
+    // before include-variant synthesis introduces compiler-internal names.
+    crate::strict_php::check_file(&included_stmts, &resolved.display().to_string())?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     include_chain.push(canonical.clone());

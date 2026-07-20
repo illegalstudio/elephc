@@ -1,0 +1,29 @@
+//! Purpose:
+//! Declarative eval registry entry for `uksort`.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::array`.
+//!
+//! Key details:
+//! - Direct calls stay on the source-sensitive by-reference path.
+
+use super::super::super::*;
+
+eval_builtin! {
+    name: "uksort",
+    area: Array,
+    params: [array: by_ref, callback],
+    by_ref: [array],
+    direct: none,
+    values: ArrayMutating,
+}
+/// Dispatches by-value callable eval calls for the `uksort` array mutator.
+pub(in crate::interpreter) fn eval_uksort_declared_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, callback] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
+    super::array_pop::eval_warn_array_by_value("uksort", values)?;
+    super::usort::eval_user_sort_value_result("uksort", *array, *callback, context, values)
+}

@@ -2,7 +2,7 @@
 title: "stream_filter_remove()"
 description: "Removes a filter from a stream."
 sidebar:
-  order: 200
+  order: 217
 ---
 
 ## stream_filter_remove()
@@ -17,6 +17,11 @@ Removes a filter from a stream.
 - `$stream_filter` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

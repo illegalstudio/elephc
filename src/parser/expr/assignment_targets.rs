@@ -316,6 +316,17 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::NullsafeMethodCall { object, .. } => {
             collect_assignment_target_dependencies(object, dependencies);
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_assignment_target_dependencies(object, dependencies);
+            collect_assignment_target_dependencies(method, dependencies);
+            for arg in args {
+                collect_assignment_target_dependencies(arg, dependencies);
+            }
+        }
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             collect_assignment_target_dependencies(object, dependencies);
@@ -333,12 +344,16 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => collect_assignment_target_dependencies(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value } => {
+            collect_assignment_target_dependencies(value, dependencies)
+        }
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
@@ -465,12 +480,16 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => expr_may_write_dependency(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value } => {
+            expr_may_write_dependency(value, dependencies)
+        }
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
@@ -527,6 +546,18 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_may_write_dependency(object, dependencies)
+                || args.iter().any(|arg| {
+                    expr_contains_dependency(arg, dependencies)
+                        || expr_may_write_dependency(arg, dependencies)
+                })
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_may_write_dependency(object, dependencies)
+                || expr_may_write_dependency(method, dependencies)
                 || args.iter().any(|arg| {
                     expr_contains_dependency(arg, dependencies)
                         || expr_may_write_dependency(arg, dependencies)
@@ -663,12 +694,14 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
+        | ExprKind::ObjectClassName { object: value }
         | ExprKind::YieldFrom(value) => expr_contains_equivalent(value, needle),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_contains_equivalent(value, needle) || expr_contains_equivalent(default, needle)
@@ -754,6 +787,15 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_contains_equivalent(object, needle)
+                || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_contains_equivalent(object, needle)
+                || expr_contains_equivalent(method, needle)
                 || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
         ExprKind::BufferNew { len, .. } => expr_contains_equivalent(len, needle),

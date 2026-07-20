@@ -2,7 +2,7 @@
 title: "log2() — internals"
 description: "Compiler internals for log2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 256
+  order: 273
 ---
 
 ## `log2()` — internals
@@ -31,6 +31,11 @@ function log2(float $num): float
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/log2.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/log2.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

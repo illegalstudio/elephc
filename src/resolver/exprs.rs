@@ -223,6 +223,7 @@ pub(super) fn resolve_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -234,6 +235,7 @@ pub(super) fn resolve_expr(
         } => ExprKind::Closure {
             params: resolve_params(params, base_dir, declared_once, include_chain, state, function_variants)?,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body: resolve_isolated(
@@ -371,6 +373,29 @@ pub(super) fn resolve_expr(
                 function_variants,
             )?),
             method,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(resolve_expr(
+                *object,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            method: Box::new(resolve_expr(
+                *method,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
             args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::StaticMethodCall {

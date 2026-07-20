@@ -7,6 +7,8 @@ sidebar:
 
 `ifdef` selectively includes or excludes code based on compile-time symbols.
 
+> **Strict mode:** `ifdef` is an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects it (and `--define` cannot be combined with the flag).
+
 ## Syntax
 ```php
 <?php

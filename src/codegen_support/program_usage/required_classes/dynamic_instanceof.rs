@@ -158,11 +158,13 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::Throw(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::NamedArg { value: expr, .. }
-        | ExprKind::BufferNew { len: expr, .. } => expr_has_dynamic_instanceof(expr),
+        | ExprKind::BufferNew { len: expr, .. }
+        | ExprKind::ObjectClassName { object: expr } => expr_has_dynamic_instanceof(expr),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(default)
@@ -240,6 +242,15 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_dynamic_instanceof(object) || args.iter().any(expr_has_dynamic_instanceof)
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_dynamic_instanceof(object)
+                || expr_has_dynamic_instanceof(method)
+                || args.iter().any(expr_has_dynamic_instanceof)
         }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
             object,

@@ -2,7 +2,7 @@
 title: "Strings"
 description: "String types, escape sequences, interpolation, heredoc/nowdoc, and built-in string functions."
 sidebar:
-  order: 5
+  order: 6
 ---
 
 ## Double-quoted strings

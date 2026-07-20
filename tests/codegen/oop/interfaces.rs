@@ -93,6 +93,75 @@ echo $item->name() . ":" . $item->tag();
     assert_eq!(out, "box:BX");
 }
 
+/// Verifies a class can satisfy a static interface method contract.
+///
+/// Fixture: interface `StaticMaker` declares `public static make(...)`;
+/// `StaticWidget` implements it. The test also checks ReflectionClass and
+/// ReflectionMethod expose the method as static.
+#[test]
+fn test_static_interface_method_contract_is_supported() {
+    let out = compile_and_run(
+        r#"<?php
+interface StaticMaker {
+    public static function make(string $name): string;
+}
+
+class StaticWidget implements StaticMaker {
+    public static function make(string $name): string {
+        return "W:" . $name;
+    }
+}
+
+echo StaticWidget::make("box");
+echo ":";
+$interface = new ReflectionClass(StaticMaker::class);
+echo $interface->hasMethod("make") ? "H" : "h";
+echo ":";
+$listed = $interface->getMethods()[0];
+echo $listed->getName();
+echo ":";
+echo $listed->isStatic() ? "S" : "s";
+echo ":";
+echo $listed->getNumberOfParameters();
+echo ":";
+$method = new ReflectionMethod(StaticMaker::class, "make");
+echo $method->isStatic() ? "S" : "s";
+echo ":";
+echo $method->getName();
+echo ":";
+echo (new ReflectionClass(StaticWidget::class))->implementsInterface(StaticMaker::class) ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "W:box:H:make:S:1:S:make:Y");
+}
+
+/// Verifies an abstract class may defer a static interface method to a concrete child.
+///
+/// Fixture: `AbstractStaticLabel` implements `StaticLabel` but leaves the
+/// static contract abstract; `ConcreteStaticLabel` provides it and is callable.
+#[test]
+fn test_abstract_class_can_defer_static_interface_method_to_child() {
+    let out = compile_and_run(
+        r#"<?php
+interface StaticLabel {
+    public static function label(): string;
+}
+
+abstract class AbstractStaticLabel implements StaticLabel {
+}
+
+class ConcreteStaticLabel extends AbstractStaticLabel {
+    public static function label(): string {
+        return "ready";
+    }
+}
+
+echo ConcreteStaticLabel::label();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
 /// Verifies transitive interface extension is enforced: a class must satisfy the full chain.
 /// Fixture: `Labeled extends Named`, `Product implements Labeled`. Uses `strtoupper($this->name())`.
 /// Asserts the method call correctly resolves through the transitive interface hierarchy.
@@ -281,4 +350,42 @@ echo implode(',', C::previews());
 "#,
     );
     assert_eq!(out, "a,b");
+}
+
+/// An implementation may return a NARROWER type than the interface declares — the PSR-7 shape
+/// `withX(): static` (resolving to the class) against an interface-typed return. The class
+/// under validation is mid-construction when conformance runs, so the covariance is proven
+/// from the conformance context itself. Byte-parity vs PHP 8.5.
+#[test]
+fn test_interface_covariant_self_return() {
+    let out = compile_and_run(
+        "<?php interface I { public function w(): I; } final class C implements I { public function w(): static { return $this; } } echo (new C())->w() instanceof C ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// A static implementation may return its concrete class against an interface return contract.
+#[test]
+fn test_static_interface_covariant_self_return() {
+    let out = compile_and_run(
+        r#"<?php
+interface Maker {
+    public static function make(): Maker;
+}
+final class Product implements Maker {
+    public static function make(): static { return new static(); }
+}
+echo Product::make() instanceof Product ? 'ok' : 'no';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Parent method returns the parent class; child may override with `static` / self (covariant).
+#[test]
+fn test_class_covariant_self_return_override() {
+    let out = compile_and_run(
+        "<?php class Base { public function w(): Base { return $this; } } class Child extends Base { public function w(): static { return $this; } } echo (new Child())->w() instanceof Child ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
 }

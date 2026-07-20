@@ -13,7 +13,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_callable_descriptor_release` runtime helper for the active target.
 ///
@@ -146,7 +145,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_callable_descriptor_release_done");           // outside-heap descriptors are not runtime-owned
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the x86_64 heap marker/kind word
     emitter.instruction("shr r10, 32");                                         // isolate the high-word ownership marker
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that this block belongs to the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this block belongs to the x86_64 heap wrapper
     emitter.instruction("jne __rt_callable_descriptor_release_done");           // foreign/static pointers are ignored
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load descriptor refcount from the uniform heap header
     emitter.instruction("test r10d, r10d");                                     // has this raw heap block already been released?

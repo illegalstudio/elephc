@@ -33,6 +33,10 @@ function array_find(mixed $array, mixed $callback): mixed
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `array_find()`](../../../php/builtins/array/array_find.md)

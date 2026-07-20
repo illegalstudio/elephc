@@ -2,7 +2,7 @@
 title: "is_link() — internals"
 description: "Compiler internals for is_link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 125
+  order: 129
 ---
 
 ## `is_link()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_link.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5640](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5640) (`lower_is_link`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5636](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5636) (`lower_is_link`)
 - **Function symbol**: `lower_is_link()`
 
 
@@ -35,6 +35,11 @@ function is_link(string $filename): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

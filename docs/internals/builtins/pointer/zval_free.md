@@ -2,7 +2,7 @@
 title: "zval_free() — internals"
 description: "Compiler internals for zval_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 300
+  order: 317
 ---
 
 ## `zval_free()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_free.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_free.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:606](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L606) (`lower_zval_free`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:598](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L598) (`lower_zval_free`)
 - **Function symbol**: `lower_zval_free()`
 
 
@@ -32,6 +32,10 @@ function zval_free(pointer $zval): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

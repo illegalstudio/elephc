@@ -15,9 +15,11 @@ use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -38,6 +40,10 @@ pub(crate) fn collect_constants(
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
             PhpType::Str,
         ),
+    );
+    constants.insert(
+        "SID".to_string(),
+        (ExprKind::StringLiteral(String::new()), PhpType::Str),
     );
     constants.insert(
         "PATHINFO_DIRNAME".to_string(),
@@ -144,6 +150,101 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in SESSION_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in ERROR_LEVEL_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
+    constants.insert(
+        "PHP_INT_MAX".to_string(),
+        (ExprKind::IntLiteral(i64::MAX), PhpType::Int),
+    );
+    constants.insert(
+        "PHP_INT_MIN".to_string(),
+        (ExprKind::IntLiteral(i64::MIN), PhpType::Int),
+    );
+    constants.insert(
+        "PHP_FLOAT_MAX".to_string(),
+        (ExprKind::FloatLiteral(f64::MAX), PhpType::Float),
+    );
+    constants.insert(
+        "PHP_FLOAT_MIN".to_string(),
+        (ExprKind::FloatLiteral(f64::MIN_POSITIVE), PhpType::Float),
+    );
+    constants.insert(
+        "PHP_FLOAT_EPSILON".to_string(),
+        (ExprKind::FloatLiteral(f64::EPSILON), PhpType::Float),
+    );
+    constants.insert(
+        "INF".to_string(),
+        (ExprKind::FloatLiteral(f64::INFINITY), PhpType::Float),
+    );
+    constants.insert(
+        "NAN".to_string(),
+        (ExprKind::FloatLiteral(f64::NAN), PhpType::Float),
+    );
+    constants.insert(
+        "M_PI".to_string(),
+        (ExprKind::FloatLiteral(std::f64::consts::PI), PhpType::Float),
+    );
+    constants.insert(
+        "M_E".to_string(),
+        (ExprKind::FloatLiteral(std::f64::consts::E), PhpType::Float),
+    );
+    constants.insert(
+        "M_SQRT2".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::SQRT_2),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_PI_2".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_PI_4".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_LOG2E".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::LOG2_E),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_LOG10E".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::LOG10_E),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "PHP_EOL".to_string(),
+        (ExprKind::StringLiteral("\n".to_string()), PhpType::Str),
+    );
+    constants.insert(
+        "DIRECTORY_SEPARATOR".to_string(),
+        (
+            ExprKind::StringLiteral(std::path::MAIN_SEPARATOR.to_string()),
+            PhpType::Str,
+        ),
+    );
     collect_constant_decls(program, &mut constants);
     constants
 }

@@ -66,6 +66,7 @@ fn lower_late_static_class_name(ctx: &mut FunctionContext<'_>) -> Result<()> {
 fn lower_late_static_class_name_arm64(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
+    emit_eval_native_frame_called_class_override_probe(ctx, &done);
     emit_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
     ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the emitted class-name table
@@ -87,6 +88,7 @@ fn lower_late_static_class_name_arm64(ctx: &mut FunctionContext<'_>) -> Result<(
 fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
+    emit_eval_native_frame_called_class_override_probe(ctx, &done);
     emit_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
     ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the emitted class-name table
@@ -102,6 +104,92 @@ fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<
     ctx.emitter.instruction("mov rdx, 0");                                      // missing metadata stringifies to an empty class name
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Probes eval's thread-local called-class override before falling back to AOT class ids.
+fn emit_eval_native_frame_called_class_override_probe(
+    ctx: &mut FunctionContext<'_>,
+    done_label: &str,
+) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    let Some(frame_class) = current_late_static_frame_class(ctx).map(str::to_string) else {
+        return;
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            emit_eval_native_frame_called_class_override_probe_aarch64(ctx, &frame_class, done_label);
+        }
+        Arch::X86_64 => {
+            emit_eval_native_frame_called_class_override_probe_x86_64(ctx, &frame_class, done_label);
+        }
+    }
+}
+
+/// Emits the AArch64 eval override probe for one generated/AOT method frame.
+fn emit_eval_native_frame_called_class_override_probe_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    frame_class: &str,
+    done_label: &str,
+) {
+    let no_override = ctx.next_label("static_class_no_eval_override");
+    let (class_label, class_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_symbol_address(ctx.emitter, "x0", &class_label);
+    abi::emit_load_int_immediate(ctx.emitter, "x1", class_len as i64);
+    abi::emit_temporary_stack_address(ctx.emitter, "x2", 0);
+    abi::emit_temporary_stack_address(ctx.emitter, "x3", 8);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_called_class_override");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.instruction("cmp x0, #0");                                      // check whether eval has a late-static class override for this AOT frame
+    ctx.emitter.instruction(&format!("b.eq {}", no_override));                  // fall back to the emitted class-id metadata when no override is active
+    ctx.emitter.instruction("ldr x1, [sp]");                                    // load the eval called-class name pointer into the string result
+    ctx.emitter.instruction("ldr x2, [sp, #8]");                                // load the eval called-class name length into the string result
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the AOT class-id metadata path after using the eval override
+    ctx.emitter.label(&no_override);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+}
+
+/// Emits the x86_64 eval override probe for one generated/AOT method frame.
+fn emit_eval_native_frame_called_class_override_probe_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    frame_class: &str,
+    done_label: &str,
+) {
+    let no_override = ctx.next_label("static_class_no_eval_override");
+    let (class_label, class_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_symbol_address(ctx.emitter, "rdi", &class_label);
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", class_len as i64);
+    abi::emit_temporary_stack_address(ctx.emitter, "rdx", 0);
+    abi::emit_temporary_stack_address(ctx.emitter, "rcx", 8);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_called_class_override");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.instruction("cmp rax, 0");                                      // check whether eval has a late-static class override for this AOT frame
+    ctx.emitter.instruction(&format!("je {}", no_override));                    // fall back to the emitted class-id metadata when no override is active
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // load the eval called-class name pointer into the string result
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // load the eval called-class name length into the string result
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the AOT class-id metadata path after using the eval override
+    ctx.emitter.label(&no_override);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+}
+
+/// Returns the generated/AOT class encoded in the current method frame name.
+fn current_late_static_frame_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
+    ctx.function
+        .flags
+        .is_method
+        .then(|| ctx.function.name.rsplit_once("::").map(|(class_name, _)| class_name))
+        .flatten()
 }
 
 /// Loads the late-static class id from the hidden static frame slot or `$this`.

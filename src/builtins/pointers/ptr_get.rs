@@ -24,6 +24,7 @@ builtin! {
     check: check,
     lower: lower,
     summary: "Reads one machine word through a raw pointer and returns it as an integer.",
+    extension: true,
 }
 
 /// Validates that the argument is a pointer type and returns `PhpType::Int`.

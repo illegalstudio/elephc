@@ -88,6 +88,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(propagate_expr(*inner, env))),
+        ExprKind::Clone(inner) => {
+            let empty_env = HashMap::new();
+            ExprKind::Clone(Box::new(propagate_expr(*inner, &empty_env)))
+        }
         ExprKind::ErrorSuppress(inner) => {
             ExprKind::ErrorSuppress(Box::new(propagate_expr(*inner, env)))
         }
@@ -193,6 +197,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -210,6 +215,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::Closure {
                 params: propagate_params(params),
                 variadic,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 body: super::stmt::with_function_scope(|| {
@@ -315,6 +321,19 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 args: propagate_args(args, None, None),
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = propagate_expr(*object, env);
+            let method = propagate_expr(*method, env);
+            ExprKind::NullsafeDynamicMethodCall {
+                object: Box::new(object),
+                method: Box::new(method),
+                args: propagate_args(args, None, None),
+            }
+        }
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -342,6 +361,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             len: Box::new(propagate_expr(*len, env)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(propagate_expr(*object, env)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }

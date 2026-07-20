@@ -49,6 +49,63 @@ fn test_typed_callable_parameter() {
     assert_eq!(out, "2");
 }
 
+/// Verifies an unqualified global `Closure` class hint maps to callable storage for both
+/// parameters and return values.
+#[test]
+fn test_global_closure_parameter_and_return_type_hints() {
+    let out = compile_and_run(
+        r#"<?php
+function preserve_closure(Closure $callback): Closure {
+    return $callback;
+}
+
+$callback = preserve_closure(function (string $value): string {
+    return $value . "!";
+});
+echo $callback("ok");
+"#,
+    );
+    assert_eq!(out, "ok!");
+}
+
+/// Verifies `use Closure` and fully-qualified `\Closure` hints resolve to the global Closure
+/// class inside a namespace for parameters, return values, and property declarations.
+#[test]
+fn test_namespaced_imported_and_fully_qualified_closure_type_hints() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+use Closure;
+
+class ClosureHolder {
+    public Closure $plain;
+    public ?\Closure $nullable;
+    public Closure|null $union;
+}
+
+function preserve_imported_closure(Closure $callback): Closure {
+    return $callback;
+}
+
+function preserve_global_closure(\Closure $callback): \Closure {
+    return $callback;
+}
+
+$holder = new ClosureHolder();
+$holder->plain = preserve_imported_closure(function (): string { return "plain"; });
+$holder->nullable = null;
+$holder->union = preserve_global_closure(function (): string { return "union"; });
+
+$plain = $holder->plain;
+echo $plain() . "|";
+echo is_null($holder->nullable) ? "null|" : "bad|";
+echo isset($holder->union) ? "union" : "bad";
+"#,
+    );
+    assert_eq!(out, "plain|null|union");
+}
+
 /// Verifies a function with a typed `int &$x` by-ref parameter mutates the caller's variable
 /// and the new value is observable after the call.
 #[test]

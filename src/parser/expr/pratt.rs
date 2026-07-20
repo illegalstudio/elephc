@@ -9,7 +9,7 @@
 //! - Binding powers must match PHP precedence exactly because downstream passes trust the AST shape.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget};
 use crate::parser::stmt::parse_name;
@@ -46,7 +46,7 @@ use super::parse_expr;
 /// 3. In the second loop, consume ternary (`? :`), instanceof, assignments
 ///    (`=`, `+=`, `??=`, etc.), pipe (`|>`), and remaining binary operators
 pub(super) fn parse_expr_bp(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     min_bp: u8,
 ) -> Result<Expr, CompileError> {
@@ -64,7 +64,7 @@ pub(super) fn parse_expr_bp(
 
 /// The actual Pratt loop behind the stack-growth guard of [`parse_expr_bp`].
 fn parse_expr_bp_inner(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     min_bp: u8,
 ) -> Result<Expr, CompileError> {
@@ -77,7 +77,7 @@ fn parse_expr_bp_inner(
 
         match &tokens[*pos].0 {
             Token::LBracket => {
-                let span = tokens[*pos].1;
+                let span = tokens[*pos].1.span;
                 *pos += 1;
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
@@ -97,9 +97,23 @@ fn parse_expr_bp_inner(
                 // receiver — named-class static calls are fully parsed in the prefix parser.
                 // `$cls::method(args)` / `$cls::$method(args)` desugars to
                 // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
-                let span = tokens[*pos].1;
+                let span = tokens[*pos].1.span;
                 *pos += 1; // consume '::'
-                let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Class)) {
+                    *pos += 1;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    lhs = Expr::new(
+                        ExprKind::ObjectClassName {
+                            object: Box::new(lhs),
+                        },
+                        span,
+                    );
+                    continue;
+                }
+                let member = match tokens
+                    .get(*pos)
+                    .map(|(token, metadata)| (token.clone(), metadata.span))
+                {
                     Some((Token::Identifier(name), name_span)) => {
                         *pos += 1;
                         Expr::new(ExprKind::StringLiteral(name), name_span)
@@ -144,26 +158,31 @@ fn parse_expr_bp_inner(
                 }
             }
             Token::Arrow | Token::QuestionArrow => {
-                let arrow_span = tokens[*pos].1;
+                let arrow_span = tokens[*pos].1.span;
                 let nullsafe = tokens[*pos].0 == Token::QuestionArrow;
                 *pos += 1;
                 let member = match parse_object_member(tokens, pos, arrow_span, nullsafe)? {
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                            if nullsafe {
-                                return Err(CompileError::new(
-                                    arrow_span,
-                                    "Nullsafe dynamic method calls are not supported yet",
-                                ));
-                            }
-                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
-                            // desugaring to `call_user_func([$obj, $method], ...args)`.
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
+                            if nullsafe {
+                                lhs = Expr::new(
+                                    ExprKind::NullsafeDynamicMethodCall {
+                                        object: Box::new(lhs),
+                                        method: Box::new(property),
+                                        args: dynamic_args,
+                                    },
+                                    arrow_span,
+                                );
+                                continue;
+                            }
+                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
+                            // desugaring to `call_user_func([$obj, $method], ...args)`.
                             let mut call_args = vec![Expr::new(
                                 ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,
@@ -259,7 +278,7 @@ fn parse_expr_bp_inner(
                         | ExprKind::MethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
                 ) {
-                    let call_span = tokens[*pos].1;
+                    let call_span = tokens[*pos].1.span;
                     *pos += 1;
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
@@ -289,7 +308,7 @@ fn parse_expr_bp_inner(
                 break;
             }
 
-            let span = tokens[*pos].1;
+            let span = tokens[*pos].1.span;
             *pos += 1;
             if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
                 *pos += 1;
@@ -327,7 +346,7 @@ fn parse_expr_bp_inner(
                 break;
             }
 
-            let span = tokens[*pos].1;
+            let span = tokens[*pos].1.span;
             *pos += 1;
             let target = parse_instanceof_target(tokens, pos, span)?;
             lhs = Expr::new(
@@ -349,7 +368,7 @@ fn parse_expr_bp_inner(
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 
-            let span = tokens[*pos].1;
+            let span = tokens[*pos].1.span;
             *pos += 1;
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
             // Widen only the END so the span covers through the value expression;
@@ -430,11 +449,11 @@ fn parse_expr_bp_inner(
             if l_bp < min_bp {
                 break;
             }
-            let span = tokens[*pos].1;
+            let span = tokens[*pos].1.span;
             *pos += 1;
             if starts_unparenthesized_arrow_function(tokens, *pos) {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Arrow functions used as pipe targets must be parenthesized",
                 ));
             }
@@ -458,7 +477,7 @@ fn parse_expr_bp_inner(
             break;
         }
 
-        let span = tokens[*pos].1;
+        let span = tokens[*pos].1.span;
         *pos += 1;
         let rhs = parse_expr_bp(tokens, pos, r_bp)?;
         // Widen only the END through the right operand; the start stays on the
@@ -492,7 +511,7 @@ fn parse_expr_bp_inner(
 ///
 /// Used by pipe operator (`|>`) parsing to reject unparenthesized arrow functions
 /// as pipe targets, since PHP requires them to be parenthesized.
-fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -> bool {
+fn starts_unparenthesized_arrow_function(tokens: &[SpannedToken], pos: usize) -> bool {
     matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Fn))
         || (matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Static))
             && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Fn)))
@@ -522,7 +541,7 @@ enum ObjectMember {
 /// - `arrow_span`: span of the `->` or `?->` token, used for error reporting
 /// - `nullsafe`: whether the operator was `?->` (changes error messages)
 fn parse_object_member(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     arrow_span: Span,
     nullsafe: bool,
@@ -537,8 +556,9 @@ fn parse_object_member(
         return Ok(ObjectMember::Dynamic(property));
     }
     // `->$var` selects a member whose name is the runtime value of `$var`.
-    if let Some((Token::Variable(name), var_span)) =
-        tokens.get(*pos).map(|(token, span)| (token.clone(), *span))
+    if let Some((Token::Variable(name), var_span)) = tokens
+        .get(*pos)
+        .map(|(token, metadata)| (token.clone(), metadata.span))
     {
         *pos += 1;
         return Ok(ObjectMember::Dynamic(Expr::new(
@@ -549,7 +569,9 @@ fn parse_object_member(
     // PHP 8 allows identifiers and any semi-reserved keyword as a member name after `->`/`?->`.
     if let Some(name) = tokens
         .get(*pos)
-        .and_then(|(token, _)| crate::parser::keyword_name::bareword_name_from_token(token))
+        .and_then(|(token, metadata)| {
+            crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+        })
     {
         *pos += 1;
         return Ok(ObjectMember::Named(name));
@@ -659,7 +681,7 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
 /// The dynamic form is parsed with `min_bp = 36` to ensure it captures everything
 /// with tighter precedence than comparison operators.
 fn parse_instanceof_target(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<InstanceOfTarget, CompileError> {

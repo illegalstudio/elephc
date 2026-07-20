@@ -8,11 +8,22 @@
 //! - Verifies the Phase 03 ownership surface emits explicit acquire/release
 //!   markers for refcounted local values before the future EIR backend exists.
 
-use crate::ir::print_module;
+use crate::ir::{print_module, Op, ValueDef};
 
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
     let start = text.find("function main()").expect("expected lowered main function");
+    let tail = &text[start..];
+    match tail[1..].find("\n  function ") {
+        Some(next_function) => &tail[..1 + next_function],
+        None => tail,
+    }
+}
+
+/// Returns the printed EIR slice for one named function.
+fn named_function_text<'a>(text: &'a str, name: &str) -> &'a str {
+    let needle = format!("function {name}(");
+    let start = text.find(&needle).expect("expected named lowered function");
     let tail = &text[start..];
     match tail[1..].find("\n  function ") {
         Some(next_function) => &tail[..1 + next_function],
@@ -103,6 +114,37 @@ fn overwriting_string_local_emits_release() {
     assert!(text.contains("release"), "expected release in {text}");
 }
 
+/// Verifies a borrowed string result is retained before its aliased source slot is released.
+#[test]
+fn self_reassignment_acquires_borrowed_string_before_releasing_slot() {
+    let module = super::lower_source(
+        r#"<?php
+function normalize(string $value): string {
+    $value = trim($value);
+    return $value;
+}
+echo normalize("  hi  ");
+"#,
+    );
+    let text = print_module(&module);
+    let function = named_function_text(&text, "normalize");
+    let builtin = function
+        .find("builtin_call")
+        .expect("expected trim builtin call");
+    let assignment = &function[builtin..];
+    let acquire = assignment.find("acquire").expect("expected retained trim result");
+    let release = assignment
+        .find("release")
+        .expect("expected previous slot release");
+    let store = assignment
+        .find("store_local")
+        .expect("expected replacement local store");
+    assert!(
+        acquire < release && release < store,
+        "expected acquire before old-slot release and store in {function}"
+    );
+}
+
 /// Verifies appends into mixed function parameters use an explicit append opcode.
 #[test]
 fn mixed_parameter_array_push_uses_explicit_opcode() {
@@ -118,5 +160,80 @@ function add($arr, $value) {
     assert!(
         text.contains("mixed_array_append"),
         "expected mixed_array_append for mixed parameter array push in {text}"
+    );
+}
+
+/// Stringifying a Mixed local read must not release its slot-backed source.
+#[test]
+fn mixed_string_cast_does_not_release_local_source() {
+    let module = super::lower_source(
+        r#"<?php
+function render_mixed(mixed $value): string {
+    $first = (string) $value;
+    return $first . "|" . (string) $value;
+}
+echo render_mixed(str_repeat("alive", 1));
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "render_mixed")
+        .expect("expected render_mixed EIR function");
+    let cast_sources = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Cast)
+        .filter_map(|inst| inst.operands.first().copied())
+        .collect::<Vec<_>>();
+    assert_eq!(cast_sources.len(), 2, "expected two Mixed string casts");
+    for source in cast_sources {
+        assert!(
+            function
+                .instructions
+                .iter()
+                .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(source)),
+            "a Mixed local read must survive stringification"
+        );
+    }
+}
+
+/// Stringifying an owned Mixed container read must release that exact source value.
+#[test]
+fn mixed_string_cast_releases_owned_container_read() {
+    let module = super::lower_source(
+        r#"<?php
+$values = ["s" => str_repeat("x", 1), "n" => 1];
+echo (string) $values["s"];
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let source = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Cast)
+        .filter_map(|inst| inst.operands.first().copied())
+        .find(|source| {
+            let Some(value) = function.value(*source) else {
+                return false;
+            };
+            let ValueDef::Instruction { inst, .. } = value.def else {
+                return false;
+            };
+            function
+                .instruction(inst)
+                .is_some_and(|inst| matches!(inst.op, Op::ArrayGet | Op::HashGet))
+        })
+        .expect("expected a Mixed string cast sourced from a container read");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .any(|inst| inst.op == Op::Release && inst.operands.first().copied() == Some(source)),
+        "the owned Mixed container read must be released after stringification"
     );
 }

@@ -26,7 +26,10 @@ pub enum ValidationError {
     NoBlocks,
     NoEntryBlock,
     EntryBlockHasParams(BlockId),
-    BlockIdMismatch { expected: BlockId, actual: BlockId },
+    BlockIdMismatch {
+        expected: BlockId,
+        actual: BlockId,
+    },
     BlockMissingTerminator(BlockId),
     UnknownBlock(BlockId),
     UnknownInstruction(InstId),
@@ -126,7 +129,10 @@ fn validate_function_shape(function: &Function) -> Result<(), ValidationError> {
     if function.block(function.entry).is_none() {
         return Err(ValidationError::NoEntryBlock);
     }
-    if !function.blocks[function.entry.as_raw() as usize].params.is_empty() {
+    if !function.blocks[function.entry.as_raw() as usize]
+        .params
+        .is_empty()
+    {
         return Err(ValidationError::EntryBlockHasParams(function.entry));
     }
     for (index, block) in function.blocks.iter().enumerate() {
@@ -211,7 +217,14 @@ fn validate_instructions(
             validate_instruction_result(function, block.id, index as u32, *inst_id, inst)?;
             validate_instruction_effects(*inst_id, inst)?;
             validate_instruction_immediate(*inst_id, inst)?;
-            validate_instruction_operands(function, block.id, index as u32, *inst_id, inst, dominators)?;
+            validate_instruction_operands(
+                function,
+                block.id,
+                index as u32,
+                *inst_id,
+                inst,
+                dominators,
+            )?;
             validate_opcode_rules(function, *inst_id, inst)?;
         }
     }
@@ -243,7 +256,13 @@ fn validate_instruction_result(
             if value.ownership != inst.result_ownership {
                 return Err(ValidationError::OwnershipTypeMismatch(value_id));
             }
-            if value.def != (ValueDef::Instruction { block, index, inst: inst_id }) {
+            if value.def
+                != (ValueDef::Instruction {
+                    block,
+                    index,
+                    inst: inst_id,
+                })
+            {
                 return Err(ValidationError::ValueDefMismatch(value_id));
             }
             Ok(())
@@ -252,7 +271,10 @@ fn validate_instruction_result(
 }
 
 /// Validates that non-refinable opcodes carry their canonical effect set.
-fn validate_instruction_effects(inst_id: InstId, inst: &Instruction) -> Result<(), ValidationError> {
+fn validate_instruction_effects(
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
     let expected = inst.op.default_effects();
     if !inst.op.allows_effect_refinement() && inst.effects != expected {
         return Err(ValidationError::EffectMismatch {
@@ -265,7 +287,10 @@ fn validate_instruction_effects(inst_id: InstId, inst: &Instruction) -> Result<(
 }
 
 /// Validates immediate shape for opcodes whose immediate is structurally required.
-fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result<(), ValidationError> {
+fn validate_instruction_immediate(
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
     match inst.op {
@@ -273,17 +298,26 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
-        | EnumBackingStringToInt | EnumBackingMixedToInt => {
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | EvalLiteralCall
+        | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
+        | EvalConstantFetch
+        | EvalStaticMethodCall
+        | EnumBackingStringToInt
+        | EnumBackingMixedToInt
+        | PropInitialized
+        | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
-        | BindRefCellPtr
+        | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
+        }),
+        EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
+            matches!(imm, Imm::GlobalName(_))
         }),
         ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
@@ -320,12 +354,18 @@ fn require_immediate(
     matches_expected: impl FnOnce(&Immediate) -> bool,
 ) -> Result<(), ValidationError> {
     let Some(imm) = inst.immediate.as_ref() else {
-        return Err(ValidationError::MissingImmediate { inst: inst_id, expected });
+        return Err(ValidationError::MissingImmediate {
+            inst: inst_id,
+            expected,
+        });
     };
     if matches_expected(imm) {
         Ok(())
     } else {
-        Err(ValidationError::MissingImmediate { inst: inst_id, expected })
+        Err(ValidationError::MissingImmediate {
+            inst: inst_id,
+            expected,
+        })
     }
 }
 
@@ -345,7 +385,11 @@ fn validate_instruction_operands(
 }
 
 /// Validates core opcode operand/result type rules.
-fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instruction) -> Result<(), ValidationError> {
+fn validate_opcode_rules(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
     use Op::*;
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
@@ -353,13 +397,18 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | CallableArrayNew | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | ConcatReset
-        | GcCollect | Nop => {
+        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
+        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
+        EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
+            check_count(inst_id, inst, 1, "1")
+        }
+        EvalScopeSet => check_count(inst_id, inst, 2, "2"),
         ClosureNew => Ok(()),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
+        EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         ICheckedAdd | ICheckedSub | ICheckedMul => {
@@ -385,29 +434,54 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => check_binary(function, inst_id, inst, IrType::Str, "Str"),
+        StrConcat | StrEq | StrCmp | StrLooseEq => {
+            check_binary(function, inst_id, inst, IrType::Str, "Str")
+        }
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
-        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty | ExternGlobalLoad => {
+        LoadLocal
+        | LoadRefCell
+        | LoadGlobal
+        | LoadStaticLocal
+        | LoadStaticProperty
+        | LoadReflectionStaticProperty
+        | ReflectionStaticPropertyInitialized
+        | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
+        ThrowError => check_count(inst_id, inst, 0, "0"),
+        ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
+        UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
+        | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
         }
-        UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
-            check_count(inst_id, inst, 0, "0")
-        }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
-        | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned
-        | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
-        | ThrowException | GeneratorReturn | PtrCheckNonnull => {
+        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
+        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
+        | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
+        | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
+        | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
-        | MixedCastString => check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)"),
-        ArrayUnion => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Array), "Heap(Array)"),
-        HashUnion => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
+        | MixedCastString => {
+            check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
+        }
+        ArrayUnion => check_binary(
+            function,
+            inst_id,
+            inst,
+            IrType::Heap(IrHeapKind::Array),
+            "Heap(Array)",
+        ),
+        HashUnion => check_binary(
+            function,
+            inst_id,
+            inst,
+            IrType::Heap(IrHeapKind::Hash),
+            "Heap(Hash)",
+        ),
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
@@ -423,9 +497,17 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         }
         MixedArrayAppend => {
             check_count(inst_id, inst, 2, "2")?;
-            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")
+            check_operand_type(
+                function,
+                inst_id,
+                inst,
+                0,
+                IrType::Heap(IrHeapKind::Mixed),
+                "Heap(Mixed)",
+            )
         }
-        HashLen | HashGet | HashIsset | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {
+        HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
+        | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
@@ -433,8 +515,19 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
-        PropGet | PropSet | LoadPropRefCell | DynamicPropGet | DynamicPropSet | NullsafePropGet
-        | NullsafeMethodCall | MethodLookup | MethodCall | InstanceOf | InstanceOfDynamic => {
+        DynamicObjectNewWithoutConstructorMixed
+        | PropGet
+        | PropInitialized
+        | PropSet
+        | LoadPropRefCell
+        | DynamicPropGet
+        | DynamicPropSet
+        | NullsafePropGet
+        | NullsafeMethodCall
+        | MethodLookup
+        | MethodCall
+        | InstanceOf
+        | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
         _ => Ok(()),
@@ -448,8 +541,22 @@ fn check_array_hash_union(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 2, "2")?;
-    check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
-    check_operand_type(function, inst_id, inst, 1, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+    check_operand_type(
+        function,
+        inst_id,
+        inst,
+        0,
+        IrType::Heap(IrHeapKind::Array),
+        "Heap(Array)",
+    )?;
+    check_operand_type(
+        function,
+        inst_id,
+        inst,
+        1,
+        IrType::Heap(IrHeapKind::Hash),
+        "Heap(Hash)",
+    )
 }
 
 /// Validates the operand shape for associative+indexed array union.
@@ -459,12 +566,31 @@ fn check_hash_array_union(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 2, "2")?;
-    check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")?;
-    check_operand_type(function, inst_id, inst, 1, IrType::Heap(IrHeapKind::Array), "Heap(Array)")
+    check_operand_type(
+        function,
+        inst_id,
+        inst,
+        0,
+        IrType::Heap(IrHeapKind::Hash),
+        "Heap(Hash)",
+    )?;
+    check_operand_type(
+        function,
+        inst_id,
+        inst,
+        1,
+        IrType::Heap(IrHeapKind::Array),
+        "Heap(Array)",
+    )
 }
 
 /// Validates one exact operand count.
-fn check_count(inst_id: InstId, inst: &Instruction, expected: usize, expected_label: &'static str) -> Result<(), ValidationError> {
+fn check_count(
+    inst_id: InstId,
+    inst: &Instruction,
+    expected: usize,
+    expected_label: &'static str,
+) -> Result<(), ValidationError> {
     if inst.operands.len() == expected {
         Ok(())
     } else {
@@ -477,7 +603,12 @@ fn check_count(inst_id: InstId, inst: &Instruction, expected: usize, expected_la
 }
 
 /// Validates a minimum operand count.
-fn check_count_at_least(inst_id: InstId, inst: &Instruction, min: usize, expected_label: &'static str) -> Result<(), ValidationError> {
+fn check_count_at_least(
+    inst_id: InstId,
+    inst: &Instruction,
+    min: usize,
+    expected_label: &'static str,
+) -> Result<(), ValidationError> {
     if inst.operands.len() >= min {
         Ok(())
     } else {
@@ -490,7 +621,12 @@ fn check_count_at_least(inst_id: InstId, inst: &Instruction, min: usize, expecte
 }
 
 /// Validates a maximum operand count.
-fn check_count_at_most(inst_id: InstId, inst: &Instruction, max: usize, expected_label: &'static str) -> Result<(), ValidationError> {
+fn check_count_at_most(
+    inst_id: InstId,
+    inst: &Instruction,
+    max: usize,
+    expected_label: &'static str,
+) -> Result<(), ValidationError> {
     if inst.operands.len() <= max {
         Ok(())
     } else {
@@ -664,7 +800,9 @@ fn validate_terminators(
                 validate_branch_args(function, *default, default_args)?;
                 validate_terminator_uses(function, block.id, default_args, dominators)?;
             }
-            Terminator::Return { value } => validate_return(function, block.id, *value, dominators)?,
+            Terminator::Return { value } => {
+                validate_return(function, block.id, *value, dominators)?
+            }
             Terminator::Throw { value } => {
                 validate_use(function, *value, block.id, None, dominators)?;
             }
@@ -753,7 +891,11 @@ fn validate_terminator_uses(
 }
 
 /// Validates destination block argument count and type compatibility.
-fn validate_branch_args(function: &Function, target: BlockId, args: &[ValueId]) -> Result<(), ValidationError> {
+fn validate_branch_args(
+    function: &Function,
+    target: BlockId,
+    args: &[ValueId],
+) -> Result<(), ValidationError> {
     let Some(target_block) = function.block(target) else {
         return Err(ValidationError::UnknownBlock(target));
     };
@@ -850,9 +992,9 @@ fn definition_dominates_use(
                     .map(|set| set.contains(&block))
                     .unwrap_or(false)
         }
-        ValueDef::Instruction { block, index, .. } if block == use_block => {
-            use_inst_index.map(|use_index| index < use_index).unwrap_or(true)
-        }
+        ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
+            .map(|use_index| index < use_index)
+            .unwrap_or(true),
         ValueDef::Instruction { block, .. } => dominators
             .get(&use_block)
             .map(|set| set.contains(&block))
@@ -873,42 +1015,125 @@ fn definition_dominates_use(
 /// resolve to `{self}` (no reachable predecessor), so genuine uses inside dead
 /// code remain flagged until they are neutralized.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
-    let all_blocks: HashSet<BlockId> = function.blocks.iter().map(|block| block.id).collect();
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
-    let mut dominators = HashMap::new();
-    for block in &function.blocks {
-        if block.id == function.entry {
-            dominators.insert(block.id, HashSet::from([block.id]));
-        } else {
-            dominators.insert(block.id, all_blocks.clone());
-        }
-    }
+    let block_count = function.blocks.len();
+    let all_blocks = full_block_bitset(block_count);
+    let mut dominators = vec![all_blocks.clone(); block_count];
+    let entry_index = function.entry.as_raw() as usize;
+    dominators[entry_index] = empty_block_bitset(block_count);
+    set_block_bit(&mut dominators[entry_index], entry_index);
+    let predecessor_indices = reachable_predecessor_indices(function, &predecessors, &reachable);
 
     let mut changed = true;
     while changed {
         changed = false;
-        for block in &function.blocks {
+        for (block_index, block) in function.blocks.iter().enumerate() {
             if block.id == function.entry {
                 continue;
             }
-            let preds: Vec<BlockId> = predecessors
-                .get(&block.id)
-                .map(|preds| preds.iter().copied().filter(|p| reachable.contains(p)).collect())
-                .unwrap_or_default();
-            let mut next = if preds.is_empty() {
-                HashSet::new()
+            let mut next = if predecessor_indices[block_index].is_empty() {
+                empty_block_bitset(block_count)
             } else {
-                intersection_of_predecessors(&preds, &dominators, &all_blocks)
+                all_blocks.clone()
             };
-            next.insert(block.id);
-            if dominators.get(&block.id) != Some(&next) {
-                dominators.insert(block.id, next);
+            for pred_index in &predecessor_indices[block_index] {
+                bitset_and_assign(&mut next, &dominators[*pred_index]);
+            }
+            set_block_bit(&mut next, block_index);
+            if dominators[block_index] != next {
+                dominators[block_index] = next;
                 changed = true;
             }
         }
     }
-    dominators
+    dominator_bitsets_to_map(function, &dominators)
+}
+
+/// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
+fn reachable_predecessor_indices(
+    function: &Function,
+    predecessors: &HashMap<BlockId, Vec<BlockId>>,
+    reachable: &HashSet<BlockId>,
+) -> Vec<Vec<usize>> {
+    function
+        .blocks
+        .iter()
+        .map(|block| {
+            predecessors
+                .get(&block.id)
+                .map(|preds| {
+                    preds
+                        .iter()
+                        .filter(|pred| reachable.contains(pred))
+                        .map(|pred| pred.as_raw() as usize)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Builds a bitset with every block bit set, masking unused bits in the last word.
+fn full_block_bitset(block_count: usize) -> Vec<u64> {
+    let mut bits = vec![u64::MAX; block_bitset_word_count(block_count)];
+    let trailing_bits = block_count % u64::BITS as usize;
+    if trailing_bits != 0 {
+        if let Some(last) = bits.last_mut() {
+            *last = (1_u64 << trailing_bits) - 1;
+        }
+    }
+    bits
+}
+
+/// Builds an empty block bitset with enough words for the function block count.
+fn empty_block_bitset(block_count: usize) -> Vec<u64> {
+    vec![0; block_bitset_word_count(block_count)]
+}
+
+/// Returns the number of machine words needed to represent one block bitset.
+fn block_bitset_word_count(block_count: usize) -> usize {
+    block_count.div_ceil(u64::BITS as usize)
+}
+
+/// Marks one block index as present in a dominator bitset.
+fn set_block_bit(bits: &mut [u64], block_index: usize) {
+    let word = block_index / u64::BITS as usize;
+    let bit = block_index % u64::BITS as usize;
+    bits[word] |= 1_u64 << bit;
+}
+
+/// Intersects a dominator bitset in place with another predecessor bitset.
+fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
+    for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
+        *left_word &= *right_word;
+    }
+}
+
+/// Converts dense dominator bitsets back to the validator's public block-id map.
+fn dominator_bitsets_to_map(
+    function: &Function,
+    dominators: &[Vec<u64>],
+) -> HashMap<BlockId, HashSet<BlockId>> {
+    let mut map = HashMap::with_capacity(function.blocks.len());
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        let mut set = HashSet::new();
+        for (candidate_index, candidate) in function.blocks.iter().enumerate() {
+            if block_bit_is_set(&dominators[block_index], candidate_index) {
+                set.insert(candidate.id);
+            }
+        }
+        map.insert(block.id, set);
+    }
+    map
+}
+
+/// Returns whether a block index is present in a dominator bitset.
+fn block_bit_is_set(bits: &[u64], block_index: usize) -> bool {
+    let word = block_index / u64::BITS as usize;
+    let bit = block_index % u64::BITS as usize;
+    bits.get(word)
+        .is_some_and(|word_bits| (word_bits & (1_u64 << bit)) != 0)
 }
 
 /// Computes the set of blocks reachable from the entry over the same edge set as
@@ -993,25 +1218,6 @@ fn successors(term: &Terminator) -> Vec<BlockId> {
     }
 }
 
-/// Intersects dominator sets for all predecessors.
-fn intersection_of_predecessors(
-    predecessors: &[BlockId],
-    dominators: &HashMap<BlockId, HashSet<BlockId>>,
-    fallback: &HashSet<BlockId>,
-) -> HashSet<BlockId> {
-    let mut iter = predecessors.iter();
-    let Some(first) = iter.next() else {
-        return HashSet::new();
-    };
-    let mut result = dominators.get(first).cloned().unwrap_or_else(|| fallback.clone());
-    for pred in iter {
-        if let Some(set) = dominators.get(pred) {
-            result = result.intersection(set).copied().collect();
-        }
-    }
-    result
-}
-
 /// Returns true when PHP type metadata can use the given EIR storage type.
 fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
     let php_type = php_type.codegen_repr();
@@ -1022,8 +1228,8 @@ fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
 /// Returns true when ownership is coherent with storage and PHP type metadata.
 fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownership) -> bool {
     let php_type = php_type.codegen_repr();
-    let tracks_lifetime = ir_type.is_refcounted_storage()
-        || Ownership::php_type_needs_lifetime_tracking(&php_type);
+    let tracks_lifetime =
+        ir_type.is_refcounted_storage() || Ownership::php_type_needs_lifetime_tracking(&php_type);
     if tracks_lifetime {
         !matches!(ownership, Ownership::NonHeap)
     } else {

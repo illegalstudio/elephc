@@ -10,7 +10,6 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// __rt_cstr_to_str: convert a null-terminated C string to an owned elephc string.
 /// Input:  x0 = pointer to null-terminated C string
@@ -111,7 +110,7 @@ fn emit_cstr_to_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the computed elephc string byte length across the heap allocation helper call
     emitter.instruction("mov rax, rdx");                                        // move the computed byte length into the x86_64 heap helper input register
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned elephc string storage and return the payload pointer in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a persisted elephc string in the uniform heap header
     emitter.instruction("mov r8, rax");                                         // preserve the destination payload pointer for the byte-copy loop and final return value
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source C string pointer after the allocator helper returns

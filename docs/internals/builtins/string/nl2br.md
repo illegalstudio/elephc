@@ -2,7 +2,7 @@
 title: "nl2br() — internals"
 description: "Compiler internals for nl2br(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 372
+  order: 390
 ---
 
 ## `nl2br()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/nl2br.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/nl2br.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:76](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L76) (`lower_unary_string_runtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:75](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L75) (`lower_unary_string_runtime`)
 - **Function symbol**: `lower_unary_string_runtime()`
 
 
@@ -32,6 +32,11 @@ function nl2br(string $string): string
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "preg_replace()"
 description: "Performs a regular expression search and replace."
 sidebar:
-  order: 318
+  order: 335
 ---
 
 ## preg_replace()
@@ -19,6 +19,11 @@ Performs a regular expression search and replace.
 - `$subject` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -2,7 +2,7 @@
 title: "link() — internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 131
+  order: 135
 ---
 
 ## `link()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/link.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5453](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5453) (`lower_link`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5449](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5449) (`lower_link`)
 - **Function symbol**: `lower_link()`
 
 
@@ -35,6 +35,11 @@ function link(string $target, string $link): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

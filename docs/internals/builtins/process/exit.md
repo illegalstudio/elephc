@@ -2,7 +2,7 @@
 title: "exit() — internals"
 description: "Compiler internals for exit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 306
+  order: 323
 ---
 
 ## `exit()` — internals
@@ -27,6 +27,11 @@ function exit(int $status): void
 ## What the type checker enforces
 
 - **Arity**: takes 0–1 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/exit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/exit.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

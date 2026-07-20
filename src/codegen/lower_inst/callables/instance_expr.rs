@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::ir::{BlockId, Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::super::{
@@ -159,7 +159,6 @@ fn instance_method_expr_call_target(
             target
         ))
     })?;
-    require_instance_expr_call_signature(owner, target, sig)?;
     let impl_class = class_info
         .method_impl_classes
         .get(&method_key)
@@ -186,22 +185,6 @@ fn instance_method_expr_call_target(
         ref_params,
         return_ty: sig.return_type.clone(),
     })
-}
-
-/// Rejects callable method signatures whose EIR expr-call lowering cannot yet forward safely.
-fn require_instance_expr_call_signature(
-    owner: &str,
-    target: &str,
-    sig: &FunctionSig,
-) -> Result<()> {
-    if sig.variadic.is_some() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} receiver-bound callable '{}' with variadic method signature",
-            owner,
-            target
-        )));
-    }
-    Ok(())
 }
 
 /// Returns the first-class callable producer for an expr-call operand.

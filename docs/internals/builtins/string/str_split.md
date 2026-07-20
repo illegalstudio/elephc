@@ -2,7 +2,7 @@
 title: "str_split() — internals"
 description: "Compiler internals for str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 388
+  order: 406
 ---
 
 ## `str_split()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_split.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:194](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L194) (`lower_str_split`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:193](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L193) (`lower_str_split`)
 - **Function symbol**: `lower_str_split()`
 
 
@@ -32,6 +32,11 @@ function str_split(string $string, int $length = 1): array
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_split.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

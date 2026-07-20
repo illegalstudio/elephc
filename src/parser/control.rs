@@ -9,7 +9,7 @@
 //! - Control parsers must preserve PHP statement nesting and spans for later flow and diagnostic passes.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
@@ -17,7 +17,7 @@ use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
 pub fn parse_if(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -64,7 +64,7 @@ pub fn parse_if(
 
 /// Parse: ifdef SYMBOL { stmts } (else { stmts })?
 pub fn parse_ifdef(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -96,7 +96,7 @@ pub fn parse_ifdef(
 
 /// Parse: while (expr) { stmts }
 pub fn parse_while(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -111,7 +111,7 @@ pub fn parse_while(
 /// Parses a foreach loop: `foreach ($array as $value)` or `foreach ($array as $key => $value)`.
 /// Supports by-reference values via `&` prefix and by-reference loop variables.
 pub fn parse_foreach(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -182,7 +182,7 @@ pub fn parse_foreach(
 
 /// Parse: do { stmts } while (expr);
 pub fn parse_do_while(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -198,7 +198,7 @@ pub fn parse_do_while(
 
 /// Parse: for (init; condition; update) { stmts }
 pub fn parse_for(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -206,7 +206,7 @@ pub fn parse_for(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'for'")?;
 
     let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        let init_span = tokens[*pos].1;
+        let init_span = tokens[*pos].1.span;
         let s = parse_assign_inline(tokens, pos, init_span)?;
         Some(Box::new(s))
     } else {
@@ -222,7 +222,7 @@ pub fn parse_for(
     expect_semicolon(tokens, pos)?;
 
     let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        let update_span = tokens[*pos].1;
+        let update_span = tokens[*pos].1.span;
         let s = parse_assign_inline(tokens, pos, update_span)?;
         Some(Box::new(s))
     } else {
@@ -246,7 +246,7 @@ pub fn parse_for(
 /// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?
 ///     or: try { stmts } finally { stmts }
 pub fn parse_try(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -332,7 +332,7 @@ pub fn parse_try(
 
 /// Parse a simple statement without trailing semicolon (for use inside for-loops).
 pub fn parse_assign_inline(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -436,7 +436,7 @@ pub fn parse_assign_inline(
 
 /// Parse: switch (expr) { case expr: stmts... case expr: stmts... default: stmts... }
 pub fn parse_switch(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -481,7 +481,7 @@ pub fn parse_switch(
             default = Some(body);
         } else {
             return Err(CompileError::new(
-                tokens[*pos].1,
+                tokens[*pos].1.span,
                 "Expected 'case' or 'default' inside switch",
             ));
         }

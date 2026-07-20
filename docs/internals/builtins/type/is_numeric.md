@@ -2,7 +2,7 @@
 title: "is_numeric() — internals"
 description: "Compiler internals for is_numeric(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 427
+  order: 445
 ---
 
 ## `is_numeric()` — internals
@@ -31,6 +31,11 @@ function is_numeric(mixed $value): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_numeric.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_numeric.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

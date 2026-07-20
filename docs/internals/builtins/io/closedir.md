@@ -2,7 +2,7 @@
 title: "closedir() — internals"
 description: "Compiler internals for closedir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 153
+  order: 157
 ---
 
 ## `closedir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/closedir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3572](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3572) (`lower_closedir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3568](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3568) (`lower_closedir`)
 - **Function symbol**: `lower_closedir()`
 
 
@@ -35,6 +35,11 @@ function closedir(resource $dir_handle): void
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

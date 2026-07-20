@@ -2,7 +2,7 @@
 title: "lstat() — internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 133
+  order: 137
 ---
 
 ## `lstat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lstat.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5534](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5534) (`lower_lstat`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5530](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5530) (`lower_lstat`)
 - **Function symbol**: `lower_lstat()`
 
 
@@ -33,6 +33,11 @@ function lstat(string $filename): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "preg_split() — internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 320
+  order: 337
 ---
 
 ## `preg_split()` — internals
@@ -32,6 +32,11 @@ function preg_split(string $pattern, string $subject, int $limit = -1, int $flag
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_split.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

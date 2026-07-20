@@ -2,7 +2,7 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 168
+  order: 172
 ---
 
 ## fputcsv()
@@ -20,6 +20,11 @@ Format line as CSV and write to file pointer.
 - `$enclosure` (`string`), default `'"'`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

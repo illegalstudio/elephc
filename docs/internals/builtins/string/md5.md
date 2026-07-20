@@ -2,7 +2,7 @@
 title: "md5() — internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 371
+  order: 389
 ---
 
 ## `md5()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/md5.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:373](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L373) (`lower_md5`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:417](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L417) (`lower_md5`)
 - **Function symbol**: `lower_md5()`
 
 
@@ -34,6 +34,11 @@ function md5(string $string, bool $binary = false): string
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/md5.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

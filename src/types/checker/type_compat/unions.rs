@@ -106,7 +106,7 @@ impl Checker {
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
                 PhpType::Array(actual_elem)
-                    if matches!(expected_key.as_ref(), PhpType::Mixed)
+                    if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
                 {
                     true
@@ -115,7 +115,8 @@ impl Checker {
             },
             PhpType::Object(expected_name) => match actual {
                 PhpType::Object(actual_name) => {
-                    expected_name == actual_name
+                    expected_name.is_empty()
+                        || expected_name == actual_name
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)

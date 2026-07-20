@@ -2,7 +2,7 @@
 title: "strlen() — internals"
 description: "Compiler internals for strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 393
+  order: 411
 ---
 
 ## `strlen()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strlen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:494](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L494) (`lower_strlen`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1097](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1097) (`lower_strlen`)
 - **Function symbol**: `lower_strlen()`
 
 
@@ -32,6 +32,11 @@ function strlen(string $string): int
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strlen.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

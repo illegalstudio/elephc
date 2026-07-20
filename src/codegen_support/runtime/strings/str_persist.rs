@@ -10,7 +10,6 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// str_persist: copy a string to heap for permanent storage.
 /// Used to persist strings that would otherwise outlive their current owner.
@@ -25,6 +24,14 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
+
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x1, x9");                                          // preserve the dedicated null-string sentinel across ownership stabilization
+    emitter.instruction("b.eq __rt_str_persist_done");                          // a missing string has no payload to allocate or copy
 
     // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
     // (the old early-return let explode()'s empty segment alias the subject string and double-free it on release)
@@ -90,6 +97,14 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rax, r10");                                        // preserve the dedicated null-string sentinel across ownership stabilization
+    emitter.instruction("je __rt_str_persist_done");                            // a missing string has no payload to allocate or copy
+
     // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
 
     // -- preserve the source payload across the heap allocation helper call --
@@ -100,7 +115,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source length across the heap allocation helper call
     emitter.instruction("mov rax, rdx");                                        // move the byte length into the x86_64 heap helper input register
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned string storage and return the payload pointer in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a persisted elephc string in the uniform heap header
     emitter.instruction("mov r8, rax");                                         // preserve the destination heap pointer for the byte-copy loop and final return value
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source pointer after the allocator helper returns

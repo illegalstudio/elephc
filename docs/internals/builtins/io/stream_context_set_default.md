@@ -2,7 +2,7 @@
 title: "stream_context_set_default() — internals"
 description: "Compiler internals for stream_context_set_default(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 195
+  order: 212
 ---
 
 ## `stream_context_set_default()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_default.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_default.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1088](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1088) (`lower_stream_context_set_default`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1086](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1086) (`lower_stream_context_set_default`)
 - **Function symbol**: `lower_stream_context_set_default()`
 
 
@@ -31,6 +31,11 @@ function stream_context_set_default(array $options): mixed
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_default.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_default.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

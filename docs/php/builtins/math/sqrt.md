@@ -2,7 +2,7 @@
 title: "sqrt()"
 description: "Returns the square root of a number."
 sidebar:
-  order: 268
+  order: 285
 ---
 
 ## sqrt()
@@ -17,6 +17,11 @@ Returns the square root of a number.
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/sqrt.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

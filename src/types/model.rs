@@ -66,6 +66,36 @@ impl PhpType {
         }
     }
 
+    /// Returns true when a null property default must be materialized into a slot of
+    /// this type (and the literal-default emitters support doing so).
+    ///
+    /// `Void`, nullable unions, `Mixed`, and object slots encode null distinctly, so the
+    /// default write is required and supported. Every other slot either has no null
+    /// encoding (plain scalars, strings, arrays — those slots are always overwritten
+    /// before an observable read when refinement rebound them) or reads zero-initialized
+    /// storage as null already (callable/pointer-shaped slots), so the null default is
+    /// skipped for them.
+    pub fn null_property_default_required(&self) -> bool {
+        match self {
+            PhpType::Void | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Object(_) => true,
+            PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)),
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Never
+            | PhpType::Iterable
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_) => false,
+        }
+    }
+
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {

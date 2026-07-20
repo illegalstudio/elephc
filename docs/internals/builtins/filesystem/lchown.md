@@ -2,7 +2,7 @@
 title: "lchown() — internals"
 description: "Compiler internals for lchown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 130
+  order: 134
 ---
 
 ## `lchown()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lchown.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4483](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4483) (`lower_lchown`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4479](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4479) (`lower_lchown`)
 - **Function symbol**: `lower_lchown()`
 
 
@@ -32,6 +32,11 @@ function lchown(string $filename, string $user): bool
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

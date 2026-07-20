@@ -10,9 +10,11 @@ tree into one Markdown page per supported PHP builtin, in two flavours:
   source file lowers the call, which runtime helper it dispatches to,
   what the type checker enforces.
 
-The script is data-driven. Its source of truth is the single-source
-`builtin!` registry (`src/builtins/`), read via the `gen_builtins` binary
-(`cargo run --bin gen_builtins --include-internal`). It enriches that data
+The script is data-driven. Its sources of truth are the single-source
+`builtin!` registry (`src/builtins/`) and the eval interpreter's
+`eval_builtin!` registry (`crates/elephc-magician/src/interpreter/builtins/`),
+both read via the `gen_builtins` example
+(`cargo run --example gen_builtins -- --include-internal`). It enriches that data
 with each builtin's lowering location (parsed from the home file's `lower`
 hook) and documentation area, then writes a single JSON registry
 (`scripts/docs/builtin_registry.json`) which the Markdown renderer consumes.
@@ -20,13 +22,13 @@ Everything else is generated.
 
 ## Usage
 
-From the repo root. The generator invokes the `gen_builtins` binary, so build
-it first (the extractor prefers the prebuilt binary at `target/debug/gen_builtins`
-and otherwise falls back to `cargo run`):
+From the repo root. The generator invokes the `gen_builtins` example, so build
+it first (the extractor prefers the prebuilt binary at
+`target/debug/examples/gen_builtins` and otherwise falls back to `cargo run`):
 
 ```bash
 # 0. Build the registry exporter the generator reads from
-cargo build --bin gen_builtins
+cargo build --example gen_builtins
 
 # 1. Parse the source and write the JSON registry
 python3 scripts/docs/extract_builtins.py

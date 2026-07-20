@@ -32,6 +32,11 @@ function array_flip(array $array): array
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_flip.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_flip.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_flip()`](../../../php/builtins/array/array_flip.md)
