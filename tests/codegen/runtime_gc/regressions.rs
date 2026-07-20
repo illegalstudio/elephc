@@ -1628,6 +1628,342 @@ echo "done";
     );
 }
 
+/// Regression for #448: a caught exception object must be released once the catch
+/// handler is done with it. Before the fix the catch binding moved the throwable into
+/// the variable's slot without ever scheduling a release, leaking one ~48-byte block
+/// per catch. A throw/catch loop must leave the heap clean.
+#[test]
+fn test_regression_caught_exception_released_per_catch() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    try { throw new TypeError("x"); } catch (\Throwable $e) {}
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after caught exceptions, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: a catch clause without a variable must still consume and
+/// release the in-flight exception instead of dropping the reference.
+#[test]
+fn test_regression_unbound_catch_releases_exception() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    try { throw new RuntimeException("x"); } catch (\Throwable) {}
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after unbound catches, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: rethrowing the caught variable (`throw $e`) hands the same
+/// object to an outer handler. With catch slots owned and released, the rethrow must
+/// retain the borrowed local so inner and outer bindings each own a reference —
+/// neither a leak nor a double free.
+#[test]
+fn test_regression_rethrow_chain_balances_references() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    try {
+        try { throw new LogicException("x"); } catch (\Throwable $e) { throw $e; }
+    } catch (\Throwable $outer) {}
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after rethrow chains, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: aliasing the caught exception (`$x = $e`) acquires its own
+/// reference; both locals release at scope exit and the heap stays clean.
+#[test]
+fn test_regression_caught_exception_alias_balances_references() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    try { throw new TypeError("x"); } catch (\Throwable $e) { $x = $e; }
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after aliased catches, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: a function that throws and catches internally must release
+/// the caught exception in its epilogue like any owned object local.
+#[test]
+fn test_regression_function_scoped_catch_releases_exception() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function poke(int $n): int {
+    try { throw new RuntimeException("r$n"); } catch (\Throwable $e) { return $n; }
+}
+$acc = 0;
+for ($n = 0; $n < 50; $n++) { $acc += poke($n); }
+echo $acc;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1225");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after function-scoped catches, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: a caught exception that legitimately escapes the catch (pushed
+/// into an array) is retained by the container and NOT freed by the catch slot's own
+/// cleanup — exactly the escaped objects stay live, nothing more (no double free, no
+/// extra leak on top of the retention). `return $e` from inside a catch is a separate,
+/// pre-existing unsupported shape, so the array escape is the coverable transfer path.
+#[test]
+fn test_regression_escaped_caught_exception_retained_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$keep = [];
+for ($n = 0; $n < 5; $n++) {
+    try { throw new LogicException("boom"); } catch (\Throwable $e) { $keep[] = $e; }
+}
+echo count($keep), "|", strlen($keep[4]->getMessage());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5|4");
+    // Match the no-try control that pushes `new LogicException("boom")` into the same
+    // array: main's epilogue currently leaves the escaped throwables (and their
+    // message payloads) live rather than deep-freeing array object elements. Catch
+    // cleanup must not free them a second time — a double free would abort with a
+    // bad-refcount fatal before this assertion — and must not add blocks beyond that
+    // baseline (10 = 5 exceptions + 5 message strings under the current allocator).
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=10"),
+        "expected the no-try escape baseline (10 live blocks), got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: `finally` on both paths — a caught exception with a finally
+/// block, and a propagating exception whose finally runs before the outer catch —
+/// must keep the heap flat like the plain catch shapes.
+#[test]
+fn test_regression_finally_paths_release_exception() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function g(): int {
+    try { throw new RuntimeException("inner"); } finally { }
+}
+$hits = 0;
+for ($n = 0; $n < 50; $n++) {
+    try { throw new TypeError("x"); } catch (\Throwable $e) { $hits++; } finally { }
+    try { g(); } catch (\Throwable $e) { $hits++; }
+}
+echo $hits;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "100");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap across finally paths, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: a multi-type catch clause (`catch (A | B $e)`) types the slot
+/// as Throwable; both matching arms must release through the same owned-slot lifecycle.
+#[test]
+fn test_regression_multi_type_catch_releases_exception() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hits = 0;
+for ($n = 0; $n < 50; $n++) {
+    try {
+        if ($n % 2 == 0) { throw new LogicException("a"); }
+        throw new RuntimeException("b");
+    } catch (LogicException | RuntimeException $e) {
+        $hits++;
+    }
+}
+echo $hits;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "50");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap for multi-type catches, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: a catch variable declared through `global` must replace the
+/// shared global value, release prior iterations, and remain readable after the function.
+#[test]
+fn test_regression_catch_binding_updates_global_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$caught = null;
+function catchGlobally(): int {
+    global $caught;
+    $hits = 0;
+    for ($n = 0; $n < 50; $n++) {
+        try { throw new RuntimeException("g"); }
+        catch (\Throwable $caught) {
+            if ($caught instanceof RuntimeException) { $hits++; }
+        }
+    }
+    return $hits;
+}
+echo catchGlobally(), "|", get_class($caught);
+$caught = null;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "50|RuntimeException");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected global catch rebinding to keep a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: binding a catch into a referenced local must write through
+/// the shared ref cell instead of replacing the frame slot's cell pointer.
+#[test]
+fn test_regression_catch_binding_updates_reference_cell_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = new LogicException("old");
+$target =& $value;
+$hits = 0;
+for ($n = 0; $n < 50; $n++) {
+    try { throw new LogicException("r"); }
+    catch (\Throwable $target) {
+        if ($value instanceof LogicException) { $hits++; }
+    }
+}
+echo $hits, "|", get_class($value);
+$value = null;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "50|LogicException");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected reference-cell catch rebinding to keep a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: releasing a closure that captured a caught throwable must
+/// dispatch heap kind 6 through `__rt_decref_any` on every supported architecture.
+#[test]
+fn test_regression_caught_throwable_capture_uses_uniform_decref_dispatch() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hits = 0;
+for ($n = 0; $n < 50; $n++) {
+    try { throw new RuntimeException("captured"); }
+    catch (\Throwable $e) {
+        $callback = function () use ($e) { return $e instanceof RuntimeException; };
+        if ($callback() === true) { $hits++; }
+        $callback = null;
+    }
+}
+echo $hits;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "50");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected throwable captures to release through decref_any, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: expression-form rethrow (`true ? throw $e : 0`) must retain
+/// the catch local the same way statement-form `throw $e` does. Without the retain,
+/// inner and outer catch slots share one reference and epilogue/rebind double-frees.
+#[test]
+fn test_regression_expression_rethrow_balances_references() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    try {
+        try { throw new LogicException("x"); } catch (\Throwable $e) { $x = true ? throw $e : 0; }
+    } catch (\Throwable $outer) {}
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap after expression-form rethrows, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for #448: `Fiber::throw($caught)` must retain a separate in-flight
+/// reference before the suspended fiber consumes it, while both catch bindings
+/// continue to own and release their local references.
+#[test]
+fn test_regression_fiber_throw_balances_caught_exception_references() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 20; $n++) {
+    $fiber = new Fiber(function (): void {
+        try { Fiber::suspend(); } catch (\Throwable $inside) {}
+    });
+    $fiber->start();
+    try { throw new LogicException("fiber"); }
+    catch (\Throwable $caught) { $fiber->throw($caught); }
+    $fiber = null;
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Fiber::throw catch transfers to keep a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #538: growing one function-local array from indexed
 /// `[]` storage into a string-keyed hash must release every replaced COW generation.
 #[test]

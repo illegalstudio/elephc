@@ -507,8 +507,9 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
-            | FinallyExit => E::WRITES_LOCAL,
+            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
+                E::WRITES_LOCAL
+            }
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -526,6 +527,7 @@ impl Op {
             | ClassAttrArgs
             | ClassGetAttributes
             | CatchCurrent => E::READS_GLOBAL,
+            CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
             | StoreStaticLocal
             | StoreStaticProperty

@@ -893,6 +893,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::CallableArrayNew
                 | Op::BufferNew
                 | Op::GeneratorNew
+                | Op::CatchBind
                 | Op::Call
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall

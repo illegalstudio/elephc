@@ -1043,7 +1043,22 @@ fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> Lo
 /// Lowers throw used as an expression and returns a placeholder null value.
 fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::ThrowException, vec![value.value], None, Op::ThrowException.default_effects(), Some(expr.span));
+    // Match statement-form `throw`: transfer owning temps, but retain loads that
+    // leave a local slot as owner (e.g. `true ? throw $e : 0` after a catch bind).
+    let transferable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let value = if transferable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(inner.span))
+    };
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![value.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(expr.span),
+    );
     lower_null(ctx, expr)
 }
 

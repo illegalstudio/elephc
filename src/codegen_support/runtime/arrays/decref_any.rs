@@ -16,7 +16,7 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Reads the heap kind tag from the value's header, validates the pointer against the
 /// managed heap window, and dispatches to the appropriate concrete release helper
-/// (string, array, hash, object, mixed). Skips GC-tracked children during active cycle
+/// (string, array, hash, object/throwable, mixed). Skips GC-tracked children during active cycle
 /// collection to avoid double-frees when the collector reclaims them directly.
 ///
 /// Input: x0 (ARM64) or rax (x86_64) = heap-backed value pointer
@@ -52,7 +52,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
-    emitter.instruction("cmp x13, #5");                                         // is this within the refcounted array/hash/object/mixed range?
+    emitter.instruction("cmp x13, #6");                                         // is this within the refcounted array/hash/object/mixed/throwable range?
     emitter.instruction("b.hi __rt_decref_any_dispatch");                       // raw/untyped blocks are not part of refcounted graph cleanup
     emitter.instruction("mov x14, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x14, x14, #16");                                   // x14 = GC reachable bit in the kind word
@@ -72,6 +72,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #6");                                         // is this a throwable object?
+    emitter.instruction("b.eq __rt_decref_any_object");                         // release throwables through the object decref helper
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -96,7 +98,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 /// x86_64 Linux implementation of the uniform release dispatcher.
 /// Uses the x86_64 heap wrapper header format with a high-word magic marker to distinguish
 /// managed heap payloads from foreign or static pointers before dispatching to concrete
-/// release helpers (string, array, hash, object, mixed).
+/// release helpers (string, array, hash, object/throwable, mixed).
 /// Input: rax = heap-backed value pointer
 /// Output: none (tail-calls to specialized release helpers)
 fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
@@ -130,6 +132,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
+    emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");
@@ -149,4 +153,37 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies every supported architecture routes throwable heap kind 6 through
+    /// object release, including ARM64's active-cycle collection range.
+    #[test]
+    fn test_decref_any_dispatches_throwable_kind_on_all_supported_architectures() {
+        for platform in [Platform::MacOS, Platform::Linux] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::AArch64));
+            emit_decref_any(&mut emitter);
+            let assembly = emitter.output();
+            assert!(
+                assembly.contains("    cmp x13, #6\n"),
+                "ARM64 collector range excludes throwables on {platform:?}:\n{assembly}"
+            );
+            assert!(
+                assembly.contains("    cmp x11, #6\n    b.eq __rt_decref_any_object\n"),
+                "ARM64 dispatcher excludes throwables on {platform:?}:\n{assembly}"
+            );
+        }
+
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_decref_any(&mut emitter);
+        let assembly = emitter.output();
+        assert!(
+            assembly.contains("    cmp r10, 6\n    je __rt_decref_any_object\n"),
+            "x86_64 dispatcher excludes throwables:\n{assembly}"
+        );
+    }
 }

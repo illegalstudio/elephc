@@ -1867,6 +1867,21 @@ fn lower_include_once_guard(
 /// Lowers a throwing statement into a terminator.
 fn lower_throw(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) {
     let value = lower_expr(ctx, expr);
+    // The in-flight exception cell owns one reference to the thrown object. Throwing
+    // an owning temporary (e.g. `throw new E()`, `throw f()`) transfers that
+    // reference; throwing a value that still leaves a local slot as owner — a
+    // PhpLocal/StaticLocal heap load such as a rethrown catch variable (`throw $e`)
+    // — must retain it, so the local's own release (rebind or epilogue) stays
+    // balanced with the catch-side release of the in-flight reference (issue #448).
+    // Main classifies concrete object local loads as owning temporaries for
+    // provisional unbox-release tracking; that must not be mistaken for a transfer.
+    let transferable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let value = if transferable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span))
+    };
     terminate_throw(ctx, value.value);
 }
 
@@ -2114,27 +2129,27 @@ fn lower_current_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> Low
     )
 }
 
-/// Binds and clears the active exception for a matched catch clause.
+/// Takes and clears the active exception for a matched catch clause, then stores the
+/// owned result through the ordinary variable-storage planner. This keeps local,
+/// global, static, and reference-cell destinations consistent while preserving the
+/// single in-flight reference transferred by the runtime (issue #448). A variable-less
+/// catch consumes the reference through a hidden owned temporary so it follows the
+/// same lifecycle instead of leaking.
 fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span: Span) {
-    let (immediate, php_type) = catch
-        .variable
-        .as_ref()
-        .map_or((None, PhpType::Void), |variable| {
-            let php_type = catch_variable_type(catch);
-            let slot = ctx.declare_local(variable, php_type.clone());
-            ctx.set_local_type(variable, php_type.clone());
-            (Some(Immediate::LocalSlot(slot)), php_type)
-        });
-    ctx.builder.emit_with_effects(
+    let php_type = catch_variable_type(catch);
+    let variable = match catch.variable.as_ref() {
+        Some(variable) => variable.clone(),
+        None => ctx.declare_owned_hidden_temp(php_type.clone()),
+    };
+    let caught = ctx.emit_owned_value(
         Op::CatchBind,
         Vec::new(),
-        immediate,
-        IrType::Void,
-        php_type,
-        Ownership::NonHeap,
+        None,
+        php_type.clone(),
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    ctx.store_local(&variable, caught, php_type, Some(span));
 }
 
 /// Returns the local type to use for a catch variable.

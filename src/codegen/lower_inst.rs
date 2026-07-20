@@ -2885,37 +2885,16 @@ fn lower_catch_current(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     store_if_result(ctx, inst)
 }
 
-/// Binds the active exception to an optional catch variable and clears the runtime slot.
+/// Takes the active exception into an owned SSA result and clears the runtime slot.
 fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
-        let storage_ty = ctx.local_php_type(slot)?;
-        let target_ty = if inst.result_php_type.codegen_repr() == PhpType::Void {
-            storage_ty.clone()
-        } else {
-            inst.result_php_type.codegen_repr()
-        };
-        let offset = ctx.local_offset(slot)?;
-        abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &target_ty);
-        let store_ty = catch_bind_store_type(ctx, &target_ty, &storage_ty);
-        abi::emit_store(ctx.emitter, &store_ty, offset);
-    }
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("catch_bind missing owned result"))?;
+    let result_ty = ctx.value_php_type(result)?;
+    abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &result_ty);
+    ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
     Ok(())
-}
-
-/// Returns the local-storage representation used after loading the raw exception object.
-fn catch_bind_store_type(
-    ctx: &mut FunctionContext<'_>,
-    target_ty: &PhpType,
-    storage_ty: &PhpType,
-) -> PhpType {
-    let storage_ty = storage_ty.codegen_repr();
-    let target_ty = target_ty.codegen_repr();
-    if storage_ty == PhpType::Mixed && target_ty != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &target_ty);
-        return PhpType::Mixed;
-    }
-    target_ty
 }
 
 /// Lowers a direct instance-method call on a statically known object receiver.
