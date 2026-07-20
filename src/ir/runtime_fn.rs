@@ -506,6 +506,47 @@ impl RuntimeFnId {
         }
     }
 
+    /// Returns representation-safe EIR result metadata when no checked call-site type survives.
+    ///
+    /// Most runtime functions use the registry declaration unchanged. Operations whose registry
+    /// declaration is deliberately broad refine it here so compiler-injected or synthesized calls
+    /// still materialize the container layout required by the backend.
+    pub fn fallback_result_type(
+        self,
+        arg_types: &[crate::types::PhpType],
+        declared: &crate::types::PhpType,
+    ) -> crate::types::PhpType {
+        use crate::types::PhpType;
+        match self {
+            RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => PhpType::Array(element),
+                Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
+                Some(other) => other,
+                None => declared.clone(),
+            },
+            RuntimeFnId::ClassAttributeArgs => PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::Explode
+            | RuntimeFnId::File
+            | RuntimeFnId::Glob
+            | RuntimeFnId::Scandir
+            | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
+                "ReflectionAttribute".to_string(),
+            ))),
+            RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
+            RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
+            _ => declared.clone(),
+        }
+    }
+
     /// Refines the first-class callable ABI where the direct PHP signature is broader.
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;

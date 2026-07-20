@@ -14,7 +14,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Int,
-        false,
     ),
     summary: "Checks whether a variable is an integer.",
     php_manual: "function.is-int",

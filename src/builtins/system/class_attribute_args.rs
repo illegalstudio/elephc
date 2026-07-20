@@ -11,6 +11,9 @@
 //! - Dynamic class or attribute names are not yet supported; only string literals are accepted.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::system::attr_support::{class_attribute_args_unsupported, resolve_class_name};
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
@@ -22,11 +25,24 @@ builtin! {
     params: [class_name: Str, attribute_name: Str],
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ClassAttributeArgs,
-    ),
+    semantics: class_attribute_args_semantics(),
     summary: "Returns the constructor arguments of a named attribute applied to a class.",
     extension: true,
+}
+
+/// Builds semantics with the associative Mixed container layout emitted by the backend.
+const fn class_attribute_args_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ClassAttributeArgs);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the representation-safe EIR type for positional and named attribute keys.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
 }
 
 /// Validates both arguments are string literals, resolves the class and attribute,

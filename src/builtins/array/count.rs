@@ -12,19 +12,14 @@
 //!   default so `min` derives to 1; capping `max` at 1 yields the standard
 //!   "count() takes exactly 1 argument" diagnostic. The 2-param golden is preserved for
 //!   FCC and parity.
-//! - Concrete indexed and associative arrays lower to `ArrayLen`/`HashLen`; dynamic
-//!   `Mixed`, union, and `Countable` object values use the typed `runtime.count` function.
+//! - All accepted representations lower through typed `runtime.count` so a typed array
+//!   value carrying the runtime null-container sentinel still raises PHP's catchable TypeError.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::semantics::{
-    BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
-    BuiltinArgumentLowering, BuiltinLoweringError, BuiltinRequirements,
-    BuiltinResultOwnership, BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemanticInput,
-    BuiltinSemantics, BuiltinTargetStrategy, BuiltinTargetSupport, BuiltinValidation,
-    LoweredBuiltinValue, NormalizedBuiltinCall,
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
 };
 use crate::errors::CompileError;
-use crate::ir::{Effects, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::checker::builtins::arrays::union_member_is_countable_array;
 use crate::types::PhpType;
 
@@ -35,23 +30,17 @@ builtin! {
     max_args: 1,
     returns: Int,
     check: check,
-    semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
-        result_type: BuiltinResultType::Declared,
-        effects: BuiltinEffects::Shared(effects),
-        result_ownership: BuiltinResultOwnership::NonHeap,
-        requirements: BuiltinRequirements::Static(&[]),
-        target_strategy: BuiltinTargetStrategy::Conditional,
-        target_support: BuiltinTargetSupport::All,
-        runtime_functions: BuiltinRuntimeFunctions::One(RuntimeFnId::Count),
-        argument_lowering: BuiltinArgumentLowering::Count,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "runtime-selected count requires a statically typed Countable source",
-        ),
-        lowering: BuiltinLowering::Eir(lower),
-    },
+    semantics: count_semantics(),
     summary: "Counts all elements in an array or Countable object.",
     php_manual: "https://www.php.net/manual/en/function.count.php",
+}
+
+/// Builds typed runtime semantics while retaining count's one-visible-argument lowering rule.
+const fn count_semantics() -> BuiltinSemantics {
+    with_argument_lowering(
+        runtime_fn_semantics(crate::ir::RuntimeFnId::Count),
+        BuiltinArgumentLowering::Count,
+    )
 }
 
 /// Validates the argument type and returns `Int`.
@@ -81,64 +70,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.span,
             "count() argument must be array or Countable object",
         )),
-    }
-}
-
-/// Resolves precise count effects from the checked operand type.
-fn effects(input: &BuiltinSemanticInput<'_>) -> Effects {
-    input
-        .arg_types
-        .first()
-        .map(count_effects_for_type)
-        .unwrap_or_else(Effects::all)
-}
-
-/// Returns the EIR effect contract for one countable operand representation.
-fn count_effects_for_type(ty: &PhpType) -> Effects {
-    match ty.codegen_repr() {
-        PhpType::Array(_) => Op::ArrayLen.default_effects(),
-        PhpType::AssocArray { .. } => Op::HashLen.default_effects(),
-        PhpType::Mixed | PhpType::Union(_) => Effects::READS_HEAP | Effects::MAY_FATAL,
-        PhpType::Object(_) => Effects::all(),
-        _ => Effects::READS_HEAP | Effects::MAY_FATAL,
-    }
-}
-
-/// Lowers concrete arrays to length primitives and keeps dynamic Countable values typed.
-fn lower(
-    ctx: &mut dyn BuiltinLoweringContext,
-    call: &NormalizedBuiltinCall<'_>,
-) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    let value = call.operand(0)?;
-    let ty = ctx.value_php_type(value);
-    let effects = count_effects_for_type(&ty);
-    match ty.codegen_repr() {
-        PhpType::Array(_) => Ok(ctx.emit_value(
-            Op::ArrayLen,
-            vec![value],
-            None,
-            call.result_type.clone(),
-            effects,
-            Some(call.span),
-        )),
-        PhpType::AssocArray { .. } => Ok(ctx.emit_value(
-            Op::HashLen,
-            vec![value],
-            None,
-            call.result_type.clone(),
-            effects,
-            Some(call.span),
-        )),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_) => Ok(ctx.emit_runtime_call(
-            RuntimeCallTarget::Function(RuntimeFnId::Count),
-            vec![value],
-            call.result_type.clone(),
-            effects,
-            Some(call.span),
-        )),
-        other => Err(BuiltinLoweringError::new(format!(
-            "count cannot lower checked operand type {:?}",
-            other,
-        ))),
     }
 }

@@ -239,3 +239,35 @@ echo (string) $values["s"];
         "the owned Mixed container read must be released after stringification"
     );
 }
+
+/// Verifies a user-call result that aliases a borrowed Mixed argument is not released.
+#[test]
+fn borrowed_user_call_result_is_not_treated_as_an_owning_temporary() {
+    let module = super::lower_source(
+        r#"<?php
+function identity(mixed $value): mixed { return $value; }
+$values = [1];
+$value = array_pop($values);
+echo identity($value);
+echo $value;
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let result = function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::Call)
+        .and_then(|inst| inst.result)
+        .expect("expected the identity user-call result");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(result)),
+        "a user-call result borrowed from a local argument must not be released"
+    );
+}

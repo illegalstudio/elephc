@@ -14,6 +14,9 @@
 //!   unless the callback returns Mixed.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
@@ -26,11 +29,21 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayMap,
-    ),
+    semantics: array_map_semantics(),
     summary: "Applies a callback to the elements of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
+}
+
+/// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.
+const fn array_map_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns Mixed because a string or descriptor callback can select its result ABI at runtime.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Returns the mapped array type for an `array_map` call.

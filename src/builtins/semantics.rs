@@ -126,8 +126,6 @@ pub enum BuiltinTargetStrategy {
     EirGraph,
     /// Lower through a typed runtime call whose ABI is resolved by the backend.
     RuntimeCall,
-    /// Select among multiple explicit EIR/runtime strategies from semantic inputs.
-    Conditional,
 }
 
 /// Declares which supported compiler targets implement the builtin semantics.
@@ -380,10 +378,7 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
 }
 
 /// Builds shared semantics for a PHP runtime-type predicate.
-pub const fn type_predicate_semantics(
-    predicate: PhpTypePredicate,
-    runtime_callable: bool,
-) -> BuiltinSemantics {
+pub const fn type_predicate_semantics(predicate: PhpTypePredicate) -> BuiltinSemantics {
     BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -394,13 +389,7 @@ pub const fn type_predicate_semantics(
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
-        callable: if runtime_callable {
-            BuiltinCallablePolicy::Dynamic(callable_accepts_any_source)
-        } else {
-            BuiltinCallablePolicy::StaticOnly(
-                "runtime-selected type predicate has no generic wrapper contract",
-            )
-        },
+        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_any_source),
         lowering: BuiltinLowering::TypePredicate(predicate),
     }
 }
@@ -508,6 +497,14 @@ pub(crate) const fn test_probe_semantics_with_ownership(
 ) -> BuiltinSemantics {
     let mut semantics = test_probe_semantics();
     semantics.result_ownership = result_ownership;
+    semantics
+}
+
+/// Returns test-only registry semantics that conservatively model by-reference mutation.
+#[cfg(test)]
+pub(crate) const fn test_probe_by_ref_semantics() -> BuiltinSemantics {
+    let mut semantics = test_probe_semantics();
+    semantics.effects = BuiltinEffects::Static(Effects::WRITES_HEAP);
     semantics
 }
 

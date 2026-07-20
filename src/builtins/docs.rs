@@ -127,7 +127,6 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinTargetStrategy::EirPrimitive => "eir_primitive",
         BuiltinTargetStrategy::EirGraph => "eir_graph",
         BuiltinTargetStrategy::RuntimeCall => "runtime_call",
-        BuiltinTargetStrategy::Conditional => "conditional",
     };
     let target_support = match semantics.target_support {
         crate::builtins::semantics::BuiltinTargetSupport::All => {

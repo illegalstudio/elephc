@@ -15,7 +15,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Resource,
-        false,
     ),
     summary: "Checks whether a variable is a resource.",
     php_manual: "function.is-resource",

@@ -14,7 +14,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Int,
-        false,
     ),
     summary: "Alias of is_int().",
     php_manual: "function.is-long",

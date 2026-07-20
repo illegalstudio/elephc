@@ -15,7 +15,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Object,
-        false,
     ),
     summary: "Checks whether a variable is an object.",
     php_manual: "function.is-object",

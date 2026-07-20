@@ -445,7 +445,7 @@ mod tests {
         area: Types,
         params: [ref target: Mixed, value: Int],
         returns: Mixed,
-        semantics: crate::builtins::semantics::test_probe_semantics(),
+        semantics: crate::builtins::semantics::test_probe_by_ref_semantics(),
         summary: "registry by-ref param probe",
         internal: true,
     }
@@ -795,12 +795,60 @@ mod tests {
         ));
     }
 
-    /// Verifies conditional EIR lowering exposes its runtime fallback contract by typed ID.
+    /// Verifies typed runtime lowering derives count's visible arity from registry semantics.
     #[test]
-    fn conditional_runtime_function_arity_comes_from_registry_semantics() {
+    fn count_runtime_function_arity_comes_from_registry_semantics() {
         assert_eq!(
             runtime_fn_arity_bounds(crate::ir::RuntimeFnId::Count),
             Some((1, Some(1))),
         );
+    }
+
+    /// Verifies every backend-neutral type predicate supports runtime string dispatch.
+    #[test]
+    fn type_predicates_support_dynamic_callable_wrappers() {
+        for name in [
+            "is_array",
+            "is_bool",
+            "is_double",
+            "is_float",
+            "is_int",
+            "is_integer",
+            "is_iterable",
+            "is_long",
+            "is_object",
+            "is_real",
+            "is_resource",
+            "is_scalar",
+            "is_string",
+        ] {
+            let def = lookup(name).expect("type predicate must be registered");
+            assert!(
+                matches!(
+                    def.spec.semantics.callable,
+                    crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(_)
+                ),
+                "{name} must support runtime string dispatch",
+            );
+        }
+    }
+
+    /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
+    #[test]
+    fn array_runtime_fallbacks_preserve_backend_container_layout() {
+        for target in [
+            crate::ir::RuntimeFnId::Explode,
+            crate::ir::RuntimeFnId::File,
+            crate::ir::RuntimeFnId::Glob,
+            crate::ir::RuntimeFnId::Scandir,
+            crate::ir::RuntimeFnId::SplClasses,
+        ] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Array(Box::new(PhpType::Str)),
+                "{} must remain a concrete string array",
+                target.as_eir(),
+            );
+        }
     }
 }

@@ -12,6 +12,9 @@
 //!   `AssocArray { value, .. }` yields the value type, any other type is an error.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
@@ -21,11 +24,21 @@ builtin! {
     params: [ref array: Mixed],
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayPop,
-    ),
+    semantics: array_pop_semantics(),
     summary: "Pops the element off the end of array.",
     php_manual: "https://www.php.net/manual/en/function.array-pop.php",
+}
+
+/// Builds semantics whose EIR result preserves the builtin's nullable boxed payload.
+const fn array_pop_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayPop);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns Mixed because an empty array produces null regardless of its element type.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Returns the element type for an `array_pop` call.

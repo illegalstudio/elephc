@@ -8,6 +8,9 @@
 //! - The check hook validates that all flag/depth arguments are integers, reporting
 //!   each type error at the offending argument's span (not the call span).
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -22,10 +25,20 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::JsonEncode,
-    ),
+    semantics: json_encode_semantics(),
     summary: "Returns the JSON representation of a value.",
+}
+
+/// Builds semantics whose EIR result matches the runtime's boxed string-or-false value.
+const fn json_encode_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::JsonEncode);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the representation-safe EIR type for the runtime-selected string-or-false result.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Validates that all flag and depth arguments are integers.

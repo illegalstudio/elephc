@@ -55,7 +55,12 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
     let ast = crate::optimize::eliminate_dead_code(ast);
-    crate::ir_lower::lower_program(&ast, &check_result, target, false).expect("EIR lowering failed")
+    crate::ir_lower::lower_program(&ast, &check_result, target, false).unwrap_or_else(|error| {
+        panic!(
+            "EIR lowering failed for {}: {error:?}",
+            main_file_path.display()
+        )
+    })
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
@@ -181,17 +186,51 @@ fn unary_string_builtins_use_typed_runtime_calls() {
     );
 }
 
-/// Verifies `count` selects reusable length EIR for arrays and a typed fallback for dynamic values.
+/// Verifies positional builtin operands use registry types for explicit EIR coercions.
 #[test]
-fn count_uses_conditional_backend_neutral_lowering() {
+fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
+    let module = lower_source(
+        "<?php $value = json_decode('\"abc\"'); echo strtoupper($value);",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("cast") && text.contains("runtime.string.to_upper"),
+        "missing Mixed-to-Str coercion before typed runtime call: {text}"
+    );
+}
+
+/// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+#[test]
+fn builtin_runtime_calls_use_descriptor_result_representations() {
+    let module = lower_source(
+        "<?php $encoded = json_encode(INF); $environment = getenv('HOME'); echo $encoded === false; echo strlen($environment);",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.lines().any(|line| {
+            line.contains("Heap(Mixed) php=mixed") && line.contains("runtime.json_encode")
+        }),
+        "json_encode must retain its boxed string-or-false EIR result: {text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            line.contains("Str php=string") && line.contains("runtime.getenv")
+        }),
+        "getenv must retain the backend's concrete string EIR result: {text}"
+    );
+}
+
+/// Verifies `count` uses its typed runtime operation for concrete and dynamic values.
+#[test]
+fn count_uses_typed_runtime_lowering() {
     let module = lower_source(
         "<?php function sized(array $value): int { return count($value); } function dynamic($value): int { return count($value); } echo sized([1]); echo dynamic([1]);",
     );
     let text = print_module(&module);
-    assert!(text.contains("array_len"), "missing concrete array length EIR: {text}");
-    assert!(
-        text.contains("runtime.count"),
-        "missing typed dynamic count runtime function: {text}"
+    assert_eq!(
+        text.matches("runtime.count").count(),
+        2,
+        "concrete and dynamic count calls must retain typed runtime semantics: {text}"
     );
     assert!(
         !text.contains("builtin_call @count"),

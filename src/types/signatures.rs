@@ -114,13 +114,28 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 fn compiler_resident_builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "eval" => Some(fixed(&["code"])),
-        "empty" => Some(fixed(&["value"])),
-        "isset" => Some(variadic(&["var"], "vars")),
-        "unset" => Some(variadic(&["var"], "vars")),
-        "exit" | "die" => Some(optional(&["status"], 0, vec![int_lit(0)])),
+        "empty" => Some(with_return_type(fixed(&["value"]), PhpType::Bool)),
+        "isset" => Some(with_return_type(
+            variadic(&["var"], "vars"),
+            PhpType::Bool,
+        )),
+        "unset" => Some(with_return_type(
+            variadic(&["var"], "vars"),
+            PhpType::Void,
+        )),
+        "exit" | "die" => Some(with_return_type(
+            optional(&["status"], 0, vec![int_lit(0)]),
+            PhpType::Void,
+        )),
         "buffer_new" => Some(fixed(&["length"])),
         _ => None,
     }
+}
+
+/// Sets the result type on a compiler-resident language-construct signature.
+fn with_return_type(mut signature: FunctionSig, return_type: PhpType) -> FunctionSig {
+    signature.return_type = return_type;
+    signature
 }
 
 /// Returns the signature used when a builtin is accessed as a first-class callable.
@@ -255,5 +270,26 @@ mod tests {
         assert_eq!(wrapper_sig.defaults.len(), 2);
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
+    }
+
+    /// Verifies compiler-resident constructs expose their concrete EIR result types.
+    #[test]
+    fn compiler_resident_constructs_have_precise_return_types() {
+        assert_eq!(
+            builtin_call_sig("empty").expect("empty signature").return_type,
+            PhpType::Bool,
+        );
+        assert_eq!(
+            builtin_call_sig("isset").expect("isset signature").return_type,
+            PhpType::Bool,
+        );
+        assert_eq!(
+            builtin_call_sig("unset").expect("unset signature").return_type,
+            PhpType::Void,
+        );
+        assert_eq!(
+            builtin_call_sig("exit").expect("exit signature").return_type,
+            PhpType::Void,
+        );
     }
 }

@@ -1581,6 +1581,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_index_read_temp(value) {
             return true;
         }
+        if self.value_is_borrowed_user_call_result(value.value) {
+            return false;
+        }
         if matches!(
             self.builder.value_defining_op(value.value),
             Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
@@ -1666,6 +1669,85 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::FiberRuntimeCall
             )
         )
+    }
+
+    /// Returns whether a user-call result can alias a borrowed visible argument.
+    ///
+    /// User functions currently return refcounted parameter storage without
+    /// acquiring it for the caller. Such a result is borrowed when the matching
+    /// argument is borrowed, but remains an owning temporary when an owning
+    /// argument temporary transfers through the call.
+    fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(result) else {
+            return false;
+        };
+        if inst.op != Op::Call {
+            return false;
+        }
+        let Some(Immediate::Data(function_id)) = inst.immediate else {
+            return false;
+        };
+        let Some(function_name) = self.data.function_names.get(function_id.as_raw() as usize)
+        else {
+            return false;
+        };
+        let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
+            return false;
+        };
+        inst.operands
+            .iter()
+            .enumerate()
+            .any(|(parameter_index, argument)| {
+                if !return_alias.proven_aliases_parameter(parameter_index)
+                    || !self.call_result_may_alias_arg(*argument, result)
+                {
+                    return false;
+                }
+                let argument = LoweredValue {
+                    value: *argument,
+                    ir_type: self.builder.value_type(*argument),
+                };
+                !self.value_is_owning_temporary(argument)
+            })
+    }
+
+    /// Returns whether a call result can legally reuse one argument's refcounted payload.
+    pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
+        if matches!(
+            self.builder.value_defining_op(argument),
+            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        ) {
+            return false;
+        }
+        let argument_type = self.builder.value_php_type(argument).codegen_repr();
+        let result_type = self.builder.value_php_type(result).codegen_repr();
+        if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
+            || !Ownership::php_type_needs_lifetime_tracking(&result_type)
+        {
+            return false;
+        }
+        match (&argument_type, &result_type) {
+            (PhpType::Mixed | PhpType::Union(_), _)
+            | (_, PhpType::Mixed | PhpType::Union(_)) => true,
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(_), PhpType::Array(_)) => true,
+            (
+                PhpType::AssocArray { .. },
+                PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+            ) => true,
+            (
+                PhpType::Iterable,
+                PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
+            (PhpType::Str, PhpType::Str) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+            _ => argument_type == result_type,
+        }
     }
 
     /// Returns whether the value is a read from a one-shot hidden expression temp.

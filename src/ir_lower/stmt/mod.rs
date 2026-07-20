@@ -600,9 +600,11 @@ fn infer_loop_growth_value_type(
         ExprKind::Variable(name) if ctx.local_slots.contains_key(name) => {
             Some(ctx.local_type(name))
         }
-        ExprKind::FunctionCall { name, .. } => {
-            Some(call_return_type(ctx, name.as_str(), &[]))
-        }
+        ExprKind::FunctionCall { name, .. } => ctx
+            .builtin_call_types
+            .get(&expr.span)
+            .cloned()
+            .or_else(|| Some(call_return_type(ctx, name.as_str(), &[]))),
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
         }

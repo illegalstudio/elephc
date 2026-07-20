@@ -1182,6 +1182,28 @@ echo $total;
     );
 }
 
+/// Regression test: returning a borrowed Mixed parameter must not make the call
+/// result an owning temporary. Releasing that alias would invalidate the source
+/// local before its next use.
+#[test]
+fn test_borrowed_mixed_user_call_result_does_not_free_source_local() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function identity(mixed $value): mixed { return $value; }
+$values = [1];
+$value = array_pop($values);
+echo identity($value), "|", $value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for the call-argument-temporary leak: a fresh array literal passed
 /// to a plain BUILTIN (`count([...])`) inside a loop is an owning temporary that must
 /// be released after each call. Before the fix it leaked one array allocation per

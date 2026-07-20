@@ -14,7 +14,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Float,
-        false,
     ),
     summary: "Checks whether a variable is a floating-point number.",
     php_manual: "function.is-float",

@@ -224,7 +224,6 @@ def build_inventory() -> dict[str, Any]:
             "eir_primitive": 1,
             "eir_graph": 2,
             "runtime_call": 3,
-            "conditional": 4,
         }.get(strategy, 0)
         params = exported_record.get("params", [])
         records.append(
@@ -382,7 +381,7 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             errors.append(
                 f"{record['name']}: runtime_call strategy does not use typed RuntimeCall lowering"
             )
-        if strategy in {"eir_primitive", "eir_graph", "conditional"} and lowering_kind != "eir":
+        if strategy in {"eir_primitive", "eir_graph"} and lowering_kind != "eir":
             errors.append(
                 f"{record['name']}: {strategy} strategy does not use backend-neutral EIR lowering"
             )

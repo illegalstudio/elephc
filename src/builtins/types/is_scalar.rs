@@ -15,7 +15,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Scalar,
-        false,
     ),
     summary: "Checks whether a variable is a scalar.",
     php_manual: "function.is-scalar",

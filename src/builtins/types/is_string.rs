@@ -14,7 +14,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::String,
-        false,
     ),
     summary: "Checks whether a variable is a string.",
     php_manual: "function.is-string",

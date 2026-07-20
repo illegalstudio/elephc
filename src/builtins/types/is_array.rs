@@ -15,7 +15,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Array,
-        true,
     ),
     summary: "Checks whether a variable is an array.",
     php_manual: "function.is-array",

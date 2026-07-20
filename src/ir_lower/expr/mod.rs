@@ -1856,7 +1856,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
         return value;
     }
-    let sig = call_signature(ctx, canonical, args);
+    let sig = call_signature(ctx, canonical);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
     let operands = if is_extern || is_user_function {
@@ -1866,8 +1866,6 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     };
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
-    } else if let Some(php_type) = ctx.builtin_call_types.get(&expr.span) {
-        normalize_value_php_type(php_type.clone())
     } else if let Some(php_type) =
         registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)
     {
@@ -2074,7 +2072,16 @@ fn registry_builtin_result_type(
     };
     let resolved = match def.spec.semantics.result_type {
         crate::builtins::semantics::BuiltinResultType::Checked => {
-            return ctx.builtin_call_types.get(&span).cloned().map(normalize_value_php_type)
+            if let Some(checked) = ctx.builtin_call_types.get(&span) {
+                return Some(normalize_value_php_type(checked.clone()));
+            }
+            let crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(target),
+            ) = def.spec.semantics.lowering
+            else {
+                return None;
+            };
+            target.fallback_result_type(&arg_types, &def.return_type)
         }
         crate::builtins::semantics::BuiltinResultType::Declared => def.return_type.clone(),
         crate::builtins::semantics::BuiltinResultType::Shared(resolve) => resolve(&input),
@@ -4646,7 +4653,7 @@ fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
-            let sig = call_signature(ctx, &function_name, callback_args);
+            let sig = call_signature(ctx, &function_name);
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             Some(emit_builtin_call_value(
@@ -4973,7 +4980,6 @@ where
 fn call_signature(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
-    args: &[Expr],
 ) -> Option<FunctionSig> {
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
@@ -4981,10 +4987,7 @@ fn call_signature(
     if let Some(sig) = ctx.extern_functions.get(name) {
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
-    if crate::types::call_args::has_named_args(args) {
-        return builtin_call_signature(name);
-    }
-    None
+    builtin_call_signature(name)
 }
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
@@ -5400,8 +5403,38 @@ fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        _ if !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg) =>
+        {
+            lower_positional_builtin_args_with_signature(ctx, sig, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.
+///
+/// Runtime helpers consume the caller-provided arity, while the registry signature still supplies
+/// by-reference handling and scalar storage coercions for every visible regular parameter.
+fn lower_positional_builtin_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index < regular_param_count {
+                lower_arg_with_signature(ctx, sig, index, arg)
+            } else {
+                lower_expr(ctx, arg).value
+            }
+        })
+        .collect()
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.
@@ -5590,7 +5623,7 @@ fn lower_static_settype(
         return None;
     };
     let target_ty = static_settype_target_type(&type_arg)?;
-    let sig = call_signature(ctx, name, args);
+    let sig = call_signature(ctx, name);
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);
     ctx.set_local_type(local_name, target_ty);
@@ -5609,7 +5642,7 @@ fn static_settype_arg_exprs(
     if !crate::types::call_args::has_named_args(args) {
         return Some((args[0].clone(), args[1].clone()));
     }
-    let sig = call_signature(ctx, name, args)?;
+    let sig = call_signature(ctx, name)?;
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -13282,7 +13315,7 @@ fn release_owned_call_arg_temporaries_with_signature(
             });
             if !independently_boxed
                 && return_alias.may_alias_parameter(parameter_index)
-                && call_result_may_alias_arg(ctx, *value, result)
+                && result.is_some_and(|result| ctx.call_result_may_alias_arg(*value, result))
             {
                 continue;
             }
@@ -13315,54 +13348,6 @@ fn call_arg_gets_independent_mixed_box(
                     PhpType::Mixed | PhpType::Union(_)
                 )
         })
-}
-
-/// Returns true when a call result can legally be the same refcounted payload as an argument.
-fn call_result_may_alias_arg(
-    ctx: &LoweringContext<'_, '_>,
-    arg: crate::ir::ValueId,
-    result: Option<crate::ir::ValueId>,
-) -> bool {
-    let Some(result) = result else {
-        return false;
-    };
-    if matches!(
-        ctx.builder.value_defining_op(arg),
-        Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
-    ) {
-        return false;
-    }
-    let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();
-    let result_ty = ctx.builder.value_php_type(result).codegen_repr();
-    if !Ownership::php_type_needs_lifetime_tracking(&arg_ty)
-        || !Ownership::php_type_needs_lifetime_tracking(&result_ty)
-    {
-        return false;
-    }
-    match (&arg_ty, &result_ty) {
-        (PhpType::Mixed | PhpType::Union(_), _) | (_, PhpType::Mixed | PhpType::Union(_)) => true,
-        (PhpType::Object(_), PhpType::Object(_)) => true,
-        (PhpType::Array(_), PhpType::Array(_)) => true,
-        (
-            PhpType::AssocArray { .. },
-            PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
-        ) => true,
-        // `iterable` is a supertype of arrays and Traversable objects, so a
-        // function can accept one container shape and return the same payload
-        // typed as `iterable` (e.g. `function id(iterable $x): iterable`
-        // returning an array argument). Treat container/iterable pairings in
-        // either direction as a possible alias so the shared payload is not
-        // released while the callee still returns it.
-        (
-            PhpType::Iterable,
-            PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_),
-        ) => true,
-        (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
-        (PhpType::Str, PhpType::Str) => true,
-        (PhpType::Callable, PhpType::Callable) => true,
-        (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
-        _ => arg_ty == result_ty,
-    }
 }
 
 /// Makes a borrowed read result independent from an owning receiver before releasing it.

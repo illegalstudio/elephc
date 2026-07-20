@@ -14,7 +14,6 @@ builtin! {
     returns: Bool,
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Bool,
-        false,
     ),
     summary: "Checks whether a variable is a boolean.",
     php_manual: "function.is-bool",

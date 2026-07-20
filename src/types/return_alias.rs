@@ -53,6 +53,11 @@ impl ReturnArgAlias {
             Self::Unknown => true,
         }
     }
+
+    /// Returns whether analysis proved the result aliases `parameter_index`.
+    pub(crate) fn proven_aliases_parameter(&self, parameter_index: usize) -> bool {
+        matches!(self, Self::Parameters(parameters) if parameters.contains(&parameter_index))
+    }
 }
 
 /// Return/argument alias summaries for source-declared functions and methods.
