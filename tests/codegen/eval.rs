@@ -28739,6 +28739,21 @@ return 0;');
     assert_eq!(out, "8");
 }
 
+/// Verifies eval's native Throwable bridge retains and exposes the third `$previous` argument.
+#[test]
+fn test_eval_exception_previous_round_trips_through_native_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    eval('throw new Exception("outer", 7, new RuntimeException("inner"));');
+} catch (Exception $caught) {
+    echo $caught->getMessage(), "|", $caught->getCode(), "|", $caught->getPrevious()->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "outer|7|inner");
+}
+
 /// Verifies eval-internal catch type narrowing uses the thrown object's class.
 #[test]
 fn test_eval_try_catch_matches_specific_exception_inside_eval() {
