@@ -184,6 +184,20 @@ fn test_parse_enum_case_expr() {
     }
 }
 
+/// Verifies `enum` remains a soft keyword in declarations, type hints, and scoped expressions.
+#[test]
+fn test_parse_enum_named_enum_across_name_contexts() {
+    let stmts = parse_source(
+        "<?php enum Enum { case X; } function pick(Enum $value): Enum { return Enum::X; } Enum::X;",
+    );
+    assert!(matches!(
+        &stmts[0].kind,
+        StmtKind::EnumDecl { name, .. } if name == "Enum"
+    ));
+    assert!(matches!(&stmts[1].kind, StmtKind::FunctionDecl { .. }));
+    assert!(matches!(&stmts[2].kind, StmtKind::ExprStmt(_)));
+}
+
 /// Verifies that `<?php [$a, $b] = [1, 2];` parses to a `ListUnpack` with vars `["a", "b"]`.
 /// Destructuring via list literal unpacks the source array into named variables.
 #[test]

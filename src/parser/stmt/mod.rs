@@ -108,7 +108,13 @@ fn parse_stmt_dispatch(
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
-        Token::Enum => oop::parse_enum_decl(tokens, pos, span),
+        Token::Enum
+            if tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
+                name_part_from_token(token, metadata).is_some()
+            }) =>
+        {
+            oop::parse_enum_decl(tokens, pos, span)
+        }
         Token::ReadOnly => oop::parse_readonly_decl(tokens, pos, span),
         Token::Packed => oop::parse_packed_decl(tokens, pos, span),
         Token::Interface => oop::parse_interface_decl(tokens, pos, span),
@@ -151,6 +157,7 @@ fn parse_stmt_dispatch(
         }
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
         Token::Identifier(_)
+        | Token::Enum
         | Token::Self_
         | Token::Parent
         | Token::Backslash
@@ -471,14 +478,49 @@ pub(crate) fn expect_token(
     }
 }
 
-/// Returns true if the token at `pos` is the start of a PHP name (identifier or backslash).
+/// Converts a token accepted as an ordinary PHP name segment to its source spelling.
 ///
-/// Used to distinguish name-based declarations from generic expression statements.
+/// `enum` is a soft keyword in class-like name contexts; other reserved words remain
+/// excluded here even though PHP permits them in the broader member-name grammar.
+pub(crate) fn name_part_from_token(
+    token: &Token,
+    metadata: &crate::lexer::TokenMetadata,
+) -> Option<String> {
+    match token {
+        Token::Identifier(name) => Some(name.clone()),
+        Token::Enum => crate::parser::keyword_name::bareword_name_from_token(token, metadata),
+        _ => None,
+    }
+}
+
+/// Returns true if the token at `pos` starts a PHP class-like name.
+///
+/// Accepts identifiers, the soft keyword `enum`, and a leading namespace separator.
 pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
-    matches!(
-        tokens.get(pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Backslash)
-    )
+    match tokens.get(pos) {
+        Some((Token::Backslash, _)) => true,
+        Some((token, metadata)) => name_part_from_token(token, metadata).is_some(),
+        None => false,
+    }
+}
+
+/// Parses one unqualified class-like declaration name.
+///
+/// This accepts the soft keyword `enum` alongside ordinary identifiers but never
+/// consumes namespace separators, which are invalid in declaration names.
+pub(crate) fn parse_unqualified_name(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    error: &str,
+) -> Result<String, CompileError> {
+    let Some((token, metadata)) = tokens.get(*pos) else {
+        return Err(CompileError::new(span, error));
+    };
+    let name = name_part_from_token(token, metadata)
+        .ok_or_else(|| CompileError::new(span, error))?;
+    *pos += 1;
+    Ok(name)
 }
 
 /// Parses a PHP qualified or unqualified name from the token stream.
@@ -501,12 +543,17 @@ pub(crate) fn parse_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                parts.push(name.clone());
+        match tokens.get(*pos) {
+            Some((token, metadata)) if name_part_from_token(token, metadata).is_some() => {
+                parts.push(
+                    name_part_from_token(token, metadata)
+                        .expect("name part was checked immediately above"),
+                );
                 *pos += 1;
             }
-            _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ if parts.is_empty() => {
+                return Err(CompileError::new(span, first_error))
+            }
             _ => {
                 return Err(CompileError::new(
                     span,

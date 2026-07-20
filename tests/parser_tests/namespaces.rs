@@ -40,6 +40,24 @@ fn test_parse_namespace_semicolon_and_use_group() {
     }
 }
 
+/// Parses lexer-tokenized predefined constants in every grouped-use suffix position.
+#[test]
+fn test_parse_grouped_use_const_tokenized_names() {
+    let stmts = parse_source(
+        "<?php namespace App; use const Vendor\\{PHP_INT_MAX as MAX, PHP_INT_MIN as MIN};",
+    );
+    match &stmts[1].kind {
+        StmtKind::UseDecl { imports } => {
+            assert_eq!(imports.len(), 2);
+            assert_eq!(imports[0].name.as_str(), "Vendor\\PHP_INT_MAX");
+            assert_eq!(imports[0].alias, "MAX");
+            assert_eq!(imports[1].name.as_str(), "Vendor\\PHP_INT_MIN");
+            assert_eq!(imports[1].alias, "MIN");
+        }
+        other => panic!("expected use decl, got {:?}", other),
+    }
+}
+
 /// Parses a namespace block containing a class with extends, implements, trait use,
 /// and a fully-qualified static method call inside a method body.
 #[test]

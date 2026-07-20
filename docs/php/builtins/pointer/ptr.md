@@ -2,7 +2,7 @@
 title: "ptr()"
 description: "Returns a raw pointer to the given variable."
 sidebar:
-  order: 289
+  order: 302
 ---
 
 ## ptr()

@@ -2,7 +2,7 @@
 title: "gettype() — internals"
 description: "Compiler internals for gettype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 436
 ---
 
 ## `gettype()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/gettype.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:417](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L417) (`lower_gettype`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:418](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L418) (`lower_gettype`)
 - **Function symbol**: `lower_gettype()`
 
 

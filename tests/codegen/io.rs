@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "io/printing.rs"]
 mod printing;
+#[path = "io/output_buffering.rs"]
+mod output_buffering;
 #[path = "io/files.rs"]
 mod files;
 #[path = "io/streams.rs"]

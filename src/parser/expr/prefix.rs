@@ -210,7 +210,9 @@ pub(super) fn parse_prefix(
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
-        Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
+        Token::Identifier(_) | Token::Enum | Token::Backslash => {
+            parse_named_expr(tokens, pos, span)
+        }
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")

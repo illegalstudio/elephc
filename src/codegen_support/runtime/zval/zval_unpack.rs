@@ -265,7 +265,7 @@ fn emit_zval_unpack_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the owned array pointer across the cell alloc
     emitter.instruction("mov rax, 24");                                         // a Mixed cell stores tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell storage
-    emitter.instruction("mov r10, 0x454C504800000005");                         // materialize the Mixed-cell heap kind word (x86_64 marker | kind 5)
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the Mixed-cell heap kind word (x86_64 marker | kind 5)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a Mixed cell in the uniform header
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the runtime array tag (4 or 5)
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the runtime value tag at mixed[0]

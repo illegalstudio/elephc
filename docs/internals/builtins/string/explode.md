@@ -2,7 +2,7 @@
 title: "explode() — internals"
 description: "Compiler internals for explode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 350
+  order: 363
 ---
 
 ## `explode()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/explode.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L169) (`lower_explode`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:168](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L168) (`lower_explode`)
 - **Function symbol**: `lower_explode()`
 
 

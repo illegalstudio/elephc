@@ -2,7 +2,7 @@
 title: "fmod() — internals"
 description: "Compiler internals for fmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 265
 ---
 
 ## `fmod()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/fmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/fmod.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:92](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L92) (`lower_fmod`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/binary.rs`:91](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/binary.rs#L91) (`lower_fmod`)
 - **Function symbol**: `lower_fmod()`
 
 

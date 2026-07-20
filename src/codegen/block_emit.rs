@@ -46,7 +46,6 @@ use super::lower_term;
 use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits all supported EIR functions and then the process-entry main function.
 ///
@@ -916,7 +915,7 @@ fn emit_enum_object_allocation(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
-                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             )); // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
@@ -1058,6 +1057,7 @@ fn ensure_static_property_default_type_supported(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Mixed
+        | PhpType::Object(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Union(_) => Ok(()),

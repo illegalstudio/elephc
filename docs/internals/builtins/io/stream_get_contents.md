@@ -2,7 +2,7 @@
 title: "stream_get_contents() — internals"
 description: "Compiler internals for stream_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 218
 ---
 
 ## `stream_get_contents()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_contents.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1301](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1301) (`lower_stream_get_contents`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1299](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1299) (`lower_stream_get_contents`)
 - **Function symbol**: `lower_stream_get_contents()`
 
 

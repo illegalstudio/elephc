@@ -121,6 +121,15 @@ fn test_new_static_returns_instance_of_called_class() {
     assert_eq!(out, "Child");
 }
 
+/// Verifies a static child override may narrow a parent-class return to `static`.
+#[test]
+fn test_static_override_covariant_self_return() {
+    let out = compile_and_run(
+        "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public static function make(): static { return new static(); } } echo Child::make() instanceof Child ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies `new parent()` inside a child class returns an instance of the parent class `Base`.
 #[test]
 fn test_new_parent_returns_instance_of_parent_class() {

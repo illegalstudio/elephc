@@ -2,7 +2,7 @@
 title: "phpversion() — internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 283
+  order: 296
 ---
 
 ## `phpversion()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/phpversion.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:539](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L539) (`lower_phpversion`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L543) (`lower_phpversion`)
 - **Function symbol**: `lower_phpversion()`
 
 

@@ -311,12 +311,13 @@ pub(crate) fn declared_return_type_compatible(
 /// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
-    class_name: &str,
+    class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
+    let class_name = class.name.as_str();
     let child_sig = build_method_sig(checker, method)?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
@@ -345,6 +346,14 @@ pub(crate) fn validate_override_signature(
             &parent_sig.return_type,
             &child_sig.return_type,
         )
+        && !covariant_self_return_compatible(
+            checker,
+            class_name,
+            class.extends.as_deref(),
+            &class.implements,
+            parent_sig,
+            &child_sig,
+        )
     {
         return Err(CompileError::new(
             method.span,
@@ -355,4 +364,41 @@ pub(crate) fn validate_override_signature(
         ));
     }
     Ok(())
+}
+
+/// Returns true when a child method may return the child class itself against a wider parent return.
+///
+/// Covers PHP covariant returns (`parent::w(): Base` overridden as `w(): static` / `w(): Child`)
+/// while the child is mid-construction — `type_accepts` cannot see the subclass edge yet because
+/// `checker.classes` lacks the child, but the parent class is already registered.
+fn covariant_self_return_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    parent_sig: &FunctionSig,
+    child_sig: &FunctionSig,
+) -> bool {
+    match (&parent_sig.return_type, &child_sig.return_type) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name))
+            if actual_name == class_name =>
+        {
+            if expected_name == class_name {
+                return true;
+            }
+            if let Some(parent) = extends {
+                if parent == expected_name
+                    || checker.is_subclass_of(parent, expected_name)
+                    || checker.class_implements_interface(parent, expected_name)
+                {
+                    return true;
+                }
+            }
+            implements.iter().any(|iface| {
+                iface == expected_name
+                    || checker.interface_extends_interface(iface, expected_name)
+            })
+        }
+        _ => false,
+    }
 }

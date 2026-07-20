@@ -18,7 +18,6 @@ use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
 use crate::types::ClassInfo;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Fixed object layout for one synthetic Reflection owner class.
 struct ReflectionOwnerLayout {
@@ -942,7 +941,7 @@ fn emit_alloc_reflection_owner_object_x86_64(
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     )); // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the object heap header before the payload
     emitter.instruction(&format!("mov r10, {}", layout.class_id)); // materialize the Reflection owner class id

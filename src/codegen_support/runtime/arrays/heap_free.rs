@@ -11,10 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Magic high-word marker identifying valid x86_64 heap blocks. Stored in the
-/// upper 32 bits of the heap kind field to distinguish owned heap payloads from
-/// foreign/static pointers passed to `heap_free_safe`.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits `__rt_heap_free` and `__rt_heap_free_safe` runtime helpers.
 ///
@@ -296,7 +292,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 /// Emits the x86_64-specific portion of `__rt_heap_free` and `__rt_heap_free_safe`.
 ///
 /// Mirrors the ARM64 `emit_heap_free` logic for the x86_64 SYSV ABI:
-/// - Validates pointer is a live heap block via the `X86_64_HEAP_MAGIC_HI32` marker
+/// - Validates pointer is a live heap block via the `crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32` marker
 /// - Bump-reset for tail blocks (O(1))
 /// - Segregated small-bin cache for ≤64-byte payloads
 /// - Ordered coalescing free list for larger blocks
@@ -333,7 +329,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -344,7 +340,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it

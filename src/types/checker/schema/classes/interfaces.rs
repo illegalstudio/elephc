@@ -103,6 +103,32 @@ fn class_can_implement_throwable_contract(
             .any(|interface_name| php_symbol_key(interface_name) == php_symbol_key("Throwable"))
 }
 
+/// Returns whether the class's own type is a valid covariant implementation return.
+///
+/// Class metadata is not registered yet while interface contracts are validated, so
+/// this derives the subtype relationship from the interface currently being checked
+/// and the interfaces declared directly on the class.
+fn interface_self_return_conforms(
+    checker: &Checker,
+    class: &FlattenedClass,
+    interface_name: &str,
+    required_return: &PhpType,
+    actual_return: &PhpType,
+) -> bool {
+    match (required_return, actual_return) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
+            actual_name == &class.name
+                && (expected_name == interface_name
+                    || checker.interface_extends_interface(interface_name, expected_name)
+                    || class.implements.iter().any(|declared| {
+                        declared == expected_name
+                            || checker.interface_extends_interface(declared, expected_name)
+                    }))
+        }
+        _ => false,
+    }
+}
+
 /// Validates that `class` satisfies all method and property contracts for each interface it
 /// implements (including transitive parents).
 ///
@@ -273,6 +299,13 @@ fn validate_static_interface_method(
         }
     }
     if required_sig.declared_return
+        && !interface_self_return_conforms(
+            checker,
+            class,
+            interface_name,
+            &required_sig.return_type,
+            &actual_sig.return_type,
+        )
         && !declared_return_type_compatible(
             checker,
             &required_sig.return_type,
@@ -464,6 +497,13 @@ fn validate_interface_method(
         }
     }
     if required_sig.declared_return
+        && !interface_self_return_conforms(
+            checker,
+            class,
+            interface_name,
+            &required_sig.return_type,
+            &actual_sig.return_type,
+        )
         && !declared_return_type_compatible(
             checker,
             &required_sig.return_type,

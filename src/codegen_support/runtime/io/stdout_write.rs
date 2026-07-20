@@ -1,7 +1,8 @@
 //! Purpose:
 //! Emits the `__rt_stdout_write` runtime helper: the single indirection every
 //! terminal stdout write travels through. Keeps the plain `write(1, …)` syscall
-//! and the optional `--web` output-capture branch in one focused emitter.
+//! and the print_r, output-buffering (`ob_*`), and optional `--web` capture
+//! branches in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
@@ -56,6 +57,23 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     emitter.instruction("b __rt_stdout_write_done");                            // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_pr_inactive");
 
+    // -- user output-handler guard: PHP discards output produced inside an
+    //    ob_start() handler; drop the bytes while _ob_in_handler is set. --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");  // materialize the address of the in-handler flag
+    emitter.instruction("ldr x9, [x9]");                                        // load the in-handler flag
+    emitter.instruction("cbnz x9, __rt_stdout_write_done");                     // inside a handler — discard the bytes entirely
+
+    // -- output-buffering capture: while the ob_* stack is non-empty, append the
+    //    bytes to the top output buffer instead of writing to the terminal. The
+    //    flush helpers temporarily decrement _ob_level before re-entering this
+    //    routine so parent-buffer routing keeps working. --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the output-buffer stack depth
+    emitter.instruction("ldr x9, [x9]");                                        // load the output-buffer stack depth
+    emitter.instruction("cbz x9, __rt_stdout_write_ob_inactive");               // no active output buffer — fall through to the web/syscall path
+    emitter.instruction("bl __rt_ob_append");                                   // append the bytes (ptr=x0, len=x1) to the top output buffer
+    emitter.instruction("b __rt_stdout_write_done");                            // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_stdout_write_ob_inactive");
+
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
@@ -102,6 +120,23 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("call __rt_pr_append");                                 // capture enabled — append the bytes (ptr=rdi, len=rsi) to the capture buffer
     emitter.instruction("jmp __rt_stdout_write_done");                          // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_pr_inactive");
+
+    // -- user output-handler guard: PHP discards output produced inside an
+    //    ob_start() handler; drop the bytes while _ob_in_handler is set. --
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_in_handler"); // materialize the address of the in-handler flag
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the in-handler flag
+    emitter.instruction("test r11, r11");                                       // is a user output handler running?
+    emitter.instruction("jnz __rt_stdout_write_done");                          // inside a handler — discard the bytes entirely
+
+    // -- output-buffering capture: while the ob_* stack is non-empty, append the
+    //    bytes to the top output buffer instead of writing to the terminal. --
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_level");      // materialize the address of the output-buffer stack depth
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the output-buffer stack depth
+    emitter.instruction("test r11, r11");                                       // is any output buffer active?
+    emitter.instruction("jz __rt_stdout_write_ob_inactive");                    // no active output buffer — fall through to the web/syscall path
+    emitter.instruction("call __rt_ob_append");                                 // append the bytes (ptr=rdi, len=rsi) to the top output buffer
+    emitter.instruction("jmp __rt_stdout_write_done");                          // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_stdout_write_ob_inactive");
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --

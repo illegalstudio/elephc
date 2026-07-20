@@ -431,34 +431,34 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
     emitter.comment("push eval constructor exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));        // save the previous native exception-handler head
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));    // preserve the caller activation frame across constructor unwinding
+    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!(
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // save diagnostic suppression depth for restoration
-    emitter.instruction(&format!("add x10, x29, #{}", handler_offset));          // compute the boundary handler record address
+    ));                                                                         // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                          // pass the boundary jmp_buf to setjmp
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
-    emitter.instruction(&format!("cbnz x0, {}", escape_label));                  // non-zero setjmp result means a constructor Throwable escaped
+    ));                                                                         // pass the boundary jmp_buf to setjmp
+    emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
+    emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
 
 /// Emits an ARM64 boundary pop that preserves the constructor status in x0.
 fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));        // reload the previous native exception-handler head
+    emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // reload the saved diagnostic suppression depth
+    ));                                                                         // reload the saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -475,7 +475,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
     ));                                                                          // save diagnostic suppression depth for restoration
-    emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));          // compute the boundary handler record address
+    emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
         "lea rdi, [rbp - {}]",
@@ -587,7 +587,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
 ) {
     emit_aarch64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
     emit_aarch64_default_builtin_throwable_fields(emitter);
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload constructor argc before testing the message argument
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the message argument
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 0);
@@ -603,7 +603,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload constructor argc before testing the code argument
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 1);
@@ -618,7 +618,12 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
-    emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
+    emit_aarch64_builtin_throwable_previous_arg(
+        module,
+        emitter,
+        fail_label,
+        success_label,
+    );
 }
 
 /// Initializes the compact Throwable payload for eval-created x86_64 builtin exceptions.
@@ -663,6 +668,59 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
+    emit_x86_64_builtin_throwable_previous_arg(
+        module,
+        emitter,
+        fail_label,
+        success_label,
+    );
+}
+
+/// Stores the nullable third Throwable constructor argument on ARM64.
+fn emit_aarch64_builtin_throwable_previous_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    success_label: &str,
+) {
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload argc before testing the previous argument
+    emitter.instruction("cmp x9, #2");                                          // did eval supply the normalized previous argument?
+    emitter.instruction(&format!("b.le {}", success_label));                    // keep null when the legacy bridge omitted previous
+    emit_aarch64_load_eval_arg(module, emitter, 2);
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed previous argument for inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the nullable previous payload
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the previous argument is null
+    emitter.instruction(&format!("b.eq {}", success_label));                    // keep the default raw null previous pointer
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the previous argument is an object
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object previous arguments
+    emitter.instruction("mov x0, x1");                                          // move the previous object payload into the retain ABI
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object after retaining previous
+    emitter.instruction("str x0, [x9, #40]");                                   // store the retained previous object pointer
+    emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
+}
+
+/// Stores the nullable third Throwable constructor argument on x86_64.
+fn emit_x86_64_builtin_throwable_previous_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    success_label: &str,
+) {
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload argc before testing the previous argument
+    emitter.instruction("cmp r11, 2");                                          // did eval supply the normalized previous argument?
+    emitter.instruction(&format!("jle {}", success_label));                     // keep null when the legacy bridge omitted previous
+    emit_x86_64_load_eval_arg(module, emitter, 2);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed previous argument for inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the nullable previous payload
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the previous argument is null
+    emitter.instruction(&format!("je {}", success_label));                      // keep the default raw null previous pointer
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the previous argument is an object
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object previous arguments
+    emitter.instruction("mov rax, rdi");                                        // move the previous object payload into the retain ABI
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object after retaining previous
+    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the retained previous object pointer
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 
@@ -675,9 +733,9 @@ fn emit_aarch64_validate_builtin_throwable_arg_count(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for builtin Throwable arity validation
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
-    emitter.instruction("str x0, [sp, #32]");                                   // save constructor argc for message/code initialization
-    emitter.instruction("cmp x0, #2");                                          // compact Throwable initialization supports message and code arguments
-    emitter.instruction(&format!("b.gt {}", fail_label));                       // reject unsupported previous-Throwable arguments from eval
+    emitter.instruction("str x0, [sp, #40]");                                   // preserve argc outside the eval argument scratch slot
+    emitter.instruction("cmp x0, #3");                                          // compact Throwable initialization supports message/code/previous
+    emitter.instruction(&format!("b.gt {}", fail_label));                       // reject excess builtin Throwable arguments from eval
 }
 
 /// Emits x86_64 arity validation for compact builtin Throwable constructors.
@@ -690,24 +748,26 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save constructor argc for message/code initialization
-    emitter.instruction("cmp rax, 2");                                          // compact Throwable initialization supports message and code arguments
-    emitter.instruction(&format!("jg {}", fail_label));                         // reject unsupported previous-Throwable arguments from eval
+    emitter.instruction("cmp rax, 3");                                          // compact Throwable initialization supports message/code/previous
+    emitter.instruction(&format!("jg {}", fail_label));                         // reject excess builtin Throwable arguments from eval
 }
 
-/// Writes ARM64 empty-message and zero-code defaults into the compact Throwable payload.
+/// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
     emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
     emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
     emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
+    emitter.instruction("str xzr, [x9, #40]");                                  // default the previous Throwable pointer to null
 }
 
-/// Writes x86_64 empty-message and zero-code defaults into the compact Throwable payload.
+/// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
     emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
     emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
+    emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
 }
 
 /// Emits ARM64 class-id dispatch for supported constructor bodies.

@@ -134,8 +134,10 @@ fn emit_pr_append_linux_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_pr_write`: the print_r walker terminal-write indirection.
-/// Branches on `_print_r_mode`: 0 → `write(1, buf, len)` syscall; 1 → append to
-/// the capture buffer via `__rt_pr_append`.
+/// Branches on `_print_r_mode`: 1 → append to the capture buffer via
+/// `__rt_pr_append`; 0 → the plain write path, which itself appends to the top
+/// output buffer via `__rt_ob_append` while `_ob_level` is non-zero and only
+/// falls through to the raw `write(1, buf, len)` syscall otherwise.
 ///
 /// Inputs match the walker's pre-syscall register layout:
 /// AArch64 x1=buf, x2=len / x86_64 rsi=buf, rdx=len. No result.
@@ -162,8 +164,21 @@ pub fn emit_pr_write(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_pr_append");                                   // append the bytes to the capture buffer
     emitter.instruction("b __rt_pr_write_done");                                // skip the syscall path
 
-    // -- plain write(1, buf, len) syscall path --
+    // -- plain write path: while the ob_* stack is non-empty, append to the top
+    //    output buffer instead of issuing the write(1, …) syscall so print_r's
+    //    structural output is captured like every other terminal write. --
     emitter.label("__rt_pr_write_syscall");
+    abi::emit_symbol_address(emitter, "x9", "_ob_in_handler");                  // materialize the address of the in-handler flag
+    emitter.instruction("ldr x9, [x9]");                                        // load the in-handler flag
+    emitter.instruction("cbnz x9, __rt_pr_write_done");                         // inside a handler — discard the bytes entirely
+    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the output-buffer stack depth
+    emitter.instruction("ldr x9, [x9]");                                        // load the output-buffer stack depth
+    emitter.instruction("cbz x9, __rt_pr_write_raw");                           // no active output buffer — take the raw syscall path
+    emitter.instruction("mov x0, x1");                                          // __rt_ob_append buf arg = incoming buf pointer
+    emitter.instruction("mov x1, x2");                                          // __rt_ob_append len arg = incoming length
+    emitter.instruction("bl __rt_ob_append");                                   // append the bytes to the top output buffer
+    emitter.instruction("b __rt_pr_write_done");                                // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_pr_write_raw");
     emitter.instruction("mov x0, #1");                                          // syscall fd = stdout (buf already in x1, len already in x2)
     emitter.syscall(4);                                                         // write the bytes to stdout
 
@@ -190,8 +205,23 @@ fn emit_pr_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_pr_append");                                 // append the bytes to the capture buffer
     emitter.instruction("jmp __rt_pr_write_done");                              // skip the syscall path
 
-    // -- plain write(1, buf, len) syscall path --
+    // -- plain write path: while the ob_* stack is non-empty, append to the top
+    //    output buffer instead of issuing the write(1, …) syscall so print_r's
+    //    structural output is captured like every other terminal write. --
     emitter.label("__rt_pr_write_syscall");
+    abi::emit_symbol_address(emitter, "r11", "_ob_in_handler");                 // materialize the address of the in-handler flag
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the in-handler flag
+    emitter.instruction("test r11, r11");                                       // is a user output handler running?
+    emitter.instruction("jnz __rt_pr_write_done");                              // inside a handler — discard the bytes entirely
+    abi::emit_symbol_address(emitter, "r11", "_ob_level");                      // materialize the address of the output-buffer stack depth
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the output-buffer stack depth
+    emitter.instruction("test r11, r11");                                       // is any output buffer active?
+    emitter.instruction("jz __rt_pr_write_raw_x86");                            // no active output buffer — take the raw syscall path
+    emitter.instruction("mov rdi, rsi");                                        // __rt_ob_append buf arg = incoming buf pointer
+    emitter.instruction("mov rsi, rdx");                                        // __rt_ob_append len arg = incoming length
+    emitter.instruction("call __rt_ob_append");                                 // append the bytes to the top output buffer
+    emitter.instruction("jmp __rt_pr_write_done");                              // capture handled the bytes — skip the syscall path
+    emitter.label("__rt_pr_write_raw_x86");
     emitter.instruction("mov rdi, 1");                                          // syscall fd = stdout
     // buf is already in rsi; len is already in rdx
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write

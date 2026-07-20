@@ -2,7 +2,7 @@
 title: "gzinflate() — internals"
 description: "Compiler internals for gzinflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 354
+  order: 367
 ---
 
 ## `gzinflate()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzinflate.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:499](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L499) (`lower_gzinflate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:498](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L498) (`lower_gzinflate`)
 - **Function symbol**: `lower_gzinflate()`
 
 

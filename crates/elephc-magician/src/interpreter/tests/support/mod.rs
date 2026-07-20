@@ -60,6 +60,18 @@ pub(super) struct FakeOps {
     pub(super) warnings: Vec<String>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
+    pub(super) ob_stack: Vec<FakeObLevel>,
+    pub(super) ob_implicit_flush: bool,
+}
+
+/// One fake output-buffer level: captured text plus the ob_start metadata the
+/// status/introspection builtins report.
+#[derive(Default)]
+pub(super) struct FakeObLevel {
+    pub(super) buffer: String,
+    pub(super) name: String,
+    pub(super) chunk_size: i64,
+    pub(super) flags: i64,
 }
 
 impl FakeOps {

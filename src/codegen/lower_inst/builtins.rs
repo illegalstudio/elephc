@@ -38,6 +38,7 @@ mod isset;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod output_buffering;
 pub(crate) mod pointers;
 pub(crate) mod regex;
 pub(crate) mod serialize;
@@ -418,7 +419,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     ensure_arg_count(inst, "gettype", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.raw_value_php_type(value)?;
-    if matches!(ty, PhpType::TaggedScalar) {
+    // Dispatch on the codegen representation: a nullable-int union stores an
+    // inline tagged scalar, not a boxed Mixed cell, so unboxing it would read
+    // a non-pointer payload as a heap cell and crash.
+    if matches!(ty.codegen_repr(), PhpType::TaggedScalar) {
         emit_tagged_scalar_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }

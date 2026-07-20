@@ -756,3 +756,12 @@ fn test_error_nullable_intersection_type_rejected() {
         "?A&B should be rejected, not silently accepted",
     );
 }
+
+/// `Exception::__construct` third parameter must be `?Throwable`, matching PHP.
+#[test]
+fn test_error_exception_previous_rejects_non_throwable() {
+    expect_error(
+        "<?php throw new Exception('x', 0, previous: 123);",
+        "previous",
+    );
+}

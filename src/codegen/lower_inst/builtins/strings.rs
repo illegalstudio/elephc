@@ -18,7 +18,6 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 struct SplitStringTempCleanups {
@@ -1080,7 +1079,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
@@ -1170,7 +1169,7 @@ fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1302,7 +1301,7 @@ fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r9");                   // save the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1393,7 +1392,7 @@ fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str, after: &st
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r9");                    // seed destLen with the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
@@ -2952,18 +2951,20 @@ fn pack_sprintf_arg_x86_64(
 fn emit_printf_write_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #1");                              // pass stdout as the destination file descriptor
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, x2");                              // return the formatted byte count as printf()'s integer result
+            ctx.emitter.instruction("stp x2, xzr, [sp, #-16]!");                // preserve the formatted byte count across the funnel call
+            ctx.emitter.instruction("mov x0, x1");                              // pass the formatted string pointer as the write buffer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the formatted string length as the write byte count
+            abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // return the formatted byte count as printf()'s integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r8, rdx");                             // preserve the formatted byte count across syscall-clobbered registers
-            ctx.emitter.instruction("mov rsi, rax");                            // pass the formatted string pointer as the write buffer
-            ctx.emitter.instruction("mov rdx, r8");                             // pass the formatted string length as the write byte count
-            ctx.emitter.instruction("mov edi, 1");                              // pass stdout as the destination file descriptor
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux x86_64 syscall 1 for write
-            ctx.emitter.instruction("syscall");                                 // write the formatted printf() result to stdout
-            ctx.emitter.instruction("mov rax, r8");                             // return the formatted byte count as printf()'s integer result
+            ctx.emitter.instruction("push rdx");                                // preserve the formatted byte count across the funnel call
+            ctx.emitter.instruction("push rdx");                                // keep the stack 16-byte aligned for the call
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the formatted string pointer as the write buffer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted string length as the write byte count
+            abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+            ctx.emitter.instruction("pop rax");                                 // drop the alignment copy of the byte count
+            ctx.emitter.instruction("pop rax");                                 // return the formatted byte count as printf()'s integer result
         }
     }
 }

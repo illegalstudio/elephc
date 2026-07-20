@@ -2,7 +2,7 @@
 title: "stream_filter_register() — internals"
 description: "Compiler internals for stream_filter_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 216
 ---
 
 ## `stream_filter_register()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_register.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1521](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1521) (`lower_stream_filter_register`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1519](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1519) (`lower_stream_filter_register`)
 - **Function symbol**: `lower_stream_filter_register()`
 
 

@@ -909,6 +909,40 @@ echo "done";
     );
 }
 
+/// Verifies repeated Mixed-to-object static stores retain only the current object.
+///
+/// The untyped setter receives a boxed Mixed argument, while inference gives the
+/// static property a concrete object slot. Each store must retain the unboxed
+/// object independently, release the replaced object, and leave no call-argument
+/// or assignment-result owners behind.
+#[test]
+fn test_regression_untyped_static_setter_object_overwrite_stays_bounded() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    protected static $instance;
+
+    public static function set($instance) {
+        return static::$instance = $instance;
+    }
+}
+
+for ($i = 0; $i < 20; $i++) {
+    C::set(new C());
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the current static object to remain live, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: array literals with spread build their result through
 /// `__rt_array_push_refcounted` for refcounted elements. The non-spread element
 /// path retained the element via `retain_borrowed_heap_arg` and again inside the

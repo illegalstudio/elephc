@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fputcsv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3005](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3005) (`lower_fputcsv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3003](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3003) (`lower_fputcsv`)
 - **Function symbol**: `lower_fputcsv()`
 
 

@@ -2,7 +2,7 @@
 title: "header()"
 description: "Sends a raw HTTP header."
 sidebar:
-  order: 279
+  order: 292
 ---
 
 ## header()

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pathinfo.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4644](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4644) (`lower_pathinfo`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4640](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4640) (`lower_pathinfo`)
 - **Function symbol**: `lower_pathinfo()`
 
 

@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_metadata() — internals"
 description: "Compiler internals for __elephc_phar_get_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 443
+  order: 456
 ---
 
 ## `__elephc_phar_get_metadata()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_metadata.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3859](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3859) (`lower_elephc_phar_get_metadata`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3855](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3855) (`lower_elephc_phar_get_metadata`)
 - **Function symbol**: `lower_elephc_phar_get_metadata()`
 
 

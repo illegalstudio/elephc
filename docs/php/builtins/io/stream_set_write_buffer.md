@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer()"
 description: "Sets the write file buffering on a stream."
 sidebar:
-  order: 219
+  order: 232
 ---
 
 ## stream_set_write_buffer()

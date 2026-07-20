@@ -41,6 +41,19 @@ sidebar:
 | [`getservbyname()`](./io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_file()`](./io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_clean()`](./io/ob_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_end_clean()`](./io/ob_end_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_end_flush()`](./io/ob_end_flush.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_flush()`](./io/ob_flush.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_get_clean()`](./io/ob_get_clean.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_contents()`](./io/ob_get_contents.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_flush()`](./io/ob_get_flush.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_length()`](./io/ob_get_length.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_level()`](./io/ob_get_level.md) | `(): int` | `int` | ✓ | ✓ |
+| [`ob_get_status()`](./io/ob_get_status.md) | `(bool $full_status = false): array` | `array` | ✓ | ✓ |
+| [`ob_implicit_flush()`](./io/ob_implicit_flush.md) | `(bool $enable = true): bool` | `bool` | ✓ | ✓ |
+| [`ob_list_handlers()`](./io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
+| [`ob_start()`](./io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./io/opendir.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`readdir()`](./io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

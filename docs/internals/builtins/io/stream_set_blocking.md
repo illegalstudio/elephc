@@ -2,7 +2,7 @@
 title: "stream_set_blocking() — internals"
 description: "Compiler internals for stream_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 215
+  order: 228
 ---
 
 ## `stream_set_blocking()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_blocking.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2142](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2142) (`lower_stream_set_blocking`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2140](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2140) (`lower_stream_set_blocking`)
 - **Function symbol**: `lower_stream_set_blocking()`
 
 

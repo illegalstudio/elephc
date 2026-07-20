@@ -2,7 +2,7 @@
 title: "rewind() — internals"
 description: "Compiler internals for rewind(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 191
+  order: 204
 ---
 
 ## `rewind()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rewind.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewind.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3196](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3196) (`lower_rewind`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3192](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3192) (`lower_rewind`)
 - **Function symbol**: `lower_rewind()`
 
 

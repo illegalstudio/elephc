@@ -19,7 +19,7 @@ use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
 use super::super::params::{looks_like_typed_param, parse_name_list, parse_type_expr};
-use super::super::{expect_semicolon, expect_token, parse_block};
+use super::super::{expect_semicolon, expect_token, parse_block, parse_unqualified_name};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
 
@@ -33,19 +33,12 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'interface'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
-            let n = n.clone();
-            *pos += 1;
-            n
-        }
-        _ => {
-            return Err(CompileError::new(
-                span,
-                "Expected interface name after 'interface'",
-            ))
-        }
-    };
+    let name = parse_unqualified_name(
+        tokens,
+        pos,
+        span,
+        "Expected interface name after 'interface'",
+    )?;
 
     let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
@@ -94,14 +87,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'trait'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
-            let n = n.clone();
-            *pos += 1;
-            n
-        }
-        _ => return Err(CompileError::new(span, "Expected trait name after 'trait'")),
-    };
+    let name = parse_unqualified_name(tokens, pos, span, "Expected trait name after 'trait'")?;
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
     let (trait_uses, properties, methods, constants, _cases) =

@@ -10,7 +10,6 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// realpath: canonicalize a path through libc realpath().
 /// Input:  x1/x2 = path string
@@ -104,7 +103,7 @@ fn emit_realpath_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 4096");                                       // request a 4096-byte owned buffer for the canonical path
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage; pointer returned in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated buffer as a persisted elephc string in the uniform heap header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the owned buffer pointer across the libc realpath() call
 

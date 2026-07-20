@@ -2,7 +2,7 @@
 title: "crc32() — internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 362
 ---
 
 ## `crc32()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/crc32.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:366](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L366) (`lower_crc32`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:365](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L365) (`lower_crc32`)
 - **Function symbol**: `lower_crc32()`
 
 

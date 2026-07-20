@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fread.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fread.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2816](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2816) (`lower_fread`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2814](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2814) (`lower_fread`)
 - **Function symbol**: `lower_fread()`
 
 

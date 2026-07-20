@@ -133,7 +133,7 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
-        validate_override_signature(checker, &class.name, method, parent_sig, true)?;
+        validate_override_signature(checker, class, method, parent_sig, true)?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
     {
@@ -230,7 +230,7 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        validate_override_signature(checker, &class.name, method, parent_sig, false)?;
+        validate_override_signature(checker, class, method, parent_sig, false)?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
     {

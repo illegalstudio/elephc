@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/scandir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/scandir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4458](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4458) (`lower_scandir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4454](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4454) (`lower_scandir`)
 - **Function symbol**: `lower_scandir()`
 
 

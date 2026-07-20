@@ -12,7 +12,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_decref_mixed` runtime helper for the current target.
 ///
@@ -104,7 +103,7 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_decref_mixed_skip");                          // pointers above the live heap end are not refcounted mixed boxes
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_decref_mixed_skip");                          // only elephc-owned mixed boxes participate in x86_64 decref bookkeeping
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit mixed-box refcount from the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner

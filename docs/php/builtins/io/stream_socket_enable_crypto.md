@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto()"
 description: "Turns encryption on/off on an already connected socket."
 sidebar:
-  order: 222
+  order: 235
 ---
 
 ## stream_socket_enable_crypto()

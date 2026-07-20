@@ -197,6 +197,19 @@ sidebar:
 | [`getservbyname()`](./builtins/io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./builtins/io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_file()`](./builtins/io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_clean()`](./builtins/io/ob_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_end_clean()`](./builtins/io/ob_end_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_end_flush()`](./builtins/io/ob_end_flush.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_flush()`](./builtins/io/ob_flush.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`ob_get_clean()`](./builtins/io/ob_get_clean.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_contents()`](./builtins/io/ob_get_contents.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_flush()`](./builtins/io/ob_get_flush.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_length()`](./builtins/io/ob_get_length.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`ob_get_level()`](./builtins/io/ob_get_level.md) | `(): int` | `int` | ✓ | ✓ |
+| [`ob_get_status()`](./builtins/io/ob_get_status.md) | `(bool $full_status = false): array` | `array` | ✓ | ✓ |
+| [`ob_implicit_flush()`](./builtins/io/ob_implicit_flush.md) | `(bool $enable = true): bool` | `bool` | ✓ | ✓ |
+| [`ob_list_handlers()`](./builtins/io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
+| [`ob_start()`](./builtins/io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./builtins/io/opendir.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

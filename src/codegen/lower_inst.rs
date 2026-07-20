@@ -49,6 +49,7 @@ mod objects;
 mod ownership;
 mod pointers;
 mod predicates;
+mod property_values;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -2771,6 +2772,14 @@ fn cast_loaded_mixed_pointer_to_result(
         PhpType::Int => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Iterable
+        | PhpType::Object(_) => {
+            emit_unbox_mixed_to_owned_refcounted_result(ctx, target_ty);
+            return Ok(());
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "runtime mixed result cast to PHP type {:?}",
@@ -3198,6 +3207,13 @@ fn lower_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    // Builtin Throwable methods are compact-payload intrinsics. Their interface vtable
+    // slots stay zero because no synthetic method bodies are emitted, so dispatch here
+    // would `blr` to null. Use the same intrinsic path as a concrete Throwable receiver.
+    if is_throwable_standard_method_call(ctx, interface_name, method_name) {
+        let object = expect_operand(inst, 0)?;
+        return lower_throwable_standard_method(ctx, inst, object, method_name);
+    }
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -3326,6 +3342,22 @@ fn lower_nullable_receiver_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    // Same compact-payload intrinsic path as `lower_interface_method_call`: Throwable's
+    // interface vtable slots are empty, so nullable `?Throwable` must not dispatch through them.
+    if is_throwable_standard_method_call(ctx, interface_name, method_name) {
+        let null_label = ctx.next_label("method_receiver_null");
+        let done_label = ctx.next_label("method_receiver_done");
+        let receiver_reg = abi::nested_call_reg(ctx.emitter);
+        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+        // Re-materialize the unboxed object into the SSA operand's result register so the
+        // shared Throwable intrinsic lowerer can `load_value_to_reg` the receiver.
+        lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        emit_method_call_on_null_fatal(ctx, method_name);
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
     let normalized = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
     let callee_sig = ctx
@@ -3541,9 +3573,14 @@ fn lower_static_runtime_intrinsic(
         let return_ty = return_ty.codegen_repr();
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
             emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+        } else if return_ty == PhpType::Mixed
+            && !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            cast_loaded_mixed_pointer_to_result(ctx, &result_ty)?;
         }
         ctx.store_result_value(result)?;
     }
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -3818,13 +3855,43 @@ fn lower_throwable_standard_method(
     }
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, object_reg)?;
+    lower_throwable_standard_method_loaded(ctx, inst, object_reg, method_name)
+}
+
+/// Lowers a compact Throwable method when the receiver object pointer is already in `object_reg`.
+///
+/// Used by nullable `?Throwable` / Mixed-unbox paths that have already extracted the object
+/// payload and must not reload the original SSA value (which may still be a Mixed cell).
+fn lower_throwable_standard_method_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object_reg: &str,
+    method_name: &str,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "Throwable::{} with {} EIR operands",
+            method_name,
+            inst.operands.len()
+        )));
+    }
+    lower_throwable_standard_method_loaded(ctx, inst, object_reg, method_name)
+}
+
+/// Shared compact-payload Throwable method body after the receiver object is in `object_reg`.
+fn lower_throwable_standard_method_loaded(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object_reg: &str,
+    method_name: &str,
+) -> Result<()> {
     let return_ty = match php_symbol_key(method_name).as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
         "getfile" | "gettraceasstring" => lower_throwable_empty_string(ctx),
         "getline" => lower_throwable_zero_int(ctx),
         "gettrace" => lower_throwable_empty_trace_array(ctx),
-        "getprevious" => lower_throwable_null_previous(ctx, inst),
+        "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
         "__tostring" => lower_throwable_get_message(ctx, object_reg),
         _ => Err(CodegenIrError::unsupported(format!(
             "Throwable intrinsic method {}",
@@ -3892,18 +3959,83 @@ fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -> Result<Ph
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
-/// Materializes the synthetic null result used by `Throwable::getPrevious()`.
-fn lower_throwable_null_previous(
+/// Loads `Throwable::getPrevious()` from payload offset 40, retaining a non-null previous.
+///
+/// When the EIR result is `Mixed` (`?Throwable`), both the object and null arms box here and
+/// return `Mixed` so the shared intrinsic post-box path does not retag a live object as null
+/// (`PhpType::Void` → runtime tag 8).
+fn lower_throwable_get_previous(
     ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
     inst: &Instruction,
 ) -> Result<PhpType> {
-    let payload = if inst.result_php_type.codegen_repr() == PhpType::Mixed {
-        0
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("throwable_previous_null");
+    let done_label = ctx.next_label("throwable_previous_done");
+    let result_is_mixed = matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed);
+    let object_ty = PhpType::Object("Throwable".to_string());
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, 40);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing previous → null
+            // `__rt_incref` expects the object in x0.
+            if result_reg != "x0" {
+                ctx.emitter
+                    .instruction(&format!("mov x0, {}", result_reg)); // move previous into incref arg
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if result_reg != "x0" {
+                ctx.emitter
+                    .instruction(&format!("mov {}, x0", result_reg)); // restore result register
+            }
+            if result_is_mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            }
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // skip null materialization
+            ctx.emitter.label(&null_label);
+            if result_is_mixed {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+            }
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // missing previous → null
+            ctx.emitter
+                .instruction(&format!("jz {}", null_label));
+            if result_reg != "rax" {
+                ctx.emitter
+                    .instruction(&format!("mov rax, {}", result_reg)); // move previous into incref arg
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if result_reg != "rax" {
+                ctx.emitter
+                    .instruction(&format!("mov {}, rax", result_reg)); // restore result register
+            }
+            if result_is_mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            }
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // skip null materialization
+            ctx.emitter.label(&null_label);
+            if result_is_mixed {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+            }
+            ctx.emitter.label(&done_label);
+        }
+    }
+    if result_is_mixed {
+        Ok(PhpType::Mixed)
     } else {
-        0x7fff_ffff_ffff_fffe
-    };
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
-    Ok(PhpType::Void)
+        Ok(object_ty)
+    }
 }
 
 /// Lowers `Fiber::start(...)` by copying boxed start arguments into the Fiber object.
@@ -4737,16 +4869,8 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    if let Some(result) = inst.result {
-        if ctx.value_php_type(result)? == PhpType::Void {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-        }
-        ctx.store_result_value(result)?;
-    }
+    store_call_result(ctx, inst, &callee_sig.return_type)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
@@ -5174,6 +5298,11 @@ fn materialize_static_method_call_args_with_refs(
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
     emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
+    }
     let visible_abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let mut abi_param_types = Vec::with_capacity(visible_abi_param_types.len() + 1);
     abi_param_types.push(PhpType::Int);
@@ -5192,13 +5321,19 @@ fn materialize_static_method_call_args_with_refs(
                 param_ty,
                 arg_temp_bytes,
                 &ref_writebacks,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&visible_abi_param_types[index]);
@@ -5206,8 +5341,8 @@ fn materialize_static_method_call_args_with_refs(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }

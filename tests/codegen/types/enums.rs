@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Verifies `Enum` can name an enum and remain usable in type hints and scoped access.
+#[test]
+fn test_enum_soft_keyword_name_across_runtime_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+enum Enum { case X; }
+function describe(Enum $value): string {
+    return Enum::class . ":" . $value->name;
+}
+echo describe(Enum::X);
+"#,
+    );
+    assert_eq!(out, "Enum:X");
+}
+
 /// Verifies backed enum with `int` underlying type: `->value` returns the integer case value
 /// and `Color::from(2)` resolves to `Color::Green` by identity comparison.
 #[test]

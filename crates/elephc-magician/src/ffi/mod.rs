@@ -14,6 +14,7 @@ pub mod callables;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
+pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
 pub mod function_calls;

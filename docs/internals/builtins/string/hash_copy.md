@@ -2,7 +2,7 @@
 title: "hash_copy() — internals"
 description: "Compiler internals for hash_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 358
+  order: 371
 ---
 
 ## `hash_copy()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_copy.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:351](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L351) (`lower_hash_copy`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:350](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L350) (`lower_hash_copy`)
 - **Function symbol**: `lower_hash_copy()`
 
 

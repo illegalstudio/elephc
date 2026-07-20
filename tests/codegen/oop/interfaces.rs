@@ -351,3 +351,41 @@ echo implode(',', C::previews());
     );
     assert_eq!(out, "a,b");
 }
+
+/// An implementation may return a NARROWER type than the interface declares — the PSR-7 shape
+/// `withX(): static` (resolving to the class) against an interface-typed return. The class
+/// under validation is mid-construction when conformance runs, so the covariance is proven
+/// from the conformance context itself. Byte-parity vs PHP 8.5.
+#[test]
+fn test_interface_covariant_self_return() {
+    let out = compile_and_run(
+        "<?php interface I { public function w(): I; } final class C implements I { public function w(): static { return $this; } } echo (new C())->w() instanceof C ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// A static implementation may return its concrete class against an interface return contract.
+#[test]
+fn test_static_interface_covariant_self_return() {
+    let out = compile_and_run(
+        r#"<?php
+interface Maker {
+    public static function make(): Maker;
+}
+final class Product implements Maker {
+    public static function make(): static { return new static(); }
+}
+echo Product::make() instanceof Product ? 'ok' : 'no';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Parent method returns the parent class; child may override with `static` / self (covariant).
+#[test]
+fn test_class_covariant_self_return_override() {
+    let out = compile_and_run(
+        "<?php class Base { public function w(): Base { return $this; } } class Child extends Base { public function w(): static { return $this; } } echo (new Child())->w() instanceof Child ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}

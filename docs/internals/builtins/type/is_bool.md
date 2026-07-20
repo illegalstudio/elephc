@@ -2,7 +2,7 @@
 title: "is_bool() — internals"
 description: "Compiler internals for is_bool(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 439
 ---
 
 ## `is_bool()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_bool.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_bool.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1350](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1350) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1354](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1354) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 

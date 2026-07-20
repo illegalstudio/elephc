@@ -2,7 +2,7 @@
 title: "str_pad() — internals"
 description: "Compiler internals for str_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 390
+  order: 403
 ---
 
 ## `str_pad()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_pad.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:881](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L881) (`lower_str_pad`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:880](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L880) (`lower_str_pad`)
 - **Function symbol**: `lower_str_pad()`
 
 

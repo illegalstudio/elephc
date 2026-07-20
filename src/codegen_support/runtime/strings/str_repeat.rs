@@ -12,7 +12,6 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::STR_REPEAT_TIMES_MSG;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_str_repeat` runtime helper for repeating a string N times.
 ///
@@ -183,7 +182,7 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_str_repeat_heap_linux_x86_64");
     emitter.instruction("mov rax, rcx");                                        // pass requested payload size to the heap allocator
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned storage for the repeated string payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a string payload
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the repeated-string start pointer for the return pair
     emitter.instruction("mov r11, rax");                                        // initialize the heap destination cursor at the result payload start
