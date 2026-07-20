@@ -19,6 +19,29 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
+/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
+/// push sites (issue #452). Loop bodies are checked in a single pass, so without this the
+/// entry environment types an early push site against the pre-promotion element type even
+/// though the back edge brings the promoted array around; fixing the element type to
+/// `mixed` up front makes every push site see the fixed-point type.
+fn widen_loop_grown_array_pushes(
+    checker: &mut Checker,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    env: &mut TypeEnv,
+) {
+    let snapshot = env.clone();
+    let names = crate::types::checker::loop_grown_mixed_array_pushes(
+        body,
+        update,
+        &|name| snapshot.get(name).cloned(),
+        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
+    );
+    for name in names {
+        env.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+}
+
 /// Restores a narrowed variable in the environment to its previously saved type after a guarded
 /// branch, removing it when it had no prior type. Used to keep `if`/`else` type narrowing scoped
 /// to its branch.
@@ -131,6 +154,9 @@ impl Checker {
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
                     ));
                 }
+                // Widen after the key/value bindings are in the environment so a push of
+                // the foreach value variable joins with its real element type.
+                widen_loop_grown_array_pushes(self, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -257,6 +283,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
+                widen_loop_grown_array_pushes(self, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
@@ -266,6 +293,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
+                widen_loop_grown_array_pushes(self, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
@@ -283,6 +311,7 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
+                widen_loop_grown_array_pushes(self, body, update.as_deref(), env);
                 if let Some(c) = condition {
                     self.infer_type_with_assignment_effects(c, env)?;
                 }

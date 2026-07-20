@@ -20,12 +20,15 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    array_access_element_result_type, array_access_expr_value_type_for_ir, call_return_type,
+    coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
+    method_call_expr_type_for_ir, property_access_expr_type_for_ir,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
-    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
+    static_method_call_expr_type_for_ir, string_op_uses_scratch_storage,
+    type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -529,8 +532,125 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
+/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
+/// push sites (issue #452) and materializes the promotion once before the loop. Loop bodies
+/// are lowered in a single pass, so without this an early `$a[] = <scalar>` site is emitted
+/// as a raw push against the pre-promotion element type even though the back edge brings the
+/// promoted `array<mixed>` around, writing an unboxed scalar into boxed-cell storage on
+/// iterations >= 2. Converting the array up front (in place, same pointer) and fixing its
+/// type to `array<mixed>` makes every push site box its value. `overrides` supplies types
+/// for names bound by the loop itself (the `foreach` value/key variables) so a push of the
+/// loop variable joins with its real element type. Locals without a materialized slot yet
+/// (first assigned inside the body, hence fresh every iteration) are left untouched.
+fn widen_loop_grown_arrays(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    overrides: &[(&str, PhpType)],
+    span: Option<Span>,
+) {
+    let names = {
+        let lookup = |name: &str| -> Option<PhpType> {
+            if let Some((_, ty)) = overrides.iter().find(|(n, _)| *n == name) {
+                return Some(ty.clone());
+            }
+            // A name with no declared slot yet (first assigned inside the loop body) is
+            // genuinely unknown at loop entry: report it as such instead of the Mixed
+            // fallback `local_type` would return, so the prescan does not take Mixed as
+            // widening evidence for it (mirrors the checker's `env.get` lookup).
+            if !ctx.local_slots.contains_key(name) {
+                return None;
+            }
+            Some(ctx.local_type(name))
+        };
+        crate::types::checker::loop_grown_mixed_array_pushes(
+            body,
+            update,
+            &lookup,
+            &mut |expr| infer_loop_growth_value_type(ctx, expr),
+        )
+    };
+    for name in names {
+        if !ctx.local_slots.contains_key(&name) {
+            continue;
+        }
+        let array_value = ctx.load_local(&name, span);
+        if array_value.ir_type != IrType::Heap(crate::ir::IrHeapKind::Array) {
+            continue;
+        }
+        let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![array_value.value],
+            None,
+            mixed_array_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            span,
+        );
+        ctx.store_mutated_local(&name, converted, mixed_array_ty, span);
+    }
+}
+
+/// Returns the value type that EIR lowering already knows before it emits a loop body.
+fn infer_loop_growth_value_type(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<PhpType> {
+    match &expr.kind {
+        ExprKind::Variable(name) if ctx.local_slots.contains_key(name) => {
+            Some(ctx.local_type(name))
+        }
+        ExprKind::FunctionCall { name, .. } => {
+            Some(call_return_type(ctx, name.as_str(), &[]))
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array)
+        }
+        ExprKind::This => ctx.current_class.clone().map(PhpType::Object),
+        ExprKind::NewObject { class_name, .. } => {
+            Some(PhpType::Object(class_name.as_str().to_string()))
+        }
+        ExprKind::ErrorSuppress(inner) => infer_loop_growth_value_type(ctx, inner),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_ty = infer_loop_growth_value_type(ctx, then_expr)?;
+            let else_ty = infer_loop_growth_value_type(ctx, else_expr)?;
+            if then_ty == else_ty {
+                Some(then_ty)
+            } else {
+                Some(PhpType::Mixed)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Mirrors the checker's `foreach` value binding for the loop-widening prescan, preserving
+/// concrete element types from locals, literals, and function-like source expressions.
+fn foreach_prescan_value_type(ctx: &LoweringContext<'_, '_>, array: &Expr) -> PhpType {
+    let source_ty = match &array.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_loop_growth_value_type(ctx, array)
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(array)),
+    };
+    foreach_value_type(&source_ty)
+}
+
 /// Lowers a `while` loop.
 fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
+    widen_loop_grown_arrays(ctx, body, None, &[], Some(condition.span));
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -563,6 +683,7 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 
 /// Lowers a `do while` loop.
 fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr) {
+    widen_loop_grown_arrays(ctx, body, None, &[], Some(condition.span));
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -607,6 +728,10 @@ fn lower_for(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    let widen_span = condition
+        .map(|c| c.span)
+        .or_else(|| body.first().map(|s| s.span));
+    widen_loop_grown_arrays(ctx, body, update, &[], widen_span);
 
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
@@ -1219,6 +1344,15 @@ fn lower_foreach(
     value_by_ref: bool,
     body: &[Stmt],
 ) {
+    // Widen before the source is lowered so an iterated-and-pushed array is loaded with
+    // its fixed-point element type, and bind the loop variables' prescan types so a push
+    // of the foreach value joins with its real element type.
+    let prescan_value_ty = foreach_prescan_value_type(ctx, array);
+    let mut overrides: Vec<(&str, PhpType)> = vec![(value_var, prescan_value_ty)];
+    if let Some(key_var) = key_var {
+        overrides.push((key_var, PhpType::Mixed));
+    }
+    widen_loop_grown_arrays(ctx, body, None, &overrides, Some(array.span));
     let source = lower_expr(ctx, array);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
