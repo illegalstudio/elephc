@@ -224,17 +224,33 @@ Final verification evidence:
 - Every changed assembly-emitting file passed `scripts/check_asm_comments.py`;
   `scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`, Python
   bytecode checks for the docs/audit tools, and `git diff --check` all passed.
-- No `cargo fmt`, rebase, amend, push, or pull-request operation was performed.
+- The initial migration used no `cargo fmt`, rebase, amend, push, or pull-request operation.
+
+The branch was refreshed onto `origin/main` (`07391e965`) on 2026-07-21:
+
+- all 11 migration commits were rebased, leaving the branch 0 behind and 11 ahead of
+  `origin/main`; no amend, push, or pull-request operation was performed;
+- `main` added no builtin home files, so the inventory remained at 469 registry-backed
+  AOT builtins; its changes to 12 array-callback builtins and `fseek()` were preserved
+  inside the final semantic descriptors;
+- `cargo build`, `cargo check --tests`, the new contextual-callback, typed-sort,
+  `fseek(): int`, mixed-boundary, object-array covariance, and array-callback diagnostic
+  regressions all passed;
+- builtin generation remained stable at 479 exported records and 936 pages, with 0
+  audit errors and all 953 generated pages passing site compatibility;
+- the enforced builtin-boundary audit remained unchanged at 450 runtime calls, 18 EIR
+  primitives, 1 EIR graph, and 0 structural errors.
 
 The thematic local implementation commits are:
 
-1. `02b5f5520` — inventory and structural audit;
-2. `d70b56bcf` — typed EIR targets;
-3. `f9b22a9e4` — shared builtin semantics;
-4. `16330ac1c` — helper-centric runtime calls;
-5. `d1b020282` — descriptor-derived callable wrappers;
-6. `9f677203d` — registry-owned argument lowering;
-7. `9a396f4c7` — final legacy-boundary enforcement;
-8. `c52ae6469` — EIR result and ownership contracts;
-9. `07cfba7c1` — final typed result-storage regressions;
-10. `386a6f861` — document the typed builtin EIR boundary and completion evidence.
+1. `2a8f2e896` — inventory and structural audit;
+2. `0e26e9762` — typed EIR targets;
+3. `542759aef` — shared builtin semantics;
+4. `20368fa9e` — helper-centric runtime calls;
+5. `9e0301c9a` — descriptor-derived callable wrappers;
+6. `c68a51e64` — registry-owned argument lowering;
+7. `c97c035a5` — final legacy-boundary enforcement;
+8. `1d52a0c9f` — EIR result and ownership contracts;
+9. `095bb42e5` — final typed result-storage regressions;
+10. `b43c68957` — documentation and completion evidence;
+11. `6bf80798a` — generated-document ending normalization.
