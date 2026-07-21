@@ -388,6 +388,18 @@ fn lower_numeric_binary(
         };
         return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
     }
+    if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
+        let lhs = coerce_to_float(ctx, lhs, left);
+        let rhs = coerce_to_float(ctx, rhs, right);
+        return ctx.emit_value(
+            Op::FDiv,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Float,
+            Op::FDiv.default_effects(),
+            Some(expr.span),
+        );
+    }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
         // Check if the type checker promoted this to Mixed (non-constant int arithmetic
         // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
@@ -1766,8 +1778,12 @@ fn lower_inc_dec(
             MixedNumericOp::Sub
         };
         let new = lower_mixed_numeric_binary(ctx, old, one, op, expr);
-        let stored = ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
-        return if post { return_old } else { stored };
+        ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+        return if post {
+            return_old
+        } else {
+            ctx.load_local(name, Some(expr.span))
+        };
     }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
@@ -1798,8 +1814,12 @@ fn lower_inc_dec(
         )
         .expect("integer inc/dec produces a value");
     let new = LoweredValue { value: new, ir_type: result_ir_type };
-    let stored = ctx.store_local(name, new, result_php_type, Some(expr.span));
-    if post { old } else { stored }
+    ctx.store_local(name, new, result_php_type, Some(expr.span));
+    if post {
+        old
+    } else {
+        ctx.load_local(name, Some(expr.span))
+    }
 }
 
 /// Lowers a direct function, builtin, or extern call.
@@ -2030,16 +2050,6 @@ fn emit_builtin_call_value(
     };
     if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
         ctx.mark_eval_executed();
-        if let Some(widen_targets) =
-            eval_literal.and_then(|fragment| eval_literal_direct_store_widen_targets(ctx, fragment))
-        {
-            // A direct store that changes a scalar slot's type keeps the
-            // native path by widening the slot to boxed Mixed storage first;
-            // codegen re-lowers every load/store with the final slot type.
-            for name in widen_targets {
-                ctx.set_local_type(&name, PhpType::Mixed);
-            }
-        }
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
         } else if eval_literal
@@ -2097,18 +2107,6 @@ fn registry_builtin_result_type(
 
 /// Returns true when a literal `eval` call may still need runtime scope/interpreter state.
 fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
-    // Fragments fully handled by the direct-local AOT paths never touch runtime
-    // eval state; applying the barrier would declare eval locals and drag the
-    // whole bridge runtime (and magician staticlib) into native-only programs.
-    if eval_literal_direct_store_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)
     };
@@ -2149,17 +2147,6 @@ fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> 
 
 /// Returns true when a literal `eval` only needs materialized eval-scope state.
 fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
-    // Direct-local AOT fragments also skip the materialized scope: their reads
-    // and writes go straight to caller locals.
-    if eval_literal_direct_store_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)
     };
@@ -2178,191 +2165,6 @@ fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &st
             plan.assoc_array_read_constraints(),
             plan.float_predicate_read_constraints(),
         )
-}
-
-/// Returns true when a direct-store eval fragment fits every caller slot type.
-fn eval_literal_direct_store_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    eval_literal_direct_store_widen_targets(ctx, fragment).is_some()
-}
-
-/// Classifies a direct-store eval fragment against caller slots. Returns the
-/// locals whose scalar slot must widen to Mixed because the store changes
-/// their runtime type (e.g. Int -> Str); `None` when any write target rules
-/// out the direct path entirely.
-fn eval_literal_direct_store_widen_targets(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> Option<Vec<String>> {
-    let writes = crate::eval_aot::literal_fragment_direct_local_store_writes(fragment)?;
-    let mut widen_targets = Vec::new();
-    for (name, kind) in &writes {
-        if crate::superglobals::is_superglobal(name)
-            || (ctx.in_main && ctx.all_global_var_names.contains(name))
-        {
-            return None;
-        }
-        if ctx.local_slots.get(name).is_none() {
-            continue;
-        }
-        if ctx.is_ref_bound_local(name)
-            || ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal)
-        {
-            return None;
-        }
-        let ty = ctx.local_types.get(name)?;
-        if eval_literal_direct_store_type_supported(ty, *kind) {
-            continue;
-        }
-        if eval_literal_direct_store_type_widenable(ty) {
-            widen_targets.push(name.clone());
-        } else {
-            return None;
-        }
-    }
-    Some(widen_targets)
-}
-
-/// Returns true when a scalar slot can widen to Mixed for a type-changing
-/// direct eval store. Containers and special storage keep the barrier path.
-fn eval_literal_direct_store_type_widenable(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::TaggedScalar
-    )
-}
-
-/// Returns true when a static scalar store kind fits an existing caller slot type.
-fn eval_literal_direct_store_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => true,
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Bool => kind == crate::eval_aot::DirectLocalStoreScalarKind::Bool,
-        PhpType::Str => kind == crate::eval_aot::DirectLocalStoreScalarKind::String,
-        PhpType::TaggedScalar => matches!(
-            kind,
-            crate::eval_aot::DirectLocalStoreScalarKind::Int
-                | crate::eval_aot::DirectLocalStoreScalarKind::Null
-        ),
-        _ => false,
-    }
-}
-
-/// Returns true when a boxed read/write eval can use direct caller locals.
-fn eval_literal_direct_read_write_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_direct_local_read_write_writes(fragment)
-    else {
-        return false;
-    };
-    writes
-        .iter()
-        .all(|(name, kind)| eval_literal_direct_read_write_name_supported(ctx, name, *kind))
-}
-
-/// Returns true when one direct read/write target is an initialized scalar local.
-fn eval_literal_direct_read_write_name_supported(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    if crate::superglobals::is_superglobal(name)
-        || (ctx.in_main && ctx.all_global_var_names.contains(name))
-    {
-        return false;
-    }
-    let Some(slot) = ctx.local_slots.get(name) else {
-        return false;
-    };
-    if ctx.is_ref_bound_local(name) {
-        return false;
-    }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
-        return false;
-    }
-    if !ctx.initialized_slots_snapshot().contains(slot) {
-        return false;
-    }
-    ctx.local_types
-        .get(name)
-        .is_some_and(|ty| eval_literal_direct_read_write_type_supported(ty, kind))
-}
-
-/// Returns true when a read/write eval result kind fits the caller local type.
-fn eval_literal_direct_read_write_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        _ => false,
-    }
-}
-
-/// Returns true when local-scalar eval writes can be synced without eval scope state.
-fn eval_literal_local_scalar_direct_sync_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_local_scalar_writes_with_static_calls(
-        fragment,
-        |name, args| eval_literal_static_function_supported_by_lowering(ctx, name, args),
-    ) else {
-        return false;
-    };
-    writes
-        .iter()
-        .all(|(name, kind)| eval_literal_local_scalar_direct_sync_name_supported(ctx, name, *kind))
-}
-
-/// Returns true when one local-scalar write can target caller storage directly or be ignored.
-fn eval_literal_local_scalar_direct_sync_name_supported(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    if crate::superglobals::is_superglobal(name)
-        || (ctx.in_main && ctx.all_global_var_names.contains(name))
-    {
-        return false;
-    }
-    let Some(_slot) = ctx.local_slots.get(name) else {
-        return true;
-    };
-    if ctx.is_ref_bound_local(name) {
-        return false;
-    }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
-        return false;
-    }
-    let Some(ty) = ctx.local_types.get(name) else {
-        return false;
-    };
-    eval_literal_local_scalar_direct_sync_type_supported(ty, kind)
-}
-
-/// Returns true when a local-scalar write kind fits the caller local type.
-fn eval_literal_local_scalar_direct_sync_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => true,
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Bool => kind == crate::eval_aot::DirectLocalStoreScalarKind::Bool,
-        PhpType::TaggedScalar => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        _ => false,
-    }
 }
 
 /// Returns true when all scope-read variables can be passed as direct Mixed params.
