@@ -3716,3 +3716,66 @@ echo gettype($s), "\n";
         out.stderr
     );
 }
+
+/// Regression test: a function returning its Mixed-boxed static local must hand the
+/// caller an owned reference. The checked `++` widens the static slot to a boxed
+/// `int|float`, and the caller releases call results after consuming them, so an
+/// unretained `return $next_id` drops the slot's own box to refcount zero — every
+/// later call increments freed memory and reads garbage once the block is reused.
+#[test]
+fn test_returned_static_local_mixed_box_survives_caller_release() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function next_n() {
+    static $n = 0;
+    $n++;
+    return $n;
+}
+echo "N: " . next_n() . "\n";
+echo "N: " . next_n() . "\n";
+echo "N: " . next_n() . "\n";
+var_dump(next_n());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "N: 1\nN: 2\nN: 3\nint(4)\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the returned static box to stay owned by its slot, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: the freed-block reuse form of the same bug. A checked-arithmetic
+/// store into a global allocates between calls, reusing the static's freed box, so
+/// without the return retain the second `make_id()` concat prints an empty string
+/// instead of the counter value (the shape of `examples/advanced-functions`).
+#[test]
+fn test_returned_static_survives_interleaved_global_mixed_store() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$total = 0;
+function add_to_total($amount) {
+    global $total;
+    $total = $total + $amount;
+}
+function make_id() {
+    static $next_id = 0;
+    $next_id++;
+    return $next_id;
+}
+echo "ID: " . make_id() . "\n";
+add_to_total(10);
+echo "ID: " . make_id() . "\n";
+echo "ID: " . make_id() . "\n";
+echo "Total: " . $total . "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ID: 1\nID: 2\nID: 3\nTotal: 10\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static-return and global checked-add stores to stay balanced, got: {}",
+        out.stderr
+    );
+}
