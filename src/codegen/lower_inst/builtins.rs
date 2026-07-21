@@ -493,12 +493,12 @@ fn emit_mixed_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<(
 fn emit_branch_on_gettype_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp x0, #{}", tag)); // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching gettype() type-name case
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", tag)); // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching gettype() type-name case
         }
     }
 }
@@ -695,8 +695,8 @@ fn emit_dynamic_class_like_exists_compare(
             abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0"); // did the dynamic class-like name match this metadata entry?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // report existence when the runtime name matches case-insensitively
+            ctx.emitter.instruction("cmp x0, #0");                              // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // report existence when the runtime name matches case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -704,8 +704,8 @@ fn emit_dynamic_class_like_exists_compare(
             abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax"); // did the dynamic class-like name match this metadata entry?
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // report existence when the runtime name matches case-insensitively
+            ctx.emitter.instruction("test rax, rax");                           // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // report existence when the runtime name matches case-insensitively
         }
     }
 }
@@ -772,7 +772,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Calls the runtime `is_callable` helper for pointer-shaped values already in result regs.
 fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // move pointer-shaped value into helper argument 0
+        ctx.emitter.instruction("mov rdi, rax");                                // move pointer-shaped value into helper argument 0
     }
     abi::emit_call_label(ctx.emitter, label);
 }
@@ -781,12 +781,12 @@ fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
 fn emit_is_callable_dynamic_string_lookup(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov x1, x2"); // move string length into helper argument 1
+            ctx.emitter.instruction("mov x0, x1");                              // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov x1, x2");                              // move string length into helper argument 1
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax"); // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov rsi, rdx"); // move string length into helper argument 1
+            ctx.emitter.instruction("mov rdi, rax");                            // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov rsi, rdx");                            // move string length into helper argument 1
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
@@ -1007,8 +1007,8 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &active_symbol, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // test whether an include has activated this function variant
-            ctx.emitter.instruction(&format!("cset {}, ne", result_reg)); // return true only when a function variant is active
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // test whether an include has activated this function variant
+            ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
@@ -1295,13 +1295,13 @@ fn emit_int_result_zero_bool(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // compare the empty() integer operand against zero
-            ctx.emitter.instruction(&format!("cset {}, eq", result_reg)); // return true when the integer operand is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // compare the empty() integer operand against zero
+            ctx.emitter.instruction(&format!("cset {}, eq", result_reg));       // return true when the integer operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg)); // compare the empty() integer operand against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the integer operand is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));         // compare the empty() integer operand against zero
+            ctx.emitter.instruction("sete al");                                 // materialize true when the integer operand is zero
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
 }
@@ -1310,14 +1310,14 @@ fn emit_int_result_zero_bool(ctx: &mut FunctionContext<'_>) {
 fn emit_float_result_zero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fcmp d0, #0.0"); // compare the empty() float operand against zero
-            ctx.emitter.instruction("cset x0, eq"); // return true when the float operand is zero
+            ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the empty() float operand against zero
+            ctx.emitter.instruction("cset x0, eq");                             // return true when the float operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1"); // materialize a zero float register for empty() comparison
-            ctx.emitter.instruction("ucomisd xmm0, xmm1"); // compare the empty() float operand against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the float operand is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for empty() comparison
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the empty() float operand against zero
+            ctx.emitter.instruction("sete al");                                 // materialize true when the float operand is zero
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
 }
@@ -1327,13 +1327,13 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg)); // compare the empty() string length against zero
-            ctx.emitter.instruction("cset x0, eq"); // return true when the string length is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // compare the empty() string length against zero
+            ctx.emitter.instruction("cset x0, eq");                             // return true when the string length is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg)); // compare the empty() string length against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the string length is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // compare the empty() string length against zero
+            ctx.emitter.instruction("sete al");                                 // materialize true when the string length is zero
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
 }
@@ -1342,10 +1342,10 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
 fn invert_bool_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("eor x0, x0, #1"); // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("eor x0, x0, #1");                          // invert the canonical boolean result for empty()
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xor rax, 1"); // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("xor rax, 1");                              // invert the canonical boolean result for empty()
         }
     }
 }
@@ -1392,17 +1392,17 @@ fn emit_tagged_scalar_int_predicate(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("cset x0, ne"); // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the tagged scalar holds an integer
         }
         Arch::X86_64 => {
             let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("setne al"); // materialize true when the tagged scalar holds an integer
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("setne al");                                // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
     Ok(())
@@ -1453,24 +1453,24 @@ fn emit_mixed_is_iterable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4"); // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #5"); // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #6"); // check for a boxed object payload
-            ctx.emitter.instruction(&format!("b.eq {}", object_case)); // objects need a Traversable interface check
-            ctx.emitter.instruction("mov x0, #0"); // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // objects need a Traversable interface check
+            ctx.emitter.instruction("mov x0, #0");                              // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4"); // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case)); // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 5"); // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case)); // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 6"); // check for a boxed object payload
-            ctx.emitter.instruction(&format!("je {}", object_case)); // objects need a Traversable interface check
-            ctx.emitter.instruction("mov rax, 0"); // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // objects need a Traversable interface check
+            ctx.emitter.instruction("mov rax, 0");                              // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
         }
     }
     ctx.emitter.label(&object_case);
@@ -1496,16 +1496,16 @@ fn emit_runtime_object_iterable_check(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x1, [sp, #-16]!"); // preserve the unboxed object pointer across Traversable checks
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // preserve the unboxed object pointer across Traversable checks
             for interface_id in interface_ids {
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
-            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer after failed checks
-            ctx.emitter.instruction("mov x0, #0"); // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer after failed checks
+            ctx.emitter.instruction("mov x0, #0");                              // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
             ctx.emitter.label(&object_true);
-            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer before returning true
-            ctx.emitter.instruction(&format!("b {}", true_case)); // continue through the shared truthy result path
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer before returning true
+            ctx.emitter.instruction(&format!("b {}", true_case));               // continue through the shared truthy result path
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rdi");
@@ -1513,11 +1513,11 @@ fn emit_runtime_object_iterable_check(
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction("xor eax, eax"); // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("xor eax, eax");                            // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
             ctx.emitter.label(&object_true);
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction(&format!("jmp {}", true_case)); // continue through the shared truthy result path
+            ctx.emitter.instruction(&format!("jmp {}", true_case));             // continue through the shared truthy result path
         }
     }
 }
@@ -1530,20 +1530,20 @@ fn emit_saved_object_interface_check(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp]"); // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "x1", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("cmp x0, #0"); // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("b.ne {}", true_case)); // a matching interface makes the object iterable
+            ctx.emitter.instruction("cmp x0, #0");                              // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("b.ne {}", true_case));            // a matching interface makes the object iterable
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]"); // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "rsi", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("test rax, rax"); // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("jne {}", true_case)); // a matching interface makes the object iterable
+            ctx.emitter.instruction("test rax, rax");                           // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("jne {}", true_case));             // a matching interface makes the object iterable
         }
     }
 }
