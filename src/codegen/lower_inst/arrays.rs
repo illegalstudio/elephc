@@ -79,6 +79,12 @@ pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers typed indexed-array widening to boxed Mixed slots.
+///
+/// Null and in-band null-container-sentinel inputs (missed array reads that a
+/// branch merge forwards, issue #549) pass through unconverted: the runtime
+/// slot tag is recovered from the header at this call site, so the sentinel
+/// must be filtered before the header dereference — a helper-side guard per
+/// the issue #533 convention would fire too late.
 pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -89,28 +95,35 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     let array = expect_operand(inst, 0)?;
     indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
-    emit_array_to_mixed_operands(ctx, array)?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    store_if_result(ctx, inst)
-}
-
-/// Loads the array pointer and runtime element value tag for `__rt_array_to_mixed`.
-fn emit_array_to_mixed_operands(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no header or slots to box
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through unconverted
+            ctx.emitter.instruction("test rdi, rdi");                           // null containers have no header or slots to box
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep the null container as the passthrough result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
     }
-    Ok(())
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers indexed-array promotion to associative hash storage.
