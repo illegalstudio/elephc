@@ -206,11 +206,15 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `boolval()`     | `boolval($val): bool`        | Convert to bool                |
 | `floatval()`    | `floatval($val): float`      | Convert to float               |
 | `intval()`      | `intval($val): int`          | Converts to integer            |
+| `strval()`      | `strval($val): string`       | Convert to string              |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
 | `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
+PHP's predicate aliases are supported and behave identically to their canonical
+forms: `is_integer()` and `is_long()` are aliases of `is_int()`, and
+`is_double()` and `is_real()` are aliases of `is_float()`.
 
 ### Type narrowing
 

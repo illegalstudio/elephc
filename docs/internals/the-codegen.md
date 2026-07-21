@@ -52,9 +52,12 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/context.rs` | EIR function emission state and value materialization helpers |
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
+| `src/codegen/runtime_callable_invoker.rs` | Generated uniform `(descriptor, argument array) -> Mixed` invoker trampolines |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
 | `src/codegen_support/arrays.rs` | Shared array metadata helpers used by EIR and runtime support |
+| `src/codegen_support/callable_descriptor.rs` | Callable descriptor layout, kind constants, and entry-slot loading |
 | `src/codegen_support/callable_invoker_args.rs` | Shared descriptor-invoker argument cloning and boxing helpers |
+| `src/codegen_support/sentinels.rs` | Null/uninitialized sentinel constants, tagged-scalar helpers, x86_64 heap-header magic |
 | `src/codegen_support/value_boxing.rs` | Shared scalar/string/array/object/iterable boxing into runtime `Mixed` cells |
 | `src/codegen_support/wrappers/` | Shared callback and fiber wrapper emitters used by deferred EIR wrapper emission |
 | `src/codegen_support/runtime/` | Shared `__rt_*` routines and runtime data emission |
@@ -106,6 +109,58 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
 symbols for embedding hosts. On Linux cdylib output also hides internal runtime
 symbols so separate loaded elephc modules do not preempt each other's state.
+
+## Key Mechanisms
+
+### Mixed boxing
+
+`src/codegen_support/value_boxing.rs` owns the shared emitters that box PHP
+values into runtime `Mixed` cells. A boxed cell pairs a runtime tag byte
+(0 int, 1 str, 2 float, 3 bool/false, 4 array, 5 assoc array, 6 object,
+7 mixed/union/iterable, 8 null) with the payload; tag values and payload
+register conventions must match `__rt_mixed_from_value`. Owned boxing paths
+transfer or release references so payloads are never double-freed. `Union(...)`
+and `Iterable` values reuse the same boxed representation.
+
+### Callable descriptors and invokers
+
+`PhpType::Callable` stays one pointer wide, but the pointer targets a
+descriptor (`src/codegen_support/callable_descriptor.rs`) whose entry slot is
+loaded before invoking native code. Descriptors record the callable kind
+(closure, first-class callable, callback adapter, object invoke, plain
+function, builtin, extern, static method, instance method) plus
+signature/default/by-ref/variadic metadata and capture/receiver environment,
+without changing the one-word callable ABI. The optional invoker slot points at
+a generated uniform adapter (`src/codegen/runtime_callable_invoker.rs`) with
+the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
+the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
+`r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
+
+### Static and global storage
+
+Function `static` locals are `.comm` symbols (`_static_<fn>_<name>`, 16 bytes)
+paired with a one-time init-marker symbol (`<symbol>_init`); the `--web` reset
+generator walks these records to release and re-arm persistent statics between
+requests. Static properties live behind per-class user-data symbols
+(`crate::names::static_property_symbol`), with late-bound `static::` receivers
+resolved through native class-id branches. `global` variables load and store
+through `_eir_global_<mangled_fqn>` symbols emitted for the EIR `LoadGlobal` /
+`StoreGlobal` instructions.
+
+### Sentinels and null representation
+
+`src/codegen_support/sentinels.rs` is the canonical home for the in-band
+sentinel constants and tagged-scalar helpers. Under the default
+`NullRepr::Tagged` mode, null-capable scalar slots use the inline two-word
+`{payload, tag}` `TaggedScalar` representation, making the full i64 range
+representable; the legacy `--null-repr=sentinel` opt-out stores the in-band
+`NULL_SENTINEL` (`PHP_INT_MAX - 1`), which collides with that real integer.
+Uninitialized typed properties use a separate sentinel (`PHP_INT_MAX - 2`)
+stored in the property's metadata word, never the value word, so it cannot
+collide with property values. On x86_64, heap headers carry the `ELPH` magic
+in the high 32 bits of the kind word: every stamp goes through the shared
+`x86_64_heap_kind_word` helper and every check compares against
+`X86_64_HEAP_MAGIC_HI32` — local copies of either constant are forbidden.
 
 ## Backend Contract
 

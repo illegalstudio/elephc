@@ -8,8 +8,8 @@ sidebar:
 elephc implements PHP regular expressions with PCRE2 through PCRE2's
 POSIX-compatible wrapper. Regex support is an optional runtime feature:
 programs that do not use regex do not link PCRE2, while programs that use
-`preg_*`, `RegexIterator`, or `RecursiveRegexIterator` request PCRE2 during the
-final native link step.
+`preg_*`, `mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator`
+request PCRE2 during the final native link step.
 
 ## Build requirements
 
@@ -90,6 +90,7 @@ Common linker failures mean the native PCRE2 libraries were not found:
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
+| `mb_ereg_match()` | `mb_ereg_match($pattern, $subject, $options = null): bool` | Test whether the pattern matches at the **start** of the subject (anchored, like PHP's mbregex). The pattern is a bare mbregex pattern with no delimiters. Runs on the same PCRE2-backed runtime; UTF-8/ASCII patterns are supported, and the `i` option enables case-insensitive matching (other recognized mbregex options are accepted without additional effect) |
 
 ## Pattern Syntax
 

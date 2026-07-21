@@ -185,10 +185,14 @@ src/
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
+├── builtins/                  `builtin!` registry: single source of truth driving the builtin catalog, signatures, type checking, lowering dispatch, and docs
+├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
+├── strict_php.rs              `--strict-php` mode state and audit entry point
+├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
@@ -201,6 +205,7 @@ src/
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
+├── debug_info.rs              DWARF debug-info injection for `--debug-info` (lldb/gdb source mapping)
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
@@ -212,6 +217,11 @@ src/
 ├── list_id_prelude/           Identifier-list prelude detection and baked table data
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
+├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
+├── image_prelude/             Image prelude usage detection
+├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)
+├── web_prelude/               Web-prelude function-reachability analysis for pay-for-use injection
+├── superglobals.rs            Canonical --web request-superglobal set shared by checker, IR lowering, and runtime reset
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -270,13 +280,19 @@ src/
 ├── codegen/
 │   ├── mod.rs                 Active EIR → target assembly entry point
 │   ├── context.rs             Per-function lowering state and value placement
+│   ├── shared_state.rs        Module-wide artifacts shared across function contexts (callable descriptor/wrapper/invoker dedup)
+│   ├── local_analysis.rs      Precomputed local-slot facts (explicit stores, ref-cell representation, owned parameters)
 │   ├── frame.rs               EIR frame layout and local/temporary slots
+│   ├── frame/                 Frame-layout unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
 │   ├── lower_inst.rs          EIR instruction lowering dispatcher
 │   ├── lower_inst/            Target-aware instruction, builtin, callable, object, ownership, and conversion lowerers
 │   ├── lower_term.rs          EIR terminator lowering
 │   ├── value_placement.rs     Linear-scan register and stack value placement
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
+│   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
+│   ├── literal_defaults.rs    Literal property defaults → backend-native values
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -290,7 +306,13 @@ src/
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
-│   ├── callables.rs           Top-level callable metadata and indirect-call helpers
+│   ├── dynamic_new.rs         Builtin-class allow-list metadata for dynamic object construction
+│   ├── hash_crypto.rs         `hash()` / `hash_hmac()` routing through the elephc-crypto staticlib
+│   ├── phar_stream.rs         `phar://` URL and PHAR archive metadata parsing for I/O lowering
+│   ├── runtime_features.rs    Runtime helper-family derivation keeping optional native link deps pay-for-use
+│   ├── stream_filters/        zlib/bzip2/iconv stream-filter attachment helper emitters
+│   ├── tls.rs                 TLS bridge entry-point publication into runtime function-pointer slots
+│   ├── try_handlers.rs        Stack-layout constants for EIR exception-handler slots
 │   ├── reflection.rs          Shared ReflectionAttribute materialization helpers
 │   ├── prescan.rs             Constant pre-scan feeding EIR lowering
 │   ├── program_usage.rs       Required-class analysis feeding metadata emission
@@ -323,10 +345,10 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (72 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (114 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (117 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
@@ -344,7 +366,14 @@ src/
     └── report.rs              Error formatting
 
 crates/
-└── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
+├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
+├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
+├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
+├── elephc-tls/                TLS bridge for the `https://` stream wrapper
+├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
+└── elephc-web/                Prefork HTTP server bridge for `--web` binaries
 ```
 
 ## ARM64 calling conventions
@@ -435,7 +464,7 @@ Offset  Size  Field
 
 ### Runtime BSS and data symbols
 
-The runtime data emission in `src/codegen/runtime/data/` is split into `emit_runtime_data_fixed()` for shared heap buffers, diagnostics, and lookup tables, plus `emit_runtime_data_user()` for globals, statics, enum-case storage, metadata derived from the user's program, and dynamic `instanceof` lookup names:
+The runtime data emission in `src/codegen_support/runtime/data/` is split into `emit_runtime_data_fixed()` for shared heap buffers, diagnostics, and lookup tables, plus `emit_runtime_data_user()` for globals, statics, enum-case storage, metadata derived from the user's program, and dynamic `instanceof` lookup names:
 
 | Symbol group | Symbols | Purpose |
 |---|---|---|

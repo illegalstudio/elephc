@@ -49,8 +49,10 @@ runtime arguments (not elephc compiler flags):
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
+| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a worker whose request handler runs longer than N seconds. |
+| `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
-| `--help`, `--version` | No | — | Print usage / version and exit. |
+| `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
