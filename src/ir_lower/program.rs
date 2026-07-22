@@ -464,15 +464,6 @@ fn eval_literal_call_requires_bridge(
     let Some(fragment) = module.data.strings.get(data.as_raw() as usize) else {
         return true;
     };
-    if crate::eval_aot::literal_fragment_direct_local_store_writes(fragment).is_some() {
-        return false;
-    }
-    if eval_literal_call_can_use_direct_read_write(function, inst_index, fragment) {
-        return false;
-    }
-    if eval_literal_call_can_use_local_scalar_direct_sync(module, function, fragment) {
-        return false;
-    }
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         module.source_path.as_deref(),
@@ -492,27 +483,8 @@ fn eval_literal_call_requires_bridge(
     plan.requires_runtime_eval_bridge()
 }
 
-/// Returns true when a boxed read/write eval can read and update caller locals directly.
-fn eval_literal_call_can_use_direct_read_write(
-    function: &Function,
-    inst_index: usize,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_direct_local_read_write_writes(fragment)
-    else {
-        return false;
-    };
-    writes.iter().all(|(name, kind)| {
-        let Some(slot) = eval_local_scalar_direct_sync_slot(function, name) else {
-            return false;
-        };
-        eval_direct_read_write_slot_initialized(function, slot.id, inst_index)
-            && eval_direct_read_write_kind_supported(function, slot, inst_index, *kind)
-    })
-}
-
 /// Returns true when a local slot is initialized before the eval instruction.
-fn eval_direct_read_write_slot_initialized(
+fn eval_scope_read_slot_initialized(
     function: &Function,
     slot: crate::ir::LocalSlotId,
     inst_index: usize,
@@ -529,44 +501,6 @@ fn eval_direct_read_write_slot_initialized(
         .iter()
         .take(inst_index)
         .any(|inst| inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot)))
-}
-
-/// Returns true when a direct read/write value kind fits the caller slot type.
-fn eval_direct_read_write_kind_supported(
-    function: &Function,
-    slot: &crate::ir::LocalSlot,
-    inst_index: usize,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match slot.php_type.codegen_repr() {
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Mixed | PhpType::Union(_) => {
-            kind == crate::eval_aot::DirectLocalStoreScalarKind::Float
-                && eval_direct_read_write_previous_store_type(function, slot.id, inst_index)
-                    .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float))
-        }
-        _ => false,
-    }
-}
-
-/// Returns the source type of the latest direct local store before an eval instruction.
-fn eval_direct_read_write_previous_store_type(
-    function: &Function,
-    slot: crate::ir::LocalSlotId,
-    inst_index: usize,
-) -> Option<PhpType> {
-    function
-        .instructions
-        .iter()
-        .take(inst_index)
-        .rev()
-        .find(|inst| {
-            inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
-        })
-        .and_then(|inst| inst.operands.first().copied())
-        .and_then(|value| function.value(value))
-        .map(|value| value.php_type.codegen_repr())
 }
 
 /// Returns true when a read-only eval call can pass direct Mixed params safely.
@@ -617,11 +551,11 @@ fn eval_literal_call_scope_read_param_supported(
     if crate::superglobals::is_superglobal(name) {
         return false;
     }
-    let Some(slot) = eval_local_scalar_direct_sync_slot(function, name) else {
+    let Some(slot) = eval_scope_local_slot(function, name) else {
         return true;
     };
     eval_scope_read_param_type_supported(&slot.php_type)
-        && eval_direct_read_write_slot_initialized(function, slot.id, inst_index)
+        && eval_scope_read_slot_initialized(function, slot.id, inst_index)
 }
 
 /// Returns true when one caller read is initialized with an array-compatible type.
@@ -634,11 +568,11 @@ fn eval_literal_call_scope_read_array_param_supported(
     if crate::superglobals::is_superglobal(name) {
         return false;
     }
-    let Some(slot) = eval_local_scalar_direct_sync_slot(function, name) else {
+    let Some(slot) = eval_scope_local_slot(function, name) else {
         return false;
     };
     eval_scope_read_array_param_type_supported(&slot.php_type)
-        && eval_direct_read_write_slot_initialized(function, slot.id, inst_index)
+        && eval_scope_read_slot_initialized(function, slot.id, inst_index)
 }
 
 /// Returns true when one caller read is initialized with an associative-array type.
@@ -651,11 +585,11 @@ fn eval_literal_call_scope_read_assoc_array_param_supported(
     if crate::superglobals::is_superglobal(name) {
         return false;
     }
-    let Some(slot) = eval_local_scalar_direct_sync_slot(function, name) else {
+    let Some(slot) = eval_scope_local_slot(function, name) else {
         return false;
     };
     eval_scope_read_assoc_array_param_type_supported(&slot.php_type)
-        && eval_direct_read_write_slot_initialized(function, slot.id, inst_index)
+        && eval_scope_read_slot_initialized(function, slot.id, inst_index)
 }
 
 /// Returns true when one caller read can feed IEEE float predicates safely.
@@ -668,11 +602,11 @@ fn eval_literal_call_scope_read_float_predicate_param_supported(
     if crate::superglobals::is_superglobal(name) {
         return false;
     }
-    let Some(slot) = eval_local_scalar_direct_sync_slot(function, name) else {
+    let Some(slot) = eval_scope_local_slot(function, name) else {
         return false;
     };
     eval_scope_read_float_predicate_param_type_supported(&slot.php_type)
-        && eval_direct_read_write_slot_initialized(function, slot.id, inst_index)
+        && eval_scope_read_slot_initialized(function, slot.id, inst_index)
 }
 
 /// Returns true when a caller local can be boxed into a direct eval read param.
@@ -710,26 +644,8 @@ fn eval_scope_read_float_predicate_param_type_supported(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float)
 }
 
-/// Returns true when the legacy local-scalar AOT path can avoid eval scope runtime.
-fn eval_literal_call_can_use_local_scalar_direct_sync(
-    module: &Module,
-    function: &Function,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_local_scalar_writes_with_static_calls(
-        fragment,
-        |name, args| eval_literal_static_function_supported_by_module(module, name, args),
-    ) else {
-        return false;
-    };
-    writes.iter().all(|(name, kind)| {
-        eval_local_scalar_direct_sync_slot(function, name)
-            .is_none_or(|slot| eval_local_scalar_direct_sync_kind_supported(&slot.php_type, *kind))
-    })
-}
-
-/// Returns the caller local slot that would receive a direct local-scalar eval write.
-fn eval_local_scalar_direct_sync_slot<'a>(
+/// Returns the caller local slot that can provide a direct scope-read parameter.
+fn eval_scope_local_slot<'a>(
     function: &'a Function,
     name: &str,
 ) -> Option<&'a crate::ir::LocalSlot> {
@@ -737,21 +653,6 @@ fn eval_local_scalar_direct_sync_slot<'a>(
         .locals
         .iter()
         .find(|local| local.name.as_deref() == Some(name) && local.kind == LocalKind::PhpLocal)
-}
-
-/// Returns true when a local-scalar value can be stored in the caller slot type.
-fn eval_local_scalar_direct_sync_kind_supported(
-    target_ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match target_ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => true,
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Bool => kind == crate::eval_aot::DirectLocalStoreScalarKind::Bool,
-        PhpType::TaggedScalar => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        _ => false,
-    }
 }
 
 /// Returns true when a static function call matches the codegen-supported subset.
@@ -844,7 +745,7 @@ fn lower_literal_eval_aot_functions(
                     fiber_return_sigs,
                 );
             }
-            EvalAotFunctionCandidate::ScopeRead {
+            EvalAotFunctionCandidate::Scope {
                 body,
                 reads,
                 direct_writes,
@@ -853,7 +754,7 @@ fn lower_literal_eval_aot_functions(
                 if !lowered_names.insert(name.clone()) {
                     continue;
                 }
-                function::lower_eval_aot_scope_read_function(
+                function::lower_eval_aot_scope_function(
                     &name,
                     &body,
                     &reads,
@@ -874,7 +775,7 @@ enum EvalAotFunctionCandidate {
     NoScope {
         body: Program,
     },
-    ScopeRead {
+    Scope {
         body: Program,
         reads: BTreeSet<String>,
         direct_writes: BTreeSet<String>,
@@ -882,14 +783,14 @@ enum EvalAotFunctionCandidate {
     },
 }
 
-/// Collects unique literal eval fragments that can be emitted as no-scope EIR functions.
+/// Collects unique literal eval fragments that can be emitted as internal EIR functions.
 fn collect_literal_eval_aot_function_candidates(
     module: &Module,
 ) -> Vec<(String, EvalAotFunctionCandidate)> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     for function in all_lowered_functions(module) {
-        for (inst_index, inst) in function.instructions.iter().enumerate() {
+        for inst in &function.instructions {
             let Some(fragment) = eval_literal_fragment_from_inst(module, inst) else {
                 continue;
             };
@@ -916,13 +817,7 @@ fn collect_literal_eval_aot_function_candidates(
                 candidates.push((name, EvalAotFunctionCandidate::NoScope { body: program }));
                 continue;
             }
-            if crate::eval_aot::literal_fragment_direct_local_store_writes(&fragment).is_some()
-                || eval_literal_call_can_use_direct_read_write(function, inst_index, &fragment)
-                || eval_literal_call_can_use_local_scalar_direct_sync(module, function, &fragment)
-            {
-                continue;
-            }
-            let Some(name) = plan.take_scope_read_function_name() else {
+            let Some(name) = plan.take_scope_function_name() else {
                 continue;
             };
             if !seen.insert(name.clone()) {
@@ -931,12 +826,12 @@ fn collect_literal_eval_aot_function_candidates(
             let reads = plan.reads().clone();
             let direct_writes = plan.direct_writes().clone();
             let flush_writes = plan.flush_writes().clone();
-            let Some(program) = plan.take_scope_read_eir_program() else {
+            let Some(program) = plan.take_scope_eir_program() else {
                 continue;
             };
             candidates.push((
                 name,
-                EvalAotFunctionCandidate::ScopeRead {
+                EvalAotFunctionCandidate::Scope {
                     body: program,
                     reads,
                     direct_writes,

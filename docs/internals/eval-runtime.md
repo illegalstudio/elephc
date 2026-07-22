@@ -31,8 +31,9 @@ eval($code)
   -> checker: exactly one argument, result Mixed, conservative barrier
   -> EIR lowering: LanguageConstructCall or EvalLiteralCall
   -> literal planner, when the source is statically known
-       -> direct/native EIR
-       -> EIR plus core eval-scope helpers
+       -> internal no-scope EIR function
+       -> internal EIR function with direct read parameters
+       -> internal scope-aware EIR function plus core eval-scope helpers
        -> Magician interpreter fallback
   -> target-aware assembly and optional bridge linking
 ```
@@ -45,14 +46,17 @@ front end has already preserved PHP's dynamic semantics and diagnostics.
 
 | Path | Typical input | Runtime requirements |
 |---|---|---|
-| Direct AOT | A literal fragment whose operations and caller-local reads/writes can be lowered statically | No eval context, scope, or Magician library |
-| Scope-backed AOT | A literal fragment that is statically lowerable but needs materialized known scope values | Core `eval_scope` runtime feature; no interpreter library |
+| No-scope AOT | A literal fragment with no caller-scope access | Internal EIR function; no eval context, scope, or Magician library |
+| Direct-read AOT | A statically lowerable literal with read-only caller values | Internal EIR function with boxed `Mixed` parameters; no eval scope or Magician library |
+| Scope-backed AOT | A statically lowerable literal with known scope writes | Internal EIR function plus core `eval_scope`; no interpreter library |
 | Interpreter fallback | A dynamic string or a literal requiring dynamic declarations, includes, references, dynamic calls, or another unsupported AOT shape | `eval_bridge`, synchronized scopes, PCRE2, and `elephc_magician` |
 
 `src/eval_aot.rs` parses literal fragments at compile time, applies call-site
 magic-constant metadata, records known scope reads and writes, and produces an
-`EvalAotPlan`. A plan can contain a fully static EIR body, a scope-read EIR
-body, or a conservative fallback reason.
+`EvalAotPlan`. A plan can contain a no-scope EIR body, a scope-aware EIR body,
+or a conservative fallback reason. `src/ir_lower/program.rs` materializes each
+accepted body as a deterministic `__eir@evalaot*` function before validation,
+optimization, register allocation, and normal target-aware codegen.
 
 Current fallback classes include parse failures, `include`/`require`, runtime
 declarations, global/static scope, references and by-reference operations,
@@ -101,8 +105,9 @@ Three addressable local kinds hold eval state when required:
 | `EvalScope` | Materialized activation/closure scope shared with the executing fragment. |
 | `EvalGlobalScope` | Materialized program-global scope used by `global` aliases and CLI argument globals. |
 
-Frame sizing and cleanup see these slots before assembly emission. A direct AOT
-fragment does not declare them merely because the source contains `eval()`.
+Frame sizing and cleanup see these slots before assembly emission. A no-scope
+or direct-read AOT fragment does not declare them merely because the source
+contains `eval()`.
 
 ## Checker and optimizer barrier
 
