@@ -212,3 +212,84 @@ echo $c->row()->links[0]->label, '|', $c->row()->links[1]->label;
     );
     assert_eq!(out, "View|Edit");
 }
+
+/// Verifies a method-call receiver produced by another method keeps the nested callee's declared
+/// object return type when stored in an indexed literal.
+#[test]
+fn test_indexed_array_literal_chained_method_receiver_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class ChainedLink { public function __construct(public string $label) {} }
+final class ChainedFactory {
+    public function link(string $label): ChainedLink { return new ChainedLink($label); }
+}
+final class ChainedComposer {
+    private function factory(): ChainedFactory { return new ChainedFactory(); }
+    public function links(): array { return [$this->factory()->link('Chained')]; }
+}
+$links = (new ChainedComposer())->links();
+echo $links[0]->label;
+"#,
+    );
+    assert_eq!(out, "Chained");
+}
+
+/// Verifies a static method call inside an indexed literal uses the static callee's declared
+/// object return type.
+#[test]
+fn test_indexed_array_literal_static_method_element_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class StaticLink { public function __construct(public string $label) {} }
+final class StaticFactory {
+    public static function link(string $label): StaticLink { return new StaticLink($label); }
+}
+$links = [StaticFactory::link('Static')];
+echo $links[0]->label;
+"#,
+    );
+    assert_eq!(out, "Static");
+}
+
+/// Verifies a nullsafe property receiver and nullsafe method result preserve both the declared
+/// object class and the possible null result when stored in an indexed literal.
+#[test]
+fn test_indexed_array_literal_nullsafe_property_receiver_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class NullsafeLink { public function __construct(public string $label) {} }
+final class NullsafeFactory {
+    public function link(string $label): NullsafeLink { return new NullsafeLink($label); }
+}
+final class NullsafeHolder {
+    public function __construct(public ?NullsafeFactory $factory) {}
+}
+function nullsafe_links(?NullsafeHolder $holder): array {
+    return [$holder?->factory?->link('Present')];
+}
+$present = nullsafe_links(new NullsafeHolder(new NullsafeFactory()));
+$missing = nullsafe_links(null);
+echo $present[0]->label, '|', gettype($missing[0]);
+"#,
+    );
+    assert_eq!(out, "Present|NULL");
+}
+
+/// Verifies spreading only empty generic arrays widens the literal element metadata instead of
+/// attempting to emit an unmaterializable `array<void>` push path.
+#[test]
+fn test_indexed_array_literal_empty_generic_spreads_widen_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+final class EmptySpreadSource {
+    public function none(): array { return []; }
+    public function combined(): array {
+        $local = [];
+        return [...$local, ...$this->none()];
+    }
+}
+echo count((new EmptySpreadSource())->combined());
+"#,
+    );
+    assert_eq!(out, "0");
+}
