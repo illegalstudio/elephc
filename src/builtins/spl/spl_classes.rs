@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `spl_classes` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `spl_classes` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required because the return type `Array<Str>` cannot be
@@ -11,10 +10,7 @@
 //! - The function takes no arguments; arity is enforced by the registry.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +19,9 @@ builtin! {
     params: [],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::SplClasses,
+    ),
     summary: "Return available SPL classes.",
     php_manual: "https://www.php.net/manual/en/function.spl-classes.php",
 }
@@ -31,9 +29,4 @@ builtin! {
 /// Returns `Array<Str>` as the precise return type for `spl_classes()`.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
-}
-
-/// Lowers `spl_classes()` by delegating to the static SPL class-name array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_spl_classes(ctx, inst)
 }

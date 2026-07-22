@@ -2,7 +2,7 @@
 title: "strpos()"
 description: "Finds the numeric position of the first occurrence of a substring."
 sidebar:
-  order: 412
+  order: 414
 ---
 
 ## strpos()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strpos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strpos.md).
-

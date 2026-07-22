@@ -2,7 +2,7 @@
 title: "is_string()"
 description: "Checks whether a variable is a string."
 sidebar:
-  order: 449
+  order: 455
 ---
 
 ## is_string()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_string` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_string.md).
-

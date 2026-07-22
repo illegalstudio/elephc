@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `tmpfile` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `tmpfile` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `tmpfile` takes no PHP-visible arguments but the legacy allows `tmpfile(...[])`,
@@ -16,13 +15,9 @@
 //! - `is_empty_static_array_spread` is relocated here from `streams.rs` (its only caller).
 //! - `returns: Mixed` is used because the union involves a resource type that the
 //!   scalar `returns:` field cannot express.
-//! - `lower` is a thin wrapper over `io::lower_tmpfile` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -34,7 +29,9 @@ builtin! {
     arity_error: "tmpfile() takes no arguments",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Tmpfile,
+    ),
     summary: "Creates a temporary file.",
     php_manual: "function.tmpfile",
 }
@@ -65,9 +62,4 @@ fn is_empty_static_array_spread(args: &[crate::parser::ast::Expr]) -> bool {
         return false;
     };
     matches!(&inner.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
-}
-
-/// Lowers a `tmpfile` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_tmpfile(ctx, inst)
 }

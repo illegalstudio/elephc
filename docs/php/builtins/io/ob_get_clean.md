@@ -2,7 +2,7 @@
 title: "ob_get_clean()"
 description: "Gets the current buffer contents and deletes the current output buffer."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## ob_get_clean()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_get_clean` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_clean.md).
-

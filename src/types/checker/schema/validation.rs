@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, Visibility};
+use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -22,6 +22,7 @@ use super::super::Checker;
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
+    declaring_type: &str,
 ) -> Result<FunctionSig, CompileError> {
     let method_key = php_symbol_key(&method.name);
     let params: Vec<(String, PhpType)> = method
@@ -71,8 +72,9 @@ pub(crate) fn build_method_sig(
         }
     }
     let return_type = match method.return_type.as_ref() {
-        Some(type_ann) => checker.resolve_declared_return_type_hint(
+        Some(type_ann) => checker.resolve_method_return_type_hint(
             type_ann,
+            declaring_type,
             method.span,
             &format!("Method '{}'", method.name),
         )?,
@@ -305,6 +307,36 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Checks a preserved late-static parent/interface return against a child declaration.
+///
+/// A concrete class name cannot replace `static`: that would become unsound for further
+/// subclasses. `never` remains a valid covariant narrowing, while compound returns are
+/// compared after binding only their `static` members to the current receiver.
+pub(crate) fn late_static_return_compatible(
+    checker: &Checker,
+    expected: Option<&TypeExpr>,
+    actual: Option<&TypeExpr>,
+    actual_resolved: &PhpType,
+    receiver_type: &str,
+    span: crate::span::Span,
+) -> Result<Option<bool>, CompileError> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    if matches!(actual_resolved, PhpType::Never) {
+        return Ok(Some(true));
+    }
+    let Some(actual) = actual.filter(|return_type| return_type.contains_late_static()) else {
+        return Ok(Some(false));
+    };
+    let expected =
+        checker.resolve_late_static_return_type_hint(expected, receiver_type, span)?;
+    let actual = checker.resolve_late_static_return_type_hint(actual, receiver_type, span)?;
+    Ok(Some(declared_return_type_compatible(
+        checker, &expected, &actual,
+    )))
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
@@ -314,11 +346,12 @@ pub(crate) fn validate_override_signature(
     class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
+    parent_late_static_return: Option<&TypeExpr>,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let class_name = class.name.as_str();
-    let child_sig = build_method_sig(checker, method)?;
+    let child_sig = build_method_sig(checker, method, class_name)?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }
@@ -340,13 +373,20 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
-    if parent_sig.declared_return
-        && !declared_return_type_compatible(
+    let late_static_compatible = late_static_return_compatible(
+        checker,
+        parent_late_static_return,
+        method.return_type.as_ref(),
+        &child_sig.return_type,
+        class_name,
+        method.span,
+    )?;
+    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+        declared_return_type_compatible(
             checker,
             &parent_sig.return_type,
             &child_sig.return_type,
-        )
-        && !covariant_self_return_compatible(
+        ) || covariant_self_return_compatible(
             checker,
             class_name,
             class.extends.as_deref(),
@@ -354,7 +394,8 @@ pub(crate) fn validate_override_signature(
             parent_sig,
             &child_sig,
         )
-    {
+    });
+    if parent_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             method.span,
             &format!(

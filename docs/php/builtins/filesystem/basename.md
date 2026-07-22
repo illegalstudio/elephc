@@ -2,7 +2,7 @@
 title: "basename()"
 description: "Returns the trailing name component of a path."
 sidebar:
-  order: 102
+  order: 104
 ---
 
 ## basename()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `basename` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/basename.md).
-

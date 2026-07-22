@@ -2,7 +2,7 @@
 //! Lowers simple scalar math builtins for the EIR backend.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Supports concrete integer/boolean, floating-point, and boxed Mixed numeric operands.
@@ -43,18 +43,27 @@ const CLAMP_STACK_BYTES: usize = 48;
 pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "abs", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.load_value_to_result(value)?.codegen_repr() {
-        PhpType::Float => emit_float_abs(ctx),
-        PhpType::Int | PhpType::Bool => emit_int_abs(ctx),
+    let emitted_type = match ctx.load_value_to_result(value)?.codegen_repr() {
+        PhpType::Float => {
+            emit_float_abs(ctx);
+            PhpType::Float
+        }
+        PhpType::Int | PhpType::Bool => {
+            emit_int_abs(ctx);
+            PhpType::Int
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_abs_mixed");
+            PhpType::Mixed
         }
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             emit_int_abs(ctx);
+            PhpType::Int
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            PhpType::Int
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -62,6 +71,13 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
                 other
             )))
         }
+    };
+    if matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) && !matches!(emitted_type, PhpType::Mixed | PhpType::Union(_))
+    {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &emitted_type);
     }
     store_if_result(ctx, inst)
 }

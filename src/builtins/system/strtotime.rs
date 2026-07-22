@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `strtotime` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `strtotime` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` always returns `Union(Int, Bool)` to reflect PHP's behaviour where
 //!   `strtotime` returns a Unix timestamp on success or `false` on failure.
-//! - `lower` is a thin wrapper over the shared `system::lower_strtotime` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [datetime: Str, baseTimestamp: Int = DefaultSpec::Null],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Strtotime,
+    ),
     summary: "Parses an English textual datetime description into a Unix timestamp.",
 }
 
@@ -32,9 +29,4 @@ builtin! {
 /// The registry pre-infers arguments before calling this hook.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
-}
-
-/// Lowers a `strtotime` call by dispatching to the shared system emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::system::lower_strtotime(ctx, inst)
 }

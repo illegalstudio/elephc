@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `ip2long` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `ip2long` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns the `int|false` union: `ip2long` returns `false` for invalid
@@ -12,10 +11,7 @@
 //! - Argument types are inferred by the common registry dispatch path before the hook fires.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +20,9 @@ builtin! {
     params: [ip: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Ip2long,
+    ),
     summary: "Converts a string containing an IPv4 address into a long integer.",
     php_manual: "https://www.php.net/manual/en/function.ip2long.php",
 }
@@ -37,9 +35,4 @@ builtin! {
 /// arity (exactly 1 arg) is pre-validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
-}
-
-/// Lowers an `ip2long` call by dispatching to the shared `lower_ip2long` emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
 }

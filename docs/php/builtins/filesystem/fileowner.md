@@ -2,7 +2,7 @@
 title: "fileowner()"
 description: "Gets file owner."
 sidebar:
-  order: 118
+  order: 120
 ---
 
 ## fileowner()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fileowner` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/fileowner.md).
-

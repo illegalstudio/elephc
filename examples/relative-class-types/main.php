@@ -54,3 +54,26 @@ $head->next->next = new Node(3);
 // Read through the nullable `?self` links.
 echo $head->value + $head->next->value + $head->next->next->value, "\n";
 echo $head->next->next->next === null ? "tail\n" : "more\n";
+
+// An inherited `static` return binds to the subclass receiver, so subclass-only
+// fluent operations remain available even when the method lives on the base class.
+class Builder
+{
+    protected string $where = "";
+
+    public function andWhere(string $condition): static
+    {
+        $this->where = $condition;
+        return $this;
+    }
+}
+
+final class QueryBuilder extends Builder
+{
+    public function getSQL(): string
+    {
+        return "SELECT * WHERE " . $this->where;
+    }
+}
+
+echo (new QueryBuilder())->andWhere("active = 1")->getSQL(), "\n";

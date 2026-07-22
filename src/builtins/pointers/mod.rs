@@ -1,7 +1,7 @@
 //! Purpose:
 //! Groups all `pointers`-area builtin homes into this module so the registry can
 //! collect them in one place. Each submodule declares exactly one builtin via
-//! `builtin!` and provides its check hook and lowering hook.
+//! `builtin!` and provides its checker contract and typed runtime target.
 //!
 //! Called from:
 //! - `crate::builtins` (`mod pointers;` in `src/builtins/mod.rs`).

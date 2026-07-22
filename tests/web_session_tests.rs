@@ -591,6 +591,78 @@ fn session_counter_persists() {
     );
 }
 
+/// Verifies `session.use_strict_mode=1` rejects a client-supplied session ID
+/// that has no backing session (session-fixation defense): the forged cookie
+/// ID is discarded, a fresh random ID is minted and reissued via `Set-Cookie`,
+/// and the session works under the new ID (the counter persists to 2 on a
+/// follow-up request carrying it). The contrast leg proves the rejection is
+/// strict mode's doing: with strict mode off, the same kind of unknown cookie
+/// ID is adopted as-is.
+#[test]
+fn session_strict_mode_rejects_unknown_cookie_id() {
+    let dir = make_test_dir("sess_strict");
+    // A per-test save_path keeps forged-ID lookups (and the lax leg's adopted
+    // session file) isolated from the shared platform temp directory.
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php $strict = isset($_GET['strict']) ? 1 : 0; session_start(['save_path' => '{save_path}', 'use_strict_mode' => $strict]); if (!isset($_SESSION['hits'])) {{ $_SESSION['hits'] = 0; }} $_SESSION['hits'] = $_SESSION['hits'] + 1; echo session_id() . ':' . $_SESSION['hits'];"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    // Strict leg: a forged ID with no session behind it must not be adopted.
+    let forged = "elephcforgedstrictaaaaaaaaaaaaaa";
+    let r1 = http_request(
+        &addr,
+        "GET",
+        "/?strict=1",
+        &[("Cookie", &format!("PHPSESSID={}", forged))],
+        "",
+    );
+    let fresh = extract_phpsessid(&r1)
+        .expect("strict mode must reissue a fresh cookie after rejecting the forged id");
+    // Follow-up with the fresh ID: its session record now exists, so strict
+    // mode accepts it and the counter persists.
+    let r2 = http_request(
+        &addr,
+        "GET",
+        "/?strict=1",
+        &[("Cookie", &format!("PHPSESSID={}", fresh))],
+        "",
+    );
+    // Contrast leg: with strict mode off an unknown cookie ID is adopted as-is.
+    let adopted = "elephcforgedlaxadoptbbbbbbbbbbbb";
+    let r3 = http_request(
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &format!("PHPSESSID={}", adopted))],
+        "",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_ne!(
+        fresh, forged,
+        "strict mode must mint a fresh id instead of adopting the forged one"
+    );
+    assert!(
+        r1.ends_with(&format!("{}:1", fresh)),
+        "strict-mode request should run under the fresh id with a new counter: {:?}",
+        r1
+    );
+    assert!(
+        r2.ends_with(&format!("{}:2", fresh)),
+        "the reissued id must pass strict validation and persist the counter: {:?}",
+        r2
+    );
+    assert!(
+        r3.ends_with(&format!("{}:1", adopted)),
+        "with strict mode off the unknown cookie id must be adopted: {:?}",
+        r3
+    );
+}
+
 /// Verifies that `session_unset()` clears all `$_SESSION` variables so a
 /// previously-set key is no longer isset.
 #[test]

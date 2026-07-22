@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `fopen` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `fopen` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` detects the URL scheme from a string-literal first argument and links
@@ -14,14 +13,9 @@
 //!   involves a resource type that the scalar `returns:` field cannot express.
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does
 //!   NOT re-infer them.
-//! - `lower` is a thin wrapper over `io::lower_fopen` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -35,7 +29,10 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Fopen,
+    ),
+    requirements: crate::builtins::semantics::fopen_requirements,
     summary: "Opens file or URL.",
     php_manual: "function.fopen",
 }
@@ -48,47 +45,8 @@ builtin! {
 /// `elephc_phar`, `z`, and `bz2` because the scheme is unknown until run time.
 /// Returns `Union(stream_resource, Bool)` for the success/false-on-failure PHP pattern.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if let Some(ExprKind::StringLiteral(s)) = cx.args.first().map(|a| &a.kind) {
-        if s.starts_with("https://") || s.starts_with("ftps://") {
-            cx.checker.require_builtin_library("elephc_tls");
-        }
-        if s.starts_with("compress.zlib://") {
-            // compress.zlib:// attaches a zlib.inflate filter, which pulls in libz.
-            cx.checker.require_builtin_library("z");
-        }
-        if s.starts_with("compress.bzip2://") {
-            // compress.bzip2:// calls libbz2's BZ2_bzBuffToBuffDecompress at fopen time.
-            cx.checker.require_builtin_library("bz2");
-        }
-        // phar:// write mode uses the elephc-phar read-modify-write bridge when available
-        // and keeps the elephc-crypto SHA1 path as the assembly fallback. Reads need
-        // neither write bridge nor crypto here.
-        if s.starts_with("phar://") {
-            let write_mode = matches!(
-                cx.args.get(1).map(|a| &a.kind),
-                Some(ExprKind::StringLiteral(m))
-                    if matches!(m.as_bytes().first(), Some(b'w') | Some(b'a') | Some(b'c') | Some(b'x'))
-            );
-            if write_mode {
-                cx.checker.require_builtin_library("elephc_phar");
-                cx.checker.require_builtin_library("elephc_crypto");
-            }
-        }
-    } else {
-        // Non-literal paths can route to a phar:// entry at run time for reads or
-        // write-mode opens. Reads may use tar/zip and compressed entries through the
-        // elephc-phar/zlib/bz2 bridge.
-        cx.checker.require_builtin_library("elephc_phar");
-        cx.checker.require_builtin_library("z");
-        cx.checker.require_builtin_library("bz2");
-    }
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
         PhpType::Bool,
     ]))
-}
-
-/// Lowers an `fopen` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_fopen(ctx, inst)
 }

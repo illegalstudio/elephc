@@ -19,8 +19,8 @@
 //!
 //! Canonical field order:
 //!   name, area, params, variadic?, min_args?, max_args?, arity_error?, returns,
-//!   returns_fresh_storage?, returns_independent_storage?, by_ref_return?, check?,
-//!   lazy_check?, lower, summary, examples?, php_manual?,
+//!   by_ref_return?, check?,
+//!   lazy_check?, semantics, requirements?, summary, examples?, php_manual?,
 //!   deprecation?, extension?, internal?
 //!
 //! Example:
@@ -30,7 +30,7 @@
 //!     area: String,
 //!     params: [string: Str],
 //!     returns: Int,
-//!     lower: strlen_lower,
+//!     semantics: string_length_semantics(),
 //!     summary: "Returns the length of a string.",
 //!     php_manual: "function.strlen",
 //! }
@@ -40,8 +40,8 @@
 ///
 /// Fields must appear in canonical order (optional fields may be omitted):
 /// `name`, `area`, `params`, `variadic`?, `min_args`?, `max_args`?, `arity_error`?,
-/// `returns`, `returns_fresh_storage`?, `returns_independent_storage`?,
-/// `by_ref_return`?, `check`?, `lazy_check`?, `lower`, `summary`, `examples`?,
+/// `returns`, `by_ref_return`?, `check`?, `lazy_check`?, `semantics`, `requirements`?,
+/// `summary`, `examples`?,
 /// `php_manual`?, `deprecation`?, `extension`?, `internal`?
 ///
 /// `extension` (optional `bool`, default `false`) marks the builtin as an elephc
@@ -51,13 +51,6 @@
 /// registry's `check_arity` only; it does not affect `function_sig` or the parity gate.
 /// `min_args` (optional `usize`) raises the enforced minimum in `check_arity` only.
 /// `arity_error` (optional `&'static str`) overrides the standard arity error message.
-/// `returns_fresh_storage` (optional `bool`, default `false`) declares that every
-/// refcounted result variant is freshly allocated for the caller and can be released
-/// after a retaining consumer has copied or retained it. Never set it for borrowed
-/// results that can alias argument or runtime storage.
-/// `returns_independent_storage` (optional `bool`, default `false`) declares that
-/// the result cannot reuse any argument's storage even when it is scratch-backed
-/// rather than a fresh heap allocation. Fresh storage is independent implicitly.
 /// `lazy_check` (optional `bool`, default `false`) skips the registry's standard pre-inference
 /// loop before calling the `check` hook. Use when the check hook must control argument
 /// inference order (e.g., to pass object-element type hints to an unannotated closure before
@@ -85,12 +78,11 @@ macro_rules! builtin {
         $(max_args: $max_args:expr,)?
         $(arity_error: $arity_error:expr,)?
         returns: $returns:ident,
-        $(returns_fresh_storage: $returns_fresh_storage:expr,)?
-        $(returns_independent_storage: $returns_independent_storage:expr,)?
         $(by_ref_return: $by_ref_return:expr,)?
         $(check: $check:expr,)?
         $(lazy_check: $lazy_check:expr,)?
-        lower: $lower:expr,
+        semantics: $semantics:expr,
+        $(requirements: $requirements:expr,)?
         summary: $summary:expr,
         $(examples: $examples:expr,)?
         $(php_manual: $php_manual:expr,)?
@@ -113,12 +105,15 @@ macro_rules! builtin {
                 min_args: builtin!(@opt_usize $($min_args)?),
                 arity_error: builtin!(@opt_str $($arity_error)?),
                 returns: $crate::builtins::spec::TypeSpec::$returns,
-                returns_fresh_storage: builtin!(@opt_bool $($returns_fresh_storage)?),
-                returns_independent_storage: builtin!(@opt_bool $($returns_independent_storage)?),
                 by_ref_return: builtin!(@opt_bool $($by_ref_return)?),
-                check: builtin!(@opt_fn $($check)?),
-                lazy_check: builtin!(@opt_bool $($lazy_check)?),
-                lower: $lower,
+                semantics: $crate::builtins::semantics::with_registry_requirement_resolver(
+                    $crate::builtins::semantics::with_registry_checker_contract(
+                        $semantics,
+                        builtin!(@opt_fn $($check)?),
+                        builtin!(@opt_bool $($lazy_check)?),
+                    ),
+                    builtin!(@opt_requirements_fn $($requirements)?),
+                ),
                 summary: $summary,
                 examples: builtin!(@opt_examples $($examples)?),
                 php_manual: builtin!(@opt_str $($php_manual)?),
@@ -232,6 +227,10 @@ macro_rules! builtin {
     // Helper: optional CheckFn — present yields Some, absent yields None.
     (@opt_fn $val:expr) => { Some($val) };
     (@opt_fn) => { None };
+
+    // Helper: optional source-dependent requirement resolver.
+    (@opt_requirements_fn $val:expr) => { Some($val) };
+    (@opt_requirements_fn) => { None };
 
     // Helper: optional examples slice — present yields the value, absent yields empty slice.
     (@opt_examples $val:expr) => { $val };

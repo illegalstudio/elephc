@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_map` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_map` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `variadic(&["callback","array"], "arrays")` (two
@@ -13,13 +12,12 @@
 //! - `check` validates that the second argument is an indexed array and infers the
 //!   callback return element type; the result preserves the input array element type
 //!   unless the callback returns Mixed.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_map` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -31,34 +29,44 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: array_map_semantics(),
     summary: "Applies a callback to the elements of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
+}
+
+/// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.
+const fn array_map_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns Mixed because a string or descriptor callback can select its result ABI at runtime.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Returns the mapped array type for an `array_map` call.
 ///
 /// Validates that the second argument is an indexed array, checks the callback
-/// with a dummy element argument, and derives the result element type from the
-/// callback return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
+/// with its contextual element type, and derives the result element type from the callback
+/// return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    for arg in cx.args {
-        cx.checker.infer_type(arg, cx.env)?;
-    }
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            let arr_ty = PhpType::Array(elem_ty.clone());
-            let dummy_args = vec![
-                crate::types::checker::builtins::dummy_arg_for_array_scalar_elem(
-                    &arr_ty, cx.span,
-                ),
-            ];
+            if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
+                return Err(CompileError::new(
+                    cx.span,
+                    "array_map() does not yet support object array elements",
+                ));
+            }
+            let callback_arg_types = [elem_ty.as_ref().clone()];
             let callback_ret_ty =
-                crate::types::checker::builtins::check_callback_builtin_call(
+                crate::types::checker::builtins::check_array_callback_builtin_call(
                     cx.checker,
                     &cx.args[0],
-                    &dummy_args,
+                    &callback_arg_types,
                     cx.span,
                     cx.env,
                     "array_map() callback",
@@ -75,9 +83,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_map() second argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_map` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_map(ctx, inst)
 }

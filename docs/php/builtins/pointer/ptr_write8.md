@@ -2,7 +2,7 @@
 title: "ptr_write8()"
 description: "Writes one byte through a raw pointer."
 sidebar:
-  order: 315
+  order: 317
 ---
 
 ## ptr_write8()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_write8` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_write8.md).
-

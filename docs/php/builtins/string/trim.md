@@ -2,7 +2,7 @@
 title: "trim()"
 description: "Strips whitespace (or other characters) from the beginning and end of a string."
 sidebar:
-  order: 420
+  order: 422
 ---
 
 ## trim()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `trim` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/trim.md).
-

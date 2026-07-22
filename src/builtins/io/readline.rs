@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `readline` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `readline` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(Str, Bool)` to match PHP's false-on-failure pattern for
@@ -13,13 +12,12 @@
 //!   match the legacy error text.
 //! - `returns: Mixed` is used because the union cannot be expressed through the scalar
 //!   `returns:` field.
-//! - `lower` is a thin wrapper over `io::lower_readline` in the EIR backend.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,9 +27,21 @@ builtin! {
     arity_error: "readline() takes 0 or 1 arguments",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: readline_semantics(),
     summary: "Reads a line from the user's terminal.",
     php_manual: "function.readline",
+}
+
+/// Builds semantics whose EIR result matches the line reader's concrete string layout.
+const fn readline_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Readline);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the string representation produced by the current line-reader backend.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Str
 }
 
 /// Returns `Union(Str, Bool)` for the readline result (false on end-of-input).
@@ -40,9 +50,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::Str,
         PhpType::Bool,
     ]))
-}
-
-/// Lowers a `readline` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_readline(ctx, inst)
 }

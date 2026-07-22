@@ -2,7 +2,7 @@
 title: "is_resource() — internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 447
+  order: 453
 ---
 
 ## `is_resource()` — internals
@@ -10,17 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_resource.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_resource.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:407](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L407) (`lower_is_resource`)
-- **Function symbol**: `lower_is_resource()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

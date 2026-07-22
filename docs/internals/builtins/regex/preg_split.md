@@ -2,7 +2,7 @@
 title: "preg_split() — internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 337
+  order: 339
 ---
 
 ## `preg_split()` — internals
@@ -10,18 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_split.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:405](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L405) (`lower_preg_split`)
-- **Function symbol**: `lower_preg_split()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.preg_split` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_preg_split`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `shared`
+- **Result ownership**: `fresh`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.preg_split`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

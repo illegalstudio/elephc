@@ -2,7 +2,7 @@
 title: "serialize() — internals"
 description: "Compiler internals for serialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 298
+  order: 300
 ---
 
 ## `serialize()` — internals
@@ -10,23 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/serialize.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/serialize.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/serialize.rs#L33) (`lower_serialize`)
-- **Function symbol**: `lower_serialize()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `serialize($value)` into the shared serialize runtime helper.
-- Scalar static types are formatted directly through `__rt_serialize_value`; a
-- Mixed/Union argument is unboxed and dispatched by `__rt_serialize_mixed`.
-- Non-scalar static types (arrays/objects) are not yet supported and are rejected.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.serialize` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_serialize_begin`
-- `__rt_serialize_mixed`
-- `__rt_serialize_value`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.serialize`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

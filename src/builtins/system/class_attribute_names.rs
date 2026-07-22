@@ -1,23 +1,17 @@
 //! Purpose:
-//! Home of the PHP `class_attribute_names` builtin: its declaration, type-check hook,
-//! and lowering.
+//! Home of the PHP `class_attribute_names` builtin: its declaration, type-check hook, and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the argument is a string literal class name, resolves the
 //!   class at compile time, and returns `Array(Str)`.
 //! - Dynamic class names are not yet supported; only string literals are accepted.
-//! - `lower` delegates to `attributes::lower_class_attribute_names` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::attr_support::resolve_class_name;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -27,7 +21,9 @@ builtin! {
     params: [class_name: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ClassAttributeNames,
+    ),
     summary: "Returns the list of attribute names applied to a class.",
     extension: true,
 }
@@ -65,9 +61,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Array(Box::new(PhpType::Str)))
-}
-
-/// Lowers a `class_attribute_names` call by delegating to the shared attributes emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::attributes::lower_class_attribute_names(ctx, inst)
 }

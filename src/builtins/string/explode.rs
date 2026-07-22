@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `explode` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `explode` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The declared signature carries the full golden param list (`separator`, `string`,
@@ -13,13 +12,9 @@
 //!   because the `builtin!` macro `returns:` field cannot express an array type inline.
 //!   Argument types are inferred by the common registry dispatch path before the hook
 //!   fires.
-//! - `lower` is a thin wrapper over the shared `lower_explode` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,7 +24,9 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Explode,
+    ),
     summary: "Splits a string by a separator into an array of substrings.",
     php_manual: "https://www.php.net/manual/en/function.explode.php",
 }
@@ -41,9 +38,4 @@ builtin! {
 /// this hook fires; arity (capped to 2 via `max_args`) is validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
-}
-
-/// Lowers an `explode` call by dispatching to the shared `lower_explode` emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
 }

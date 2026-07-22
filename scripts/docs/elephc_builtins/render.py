@@ -5,8 +5,8 @@ We generate two trees:
 - ``docs/php/builtins/<slug>.md`` — user-facing reference (what does this
   function do, what does it return, examples).
 - ``docs/internals/builtins/<slug>.md`` — compiler-internals reference
-  (which file lowers it, which runtime helpers it calls, what the type
-  checker says about its arity).
+  (which descriptor lowers it, which typed EIR target it emits, what the type
+  checker says about its arity, and where backend dispatch begins).
 
 The renderer is *additive* by default: if a hand-written page already
 exists, it is left untouched. Use ``--force`` to overwrite.
@@ -72,7 +72,11 @@ sidebar:
 - **Function symbol**: `{codegen_function}()`
 {codegen_notes}
 
-## Runtime helpers
+## Semantic descriptor
+
+{semantic_descriptor_section}
+
+## EIR and runtime boundary
 
 {runtime_helpers_section}
 
@@ -187,12 +191,62 @@ def _see_also_section(b: dict, prefix: str = "See also") -> str:
 
 
 def _runtime_helpers_section(b: dict) -> str:
+    """Describe the typed EIR target and any explicitly known concrete helpers."""
+    semantics = b.get("semantics") or {}
+    lowering = semantics.get("lowering") or {}
     helpers = b["lowering"].get("runtime_helpers", [])
-    if not helpers:
-        return "_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._"
-    lines = ["The following runtime helpers are referenced:"]
+    lines: list[str] = []
+    if lowering.get("kind") == "runtime_call":
+        target = lowering.get("target", "unknown")
+        lines.extend(
+            [
+                f"- **Typed EIR target**: `runtime.{target}`",
+                "- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.",
+            ]
+        )
+    elif lowering.get("kind") == "eir":
+        lines.append(
+            "- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains."
+        )
+    elif not helpers:
+        lines.append(
+            "_Compiler-resident lowering; no registry-backed typed runtime target applies._"
+        )
+    if helpers:
+        lines.append("- **Concrete helpers referenced directly by this lowering**:")
     for h in helpers:
-        lines.append(f"- `{h}`")
+        lines.append(f"  - `{h}`")
+    return "\n".join(lines)
+
+
+def _semantic_descriptor_section(b: dict) -> str:
+    """Render the backend-neutral registry fields shared by compiler consumers."""
+    semantics = b.get("semantics")
+    if not semantics:
+        return "_Compiler-resident construct; this name is intentionally outside the builtin registry._"
+    validation = semantics.get("validation") or {}
+    ownership = semantics.get("ownership") or {}
+    callable_policy = semantics.get("callable") or {}
+    effects = semantics.get("effects") or {}
+    requirements = semantics.get("requirements") or {}
+    target_support = semantics.get("target_support") or []
+    effect_detail = effects.get("kind", "unknown")
+    if effects.get("kind") == "static":
+        effect_detail += f" ({len(effects.get('names') or [])} declared effects)"
+    requirement_detail = requirements.get("kind", "unknown")
+    if requirements.get("kind") == "static":
+        requirement_detail += f" ({len(requirements.get('values') or [])} requirements)"
+    lines = [
+        f"- **Target strategy**: `{semantics.get('target_strategy', 'unknown')}`",
+        f"- **Validation**: `{validation.get('kind', 'unknown')}`",
+        f"- **Result type source**: `{semantics.get('result_type', 'unknown')}`",
+        f"- **Result ownership**: `{ownership.get('kind', 'unknown')}`",
+        f"- **Effects**: `{effect_detail}`",
+        f"- **Requirements**: `{requirement_detail}`",
+        f"- **Callable policy**: `{callable_policy.get('kind', 'unknown')}`",
+        "- **Target support**: "
+        + (", ".join(f"`{target}`" for target in target_support) or "_none declared_"),
+    ]
     return "\n".join(lines)
 
 
@@ -326,11 +380,9 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
         see_also_section=_see_also_section(b),
         internals_link=_internals_link(b),
     )
-    # Empty optional sections can stack several blank lines. Preserve the
-    # established output otherwise, but collapse pathological trailing runs.
-    if rendered.endswith("\n\n\n"):
-        return rendered.rstrip() + "\n"
-    return rendered
+    # Empty optional sections can stack trailing blank lines. Keep generated
+    # pages canonical with exactly one final newline.
+    return rendered.rstrip() + "\n"
 
 
 def render_internals(b: dict, order: int, repo_root: Path) -> str:
@@ -390,6 +442,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         checker_clause=checker_clause,
         codegen_function=codegen_function,
         codegen_notes=codegen_notes,
+        semantic_descriptor_section=_semantic_descriptor_section(b),
         runtime_helpers_section=_runtime_helpers_section(b),
         signature=_signature_line(b),
         checker_notes=_checker_notes(b),

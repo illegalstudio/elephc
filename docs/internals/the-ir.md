@@ -341,11 +341,12 @@ a conservative return-to-parameter alias summary for each source function and
 method. A proven-fresh result permits cleanup of unrelated arguments; a direct
 passthrough protects only the returned parameter. Unknown calls, indirect
 storage reads, and every possible descendant override merge to the conservative
-result, so a type-compatible true alias remains live. Builtins and extern calls
-continue to use their separate ownership contracts and conservative fallback.
-The builtin registry can additionally declare result storage independent from
-all arguments, including scratch-backed results that are not fresh heap blocks;
-that contract feeds both direct-call cleanup and summaries for source wrappers.
+result, so a type-compatible true alias remains live. Registry builtins use the
+`BuiltinResultOwnership` value from their shared semantic descriptor; extern calls
+retain a conservative fallback. The descriptor can distinguish fresh, borrowed,
+independent, explicit argument-alias, and may-alias storage, including scratch-backed
+results that are not fresh heap blocks. That contract feeds direct-call cleanup,
+optimizer reasoning, and summaries for source wrappers.
 
 ## Effects
 
@@ -394,14 +395,15 @@ pub struct Effects {
 Effect sources:
 
 - Scalar arithmetic and comparison: hardcoded by opcode.
-- Builtins: from `src/optimize/effects/builtins.rs`, broadened to full bitsets
-  for EIR.
+- Registry builtins: from `BuiltinSemantics::effects`, either a fixed bitset or a
+  shared resolver over normalized argument types.
 - User functions/methods/closures: from analyzed function body effects.
 - Callable aliases and first-class callables: from `src/optimize/effects/calls.rs`
   and descriptor metadata.
 - Extern calls: conservative unless the extern declaration later gains explicit
   purity metadata.
-- Runtime calls: from an EIR runtime effect table keyed by helper name/category.
+- Typed runtime calls: from `RuntimeFnId` / `RuntimeCallTarget` metadata; concrete
+  helper symbols are selected only after EIR validation.
 
 Pure means no flags set. A pure operation may be CSE'd or removed if its result
 is unused. Any operation with `may_throw`, `may_fatal`, `may_warn`, `output`,
@@ -577,8 +579,8 @@ closure bodies lower as normal `Function` values.
 |---|---|---|---|
 | `Call(function_id, args)` | normalized args | return type | callee effect summary |
 | `FunctionVariantCall(group, args)` | normalized args | return type | union of variant effects |
-| `BuiltinCall(name, args)` | normalized args | builtin return | builtin effect summary |
-| `RuntimeCall(helper, args)` | ABI args | helper return | runtime helper effect summary |
+| `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
+| `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
 | `ClosureNew` | captures | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |
@@ -1285,7 +1287,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `PostIncrement` | Load local, save old value, increment, store, return old value. |
 | `PreDecrement` | Load local, decrement, store, return new value. |
 | `PostDecrement` | Load local, save old value, decrement, store, return old value. |
-| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. Literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
+| `FunctionCall` | If extern: `ExternCall`; if registry builtin: descriptor-emitted EIR primitives/graphs or typed `RuntimeCall`; otherwise `Call`/variant dispatch after shared argument planning. Compiler-resident constructs use `LanguageConstructCall`; literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
 | `ArrayLiteral` | Allocate indexed array and insert elements in source order, including spread handling. |
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
@@ -1423,7 +1425,7 @@ that is fully lowered to native EIR leaves both eval runtime features disabled.
 
 EIR does not choose physical registers, spill slots, callee-saved preservation,
 stack alignment, syscall numbers, object file directives, or symbol decoration.
-Those remain in `src/codegen/abi/` and platform helpers.
+Those remain in `src/codegen_support/abi/` and platform helpers.
 
 The EIR backend consumes:
 

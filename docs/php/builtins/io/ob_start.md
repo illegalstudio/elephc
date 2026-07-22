@@ -2,7 +2,7 @@
 title: "ob_start()"
 description: "Turns on output buffering."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## ob_start()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_start` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_start.md).
-

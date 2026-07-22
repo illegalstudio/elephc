@@ -2,7 +2,7 @@
 title: "ob_get_length()"
 description: "Returns the length of the output buffer."
 sidebar:
-  order: 196
+  order: 198
 ---
 
 ## ob_get_length()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_get_length` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_length.md).
-

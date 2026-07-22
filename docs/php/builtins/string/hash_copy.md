@@ -2,7 +2,7 @@
 title: "hash_copy()"
 description: "Copies the state of an incremental hashing context."
 sidebar:
-  order: 371
+  order: 373
 ---
 
 ## hash_copy()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_copy` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_copy.md).
-

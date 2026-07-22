@@ -6,7 +6,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - `self`/`static` resolve to the enclosing (declaring) class and `parent` to its parent.
+//! - `self` resolves lexically while method return `static` binds to the call-site receiver.
 //! - Trait methods resolve `self`/`static` to the using class, exercised by `test_static_in_trait`.
 
 use super::*;
@@ -84,6 +84,108 @@ fn test_static_return_type() {
         ",
     );
     assert_eq!(out, "made");
+}
+
+/// Verifies an inherited static factory returning `static` exposes subclass-only methods.
+#[test]
+fn test_inherited_static_factory_return_binds_to_called_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Factory {
+    public static function make(): static { return new static(); }
+}
+final class ProductFactory extends Factory {
+    public function label(): string { return "product"; }
+}
+echo ProductFactory::make()->label();
+echo ":";
+echo (new ReflectionMethod(Factory::class, "make"))->getReturnType()->getName();
+"#,
+    );
+    assert_eq!(out, "product:static");
+}
+
+/// Verifies an inherited non-`with*` method returning `static` exposes subclass-only methods.
+#[test]
+fn test_inherited_static_return_type_binds_to_subclass_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Builder {
+    public function andWhere(string $condition): static { return $this; }
+}
+final class QueryBuilder extends Builder {
+    public function getSQL(): string { return "SELECT"; }
+}
+echo (new QueryBuilder())->andWhere('active = 1')->getSQL();
+"#,
+    );
+    assert_eq!(out, "SELECT");
+}
+
+/// Verifies nullable late-static returns retain null while binding the object branch.
+#[test]
+fn test_nullable_static_return_binds_object_branch_to_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class MaybeBuilder {
+    public function maybe(bool $present): ?static {
+        return $present ? $this : null;
+    }
+}
+final class ConcreteBuilder extends MaybeBuilder {
+    public function build(): string { return "built"; }
+}
+$builder = new ConcreteBuilder();
+echo $builder->maybe(true)?->build();
+echo $builder->maybe(false)?->build() ?? "none";
+"#,
+    );
+    assert_eq!(out, "builtnone");
+}
+
+/// Verifies a compound late-static return keeps its explicit member in typing, ABI boxing,
+/// and Reflection metadata.
+#[test]
+fn test_late_static_union_preserves_explicit_member() {
+    let out = compile_and_run(
+        r#"<?php
+class Choice {
+    public function choose(bool $same): static|Choice {
+        return $same ? $this : new Choice();
+    }
+    public function label(): string { return "choice"; }
+}
+final class SpecialChoice extends Choice {}
+$value = (new SpecialChoice())->choose(false);
+echo $value->label() . ":";
+$type = (new ReflectionMethod(Choice::class, "choose"))->getReturnType();
+if ($type instanceof ReflectionUnionType) {
+    echo count($type->getTypes());
+    foreach ($type->getTypes() as $member) {
+        echo ":" . $member->getName();
+    }
+}
+"#,
+    );
+    assert_eq!(out, "choice:2:Choice:static");
+}
+
+/// Verifies a child override may covariantly narrow `static|false` to `static`.
+#[test]
+fn test_late_static_union_override_can_narrow_to_static() {
+    let out = compile_and_run(
+        r#"<?php
+class MaybeCloneable {
+    public function duplicate(): static|false { return false; }
+}
+final class AlwaysCloneable extends MaybeCloneable {
+    public function duplicate(): static { return $this; }
+    public function label(): string { return "clone"; }
+}
+echo (new AlwaysCloneable())->duplicate()->label();
+"#,
+    );
+    assert_eq!(out, "clone");
 }
 
 /// Verifies that a `parent` return type resolves to the parent class and exposes its methods.
@@ -174,9 +276,9 @@ fn test_static_in_trait() {
 }
 
 /// Compiles and runs the checked-in `examples/relative-class-types/main.php` fixture, which
-/// exercises `self` returns/params, a `static` factory, and a nullable `?self` property.
+/// exercises `self`, a late-bound inherited `static` return, and a nullable `?self` property.
 #[test]
 fn test_example_relative_class_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/relative-class-types/main.php"));
-    assert_eq!(out, "599\n3\n6\ntail\n");
+    assert_eq!(out, "599\n3\n6\ntail\nSELECT * WHERE active = 1\n");
 }

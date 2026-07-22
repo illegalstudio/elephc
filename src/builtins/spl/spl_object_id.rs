@@ -1,18 +1,14 @@
 //! Purpose:
-//! Home of the PHP `spl_object_id` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `spl_object_id` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required to validate that the argument is an object; returns `Int`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -21,7 +17,9 @@ builtin! {
     params: [object: Mixed],
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::SplObjectId,
+    ),
     summary: "Return the integer object handle for given object.",
     php_manual: "https://www.php.net/manual/en/function.spl-object-id.php",
 }
@@ -36,9 +34,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers `spl_object_id()` by delegating to the object-pointer identity emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_spl_object_id(ctx, inst)
 }

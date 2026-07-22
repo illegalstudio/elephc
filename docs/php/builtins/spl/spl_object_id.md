@@ -2,7 +2,7 @@
 title: "spl_object_id()"
 description: "Return the integer object handle for given object."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## spl_object_id()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `spl_object_id` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/spl_object_id.md).
-

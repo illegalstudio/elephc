@@ -2,7 +2,7 @@
 title: "empty()"
 description: "Determines whether a variable is considered empty."
 sidebar:
-  order: 291
+  order: 293
 ---
 
 ## empty()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `empty` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/empty.md).
-

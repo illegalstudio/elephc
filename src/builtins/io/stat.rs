@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `stat` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `stat` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `assoc-array<mixed, int>|bool` via `stat_result_type`, reflecting
 //!   PHP behaviour where `stat` returns the stat buffer array on success or `false` on failure.
 //! - The registry pre-infers arguments before calling this hook.
-//! - `lower` is a thin wrapper over `io::lower_stat` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [filename: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Stat,
+    ),
     summary: "Gives information about a file.",
     php_manual: "function.stat",
 }
@@ -34,9 +31,4 @@ builtin! {
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(crate::builtins::io::stat_support::stat_result_type(cx.checker))
-}
-
-/// Lowers a `stat` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_stat(ctx, inst)
 }

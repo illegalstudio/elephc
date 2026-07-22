@@ -2,7 +2,7 @@
 title: "hash_file()"
 description: "Generates a hash value using the contents of a given file."
 sidebar:
-  order: 188
+  order: 190
 ---
 
 ## hash_file()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_file` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/hash_file.md).
-

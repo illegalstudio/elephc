@@ -3,7 +3,7 @@
 //! Keeps the byte scanner separate from the builtin dispatcher.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - The string grammar accepts an optional leading `-`,

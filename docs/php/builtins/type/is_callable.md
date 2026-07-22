@@ -2,7 +2,7 @@
 title: "is_callable()"
 description: "Checks whether a variable can be called as a function."
 sidebar:
-  order: 440
+  order: 442
 ---
 
 ## is_callable()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_callable` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_callable.md).
-

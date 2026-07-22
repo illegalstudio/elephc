@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `ptr` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `ptr` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the argument is a variable (not an arbitrary expression)
 //!   and returns `PhpType::Pointer(None)`.
-//! - `lower` is a thin wrapper over the shared `pointers::lower_ptr` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -24,7 +19,9 @@ builtin! {
     params: [value: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Ptr,
+    ),
     summary: "Returns a raw pointer to the given variable.",
     extension: true,
 }
@@ -47,9 +44,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Pointer(None))
-}
-
-/// Lowers a `ptr` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_ptr(ctx, inst)
 }

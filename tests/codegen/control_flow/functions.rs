@@ -112,6 +112,101 @@ fn test_function_no_args() {
     assert_eq!(out, "42");
 }
 
+/// A bare PHP `array` parameter keeps object elements dynamically typed across sibling
+/// call sites, allowing the query-builder use case without pinning the callee to one class.
+#[test]
+fn test_array_element_object_sibling_covariance_at_param() {
+    let out = compile_and_run(
+        "<?php interface CondA {} interface CondB {} final readonly class QCond implements CondA { public function __construct(public string $sql) {} } final readonly class CCond implements CondB { public function __construct(public string $sql) {} } final class QB { /** @var list<QCond|CCond> */ private array $conditions; public function __construct() { $this->conditions = []; } private function withConditions(array $conditions): self { $c = new QB(); $c->conditions = $conditions; return $c; } public function where(string $s): self { return $this->withConditions([new QCond($s)]); } public function compound(string $s): self { return $this->withConditions([new CCond($s)]); } public function size(): int { return count($this->conditions); } public function firstSql(): string { $c = $this->conditions[0]; return $c->sql; } } function main(): void { $qb = new QB(); $a = $qb->where('a = 1'); $b = $qb->compound('b = 2'); echo $a->size(), ':', $a->firstSql(), '|', $b->size(), ':', $b->firstSql(); } main();",
+    );
+    assert_eq!(out, "1:a = 1|1:b = 2");
+}
+
+/// A free-function bare `array` parameter must not read a sibling object's same-offset
+/// property under the first call site's class. The missing property warns and returns null.
+#[test]
+fn test_array_object_sibling_missing_property_does_not_read_same_offset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class BarkDog {
+    public function __construct(public string $bark) {}
+}
+final class MeowCat {
+    public function __construct(public string $meow) {}
+}
+function firstBark(array $items): mixed {
+    return $items[0]->bark;
+}
+echo firstBark([new BarkDog('woof')]), '|';
+$missing = firstBark([new MeowCat('mew')]);
+echo $missing === null ? 'null' : $missing;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "woof|null");
+    assert!(
+        out.stderr
+            .contains("Warning: Undefined property: MeowCat::$bark"),
+        "missing PHP-style undefined-property warning: {}",
+        out.stderr
+    );
+}
+
+/// An instance-method bare `array` parameter dispatches property reads by runtime class
+/// when sibling objects have incompatible layouts, instead of loading a fixed offset.
+#[test]
+fn test_array_object_sibling_layout_mismatch_does_not_crash() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class AgedDog {
+    public function __construct(public int $age, public string $bark) {}
+}
+final class ShortCat {
+    public function __construct(public string $meow) {}
+}
+final class BarkReader {
+    public function first(array $items): mixed {
+        return $items[0]->bark;
+    }
+}
+$reader = new BarkReader();
+echo $reader->first([new AgedDog(4, 'woof')]), '|';
+$missing = $reader->first([new ShortCat('mew')]);
+echo $missing === null ? 'null' : $missing;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "woof|null");
+    assert!(
+        out.stderr
+            .contains("Warning: Undefined property: ShortCat::$bark"),
+        "missing PHP-style undefined-property warning: {}",
+        out.stderr
+    );
+}
+
+/// Associative bare-array parameters erase concrete object value classes while preserving
+/// hash storage, so sibling call sites remain valid and dispatch their shared property safely.
+#[test]
+fn test_assoc_array_object_sibling_params_preserve_hash_shape() {
+    let out = compile_and_run(
+        r#"<?php
+final class LeftCondition {
+    public function __construct(public string $sql) {}
+}
+final class RightCondition {
+    public function __construct(public string $sql) {}
+}
+function firstSql(array $conditions): string {
+    return $conditions['first']->sql;
+}
+echo firstSql(['first' => new LeftCondition('a = 1')]), '|';
+echo firstSql(['first' => new RightCondition('b = 2')]);
+"#,
+    );
+    assert_eq!(out, "a = 1|b = 2");
+}
+
 // --- Logical operators ---
 
 /// EC-8 (#491): `if ($x === false) { throw; } return $x;` narrows an `int|false` value to `int`
@@ -166,6 +261,44 @@ fn test_property_throw_guard_narrowing() {
         "<?php final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
     );
     assert_eq!(out, "x");
+}
+
+/// Verifies boxed `mixed` values can cross scalar boundaries handled by the runtime cast funnels.
+#[test]
+fn test_mixed_value_into_typed_boundary() {
+    let out = compile_and_run(
+        "<?php function takesStr(string $s): string { return strtoupper($s); } function relay(mixed $m): string { return takesStr($m); } function giveInt(mixed $m): int { return $m; } echo relay('hi'), ':', giveInt(42);",
+    );
+    assert_eq!(out, "HI:42");
+}
+
+/// Verifies `fseek()` has PHP's plain integer result type and can cross an `int` boundary.
+#[test]
+fn test_fseek_int_result_into_typed_param() {
+    let out = compile_and_run(
+        "<?php function requireZero(int $value, string $message): int { if ($value !== 0) { throw new \\RuntimeException($message); } return $value; } function main(): void { $f = fopen('php://temp', 'r+b'); fwrite($f, 'abcdef'); $r = requireZero(fseek($f, 2), 'seek failed'); echo $r, ':', fread($f, 3); } main();",
+    );
+    assert_eq!(out, "0:cde");
+}
+
+/// Verifies a boxed associative-array element can cross supported scalar call boundaries.
+#[test]
+fn test_mixed_assoc_element_into_scalar_typed_params() {
+    let out = compile_and_run(
+        "<?php function firstMode(string $mode, array $allowed): bool { return in_array($mode, $allowed); } function main(): void { $meta = ['mode' => 'r+', 'seekable' => true]; $mode = $meta['mode']; $ok = firstMode($mode, ['r+', 'w+']) ? 'ok' : 'no'; echo $ok, ':', strtoupper($mode); } main();",
+    );
+    assert_eq!(out, "ok:R+");
+}
+
+/// A typed comparator over an `array`-hinted parameter keeps its declared parameter contract —
+/// usort checks the closure against its own declarations (via the element-type binding)
+/// instead of a fabricated Int placeholder. Byte-parity vs PHP 8.5.
+#[test]
+fn test_typed_callback_over_array_hinted_param() {
+    let out = compile_and_run(
+        "<?php final class Box { public function __construct(public int $n) {} } function sorted(array $items): string { usort($items, static fn (Box $a, Box $b): int => $a->n <=> $b->n); $out = ''; foreach ($items as $b) { $out .= $b->n; } return $out; } function main(): void { echo sorted([new Box(3), new Box(1), new Box(2)]); } main();",
+    );
+    assert_eq!(out, "123");
 }
 
 /// foreach KEYS over an unknown-element array (an `array`-hinted param — elements known only

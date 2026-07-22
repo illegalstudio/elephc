@@ -2,7 +2,7 @@
 title: "fnmatch()"
 description: "Matches a filename against a pattern."
 sidebar:
-  order: 122
+  order: 124
 ---
 
 ## fnmatch()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fnmatch` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/fnmatch.md).
-

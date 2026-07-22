@@ -1,19 +1,14 @@
 //! Purpose:
-//! Home of the PHP `array_key_first` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_key_first` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the argument is an array (or Mixed) and returns `Mixed`.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_key_first` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -22,7 +17,9 @@ builtin! {
     params: [array: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayKeyFirst,
+    ),
     summary: "Gets the first key of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-key-first.php",
 }
@@ -40,9 +37,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Mixed)
-}
-
-/// Lowers an `array_key_first` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_key_first(ctx, inst)
 }

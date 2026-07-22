@@ -2,7 +2,7 @@
 title: "date_default_timezone_set()"
 description: "Sets the default timezone."
 sidebar:
-  order: 92
+  order: 94
 ---
 
 ## date_default_timezone_set()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `date_default_timezone_set` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/date_default_timezone_set.md).
-

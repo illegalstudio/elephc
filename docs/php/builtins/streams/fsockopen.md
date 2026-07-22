@@ -2,7 +2,7 @@
 title: "fsockopen()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 350
+  order: 352
 ---
 
 ## fsockopen()
@@ -38,4 +38,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fsockopen` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/fsockopen.md).
-

@@ -3,7 +3,7 @@
 //! Bridges already-evaluated EIR operands to the shared JSON runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - JSON error state is runtime-global and must be reset after PHP arguments

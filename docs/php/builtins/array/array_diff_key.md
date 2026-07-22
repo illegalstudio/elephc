@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `array_diff_key` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_diff_key.md).
-

@@ -2,7 +2,7 @@
 title: "mt_rand() — internals"
 description: "Compiler internals for mt_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 278
 ---
 
 ## `mt_rand()` — internals
@@ -10,18 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/mt_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/mt_rand.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/math/random.rs`:21](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/random.rs#L21) (`lower_rand`)
-- **Function symbol**: `lower_rand()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `rand()` and `mt_rand()` with either zero args or an inclusive range.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.mt_rand` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_random_u32`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.mt_rand`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

@@ -2,7 +2,7 @@
 title: "acos()"
 description: "Returns the arccosine of a number in radians."
 sidebar:
-  order: 253
+  order: 255
 ---
 
 ## acos()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `acos` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/acos.md).
-

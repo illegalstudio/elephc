@@ -2,7 +2,7 @@
 title: "unlink()"
 description: "Deletes a file."
 sidebar:
-  order: 156
+  order: 158
 ---
 
 ## unlink()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `unlink` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/unlink.md).
-

@@ -128,6 +128,8 @@ See [Memory Model](memory-model.md) for why this specific value is used as the n
 | `csel` | `csel x0, x1, x2, gt` | x0 = x1 if greater, x2 otherwise |
 | `csinv` | `csinv x0, x0, xzr, ge` | If condition false: x0 = ~xzr = -1, else x0 unchanged. Used for spaceship (`<=>`) |
 | `cinc` | `cinc x0, x0, eq` | Conditionally increment a register by 1 when the condition holds |
+| `csinc` | `csinc x0, x1, x2, eq` | x0 = x1 if the condition holds, x2 + 1 otherwise |
+| `ands` | `ands x0, x0, #0xFF` | Bitwise AND, set flags and keep the result |
 
 ### Floating-point comparison
 
@@ -150,6 +152,7 @@ After `cmp`, these codes test the result:
 | `ge` | Greater or equal (signed) | `>=` |
 | `mi` | Minus (negative) | Used for sign checks |
 | `cs` | Carry set | Used after unsigned comparisons or flag-setting arithmetic |
+| `vs` | Overflow set | Used to detect NaN after `fcmp` (unordered) and signed overflow |
 
 ## Branch (control flow)
 
@@ -170,10 +173,13 @@ After `cmp`, these codes test the result:
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
 | `tbnz` | `tbnz x0, #3, _label` | Test one bit and jump if it is non-zero |
+| `tbz` | `tbz x0, #3, _label` | Test one bit and jump if it is zero |
+| `b.vs` | `b.vs _label` | Jump if the overflow flag is set (NaN/unordered after `fcmp`) |
 | `bl` | `bl _fn_add` | Branch with link — call a function (saves return address in x30) |
 | `blr` | `blr x9` | Branch with link to register — indirect function call through a register (used for closures and callbacks) |
 | `br` | `br x9` | Branch to the address in a register without saving a return address |
 | `brk` | `brk #0` | Trap into the debugger / terminate with a breakpoint exception |
+| `udf` | `udf #0` | Permanently undefined instruction — traps if control ever reaches it (guards unreachable code) |
 | `ret` | `ret` | Return — jump to address in x30 |
 
 ### How branches map to PHP
@@ -192,6 +198,7 @@ continue         →  b _while_1
 | Instruction | Syntax | What it does |
 |---|---|---|
 | `scvtf` | `scvtf d0, x0` | Signed integer → double float |
+| `ucvtf` | `ucvtf d0, x0` | Unsigned integer → double float |
 | `fcvtzs` | `fcvtzs x0, d0` | Double float → signed integer (truncate toward zero) |
 
 Used for PHP type casting (`(int)3.14`, `(float)42`) and mixed arithmetic. See [The Type Checker](the-type-checker.md).
@@ -206,6 +213,8 @@ Used for PHP type casting (`(int)3.14`, `(float)42`) and mixed arithmetic. See [
 | `lsr` | `lsr x0, x0, #4` | Logical shift right |
 | `lsl` | `lsl x0, x0, #3` | Logical shift left |
 | `asr` | `asr x0, x0, #63` | Arithmetic shift right (preserves sign) |
+| `bic` | `bic x0, x0, #0xFF` | Bit clear — AND with the complement of the mask |
+| `rev` | `rev x0, x0` | Reverse byte order (network ↔ host byte order) |
 | `ubfx` | `ubfx x13, x13, #8, #7` | Unsigned bitfield extract: pull out a range of bits, used to read runtime tags |
 
 Used for PHP's bitwise operators (`&`, `|`, `^`, `<<`, `>>`) and in [runtime routines](the-runtime.md) for things like hex conversion, hash algorithms, and base64 encoding.

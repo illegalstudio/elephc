@@ -2,7 +2,7 @@
 title: "ob_get_level()"
 description: "Returns the nesting level of the output buffering mechanism."
 sidebar:
-  order: 197
+  order: 199
 ---
 
 ## ob_get_level()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_get_level` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_level.md).
-

@@ -3,7 +3,7 @@
 //! Handles stable object ids and object hashes using the concrete heap pointer.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Object ids use the heap pointer as a process-stable identity.

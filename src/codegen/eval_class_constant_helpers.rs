@@ -710,25 +710,25 @@ fn emit_value_helper_aarch64(
     mode: ValueHelperMode,
 ) {
     let done_label = format!("__elephc_eval_class_constant_{}_done", mode.suffix());
-    emitter.instruction("sub sp, sp, #64"); // reserve helper frame for class, constant, scope, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #48]"); // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #48"); // establish a stable helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the requested class-name pointer
-    emitter.instruction("str x1, [sp, #8]"); // save the requested class-name length
-    emitter.instruction("str x2, [sp, #16]"); // save the requested constant-name pointer
-    emitter.instruction("str x3, [sp, #24]"); // save the requested constant-name length
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class, constant, scope, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested constant-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested constant-name length
     if mode.checks_visibility() {
-        emitter.instruction("str x4, [sp, #32]"); // save the active eval class-scope pointer
-        emitter.instruction("str x5, [sp, #40]"); // save the active eval class-scope length
+        emitter.instruction("str x4, [sp, #32]");                               // save the active eval class-scope pointer
+        emitter.instruction("str x5, [sp, #40]");                               // save the active eval class-scope length
     }
     emit_aarch64_constant_value_dispatch(module, emitter, data, slots, mode);
-    emitter.instruction("mov x0, xzr"); // report bridge miss with a null pointer
-    emitter.instruction(&format!("b {}", done_label)); // join the helper epilogue after a miss
+    emitter.instruction("mov x0, xzr");                                         // report bridge miss with a null pointer
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
     emit_aarch64_value_slot_bodies(module, emitter, data, slots, mode, &done_label);
     emitter.label(&done_label);
-    emitter.instruction("ldp x29, x30, [sp, #48]"); // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #64"); // release the helper frame
-    emitter.instruction("ret"); // return the boxed class constant value to Rust
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the boxed class constant value to Rust
 }
 
 /// Emits an x86_64 class-constant value helper body.
@@ -740,25 +740,25 @@ fn emit_value_helper_x86_64(
     mode: ValueHelperMode,
 ) {
     let done_label = format!("__elephc_eval_class_constant_{}_done_x", mode.suffix());
-    emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
-    emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 48"); // reserve aligned slots for class, constant, and scope slices
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the requested class-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the requested class-name length
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx"); // save the requested constant-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx"); // save the requested constant-name length
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, constant, and scope slices
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested constant-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested constant-name length
     if mode.checks_visibility() {
-        emitter.instruction("mov QWORD PTR [rbp - 40], r8"); // save the active eval class-scope pointer
-        emitter.instruction("mov QWORD PTR [rbp - 48], r9"); // save the active eval class-scope length
+        emitter.instruction("mov QWORD PTR [rbp - 40], r8");                    // save the active eval class-scope pointer
+        emitter.instruction("mov QWORD PTR [rbp - 48], r9");                    // save the active eval class-scope length
     }
     emit_x86_64_constant_value_dispatch(module, emitter, data, slots, mode);
-    emitter.instruction("xor eax, eax"); // report bridge miss with a null pointer
-    emitter.instruction(&format!("jmp {}", done_label)); // join the helper epilogue after a miss
+    emitter.instruction("xor eax, eax");                                        // report bridge miss with a null pointer
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
     emit_x86_64_value_slot_bodies(module, emitter, data, slots, mode, &done_label);
     emitter.label(&done_label);
-    emitter.instruction("mov rsp, rbp"); // discard helper spill slots
-    emitter.instruction("pop rbp"); // restore the Rust caller frame pointer
-    emitter.instruction("ret"); // return the boxed class constant value to Rust
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed class constant value to Rust
 }
 
 /// Emits ARM64 class-name and constant-name dispatch for value helpers.
@@ -801,12 +801,12 @@ fn emit_aarch64_class_name_compare(
     next_label: &str,
 ) {
     let (label, len) = data.add_string(class_name.as_bytes());
-    emitter.instruction("ldr x1, [sp, #0]"); // reload requested class-name pointer
-    emitter.instruction("ldr x2, [sp, #8]"); // reload requested class-name length
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested class-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested class-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_strcasecmp"); // compare class names with PHP case-insensitive rules
-    emitter.instruction(&format!("cbnz x0, {}", next_label)); // continue dispatch when class names differ
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
+    emitter.instruction(&format!("cbnz x0, {}", next_label));                   // continue dispatch when class names differ
 }
 
 /// Emits one x86_64 case-insensitive class-name comparison.
@@ -817,13 +817,13 @@ fn emit_x86_64_class_name_compare(
     next_label: &str,
 ) {
     let (label, len) = data.add_string(class_name.as_bytes());
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]"); // reload requested class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]"); // reload requested class-name length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload requested class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested class-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_strcasecmp"); // compare class names with PHP case-insensitive rules
-    emitter.instruction("test rax, rax"); // check whether the class names matched
-    emitter.instruction(&format!("jne {}", next_label)); // continue dispatch when class names differ
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the class names matched
+    emitter.instruction(&format!("jne {}", next_label));                        // continue dispatch when class names differ
 }
 
 /// Emits one ARM64 case-sensitive constant-name comparison.
@@ -836,17 +836,17 @@ fn emit_aarch64_constant_name_compare(
     next_label: &str,
 ) {
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("ldr x1, [sp, #16]"); // reload requested constant-name pointer
-    emitter.instruction("ldr x2, [sp, #24]"); // reload requested constant-name length
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload requested constant-name pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload requested constant-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_str_eq"); // compare constant names with PHP case-sensitive rules
+    emitter.instruction("bl __rt_str_eq");                                      // compare constant names with PHP case-sensitive rules
     let target_label = slot_body_label(module, slot, mode.suffix());
     if !mode.checks_visibility() || matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the constant value body when names match
+        emitter.instruction(&format!("cbnz x0, {}", target_label));             // dispatch to the constant value body when names match
         return;
     }
-    emitter.instruction(&format!("cbz x0, {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction(&format!("cbz x0, {}", next_label));                    // continue dispatch when constant names differ
     emit_aarch64_constant_scope_check(emitter, data, slot, &target_label, next_label);
 }
 
@@ -860,18 +860,18 @@ fn emit_x86_64_constant_name_compare(
     next_label: &str,
 ) {
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]"); // reload requested constant-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]"); // reload requested constant-name length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload requested constant-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload requested constant-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_str_eq"); // compare constant names with PHP case-sensitive rules
-    emitter.instruction("test rax, rax"); // check whether the constant names matched
+    emitter.instruction("call __rt_str_eq");                                    // compare constant names with PHP case-sensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the constant names matched
     let target_label = slot_body_label(module, slot, mode.suffix());
     if !mode.checks_visibility() || matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("jne {}", target_label)); // dispatch to the constant value body when names match
+        emitter.instruction(&format!("jne {}", target_label));                  // dispatch to the constant value body when names match
         return;
     }
-    emitter.instruction(&format!("je {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction(&format!("je {}", next_label));                         // continue dispatch when constant names differ
     emit_x86_64_constant_scope_check(emitter, data, slot, &target_label, next_label);
 }
 
@@ -883,19 +883,19 @@ fn emit_aarch64_constant_scope_check(
     target_label: &str,
     next_label: &str,
 ) {
-    emitter.instruction("ldr x1, [sp, #32]"); // reload the active eval class-scope pointer
-    emitter.instruction("ldr x2, [sp, #40]"); // reload the active eval class-scope length
-    emitter.instruction(&format!("cbz x1, {}", next_label)); // reject scoped constants outside a class scope
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the active eval class-scope pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the active eval class-scope length
+    emitter.instruction(&format!("cbz x1, {}", next_label));                    // reject scoped constants outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction("ldr x1, [sp, #32]"); // reload the active eval class-scope pointer
-        emitter.instruction("ldr x2, [sp, #40]"); // reload the active eval class-scope length
+        emitter.instruction("ldr x1, [sp, #32]");                               // reload the active eval class-scope pointer
+        emitter.instruction("ldr x2, [sp, #40]");                               // reload the active eval class-scope length
         abi::emit_symbol_address(emitter, "x3", &label);
         abi::emit_load_int_immediate(emitter, "x4", len as i64);
-        emitter.instruction("bl __rt_strcasecmp"); // compare current eval scope with an allowed class
-        emitter.instruction(&format!("cbz x0, {}", target_label)); // dispatch when scoped visibility is satisfied
+        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
+        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch when scoped visibility is satisfied
     }
-    emitter.instruction(&format!("b {}", next_label)); // continue dispatch after a visibility miss
+    emitter.instruction(&format!("b {}", next_label));                          // continue dispatch after a visibility miss
 }
 
 /// Emits x86_64 visibility checks for a protected/private constant bridge hit.
@@ -906,21 +906,21 @@ fn emit_x86_64_constant_scope_check(
     target_label: &str,
     next_label: &str,
 ) {
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]"); // reload the active eval class-scope pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]"); // reload the active eval class-scope length
-    emitter.instruction("test rdi, rdi"); // check whether eval is executing inside a class scope
-    emitter.instruction(&format!("jz {}", next_label)); // reject scoped constants outside a class scope
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the active eval class-scope pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
+    emitter.instruction(&format!("jz {}", next_label));                         // reject scoped constants outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 40]"); // reload the active eval class-scope pointer
-        emitter.instruction("mov rsi, QWORD PTR [rbp - 48]"); // reload the active eval class-scope length
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                   // reload the active eval class-scope pointer
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                   // reload the active eval class-scope length
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-        emitter.instruction("call __rt_strcasecmp"); // compare current eval scope with an allowed class
-        emitter.instruction("test rax, rax"); // check whether the current scope matched
-        emitter.instruction(&format!("je {}", target_label)); // dispatch when scoped visibility is satisfied
+        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
+        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
+        emitter.instruction(&format!("je {}", target_label));                   // dispatch when scoped visibility is satisfied
     }
-    emitter.instruction(&format!("jmp {}", next_label)); // continue dispatch after a visibility miss
+    emitter.instruction(&format!("jmp {}", next_label));                        // continue dispatch after a visibility miss
 }
 
 /// Emits ARM64 value bodies for all class-constant slots.
@@ -935,7 +935,7 @@ fn emit_aarch64_value_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, mode.suffix()));
         emit_aarch64_constant_value(emitter, data, &slot.value);
-        emitter.instruction(&format!("b {}", done_label)); // return after boxing the constant value
+        emitter.instruction(&format!("b {}", done_label));                      // return after boxing the constant value
     }
 }
 
@@ -951,7 +951,7 @@ fn emit_x86_64_value_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, mode.suffix()));
         emit_x86_64_constant_value(emitter, data, &slot.value);
-        emitter.instruction(&format!("jmp {}", done_label)); // return after boxing the constant value
+        emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the constant value
     }
 }
 
@@ -973,7 +973,7 @@ fn emit_aarch64_constant_value(
         EvalClassConstantValue::Float(value) => {
             let label = data.add_float(*value);
             abi::emit_symbol_address(emitter, "x9", &label);
-            emitter.instruction("ldr d0, [x9]"); // load the float constant through the data-section symbol
+            emitter.instruction("ldr d0, [x9]");                                // load the float constant through the data-section symbol
             emit_box_current_value_as_mixed(emitter, &PhpType::Float);
         }
         EvalClassConstantValue::Str(value) => {
@@ -1015,7 +1015,7 @@ fn emit_x86_64_constant_value(
         EvalClassConstantValue::Float(value) => {
             let label = data.add_float(*value);
             abi::emit_symbol_address(emitter, "r10", &label);
-            emitter.instruction("movsd xmm0, QWORD PTR [r10]"); // load the float constant through the data-section symbol
+            emitter.instruction("movsd xmm0, QWORD PTR [r10]");                 // load the float constant through the data-section symbol
             emit_box_current_value_as_mixed(emitter, &PhpType::Float);
         }
         EvalClassConstantValue::Str(value) => {
@@ -1066,26 +1066,26 @@ fn emit_reflection_constant_names_aarch64(
     let array_new = emitter
         .target
         .extern_symbol("__elephc_eval_value_string_array_new");
-    emitter.instruction("sub sp, sp, #64"); // reserve helper frame for class slice, array, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #48]"); // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #48"); // establish a stable helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the requested class-name pointer
-    emitter.instruction("str x1, [sp, #8]"); // save the requested class-name length
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class slice, array, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
     abi::emit_load_int_immediate(emitter, "x0", slots.len() as i64);
-    emitter.instruction(&format!("bl {}", array_new)); // allocate the boxed string-array result
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // fail if the runtime could not allocate the result array
-    emitter.instruction("str x0, [sp, #16]"); // save the accumulated boxed string array
+    emitter.instruction(&format!("bl {}", array_new));                          // allocate the boxed string-array result
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // fail if the runtime could not allocate the result array
+    emitter.instruction("str x0, [sp, #16]");                                   // save the accumulated boxed string array
     for (index, slot) in slots.iter().enumerate() {
         emit_aarch64_constant_name_push(emitter, data, slot, index, fail_label);
     }
-    emitter.instruction("ldr x0, [sp, #16]"); // return the accumulated boxed string array
-    emitter.instruction(&format!("b {}", done_label)); // skip null failure after a successful scan
+    emitter.instruction("ldr x0, [sp, #16]");                                   // return the accumulated boxed string array
+    emitter.instruction(&format!("b {}", done_label));                          // skip null failure after a successful scan
     emitter.label(fail_label);
-    emitter.instruction("mov x0, xzr"); // return null when allocation or append fails
+    emitter.instruction("mov x0, xzr");                                         // return null when allocation or append fails
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #48]"); // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #64"); // release the helper frame
-    emitter.instruction("ret"); // return the boxed constant-name array to Rust
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the boxed constant-name array to Rust
 }
 
 /// Emits the x86_64 Reflection constant-name array helper.
@@ -1099,27 +1099,27 @@ fn emit_reflection_constant_names_x86_64(
     let array_new = emitter
         .target
         .extern_symbol("__elephc_eval_value_string_array_new");
-    emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
-    emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32"); // reserve aligned slots for class slice and result array
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the requested class-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the requested class-name length
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class slice and result array
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     abi::emit_load_int_immediate(emitter, "rdi", slots.len() as i64);
-    emitter.instruction(&format!("call {}", array_new)); // allocate the boxed string-array result
-    emitter.instruction("test rax, rax"); // check whether allocation returned a boxed array
-    emitter.instruction(&format!("jz {}", fail_label)); // fail if the runtime could not allocate the result array
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax"); // save the accumulated boxed string array
+    emitter.instruction(&format!("call {}", array_new));                        // allocate the boxed string-array result
+    emitter.instruction("test rax, rax");                                       // check whether allocation returned a boxed array
+    emitter.instruction(&format!("jz {}", fail_label));                         // fail if the runtime could not allocate the result array
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the accumulated boxed string array
     for (index, slot) in slots.iter().enumerate() {
         emit_x86_64_constant_name_push(emitter, data, slot, index, fail_label);
     }
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]"); // return the accumulated boxed string array
-    emitter.instruction(&format!("jmp {}", done_label)); // skip null failure after a successful scan
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the accumulated boxed string array
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip null failure after a successful scan
     emitter.label(fail_label);
-    emitter.instruction("xor eax, eax"); // return null when allocation or append fails
+    emitter.instruction("xor eax, eax");                                        // return null when allocation or append fails
     emitter.label(done_label);
-    emitter.instruction("mov rsp, rbp"); // discard helper spill slots
-    emitter.instruction("pop rbp"); // restore the Rust caller frame pointer
-    emitter.instruction("ret"); // return the boxed constant-name array to Rust
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed constant-name array to Rust
 }
 
 /// Emits one ARM64 conditional append for a reflected constant name.
@@ -1136,12 +1136,12 @@ fn emit_aarch64_constant_name_push(
         .extern_symbol("__elephc_eval_value_string_array_push");
     emit_aarch64_class_name_compare(emitter, data, &slot.reflected_class, &skip_label);
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("ldr x0, [sp, #16]"); // reload the boxed result string array
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed result string array
     abi::emit_symbol_address(emitter, "x1", &label);
     abi::emit_load_int_immediate(emitter, "x2", len as i64);
-    emitter.instruction(&format!("bl {}", push_symbol)); // append the matched constant name to the result array
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // fail if appending returned a null array pointer
-    emitter.instruction("str x0, [sp, #16]"); // save the updated boxed string array
+    emitter.instruction(&format!("bl {}", push_symbol));                        // append the matched constant name to the result array
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // fail if appending returned a null array pointer
+    emitter.instruction("str x0, [sp, #16]");                                   // save the updated boxed string array
     emitter.label(&skip_label);
 }
 
@@ -1159,13 +1159,13 @@ fn emit_x86_64_constant_name_push(
         .extern_symbol("__elephc_eval_value_string_array_push");
     emit_x86_64_class_name_compare(emitter, data, &slot.reflected_class, &skip_label);
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]"); // reload the boxed result string array
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the boxed result string array
     abi::emit_symbol_address(emitter, "rsi", &label);
     abi::emit_load_int_immediate(emitter, "rdx", len as i64);
-    emitter.instruction(&format!("call {}", push_symbol)); // append the matched constant name to the result array
-    emitter.instruction("test rax, rax"); // check whether append returned an updated array
-    emitter.instruction(&format!("jz {}", fail_label)); // fail if appending returned a null array pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax"); // save the updated boxed string array
+    emitter.instruction(&format!("call {}", push_symbol));                      // append the matched constant name to the result array
+    emitter.instruction("test rax, rax");                                       // check whether append returned an updated array
+    emitter.instruction(&format!("jz {}", fail_label));                         // fail if appending returned a null array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the updated boxed string array
     emitter.label(&skip_label);
 }
 
@@ -1193,24 +1193,24 @@ fn emit_reflection_constant_flags_aarch64(
     slots: &[EvalClassConstantSlot],
 ) {
     let done_label = "__elephc_eval_reflection_constant_flags_done";
-    emitter.instruction("sub sp, sp, #48"); // reserve helper frame for class/constant slices and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #32]"); // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #32"); // establish a stable helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the requested class-name pointer
-    emitter.instruction("str x1, [sp, #8]"); // save the requested class-name length
-    emitter.instruction("str x2, [sp, #16]"); // save the requested constant-name pointer
-    emitter.instruction("str x3, [sp, #24]"); // save the requested constant-name length
+    emitter.instruction("sub sp, sp, #48");                                     // reserve helper frame for class/constant slices and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested constant-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested constant-name length
     for slot in slots {
         let next_label = slot_miss_label(module, slot, "flags");
         emit_aarch64_class_name_compare(emitter, data, &slot.reflected_class, &next_label);
         emit_aarch64_flags_constant_name_compare(module, emitter, data, slot, &next_label);
         emitter.label(&next_label);
     }
-    emitter.instruction("mov x0, #0"); // return zero when no constant metadata matched
+    emitter.instruction("mov x0, #0");                                          // return zero when no constant metadata matched
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #32]"); // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #48"); // release the helper frame
-    emitter.instruction("ret"); // return the matched flags, or zero, to Rust
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the matched flags, or zero, to Rust
 }
 
 /// Emits the x86_64 Reflection constant flags helper.
@@ -1221,24 +1221,24 @@ fn emit_reflection_constant_flags_x86_64(
     slots: &[EvalClassConstantSlot],
 ) {
     let done_label = "__elephc_eval_reflection_constant_flags_done_x";
-    emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
-    emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32"); // reserve aligned slots for class and constant slices
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the requested class-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the requested class-name length
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx"); // save the requested constant-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx"); // save the requested constant-name length
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class and constant slices
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested constant-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested constant-name length
     for slot in slots {
         let next_label = slot_miss_label(module, slot, "flags_x");
         emit_x86_64_class_name_compare(emitter, data, &slot.reflected_class, &next_label);
         emit_x86_64_flags_constant_name_compare(module, emitter, data, slot, &next_label);
         emitter.label(&next_label);
     }
-    emitter.instruction("xor eax, eax"); // return zero when no constant metadata matched
+    emitter.instruction("xor eax, eax");                                        // return zero when no constant metadata matched
     emitter.label(done_label);
-    emitter.instruction("mov rsp, rbp"); // discard helper spill slots
-    emitter.instruction("pop rbp"); // restore the Rust caller frame pointer
-    emitter.instruction("ret"); // return the matched flags, or zero, to Rust
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the matched flags, or zero, to Rust
 }
 
 /// Emits an ARM64 constant-name comparison that returns flags on a match.
@@ -1251,14 +1251,14 @@ fn emit_aarch64_flags_constant_name_compare(
 ) {
     let done_label = "__elephc_eval_reflection_constant_flags_done";
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("ldr x1, [sp, #16]"); // reload requested constant-name pointer
-    emitter.instruction("ldr x2, [sp, #24]"); // reload requested constant-name length
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload requested constant-name pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload requested constant-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_str_eq"); // compare constant names with PHP case-sensitive rules
-    emitter.instruction(&format!("cbz x0, {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction("bl __rt_str_eq");                                      // compare constant names with PHP case-sensitive rules
+    emitter.instruction(&format!("cbz x0, {}", next_label));                    // continue dispatch when constant names differ
     abi::emit_load_int_immediate(emitter, "x0", slot_flags(slot) as i64);
-    emitter.instruction(&format!("b {}", done_label)); // return the matched constant flags
+    emitter.instruction(&format!("b {}", done_label));                          // return the matched constant flags
     let _ = module;
 }
 
@@ -1272,15 +1272,15 @@ fn emit_x86_64_flags_constant_name_compare(
 ) {
     let done_label = "__elephc_eval_reflection_constant_flags_done_x";
     let (label, len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]"); // reload requested constant-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]"); // reload requested constant-name length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload requested constant-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload requested constant-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_str_eq"); // compare constant names with PHP case-sensitive rules
-    emitter.instruction("test rax, rax"); // check whether the constant names matched
-    emitter.instruction(&format!("je {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction("call __rt_str_eq");                                    // compare constant names with PHP case-sensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the constant names matched
+    emitter.instruction(&format!("je {}", next_label));                         // continue dispatch when constant names differ
     abi::emit_load_int_immediate(emitter, "rax", slot_flags(slot) as i64);
-    emitter.instruction(&format!("jmp {}", done_label)); // return the matched constant flags
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the matched constant flags
     let _ = module;
 }
 
@@ -1316,24 +1316,24 @@ fn emit_reflection_constant_declaring_class_aarch64(
     slots: &[EvalClassConstantSlot],
 ) {
     let done_label = "__elephc_eval_reflection_constant_declaring_class_done";
-    emitter.instruction("sub sp, sp, #48"); // reserve helper frame for class/constant slices and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #32]"); // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #32"); // establish a stable helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the requested class-name pointer
-    emitter.instruction("str x1, [sp, #8]"); // save the requested class-name length
-    emitter.instruction("str x2, [sp, #16]"); // save the requested constant-name pointer
-    emitter.instruction("str x3, [sp, #24]"); // save the requested constant-name length
+    emitter.instruction("sub sp, sp, #48");                                     // reserve helper frame for class/constant slices and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested constant-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested constant-name length
     for slot in slots {
         let next_label = slot_miss_label(module, slot, "declaring");
         emit_aarch64_class_name_compare(emitter, data, &slot.reflected_class, &next_label);
         emit_aarch64_declaring_constant_name_compare(emitter, data, slot, &next_label, done_label);
         emitter.label(&next_label);
     }
-    emitter.instruction("mov x0, xzr"); // return null when no constant metadata matched
+    emitter.instruction("mov x0, xzr");                                         // return null when no constant metadata matched
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #32]"); // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #48"); // release the helper frame
-    emitter.instruction("ret"); // return the declaring class string, or null, to Rust
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the declaring class string, or null, to Rust
 }
 
 /// Emits the x86_64 Reflection constant declaring-class helper.
@@ -1344,24 +1344,24 @@ fn emit_reflection_constant_declaring_class_x86_64(
     slots: &[EvalClassConstantSlot],
 ) {
     let done_label = "__elephc_eval_reflection_constant_declaring_class_done_x";
-    emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
-    emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32"); // reserve aligned slots for class and constant slices
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the requested class-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the requested class-name length
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx"); // save the requested constant-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx"); // save the requested constant-name length
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class and constant slices
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested constant-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested constant-name length
     for slot in slots {
         let next_label = slot_miss_label(module, slot, "declaring_x");
         emit_x86_64_class_name_compare(emitter, data, &slot.reflected_class, &next_label);
         emit_x86_64_declaring_constant_name_compare(emitter, data, slot, &next_label, done_label);
         emitter.label(&next_label);
     }
-    emitter.instruction("xor eax, eax"); // return null when no constant metadata matched
+    emitter.instruction("xor eax, eax");                                        // return null when no constant metadata matched
     emitter.label(done_label);
-    emitter.instruction("mov rsp, rbp"); // discard helper spill slots
-    emitter.instruction("pop rbp"); // restore the Rust caller frame pointer
-    emitter.instruction("ret"); // return the declaring class string, or null, to Rust
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the declaring class string, or null, to Rust
 }
 
 /// Emits an ARM64 constant-name comparison that returns declaring class on a match.
@@ -1373,18 +1373,18 @@ fn emit_aarch64_declaring_constant_name_compare(
     done_label: &str,
 ) {
     let (constant_label, constant_len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("ldr x1, [sp, #16]"); // reload requested constant-name pointer
-    emitter.instruction("ldr x2, [sp, #24]"); // reload requested constant-name length
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload requested constant-name pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload requested constant-name length
     abi::emit_symbol_address(emitter, "x3", &constant_label);
     abi::emit_load_int_immediate(emitter, "x4", constant_len as i64);
-    emitter.instruction("bl __rt_str_eq"); // compare constant names with PHP case-sensitive rules
-    emitter.instruction(&format!("cbz x0, {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction("bl __rt_str_eq");                                      // compare constant names with PHP case-sensitive rules
+    emitter.instruction(&format!("cbz x0, {}", next_label));                    // continue dispatch when constant names differ
     let (class_label, class_len) = data.add_string(slot.declaring_class.as_bytes());
     abi::emit_symbol_address(emitter, "x1", &class_label);
     abi::emit_load_int_immediate(emitter, "x2", class_len as i64);
-    emitter.instruction("mov x0, #1"); // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value"); // box the declaring class name for Rust
-    emitter.instruction(&format!("b {}", done_label)); // return the matched declaring class name
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
+    emitter.instruction(&format!("b {}", done_label));                          // return the matched declaring class name
 }
 
 /// Emits an x86_64 constant-name comparison that returns declaring class on a match.
@@ -1396,19 +1396,19 @@ fn emit_x86_64_declaring_constant_name_compare(
     done_label: &str,
 ) {
     let (constant_label, constant_len) = data.add_string(slot.constant.as_bytes());
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]"); // reload requested constant-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]"); // reload requested constant-name length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload requested constant-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload requested constant-name length
     abi::emit_symbol_address(emitter, "rdx", &constant_label);
     abi::emit_load_int_immediate(emitter, "rcx", constant_len as i64);
-    emitter.instruction("call __rt_str_eq"); // compare constant names with PHP case-sensitive rules
-    emitter.instruction("test rax, rax"); // check whether the constant names matched
-    emitter.instruction(&format!("je {}", next_label)); // continue dispatch when constant names differ
+    emitter.instruction("call __rt_str_eq");                                    // compare constant names with PHP case-sensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the constant names matched
+    emitter.instruction(&format!("je {}", next_label));                         // continue dispatch when constant names differ
     let (class_label, class_len) = data.add_string(slot.declaring_class.as_bytes());
     abi::emit_symbol_address(emitter, "rdi", &class_label);
     abi::emit_load_int_immediate(emitter, "rsi", class_len as i64);
     abi::emit_load_int_immediate(emitter, "rax", 1);
-    emitter.instruction("call __rt_mixed_from_value"); // box the declaring class name for Rust
-    emitter.instruction(&format!("jmp {}", done_label)); // return the matched declaring class name
+    emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the matched declaring class name
 }
 
 /// Returns ReflectionClassConstant-style member flags for one slot.

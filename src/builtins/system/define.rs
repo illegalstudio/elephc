@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `define` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `define` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the first argument is a string literal and registers the
 //!   constant's type in `checker.constants` as a compile-time side effect.
 //! - The hook calls `infer_type` on the value argument to obtain its type for registration.
-//! - `lower` delegates to the module-level `lower_define` in `src/codegen/lower_inst/builtins.rs`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -25,7 +20,9 @@ builtin! {
     params: [constant_name: Str, value: Mixed],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Define,
+    ),
     summary: "Defines a named constant at compile time.",
 }
 
@@ -47,9 +44,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     cx.checker.constants.entry(name_str).or_insert(ty);
     Ok(PhpType::Bool)
-}
-
-/// Lowers a `define` call by delegating to the shared module-level emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_define(ctx, inst)
 }

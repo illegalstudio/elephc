@@ -5,7 +5,7 @@
 //! from boxed Mixed cells after the call returns.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Argument evaluation has already happened in PHP source order during EIR
@@ -4014,25 +4014,25 @@ fn emit_eval_local_scalar_empty_string(
     abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, program.value_aux_offset(name));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg)); // empty strings are falsey in PHP
-            ctx.emitter.instruction(&format!("b.eq {}", true_label)); // branch when length is zero
-            ctx.emitter.instruction(&format!("cmp {}, #1", len_reg)); // check for PHP's special string "0" empty case
-            ctx.emitter.instruction(&format!("b.ne {}", false_label)); // non-empty non-"0" strings are truthy
-            ctx.emitter.instruction(&format!("ldrb w11, [{}]", ptr_reg)); // load the only byte of the candidate "0" string
-            ctx.emitter.instruction("cmp w11, #48"); // compare the byte with ASCII '0'
-            ctx.emitter.instruction(&format!("b.eq {}", true_label)); // string "0" is empty in PHP truthiness
-            ctx.emitter.instruction(&format!("b {}", false_label)); // any other one-byte string is truthy
+            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // empty strings are falsey in PHP
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));           // branch when length is zero
+            ctx.emitter.instruction(&format!("cmp {}, #1", len_reg));           // check for PHP's special string "0" empty case
+            ctx.emitter.instruction(&format!("b.ne {}", false_label));          // non-empty non-"0" strings are truthy
+            ctx.emitter.instruction(&format!("ldrb w11, [{}]", ptr_reg));       // load the only byte of the candidate "0" string
+            ctx.emitter.instruction("cmp w11, #48");                            // compare the byte with ASCII '0'
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));           // string "0" is empty in PHP truthiness
+            ctx.emitter.instruction(&format!("b {}", false_label));             // any other one-byte string is truthy
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg)); // empty strings are falsey in PHP
-            ctx.emitter.instruction(&format!("je {}", true_label)); // branch when length is zero
-            ctx.emitter.instruction(&format!("cmp {}, 1", len_reg)); // check for PHP's special string "0" empty case
-            ctx.emitter.instruction(&format!("jne {}", false_label)); // non-empty non-"0" strings are truthy
+            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // empty strings are falsey in PHP
+            ctx.emitter.instruction(&format!("je {}", true_label));             // branch when length is zero
+            ctx.emitter.instruction(&format!("cmp {}, 1", len_reg));            // check for PHP's special string "0" empty case
+            ctx.emitter.instruction(&format!("jne {}", false_label));           // non-empty non-"0" strings are truthy
             ctx.emitter
                 .instruction(&format!("movzx ecx, BYTE PTR [{}]", ptr_reg)); // load the only byte of the candidate "0" string
-            ctx.emitter.instruction("cmp ecx, 48"); // compare the byte with ASCII '0'
-            ctx.emitter.instruction(&format!("je {}", true_label)); // string "0" is empty in PHP truthiness
-            ctx.emitter.instruction(&format!("jmp {}", false_label)); // any other one-byte string is truthy
+            ctx.emitter.instruction("cmp ecx, 48");                             // compare the byte with ASCII '0'
+            ctx.emitter.instruction(&format!("je {}", true_label));             // string "0" is empty in PHP truthiness
+            ctx.emitter.instruction(&format!("jmp {}", false_label));           // any other one-byte string is truthy
         }
     }
 }
@@ -4292,12 +4292,12 @@ fn emit_eval_local_scalar_negate(ctx: &mut FunctionContext<'_>, ty: EvalLocalSca
     if ty == EvalLocalScalarType::Float {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("fneg d0, d0"); // negate the local scalar floating-point result
+                ctx.emitter.instruction("fneg d0, d0");                         // negate the local scalar floating-point result
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("xorpd xmm1, xmm1"); // materialize a zero float register for local scalar negation
-                ctx.emitter.instruction("subsd xmm1, xmm0"); // compute 0.0 minus the local scalar float
-                ctx.emitter.instruction("movsd xmm0, xmm1"); // move the negated local scalar float into the result register
+                ctx.emitter.instruction("xorpd xmm1, xmm1");                    // materialize a zero float register for local scalar negation
+                ctx.emitter.instruction("subsd xmm1, xmm0");                    // compute 0.0 minus the local scalar float
+                ctx.emitter.instruction("movsd xmm0, xmm1");                    // move the negated local scalar float into the result register
             }
         }
         return;
@@ -4309,7 +4309,7 @@ fn emit_eval_local_scalar_negate(ctx: &mut FunctionContext<'_>, ty: EvalLocalSca
                 .instruction(&format!("neg {}, {}", result_reg, result_reg)); //negate the local scalar integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("neg {}", result_reg)); // negate the local scalar integer result
+            ctx.emitter.instruction(&format!("neg {}", result_reg));            // negate the local scalar integer result
         }
     }
 }
@@ -4323,7 +4323,7 @@ fn emit_eval_local_scalar_bitnot(ctx: &mut FunctionContext<'_>) {
                 .instruction(&format!("mvn {}, {}", result_reg, result_reg)); // invert every bit of the local scalar integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("not {}", result_reg)); // invert every bit of the local scalar integer result
+            ctx.emitter.instruction(&format!("not {}", result_reg));            // invert every bit of the local scalar integer result
         }
     }
 }
@@ -4333,13 +4333,13 @@ fn emit_eval_local_scalar_not(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // test local scalar truthiness against false
-            ctx.emitter.instruction(&format!("cset {}, eq", result_reg)); // materialize logical negation as 0 or 1
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // test local scalar truthiness against false
+            ctx.emitter.instruction(&format!("cset {}, eq", result_reg));       // materialize logical negation as 0 or 1
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", result_reg, result_reg)); //test local scalar truthiness against false
-            ctx.emitter.instruction("sete al"); // materialize logical negation in the low byte
+            ctx.emitter.instruction("sete al");                                 // materialize logical negation in the low byte
             ctx.emitter
                 .instruction(&format!("movzx {}, al", result_reg)); // widen logical negation into the result register
         }
@@ -4418,7 +4418,7 @@ fn emit_eval_local_scalar_shift(
             )); // shift the local scalar integer by the evaluated count
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rcx, {}", rhs_reg)); // move the local scalar shift count into x86_64's cl register
+            ctx.emitter.instruction(&format!("mov rcx, {}", rhs_reg));          // move the local scalar shift count into x86_64's cl register
             ctx.emitter
                 .instruction(&format!("{} {}, cl", x86_64_mnemonic, result_reg));
             // shift the local scalar integer by the low count byte
@@ -4452,10 +4452,10 @@ fn emit_eval_local_scalar_mod(ctx: &mut FunctionContext<'_>, rhs_reg: &str) {
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the local scalar modulo divisor is zero
-            ctx.emitter.instruction(&format!("je {}", zero_label)); // branch to the local scalar modulo zero guard
-            ctx.emitter.instruction("cqo"); // sign-extend the local scalar dividend before division
-            ctx.emitter.instruction(&format!("idiv {}", rhs_reg)); // divide local scalar integers
-            ctx.emitter.instruction(&format!("mov {}, rdx", result_reg)); // move the local scalar remainder into the result register
+            ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to the local scalar modulo zero guard
+            ctx.emitter.instruction("cqo");                                     // sign-extend the local scalar dividend before division
+            ctx.emitter.instruction(&format!("idiv {}", rhs_reg));              // divide local scalar integers
+            ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the local scalar remainder into the result register
             abi::emit_jump(ctx.emitter, &done_label);
             ctx.emitter.label(&zero_label);
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
@@ -4592,15 +4592,15 @@ fn emit_eval_local_scalar_eval_runtime_string_cell(ctx: &mut FunctionContext<'_>
 fn emit_eval_local_scalar_core_null_cell(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #8"); // materialize the core Mixed null runtime tag
-            ctx.emitter.instruction("mov x1, #0"); // null has no low payload word
-            ctx.emitter.instruction("mov x2, #0"); // null has no high payload word
+            ctx.emitter.instruction("mov x0, #8");                              // materialize the core Mixed null runtime tag
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, 8"); // materialize the core Mixed null runtime tag
-            ctx.emitter.instruction("xor edi, edi"); // null has no low payload word
-            ctx.emitter.instruction("xor esi, esi"); // null has no high payload word
+            ctx.emitter.instruction("mov rax, 8");                              // materialize the core Mixed null runtime tag
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
@@ -6206,14 +6206,14 @@ fn emit_eval_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0"); // preserve the unboxed eval result tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1"); // place the unboxed eval payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9"); // place the unboxed eval tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed eval result tag before moving the payload
+            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed eval payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed eval tag into the tagged-scalar tag register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax"); // preserve the unboxed eval result tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi"); // place the unboxed eval payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10"); // place the unboxed eval tag into the tagged-scalar tag register
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed eval result tag before moving the payload
+            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed eval payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed eval tag into the tagged-scalar tag register
         }
     }
 }
@@ -6229,10 +6229,10 @@ fn emit_eval_unbox_mixed_to_owned_result(ctx: &mut FunctionContext<'_>, result_t
 fn emit_eval_move_unboxed_low_payload_to_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // return the unboxed eval low payload as the concrete result
+            ctx.emitter.instruction("mov x0, x1");                              // return the unboxed eval low payload as the concrete result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi"); // return the unboxed eval low payload as the concrete result
+            ctx.emitter.instruction("mov rax, rdi");                            // return the unboxed eval low payload as the concrete result
         }
     }
 }
@@ -6285,12 +6285,12 @@ fn eval_class_relation_kind(name: &str) -> Result<i64> {
 fn emit_branch_if_eval_unboxed_not_object(ctx: &mut FunctionContext<'_>, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the Mixed value contains an object
-            ctx.emitter.instruction(&format!("b.ne {}", label)); // non-object values use the native false/empty fallback
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the Mixed value contains an object
+            ctx.emitter.instruction(&format!("b.ne {}", label));                // non-object values use the native false/empty fallback
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the Mixed value contains an object
-            ctx.emitter.instruction(&format!("jne {}", label)); // non-object values use the native false/empty fallback
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the Mixed value contains an object
+            ctx.emitter.instruction(&format!("jne {}", label));                 // non-object values use the native false/empty fallback
         }
     }
 }
@@ -6300,18 +6300,18 @@ fn emit_validate_eval_dynamic_instanceof_target(ctx: &mut FunctionContext<'_>, l
     let ok_label = ctx.next_label("eval_object_is_a_dynamic_target_ok");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1"); // runtime tag 1 means the dynamic target is a string
-            ctx.emitter.instruction(&format!("b.eq {}", ok_label)); // accept string targets for dynamic instanceof
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the dynamic target is an object
-            ctx.emitter.instruction(&format!("b.eq {}", ok_label)); // accept object targets for dynamic instanceof
-            ctx.emitter.instruction(&format!("b {}", label)); // reject every other dynamic instanceof target kind
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 means the dynamic target is a string
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // accept string targets for dynamic instanceof
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the dynamic target is an object
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // accept object targets for dynamic instanceof
+            ctx.emitter.instruction(&format!("b {}", label));                   // reject every other dynamic instanceof target kind
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1"); // runtime tag 1 means the dynamic target is a string
-            ctx.emitter.instruction(&format!("je {}", ok_label)); // accept string targets for dynamic instanceof
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the dynamic target is an object
-            ctx.emitter.instruction(&format!("je {}", ok_label)); // accept object targets for dynamic instanceof
-            ctx.emitter.instruction(&format!("jmp {}", label)); // reject every other dynamic instanceof target kind
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 means the dynamic target is a string
+            ctx.emitter.instruction(&format!("je {}", ok_label));               // accept string targets for dynamic instanceof
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the dynamic target is an object
+            ctx.emitter.instruction(&format!("je {}", ok_label));               // accept object targets for dynamic instanceof
+            ctx.emitter.instruction(&format!("jmp {}", label));                 // reject every other dynamic instanceof target kind
         }
     }
     ctx.emitter.label(&ok_label);
@@ -6322,11 +6322,11 @@ fn emit_branch_if_eval_c_int_negative(ctx: &mut FunctionContext<'_>, label: &str
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let branch = format!("tbnz w0, #31, {}", label);
-            ctx.emitter.instruction(&branch); // branch when the C int result is the invalid-target sentinel
+            ctx.emitter.instruction(&branch);                                   // branch when the C int result is the invalid-target sentinel
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test eax, eax"); // set flags from the C int result
-            ctx.emitter.instruction(&format!("js {}", label)); // branch when the C int result is the invalid-target sentinel
+            ctx.emitter.instruction("test eax, eax");                           // set flags from the C int result
+            ctx.emitter.instruction(&format!("js {}", label));                  // branch when the C int result is the invalid-target sentinel
         }
     }
 }
@@ -6334,7 +6334,7 @@ fn emit_branch_if_eval_c_int_negative(ctx: &mut FunctionContext<'_>, label: &str
 /// Reorders an unboxed eval string cell into the target string result registers.
 fn emit_eval_unboxed_string_result(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rax, rdi"); // move the unboxed string pointer into the x86_64 string-result register
+        ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into the x86_64 string-result register
     }
 }
 
@@ -10051,17 +10051,17 @@ fn emit_eval_called_class_name_result_aarch64(ctx: &mut FunctionContext<'_>) -> 
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp x12, x10"); // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("b.hs {}", missing)); // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("b.hs {}", missing));                      // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-    ctx.emitter.instruction("lsl x12, x12, #4"); // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add x11, x11, x12"); // select the called-class metadata row
-    ctx.emitter.instruction("ldr x1, [x11]"); // load the called-class name pointer
-    ctx.emitter.instruction("ldr x2, [x11, #8]"); // load the called-class name length
-    ctx.emitter.instruction(&format!("b {}", done)); // skip the missing-metadata fallback
+    ctx.emitter.instruction("lsl x12, x12, #4");                                // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add x11, x11, x12");                               // select the called-class metadata row
+    ctx.emitter.instruction("ldr x1, [x11]");                                   // load the called-class name pointer
+    ctx.emitter.instruction("ldr x2, [x11, #8]");                               // load the called-class name length
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "x1", "_class_name_missing");
-    ctx.emitter.instruction("mov x2, #0"); // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov x2, #0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -10072,17 +10072,17 @@ fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContext<'_>) -> R
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp r8, r9"); // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("jae {}", missing)); // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("jae {}", missing));                       // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-    ctx.emitter.instruction("shl r8, 4"); // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add r10, r8"); // select the called-class metadata row
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10]"); // load the called-class name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]"); // load the called-class name length
-    ctx.emitter.instruction(&format!("jmp {}", done)); // skip the missing-metadata fallback
+    ctx.emitter.instruction("shl r8, 4");                                       // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add r10, r8");                                     // select the called-class metadata row
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // load the called-class name pointer
+    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                    // load the called-class name length
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
-    ctx.emitter.instruction("mov rdx, 0"); // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov rdx, 0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -10597,12 +10597,12 @@ fn emit_branch_if_scope_entry_missing_at(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -10716,12 +10716,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -10844,12 +10844,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
 }
@@ -10877,7 +10877,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -10886,12 +10886,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }

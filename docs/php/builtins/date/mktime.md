@@ -2,7 +2,7 @@
 title: "mktime()"
 description: "Returns the Unix timestamp for a date."
 sidebar:
-  order: 99
+  order: 101
 ---
 
 ## mktime()
@@ -39,4 +39,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `mktime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/mktime.md).
-

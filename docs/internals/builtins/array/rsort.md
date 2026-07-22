@@ -10,24 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/rsort.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1084](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1084) (`lower_rsort`)
-- **Function symbol**: `lower_rsort()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.rsort` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_arsort`
-- `__rt_asort`
-- `__rt_krsort`
-- `__rt_ksort`
-- `__rt_natsort`
-- `__rt_rsort_int`
-- `__rt_rsort_str`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.rsort`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

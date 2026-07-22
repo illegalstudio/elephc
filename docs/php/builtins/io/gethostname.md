@@ -2,7 +2,7 @@
 title: "gethostname()"
 description: "Gets the standard host name for the local machine."
 sidebar:
-  order: 183
+  order: 185
 ---
 
 ## gethostname()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `gethostname` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/gethostname.md).
-

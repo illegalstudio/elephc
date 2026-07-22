@@ -12,7 +12,7 @@ pub(crate) mod arrays;
 mod callables;
 pub(crate) mod catalog;
 pub(crate) mod io;
-mod numeric;
+mod language_constructs;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
@@ -27,11 +27,11 @@ pub(crate) use catalog::{
     supported_builtin_function_names,
 };
 pub(crate) use callables::{
-    array_element_type, array_filter_callback_dummy_args, callback_supports_complex_descriptor_env,
-    check_call_user_func, check_call_user_func_array,
+    array_element_type, array_filter_callback_arg_types, callback_supports_complex_descriptor_env,
+    check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
     check_callback_builtin_call, check_function_exists,
     check_preg_replace_callback_first_class_call,
-    comparator_dummy_arg_for_elem, dummy_arg_for_array_scalar_elem, runtime_callable_array_type,
+    runtime_callable_array_type,
 };
 
 impl Checker {
@@ -106,46 +106,104 @@ impl Checker {
             return Ok(Some(PhpType::Mixed));
         }
 
-        // Registry-first: if the builtin is registered, use its spec to check arity
-        // and derive the return type (or call the spec's check hook for refined types).
-        // Falls through to the legacy per-area dispatch when the name is not registered.
+        // Registry-backed builtins use their spec for arity, requirements,
+        // validation, and result typing. Only compiler-resident language
+        // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
+                args,
+            };
+            let requirements = match def.spec.semantics.requirements {
+                crate::builtins::semantics::BuiltinRequirements::Static(requirements) => {
+                    requirements.to_vec()
+                }
+                crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+                    resolve(&requirement_input)
+                }
+            };
+            for requirement in requirements {
+                match requirement {
+                    crate::builtins::semantics::BuiltinRequirement::Bridge(library)
+                    | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library) => {
+                        self.require_builtin_library(library);
+                    }
+                    crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
+                        self.require_macos_builtin_library(library);
+                    }
+                    crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                }
+            }
+            if !matches!(
+                def.spec.semantics.validation,
+                crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+            ) {
+                let mut arg_types = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_types.push(self.infer_type(arg, env)?);
+                }
+                let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
+                    name: &builtin_key,
+                    args,
+                    arg_types: &arg_types,
+                    span,
+                };
+                if let crate::builtins::semantics::BuiltinValidation::Shared(validate) =
+                    def.spec.semantics.validation
+                {
+                    validate(&semantic_input)?;
+                }
+                let ret = match def.spec.semantics.result_type {
+                    crate::builtins::semantics::BuiltinResultType::Declared => {
+                        def.return_type.clone()
+                    }
+                    crate::builtins::semantics::BuiltinResultType::Shared(resolve) => {
+                        resolve(&semantic_input)
+                    }
+                    crate::builtins::semantics::BuiltinResultType::Checked => {
+                        return Err(CompileError::new(
+                            span,
+                            "shared builtin validation must define a shared or declared result type",
+                        ));
+                    }
+                };
+                return Ok(Some(ret));
+            }
             // Infer argument types unconditionally so that type-environment side effects
             // (variable narrowing, undefined-variable diagnostics, etc.) fire for every
             // registry builtin — including pure-data builtins that have no check hook.
             // Check hooks may still inspect inferred types; they should not call
             // infer_type again on the same args to avoid redundant inference.
             //
-            // Exception: `lazy_check` builtins skip pre-inference so the check hook can
+            // Exception: lazy checker hooks skip pre-inference so the hook can
             // control argument inference order (e.g., to supply object-element type hints
             // to an unannotated closure before `infer_type` is called on it). These hooks
             // are responsible for calling `infer_type` on each argument themselves.
-            if !def.spec.lazy_check {
+            let crate::builtins::semantics::BuiltinValidation::CheckerHook {
+                check,
+                lazy,
+            } = def.spec.semantics.validation
+            else {
+                unreachable!("non-checker builtin returned from semantic validation branch");
+            };
+            if !lazy {
                 for arg in args.iter() {
                     self.infer_type(arg, env)?;
                 }
             }
-            let ret = if let Some(check) = def.spec.check {
-                let mut cx = crate::builtins::spec::BuiltinCheckCtx {
-                    checker: self,
-                    name,
-                    args,
-                    span,
-                    env,
-                };
-                check(&mut cx)?
-            } else {
-                def.return_type.clone()
+            let mut cx = crate::builtins::spec::BuiltinCheckCtx {
+                checker: self,
+                name,
+                args,
+                span,
+                env,
             };
+            let ret = check(&mut cx)?;
             return Ok(Some(ret));
         }
 
-        if let Some(result) = numeric::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = arrays::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
+        if matches!(builtin_key.as_str(), "exit" | "die" | "empty" | "unset" | "isset") {
+            return language_constructs::check(self, &builtin_key, args, span, env).map(Some);
         }
         Ok(None)
     }

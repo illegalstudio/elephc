@@ -2,7 +2,7 @@
 title: "mkdir()"
 description: "Makes a directory."
 sidebar:
-  order: 138
+  order: 140
 ---
 
 ## mkdir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `mkdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/mkdir.md).
-

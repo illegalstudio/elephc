@@ -2,7 +2,7 @@
 title: "stream_wrapper_register()"
 description: "Registers a URL wrapper implemented as a PHP class."
 sidebar:
-  order: 243
+  order: 245
 ---
 
 ## stream_wrapper_register()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_wrapper_register` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_wrapper_register.md).
-

@@ -2,7 +2,7 @@
 title: "lchown()"
 description: "Changes user ownership of a symlink."
 sidebar:
-  order: 134
+  order: 136
 ---
 
 ## lchown()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `lchown` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/lchown.md).
-

@@ -2,7 +2,7 @@
 title: "getcwd()"
 description: "Gets the current working directory."
 sidebar:
-  order: 123
+  order: 125
 ---
 
 ## getcwd()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `getcwd` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/getcwd.md).
-

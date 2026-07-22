@@ -3,7 +3,7 @@
 //! Holds the per-builtin `pub(crate)` check functions (`check_call_user_func`,
 //! `check_call_user_func_array`, `check_function_exists`, `check_preg_replace_callback_first_class_call`)
 //! relocated out of the old `check_builtin` dispatcher, plus the shared callback-validation helpers
-//! (`check_callback_builtin_call`, `array_element_type`, dummy-argument builders, etc.) reused across
+//! (`check_callback_builtin_call`, contextual array-argument builders, etc.) reused across
 //! the array and spl builtin checkers.
 //!
 //! Called from:
@@ -114,66 +114,142 @@ fn specialize_dynamic_assoc_variadic_first_class_callback(
     Ok(())
 }
 
-/// Produces a dummy expression of the appropriate scalar type for an array's element.
-///
-/// Selects `Str`, `Float`, `Bool`, or `Int` based on the element type of `arr_ty`.
-/// Used to fabricate placeholder call arguments when type-checking array-callback builtins.
-pub(crate) fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) -> Expr {
-    let elem_ty = match arr_ty {
-        PhpType::Array(elem_ty) => elem_ty.as_ref(),
-        PhpType::AssocArray { value, .. } => value.as_ref(),
-        _ => &PhpType::Int,
-    };
-    match elem_ty {
-        PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
-        PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
-        PhpType::Bool | PhpType::False => Expr::new(ExprKind::BoolLiteral(false), span),
-        _ => Expr::new(ExprKind::IntLiteral(0), span),
-    }
-}
-
 /// Returns the element type carried by an array/associative-array type.
 ///
-/// Falls back to `Int` for non-array types so callers can build a placeholder
-/// comparator argument without special-casing every caller.
+/// A `Mixed` receiver yields `Mixed` elements so callback validation can preserve the
+/// declaration as the only available contract. Other non-array types retain the historical
+/// `Int` fallback; callers that require arrays diagnose the invalid container separately.
 pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => (**elem_ty).clone(),
         PhpType::AssocArray { value, .. } => (**value).clone(),
+        PhpType::Mixed => PhpType::Mixed,
         _ => PhpType::Int,
     }
 }
 
-/// Reserved synthetic variable name used to give a comparator's dummy argument an
-/// object element type. It begins with a digit, so it can never collide with a
-/// real PHP variable name (`[A-Za-z_]\w*`).
-const COMPARATOR_ELEM_PLACEHOLDER: &str = "0__elephc_cmp_elem";
+/// Prefix for synthetic callback arguments; PHP identifiers cannot begin with a digit.
+const CALLBACK_ARG_PLACEHOLDER_PREFIX: &str = "0__elephc_callback_arg";
 
-/// Builds a dummy comparator argument for one array element, plus an optional
-/// `(name, type)` environment binding for element types that have no literal form.
+/// Returns the contextual closure-parameter type for one callback argument.
 ///
-/// Scalar elements use a literal placeholder, exactly like
-/// [`dummy_arg_for_array_scalar_elem`]. Object elements have no literal, so a
-/// reserved synthetic variable (see [`COMPARATOR_ELEM_PLACEHOLDER`]) is bound to
-/// the element type and returned as the binding; the caller must insert it into
-/// the environment used for callback validation so a typed comparator parameter
-/// (`function (DateTime $a, DateTime $b)`) is checked against the real type.
-pub(crate) fn comparator_dummy_arg_for_elem(
-    elem_ty: &PhpType,
-    span: crate::span::Span,
-) -> (Expr, Option<(String, PhpType)>) {
-    match elem_ty {
-        PhpType::Str => (Expr::new(ExprKind::StringLiteral(String::new()), span), None),
-        PhpType::Float => (Expr::new(ExprKind::FloatLiteral(0.0), span), None),
-        PhpType::Bool | PhpType::False => {
-            (Expr::new(ExprKind::BoolLiteral(false), span), None)
-        }
-        PhpType::Object(_) => (
-            Expr::new(ExprKind::Variable(COMPARATOR_ELEM_PLACEHOLDER.to_string()), span),
-            Some((COMPARATOR_ELEM_PLACEHOLDER.to_string(), elem_ty.clone())),
-        ),
-        _ => (Expr::new(ExprKind::IntLiteral(0), span), None),
+/// `Mixed` and `Never` mean the array element is statically opaque, so an unannotated
+/// closure parameter remains `Mixed`; explicit declarations are preserved by closure inference.
+fn contextual_callback_param_type(ty: &PhpType) -> PhpType {
+    if matches!(ty, PhpType::Mixed | PhpType::Never) {
+        PhpType::Mixed
+    } else {
+        ty.clone()
     }
+}
+
+/// Builds one checker-only callback argument and records non-literal types in `env`.
+///
+/// Opaque `Mixed`/`Never` elements use the bottom type so a declared callback contract is
+/// not rejected against information the array type does not contain. Known compound types
+/// retain their real type and therefore still receive normal compatibility validation.
+fn callback_dummy_arg_for_type(
+    ty: &PhpType,
+    index: usize,
+    span: crate::span::Span,
+    env: &mut TypeEnv,
+) -> Expr {
+    match ty {
+        PhpType::Int => Expr::new(ExprKind::IntLiteral(0), span),
+        PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
+        PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
+        PhpType::Bool | PhpType::False => Expr::new(ExprKind::BoolLiteral(false), span),
+        PhpType::Void => Expr::new(ExprKind::Null, span),
+        _ => {
+            let name = format!("{}_{}", CALLBACK_ARG_PLACEHOLDER_PREFIX, index);
+            let binding_ty = if matches!(ty, PhpType::Mixed | PhpType::Never) {
+                PhpType::Never
+            } else {
+                ty.clone()
+            };
+            env.insert(name.clone(), binding_ty);
+            Expr::new(ExprKind::Variable(name), span)
+        }
+    }
+}
+
+/// Validates an array-callback builtin using real element types or opaque argument slots.
+///
+/// Closure literals are first checked with contextual parameter hints, then invoked against
+/// checker-only arguments. Known element types remain strict; `Mixed`/`Never` elements defer
+/// the element-to-declaration comparison without weakening global type compatibility.
+pub(crate) fn check_array_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_arg_types: &[PhpType],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    let mut callback_env = env.clone();
+    let callback_args = callback_arg_types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| callback_dummy_arg_for_type(ty, index, span, &mut callback_env))
+        .collect::<Vec<_>>();
+
+    if let ExprKind::Closure {
+        params,
+        variadic,
+        variadic_by_ref,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        by_ref_return,
+        ..
+    } = &callback.kind
+    {
+        let param_hints = callback_arg_types
+            .iter()
+            .map(contextual_callback_param_type)
+            .collect::<Vec<_>>();
+        checker.infer_closure_type_with_param_hints(
+            params,
+            variadic,
+            *variadic_by_ref,
+            return_type,
+            body,
+            captures,
+            capture_refs,
+            callback,
+            env,
+            &param_hints,
+        )?;
+        let sig = checker.resolve_closure_signature_with_param_hints(
+            params,
+            variadic,
+            *variadic_by_ref,
+            return_type,
+            body,
+            captures,
+            *by_ref_return,
+            callback.span,
+            env,
+            &param_hints,
+        )?;
+        return checker.check_known_callable_call(
+            &sig,
+            &callback_args,
+            span,
+            &callback_env,
+            label,
+        );
+    }
+
+    check_callback_builtin_call(
+        checker,
+        callback,
+        &callback_args,
+        span,
+        &callback_env,
+        label,
+    )
 }
 
 /// Checks object or array callable call and reports a compile error when it is invalid.
@@ -1209,22 +1285,19 @@ pub(crate) fn check_function_exists(
     Ok(PhpType::Bool)
 }
 
-/// Builds synthetic callback arguments for `array_filter()` based on a static mode.
+/// Returns contextual callback argument types for `array_filter()` based on a static mode.
 ///
 /// Unknown or invalid runtime modes use the default value-only shape for type checking;
 /// runtime validation still throws before invoking the callback when the mode is invalid.
-pub(crate) fn array_filter_callback_dummy_args(
+pub(crate) fn array_filter_callback_arg_types(
     arr_ty: &PhpType,
     mode_arg: Option<&Expr>,
-    span: crate::span::Span,
-) -> Vec<Expr> {
+) -> Vec<PhpType> {
+    let elem_ty = array_element_type(arr_ty);
     match mode_arg.and_then(static_array_filter_mode_value) {
-        Some(1) => vec![
-            dummy_arg_for_array_scalar_elem(arr_ty, span),
-            Expr::new(ExprKind::IntLiteral(0), span),
-        ],
-        Some(2) => vec![Expr::new(ExprKind::IntLiteral(0), span)],
-        _ => vec![dummy_arg_for_array_scalar_elem(arr_ty, span)],
+        Some(1) => vec![elem_ty, PhpType::Int],
+        Some(2) => vec![PhpType::Int],
+        _ => vec![elem_ty],
     }
 }
 

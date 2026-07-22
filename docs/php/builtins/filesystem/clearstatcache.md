@@ -2,7 +2,7 @@
 title: "clearstatcache()"
 description: "Clears file status cache."
 sidebar:
-  order: 107
+  order: 109
 ---
 
 ## clearstatcache()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `clearstatcache` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/clearstatcache.md).
-

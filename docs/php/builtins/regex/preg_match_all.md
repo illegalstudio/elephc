@@ -2,7 +2,7 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match and returns the number of matches."
 sidebar:
-  order: 334
+  order: 336
 ---
 
 ## preg_match_all()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `preg_match_all` is implemented in the compiler, see [the internals page](../../../internals/builtins/regex/preg_match_all.md).
-

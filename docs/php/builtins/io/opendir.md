@@ -2,7 +2,7 @@
 title: "opendir()"
 description: "Open directory handle."
 sidebar:
-  order: 202
+  order: 204
 ---
 
 ## opendir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `opendir` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/opendir.md).
-

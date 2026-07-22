@@ -2,7 +2,7 @@
 title: "fgets()"
 description: "Gets line from file pointer."
 sidebar:
-  order: 164
+  order: 166
 ---
 
 ## fgets()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fgets` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fgets.md).
-

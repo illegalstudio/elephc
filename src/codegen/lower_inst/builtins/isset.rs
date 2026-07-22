@@ -3,7 +3,7 @@
 //! existence probes, and scalar null-sentinel handling.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Offset probes must inspect the source `StrCharAt`, `ArrayGet`, or `HashGet`

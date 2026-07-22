@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `touch` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `touch` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` delegates to the relocated `check_touch` helper, which validates that
@@ -12,13 +11,9 @@
 //! - `arity_error` is overridden to preserve the legacy message
 //!   "touch() takes 1, 2, or 3 arguments" (the registry default for a 1-required,
 //!   3-max builtin produces "1 to 3 arguments").
-//! - `lower` is a thin wrapper over `io::lower_touch` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::Expr;
 use crate::types::checker::Checker;
 use crate::types::{PhpType, TypeEnv};
@@ -30,7 +25,9 @@ builtin! {
     arity_error: "touch() takes 1, 2, or 3 arguments",
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Touch,
+    ),
     summary: "Sets access and modification time of a file.",
     php_manual: "function.touch",
 }
@@ -81,9 +78,4 @@ fn check_touch(
         ));
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers a `touch` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_touch(ctx, inst)
 }

@@ -2,7 +2,7 @@
 title: "ob_end_flush()"
 description: "Flushes (sends) the contents of the active output buffer and turns it off."
 sidebar:
-  order: 191
+  order: 193
 ---
 
 ## ob_end_flush()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_end_flush` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_end_flush.md).
-

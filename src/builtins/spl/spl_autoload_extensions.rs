@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `spl_autoload_extensions` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `spl_autoload_extensions` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required to validate that the optional argument, when present,
@@ -11,10 +10,7 @@
 //! - Returns the current extension string (`Str`) in all cases.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -24,7 +20,9 @@ builtin! {
     params: [file_extensions: Mixed = DefaultSpec::Null],
     returns: Str,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::SplAutoloadExtensions,
+    ),
     summary: "Register and return default file extensions for spl_autoload.",
     php_manual: "https://www.php.net/manual/en/function.spl-autoload-extensions.php",
 }
@@ -41,9 +39,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Str)
-}
-
-/// Lowers `spl_autoload_extensions()` by delegating to the extension-globals emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_spl_autoload_extensions(ctx, inst)
 }

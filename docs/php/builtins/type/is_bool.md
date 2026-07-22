@@ -2,7 +2,7 @@
 title: "is_bool()"
 description: "Checks whether a variable is a boolean."
 sidebar:
-  order: 439
+  order: 441
 ---
 
 ## is_bool()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_bool` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_bool.md).
-

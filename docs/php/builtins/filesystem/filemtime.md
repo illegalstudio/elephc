@@ -2,7 +2,7 @@
 title: "filemtime()"
 description: "Gets file modification time."
 sidebar:
-  order: 117
+  order: 119
 ---
 
 ## filemtime()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `filemtime` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/filemtime.md).
-

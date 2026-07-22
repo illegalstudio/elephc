@@ -53,6 +53,11 @@ impl ReturnArgAlias {
             Self::Unknown => true,
         }
     }
+
+    /// Returns whether analysis proved the result aliases `parameter_index`.
+    pub(crate) fn proven_aliases_parameter(&self, parameter_index: usize) -> bool {
+        matches!(self, Self::Parameters(parameters) if parameters.contains(&parameter_index))
+    }
 }
 
 /// Return/argument alias summaries for source-declared functions and methods.
@@ -555,7 +560,14 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
 
 /// Returns whether a builtin's result storage cannot alias any caller argument.
 fn builtin_result_is_proven_independent(name: &str) -> bool {
-    crate::builtins::registry::returns_independent_storage(name.trim_start_matches('\\'))
+    crate::builtins::registry::lookup(name.trim_start_matches('\\')).is_some_and(|def| {
+        matches!(
+            def.spec.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                | crate::builtins::semantics::BuiltinResultOwnership::Independent
+                | crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+        )
+    })
 }
 
 /// Conservatively invalidates locals that an expression can rewrite by reference.

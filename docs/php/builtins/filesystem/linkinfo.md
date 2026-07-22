@@ -2,7 +2,7 @@
 title: "linkinfo()"
 description: "Gets information about a link."
 sidebar:
-  order: 136
+  order: 138
 ---
 
 ## linkinfo()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `linkinfo` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/linkinfo.md).
-

@@ -2,7 +2,7 @@
 title: "is_numeric()"
 description: "Checks whether a variable is a number or a numeric string."
 sidebar:
-  order: 445
+  order: 450
 ---
 
 ## is_numeric()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_numeric` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_numeric.md).
-

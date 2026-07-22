@@ -2,7 +2,7 @@
 title: "hash_final()"
 description: "Finalizes an incremental hash and returns the digest string."
 sidebar:
-  order: 373
+  order: 375
 ---
 
 ## hash_final()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_final` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_final.md).
-

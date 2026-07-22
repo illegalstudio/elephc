@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `json_decode` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `json_decode` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The check hook validates the json argument type, the optional associative
@@ -12,10 +11,7 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::system::json_support;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,7 +25,10 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::JsonDecode),
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode,
+    ),
     summary: "Decodes a JSON string.",
 }
 
@@ -64,9 +63,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Mixed)
-}
-
-/// Lowers a `json_decode` call by dispatching to the shared JSON emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::json::lower_json_decode(ctx, inst)
 }

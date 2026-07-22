@@ -2,7 +2,7 @@
 title: "strcmp()"
 description: "Binary safe string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 409
+  order: 411
 ---
 
 ## strcmp()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strcmp` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strcmp.md).
-

@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `array_fill_keys` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_fill_keys` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the first argument is an indexed array and returns an
 //!   associative array whose key type is derived from the element type of `keys`
 //!   and whose value type matches `value`.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_fill_keys` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [keys: Mixed, value: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayFillKeys,
+    ),
     summary: "Fill an array with values, specifying keys.",
     php_manual: "https://www.php.net/manual/en/function.array-fill-keys.php",
 }
@@ -50,9 +47,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         key: Box::new(crate::types::array_key_type_from_value_type(key_elem)),
         value: Box::new(val_ty),
     })
-}
-
-/// Lowers an `array_fill_keys` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_fill_keys(ctx, inst)
 }

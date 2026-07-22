@@ -2,7 +2,7 @@
 title: "chown()"
 description: "Changes file owner."
 sidebar:
-  order: 106
+  order: 108
 ---
 
 ## chown()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `chown` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/chown.md).
-

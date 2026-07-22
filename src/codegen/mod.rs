@@ -10,6 +10,7 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
+mod callable_reachability;
 pub(crate) mod context;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
@@ -384,13 +385,13 @@ fn module_uses_dynamic_callable_lookup(module: &Module) -> bool {
         .chain(module.callback_wrappers.iter())
         .chain(module.extern_callback_trampolines.iter())
         .chain(module.runtime_callable_invokers.iter())
-        .any(|function| function_uses_dynamic_callable_lookup(module, function))
+        .any(function_uses_dynamic_callable_lookup)
 }
 
 /// Returns true when one function calls `is_callable()` on a runtime-shaped value.
-fn function_uses_dynamic_callable_lookup(module: &Module, function: &Function) -> bool {
+fn function_uses_dynamic_callable_lookup(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
-        if !is_dynamic_callable_lookup_builtin(module, inst) || inst.operands.is_empty() {
+        if !is_dynamic_callable_lookup_builtin(inst) || inst.operands.is_empty() {
             return false;
         }
         let Some(value) = function.value(inst.operands[0]) else {
@@ -410,17 +411,8 @@ fn function_uses_dynamic_callable_lookup(module: &Module, function: &Function) -
 }
 
 /// Returns true for an EIR builtin instruction that calls PHP `is_callable()`.
-fn is_dynamic_callable_lookup_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    if inst.op != Op::BuiltinCall {
-        return false;
-    }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
-    };
-    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
-        return false;
-    };
-    crate::names::php_symbol_key(name.trim_start_matches('\\')) == "is_callable"
+fn is_dynamic_callable_lookup_builtin(inst: &crate::ir::Instruction) -> bool {
+    typed_builtin_target(inst).is_some_and(|target| target.is_callable_lookup())
 }
 
 /// Emits method-symbol wrappers for runtime-backed intrinsic class methods.
@@ -1490,7 +1482,7 @@ fn referenced_class_name_lookup_builtin_names(module: &Module) -> HashSet<String
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if !matches!(inst.op, Op::BuiltinCall) || !is_class_name_lookup_builtin(module, inst) {
+            if !is_class_name_lookup_builtin(inst) {
                 continue;
             }
             if inst.operands.is_empty() {
@@ -1513,17 +1505,8 @@ fn referenced_class_name_lookup_builtin_names(module: &Module) -> HashSet<String
 }
 
 /// Returns whether an instruction is a class-name lookup builtin call.
-fn is_class_name_lookup_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
-    };
-    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
-        return false;
-    };
-    matches!(
-        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "get_class" | "get_parent_class"
-    )
+fn is_class_name_lookup_builtin(inst: &crate::ir::Instruction) -> bool {
+    typed_builtin_target(inst).is_some_and(|target| target.is_class_name_lookup())
 }
 
 /// Returns class names passed as literals to stream wrapper/filter registration builtins.
@@ -1540,8 +1523,7 @@ fn referenced_stream_registration_class_names(module: &Module) -> HashSet<String
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if !matches!(inst.op, Op::BuiltinCall)
-                || !is_stream_registration_builtin(module, inst)
+            if !is_stream_registration_builtin(inst)
                 || inst.operands.len() < 2
             {
                 continue;
@@ -1565,17 +1547,16 @@ fn canonical_module_class_name(module: &Module, class_name: &str) -> Option<Stri
 }
 
 /// Returns true for builtins whose literal class argument is consumed by runtime metadata.
-fn is_stream_registration_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
-    };
-    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
-        return false;
-    };
-    matches!(
-        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "stream_wrapper_register" | "stream_filter_register"
-    )
+fn is_stream_registration_builtin(inst: &crate::ir::Instruction) -> bool {
+    typed_builtin_target(inst).is_some_and(|target| target.is_stream_registration())
+}
+
+/// Returns the typed builtin target carried by an EIR runtime call.
+fn typed_builtin_target(inst: &crate::ir::Instruction) -> Option<crate::ir::RuntimeFnId> {
+    match inst.immediate {
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+        _ => None,
+    }
 }
 
 /// Returns the literal string payload produced by a `ConstStr` value.

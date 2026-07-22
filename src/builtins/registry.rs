@@ -1,10 +1,10 @@
 //! Purpose:
 //! Collects all `BuiltinSpec` entries submitted via `builtin!` into a lazy registry,
-//! and exposes lookup helpers used by the catalog, type checker, and codegen dispatcher.
+//! and exposes lookup helpers used by the catalog, type checker, EIR, and documentation.
 //!
 //! Called from:
 //! - `crate::types::checker::builtins::catalog` for name-based lookup.
-//! - `crate::codegen::lower_inst::builtins` for lowering-hook dispatch.
+//! - `crate::ir::runtime_call` for typed runtime-function contracts.
 //!
 //! Key details:
 //! - Registry is initialized once at first access via a `OnceLock`; subsequent calls
@@ -44,10 +44,6 @@ pub struct BuiltinDef {
     pub variadic: Option<String>,
     /// The PHP-level return type, derived from the spec's `TypeSpec` via `type_spec_to_php`.
     pub return_type: PhpType,
-    /// Whether refcounted result variants are freshly allocated for the caller.
-    pub returns_fresh_storage: bool,
-    /// Whether the result cannot reuse any argument's storage.
-    pub returns_independent_storage: bool,
     /// Whether this function returns by reference.
     pub by_ref_return: bool,
     /// Reference back to the original static `BuiltinSpec` for hooks and metadata.
@@ -105,9 +101,6 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
             ref_params,
             variadic: spec.variadic.map(str::to_string),
             return_type: type_spec_to_php(&spec.returns),
-            returns_fresh_storage: spec.returns_fresh_storage,
-            returns_independent_storage: spec.returns_fresh_storage
-                || spec.returns_independent_storage,
             by_ref_return: spec.by_ref_return,
             spec,
         };
@@ -137,16 +130,6 @@ pub fn is_supported(name: &str) -> bool {
     lookup(name).is_some()
 }
 
-/// Returns whether a builtin declares fresh caller-owned refcounted result storage.
-pub fn returns_fresh_storage(name: &str) -> bool {
-    lookup(name).is_some_and(|def| def.returns_fresh_storage)
-}
-
-/// Returns whether a builtin result cannot alias any of its argument storage.
-pub fn returns_independent_storage(name: &str) -> bool {
-    lookup(name).is_some_and(|def| def.returns_independent_storage)
-}
-
 /// Returns an iterator over all registered canonical builtin names in sorted order.
 ///
 /// Names are returned in stable lexicographic order (sorted by `&'static str`)
@@ -162,18 +145,17 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 
 /// Derives a `FunctionSig` for the named builtin from the registry.
 ///
-/// The returned sig matches the field layout the legacy `builtin_call_sig()` arms
-/// produce via `make_sig`, with the following field mapping:
+/// The returned signature uses the following registry-to-`FunctionSig` field mapping:
 ///
 /// | `FunctionSig` field   | Source                                         |
 /// |------------------------|------------------------------------------------|
 /// | `params`               | `BuiltinDef.params` (typed via `TypeSpec`)    |
 /// | `defaults`             | `BuiltinDef.defaults` (via `DefaultSpec`)     |
 /// | `return_type`          | `BuiltinDef.return_type` (via `TypeSpec`)     |
-/// | `declared_return`      | `false` (matching `make_sig` convention)       |
+/// | `declared_return`      | `false` for a direct builtin signature          |
 /// | `by_ref_return`        | `BuiltinDef.by_ref_return` (from spec)        |
 /// | `ref_params`           | `BuiltinDef.ref_params` (from spec)           |
-/// | `declared_params`      | `vec![false; N]` (matching `make_sig`)        |
+/// | `declared_params`      | `vec![false; N]` for registry-derived params  |
 /// | `variadic`             | `BuiltinDef.variadic` (from spec)             |
 /// | `deprecation`          | `spec.deprecation` mapped to `Option<String>` |
 ///
@@ -199,19 +181,19 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
 ///
 /// Applies `callable_wrapper_sig` to the base `function_sig`, upgrading the
 /// variadic parameter (if any) to `Array<Mixed>` as required for first-class use.
-/// This reuses the same upgrade logic applied by the legacy `callable_wrapper_sig`
-/// helper in `src/types/signatures.rs` rather than reinventing it.
+/// This reuses the shared `callable_wrapper_sig` helper in
+/// `src/types/signatures.rs` rather than rebuilding callable normalization.
 ///
-/// Sets `declared_return: true` on the resulting signature, mirroring the
-/// `typed_first_class_builtin_sig` convention used by the legacy table. First-class
+/// Sets `declared_return: true` on the resulting signature. First-class
 /// callable sigs have a known, declared return type (they are typed wrappers, not
 /// type-erased callables), so `declared_return` must be `true`.
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
-    let sig = function_sig(name)?;
+    let def = lookup(name)?;
+    let sig = function_sig(def.name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
-    refine_first_class_callable_sig(name, &mut fcc_sig);
+    refine_first_class_callable_sig(def, &mut fcc_sig);
     fcc_sig.declared_return = true;
     // Mark params declared for reflection hasType, but keep by-ref params
     // undeclared: their registry type is Mixed by generality, and a declared
@@ -224,48 +206,12 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
 }
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
-fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
-    match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "preg_replace_callback" => {
-            if let Some((_, callback_ty)) = sig.params.get_mut(1) {
-                *callback_ty = PhpType::Callable;
-            }
-        }
-        "zval_pack" => {
-            if let Some((_, value_ty)) = sig.params.get_mut(0) {
-                *value_ty = PhpType::Mixed;
-            }
-            sig.return_type = PhpType::Pointer(None);
-        }
-        "zval_unpack" => {
-            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
-                *zval_ty = PhpType::Pointer(None);
-            }
-            sig.return_type = PhpType::Mixed;
-        }
-        "zval_type" => {
-            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
-                *zval_ty = PhpType::Pointer(None);
-            }
-            sig.return_type = PhpType::Int;
-        }
-        "zval_free" => {
-            if let Some((_, zval_ty)) = sig.params.get_mut(0) {
-                *zval_ty = PhpType::Pointer(None);
-            }
-            sig.return_type = PhpType::Void;
-        }
-        // Preserves the legacy typed first-class signature: the registry param is
-        // Mixed by generality, but the wrapper must demand a buffer so first-class
-        // use keeps rejecting non-buffer arguments at check time instead of
-        // failing later in codegen.
-        "buffer_len" => {
-            if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
-                *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
-            }
-            sig.return_type = PhpType::Int;
-        }
-        _ => {}
+fn refine_first_class_callable_sig(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if let crate::builtins::semantics::BuiltinLowering::Runtime(
+        crate::ir::RuntimeCallTarget::Function(target),
+    ) = def.spec.semantics.lowering
+    {
+        target.refine_first_class_callable_sig(sig);
     }
 }
 
@@ -276,20 +222,67 @@ fn refine_first_class_callable_sig(name: &str, sig: &mut FunctionSig) {
 ///   where `n` is the total parameter count including optional ones.
 ///
 /// Returns `None` if the builtin is not registered.
+#[cfg(test)]
 pub fn arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
     let def = lookup(name)?;
+    Some(arity_bounds_for_def(def))
+}
+
+/// Derives declared arity bounds from one already-resolved registry definition.
+fn arity_bounds_for_def(def: &BuiltinDef) -> (usize, Option<usize>) {
     let min = def.defaults.iter().filter(|d| d.is_none()).count();
     let max = if def.variadic.is_some() {
         None
     } else {
         Some(def.params.len())
     };
-    Some((min, max))
+    (min, max)
+}
+
+/// Returns the arity bounds enforced by semantic checking and typed EIR calls.
+pub fn enforced_arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
+    let def = lookup(name)?;
+    Some(enforced_arity_bounds_for_def(def))
+}
+
+/// Derives the semantic arity contract from one already-resolved definition.
+fn enforced_arity_bounds_for_def(def: &BuiltinDef) -> (usize, Option<usize>) {
+    let (declared_min, declared_max) = arity_bounds_for_def(def);
+    (
+        def.spec.min_args.unwrap_or(declared_min),
+        def.spec.max_args.map_or(declared_max, Some),
+    )
+}
+
+/// Returns the arity contract for a typed runtime function without PHP-name lookup.
+///
+/// Multiple aliases may share one runtime ID. Their normalized call contracts must
+/// agree; a mismatch is a registry invariant violation rather than a backend choice.
+pub fn runtime_fn_arity_bounds(
+    runtime_fn: crate::ir::RuntimeFnId,
+) -> Option<(usize, Option<usize>)> {
+    let mut resolved = None;
+    for def in registry().values() {
+        if !def.spec.semantics.runtime_functions.contains(runtime_fn) {
+            continue;
+        }
+        let bounds = enforced_arity_bounds_for_def(def);
+        if let Some(previous) = resolved {
+            assert_eq!(
+                previous, bounds,
+                "runtime function {} has aliases with incompatible arity contracts",
+                runtime_fn.as_eir(),
+            );
+        } else {
+            resolved = Some(bounds);
+        }
+    }
+    resolved
 }
 
 /// Validates the argument count for a named builtin and returns a standard arity error on mismatch.
 ///
-/// Uses `arity_bounds(name)` to determine the expected arity and compares it against
+/// Uses the registry's enforced arity contract and compares it against
 /// `arg_count`. Returns `Ok(())` when the count is in range. Returns a `CompileError`
 /// with `span` and a message matching the dominant legacy `"<name>() takes …"` phrasing:
 ///
@@ -313,21 +306,9 @@ pub fn arity_bounds(name: &str) -> Option<(usize, Option<usize>)> {
 pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), CompileError> {
     // Param-derived bounds, identical to what the parity gate compares against.
     // `min` is the count of required params; `param_max` is the declared maximum.
-    let (min, param_max) = match arity_bounds(name) {
+    let (min, max) = match enforced_arity_bounds(name) {
         Some(bounds) => bounds,
         None => return Ok(()),
-    };
-    // Apply the `min_args` override (if any) to the minimum only.
-    let min = match lookup(name).and_then(|def| def.spec.min_args) {
-        Some(raised) => raised,
-        None => min,
-    };
-    // Apply the `max_args` override (if any) to the maximum only. The minimum stays
-    // param-derived; the override exists to tighten the accepted maximum for builtins
-    // whose legacy CHECK arm was stricter than their declared (golden) signature.
-    let max = match lookup(name).and_then(|def| def.spec.max_args) {
-        Some(capped) => Some(capped),
-        None => param_max,
     };
 
     let in_range = match max {
@@ -371,55 +352,49 @@ mod tests {
     use super::*;
     use crate::builtins::spec::DefaultSpec;
 
-    /// No-op lowering hook used by test probe builtins; does nothing and succeeds.
-    fn noop_lower(
-        _c: &mut crate::codegen::context::FunctionContext,
-        _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen::CodegenIrError> {
-        Ok(())
-    }
-
     // Register a registry-specific probe so tests do not depend solely on the
     // spec-module probe (which lives in a different cfg(test) module).
     builtin! {
         name: "__registry_probe_opt",
-        area: Internal,
+        area: Types,
         params: [a: Int, b: Str = DefaultSpec::Null],
         returns: Bool,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "registry arity probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_owned",
-        area: Internal,
+        area: Types,
         params: [],
         returns: Mixed,
-        returns_fresh_storage: true,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics_with_ownership(
+            crate::builtins::semantics::BuiltinResultOwnership::Fresh,
+        ),
         summary: "registry owned-result probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_independent",
-        area: Internal,
+        area: Types,
         params: [value: Str],
         returns: Str,
-        returns_independent_storage: true,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics_with_ownership(
+            crate::builtins::semantics::BuiltinResultOwnership::Independent,
+        ),
         summary: "registry independent-result probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_variadic",
-        area: Internal,
+        area: Types,
         params: [fmt: Str],
         variadic: "__registry_values",
         returns: Str,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "registry variadic probe",
         internal: true,
     }
@@ -429,46 +404,46 @@ mod tests {
     // affecting `function_sig`'s full param count.
     builtin! {
         name: "__registry_probe_capped",
-        area: Internal,
+        area: Types,
         params: [a: Int, b: Int, c: Int = DefaultSpec::Int(0)],
         max_args: 2,
         returns: Int,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "registry capped-arity probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_raised_min",
-        area: Internal,
+        area: Types,
         params: [],
         variadic: "__registry_arrays",
         min_args: 2,
         returns: Mixed,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "registry raised-min probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_arity_error",
-        area: Internal,
+        area: Types,
         params: [algo: Str, flags: Int = DefaultSpec::Int(0)],
         min_args: 1,
         max_args: 1,
         arity_error: "custom arity error message for probe",
         returns: Mixed,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "registry arity_error probe",
         internal: true,
     }
 
     builtin! {
         name: "__registry_probe_byref",
-        area: Internal,
+        area: Types,
         params: [ref target: Mixed, value: Int],
         returns: Mixed,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_by_ref_semantics(),
         summary: "registry by-ref param probe",
         internal: true,
     }
@@ -499,23 +474,33 @@ mod tests {
     /// Verifies fresh-result ownership metadata is available through case-insensitive lookup.
     #[test]
     fn fresh_result_storage_metadata_is_queryable() {
-        assert!(returns_fresh_storage("__REGISTRY_PROBE_OWNED"));
-        assert!(!returns_fresh_storage("__registry_probe_opt"));
-        assert!(!returns_fresh_storage("__registry_probe_variadic"));
-        assert!(!returns_fresh_storage("__not_a_real_builtin_xyz"));
+        assert!(matches!(
+            lookup("__REGISTRY_PROBE_OWNED").unwrap().spec.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::Fresh
+        ));
     }
 
     /// Verifies fresh and explicitly independent results both reject argument aliasing.
     #[test]
     fn independent_result_storage_metadata_is_queryable() {
-        assert!(returns_independent_storage("__REGISTRY_PROBE_OWNED"));
-        assert!(returns_independent_storage("__registry_probe_independent"));
-        assert!(returns_independent_storage("htmlspecialchars"));
-        assert!(returns_independent_storage("htmlentities"));
-        assert!(returns_independent_storage("implode"));
-        assert!(returns_independent_storage("rawurldecode"));
-        assert!(!returns_independent_storage("__registry_probe_opt"));
-        assert!(!returns_independent_storage("__not_a_real_builtin_xyz"));
+        let independent = |name| {
+            lookup(name).is_some_and(|def| {
+                matches!(
+                    def.spec.semantics.result_ownership,
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                        | crate::builtins::semantics::BuiltinResultOwnership::Independent
+                        | crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                )
+            })
+        };
+        assert!(independent("__REGISTRY_PROBE_OWNED"));
+        assert!(independent("__registry_probe_independent"));
+        assert!(independent("htmlspecialchars"));
+        assert!(independent("htmlentities"));
+        assert!(independent("implode"));
+        assert!(independent("rawurldecode"));
+        assert!(!independent("__registry_probe_opt"));
+        assert!(!independent("__not_a_real_builtin_xyz"));
     }
 
     /// Verifies `is_supported` returns true for registered builtins.
@@ -698,5 +683,170 @@ mod tests {
         assert_eq!(sig.params.len(), 2);
         assert_eq!(sig.params[0].0, "target");
         assert_eq!(sig.params[1].0, "value");
+    }
+
+    /// Verifies every registry runtime function has a complete central descriptor and logical ABI.
+    #[test]
+    fn every_runtime_lowering_has_a_logical_signature() {
+        for name in names() {
+            let def = lookup(name).expect("iterated registry name must resolve");
+            if let crate::builtins::semantics::BuiltinLowering::Runtime(target) =
+                def.spec.semantics.lowering
+            {
+                assert!(
+                    target.signature().is_some(),
+                    "{} runtime target {} has no logical signature",
+                    name,
+                    target.as_eir(),
+                );
+            }
+            if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
+                def.spec.semantics.runtime_functions
+            {
+                let target = crate::ir::RuntimeCallTarget::Function(runtime_fn);
+                let descriptor = runtime_fn.descriptor();
+                assert!(
+                    target.signature().is_some(),
+                    "{} may emit {} without a logical signature",
+                    name,
+                    target.as_eir(),
+                );
+                assert_eq!(descriptor.id, runtime_fn);
+                assert_eq!(descriptor.eir_name, target.as_eir());
+                assert_eq!(descriptor.logical_signature, target.signature());
+                assert_eq!(descriptor.effects, runtime_fn.effects());
+                assert_eq!(descriptor.result_ownership, runtime_fn.result_ownership());
+                assert_eq!(descriptor.requirements, runtime_fn.requirements());
+                assert_eq!(
+                    descriptor.backend_mapping,
+                    crate::ir::RuntimeFnBackendMapping::TargetAwareEmitter,
+                );
+                assert_eq!(
+                    descriptor.target_support,
+                    crate::ir::RuntimeFnTargetSupport::AllSupported,
+                );
+            }
+        }
+    }
+
+    /// Verifies callable wrapper ABI refinements come from typed runtime descriptors.
+    #[test]
+    fn runtime_descriptors_refine_callable_wrapper_signatures() {
+        let mut count = callable_wrapper_sig(&function_sig("count").expect("count signature"));
+        crate::ir::RuntimeFnId::Count.refine_runtime_callable_wrapper_sig(&mut count);
+        assert_eq!(count.params.len(), 1);
+
+        let mut sum = callable_wrapper_sig(&function_sig("array_sum").expect("array_sum signature"));
+        crate::ir::RuntimeFnId::ArraySum.refine_runtime_callable_wrapper_sig(&mut sum);
+        assert_eq!(sum.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+
+        let mut clamp = callable_wrapper_sig(&function_sig("clamp").expect("clamp signature"));
+        crate::ir::RuntimeFnId::Clamp.refine_runtime_callable_wrapper_sig(&mut clamp);
+        assert!(clamp.params.iter().all(|(_, ty)| *ty == PhpType::Int));
+        assert_eq!(clamp.return_type, PhpType::Int);
+
+        let mut sort = callable_wrapper_sig(&function_sig("sort").expect("sort signature"));
+        crate::ir::RuntimeFnId::Sort.refine_runtime_callable_wrapper_sig(&mut sort);
+        assert_eq!(sort.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+    }
+
+    /// Verifies source-order argument strategies are registry metadata rather than name dispatch.
+    #[test]
+    fn specialized_argument_lowering_is_registry_owned() {
+        use crate::builtins::semantics::BuiltinArgumentLowering;
+        for (name, expected) in [
+            ("count", BuiltinArgumentLowering::Count),
+            ("date", BuiltinArgumentLowering::Date),
+            ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            (
+                "preg_replace_callback",
+                BuiltinArgumentLowering::PregReplaceCallback,
+            ),
+            ("preg_match", BuiltinArgumentLowering::PositionalRegex),
+            ("preg_split", BuiltinArgumentLowering::PositionalRegex),
+            ("usort", BuiltinArgumentLowering::UserValueSort),
+            ("uasort", BuiltinArgumentLowering::UserValueSort),
+        ] {
+            let def = lookup(name).expect("specialized builtin must be registered");
+            assert_eq!(def.spec.semantics.argument_lowering, expected, "{name}");
+        }
+        assert_eq!(
+            lookup("strlen")
+                .expect("strlen must be registered")
+                .spec
+                .semantics
+                .argument_lowering,
+            BuiltinArgumentLowering::Standard,
+        );
+    }
+
+    /// Verifies checker hooks can retain a representation-safe result resolver for EIR lowering.
+    #[test]
+    fn checker_hook_preserves_shared_eir_result_metadata() {
+        assert!(matches!(
+            lookup("preg_split")
+                .expect("preg_split must be registered")
+                .spec
+                .semantics
+                .result_type,
+            crate::builtins::semantics::BuiltinResultType::Shared(_)
+        ));
+    }
+
+    /// Verifies typed runtime lowering derives count's visible arity from registry semantics.
+    #[test]
+    fn count_runtime_function_arity_comes_from_registry_semantics() {
+        assert_eq!(
+            runtime_fn_arity_bounds(crate::ir::RuntimeFnId::Count),
+            Some((1, Some(1))),
+        );
+    }
+
+    /// Verifies every backend-neutral type predicate supports runtime string dispatch.
+    #[test]
+    fn type_predicates_support_dynamic_callable_wrappers() {
+        for name in [
+            "is_array",
+            "is_bool",
+            "is_double",
+            "is_float",
+            "is_int",
+            "is_integer",
+            "is_iterable",
+            "is_long",
+            "is_object",
+            "is_real",
+            "is_resource",
+            "is_scalar",
+            "is_string",
+        ] {
+            let def = lookup(name).expect("type predicate must be registered");
+            assert!(
+                matches!(
+                    def.spec.semantics.callable,
+                    crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(_)
+                ),
+                "{name} must support runtime string dispatch",
+            );
+        }
+    }
+
+    /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
+    #[test]
+    fn array_runtime_fallbacks_preserve_backend_container_layout() {
+        for target in [
+            crate::ir::RuntimeFnId::Explode,
+            crate::ir::RuntimeFnId::File,
+            crate::ir::RuntimeFnId::Glob,
+            crate::ir::RuntimeFnId::Scandir,
+            crate::ir::RuntimeFnId::SplClasses,
+        ] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Array(Box::new(PhpType::Str)),
+                "{} must remain a concrete string array",
+                target.as_eir(),
+            );
+        }
     }
 }

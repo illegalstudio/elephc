@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `array_multisort` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_multisort` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `fixed(["array1","array2"])` with `ref_params = [true, true]`:
 //!   exactly 2 by-ref params. The `ref` markers are mandatory for in-place mutation.
 //! - `check` requires BOTH arguments are indexed `Array(_)` types, returning Bool.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_multisort` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [ref array1: Mixed, ref array2: Mixed],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayMultisort,
+    ),
     summary: "Sorts multiple arrays or multi-dimensional arrays.",
     php_manual: "https://www.php.net/manual/en/function.array-multisort.php",
 }
@@ -40,9 +37,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Err(CompileError::new(cx.span, "array_multisort() arguments must be indexed arrays"));
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers an `array_multisort` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_multisort(ctx, inst)
 }

@@ -2,7 +2,7 @@
 title: "stream_set_timeout()"
 description: "Sets timeout period on a stream."
 sidebar:
-  order: 231
+  order: 233
 ---
 
 ## stream_set_timeout()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_set_timeout` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_set_timeout.md).
-

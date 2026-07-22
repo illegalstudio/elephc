@@ -392,6 +392,7 @@ impl Checker {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
                 if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
+                    self.builtin_call_types.insert(expr.span, ty.clone());
                     return Ok(ty);
                 }
                 self.check_function_call(name.as_str(), &args, expr.span, env)

@@ -2,7 +2,7 @@
 title: "pclose()"
 description: "Closes process file pointer."
 sidebar:
-  order: 325
+  order: 327
 ---
 
 ## pclose()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `pclose` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/pclose.md).
-

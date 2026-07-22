@@ -2,7 +2,7 @@
 title: "strlen() — internals"
 description: "Compiler internals for strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 413
 ---
 
 ## `strlen()` — internals
@@ -10,18 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strlen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1097](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1097) (`lower_strlen`)
-- **Function symbol**: `lower_strlen()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `strlen()` by coercing string-like values and returning the byte length.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_mixed_cast_string`
+- **Target strategy**: `eir_graph`
+- **Validation**: `shared`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

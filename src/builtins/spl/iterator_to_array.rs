@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `iterator_to_array` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `iterator_to_array` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required because the return type depends on the source type and
@@ -12,10 +11,7 @@
 //!   returns the precise array type.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 use crate::types::checker::builtins::spl as checker_spl;
 
@@ -25,7 +21,9 @@ builtin! {
     params: [iterator: Mixed, preserve_keys: Bool = DefaultSpec::Bool(true)],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::IteratorToArray,
+    ),
     summary: "Copy the iterator into an array.",
     php_manual: "https://www.php.net/manual/en/function.iterator-to-array.php",
 }
@@ -49,9 +47,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &source_ty,
         preserve_keys,
     ))
-}
-
-/// Lowers `iterator_to_array()` by delegating to the iterator-to-array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_iterator_to_array(ctx, inst)
 }

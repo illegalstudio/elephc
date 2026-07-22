@@ -2,7 +2,7 @@
 title: "is_int()"
 description: "Checks whether a variable is an integer."
 sidebar:
-  order: 442
+  order: 445
 ---
 
 ## is_int()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_int` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_int.md).
-

@@ -2,7 +2,7 @@
 title: "link()"
 description: "Creates a hard link."
 sidebar:
-  order: 135
+  order: 137
 ---
 
 ## link()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `link` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/link.md).
-

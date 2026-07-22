@@ -1,32 +1,25 @@
 //! Purpose:
-//! Home of the PHP `rename` builtin: its declaration and lowering.
+//! Home of the PHP `rename` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No `check` hook: `rename` is a pure-data builtin whose `Bool` return type is
 //!   fully determined by its declaration. The registry common path infers the
 //!   arguments and enforces the exactly-2-argument arity before falling back to
 //!   `returns`.
-//! - `lower` is a thin wrapper over `io::lower_rename` in the EIR backend.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "rename",
     area: Io,
     params: [from: Str, to: Str],
     returns: Bool,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Rename,
+    ),
     summary: "Renames a file or directory.",
     php_manual: "function.rename",
-}
-
-/// Lowers a `rename` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_rename(ctx, inst)
 }

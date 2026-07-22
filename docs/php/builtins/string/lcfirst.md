@@ -2,7 +2,7 @@
 title: "lcfirst()"
 description: "Lowercases the first character of a string."
 sidebar:
-  order: 385
+  order: 387
 ---
 
 ## lcfirst()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `lcfirst` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/lcfirst.md).
-

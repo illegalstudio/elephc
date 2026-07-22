@@ -4,7 +4,7 @@
 //! and byte-exact string copies through runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Pointer values are raw machine addresses in the integer result register.

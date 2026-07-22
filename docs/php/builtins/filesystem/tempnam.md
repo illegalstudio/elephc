@@ -2,7 +2,7 @@
 title: "tempnam()"
 description: "Creates a file with a unique filename."
 sidebar:
-  order: 152
+  order: 154
 ---
 
 ## tempnam()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `tempnam` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/tempnam.md).
-

@@ -1,25 +1,18 @@
 //! Purpose:
-//! Home of the PHP `print_r` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `print_r` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` refines the return type from the literal `$return` flag:
 //!   `print_r($v, true)` returns `Str` (the rendered output), `print_r($v)` /
 //!   `print_r($v, false)` echo and return `Bool` (true), and a runtime flag returns
-//!   `Mixed` (`string|bool`, boxed). The EIR-side return typing lives in
-//!   `crate::ir_lower::expr::print_r_builtin_return_type_for_args` and the codegen
-//!   dispatch in `debug::lower_print_r` follows the same result type — the three
-//!   must stay aligned.
-//! - `lower` is a thin wrapper over `debug::lower_print_r` in the EIR backend.
+//!   `Mixed` (`string|bool`, boxed). The checked call-site result flows through
+//!   registry semantics into EIR, and `debug::lower_print_r` follows that type.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -29,7 +22,9 @@ builtin! {
     params: [value: Mixed, r#return: Bool = DefaultSpec::Bool(false)],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::PrintR,
+    ),
     summary: "Prints human-readable information about a variable.",
     php_manual: "function.print-r",
 }
@@ -47,9 +42,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         },
         None => Ok(PhpType::Bool),
     }
-}
-
-/// Lowers a `print_r` call by dispatching to the shared debug emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::debug::lower_print_r(ctx, inst)
 }

@@ -3,7 +3,7 @@
 //! Marshals already-evaluated EIR operands into the shared runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Time builtins are effectful and must reuse the target-aware runtime

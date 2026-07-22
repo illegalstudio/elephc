@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `json_validate` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `json_validate` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The check hook validates the json argument type, that depth/flags are integers,
@@ -12,10 +11,7 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::system::json_support;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +24,9 @@ builtin! {
     ],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::JsonValidate,
+    ),
     summary: "Checks if a string contains valid JSON.",
 }
 
@@ -65,9 +63,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers a `json_validate` call by dispatching to the shared JSON emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::json::lower_json_validate(ctx, inst)
 }

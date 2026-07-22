@@ -2,7 +2,7 @@
 title: "getservbyname()"
 description: "Gets port number associated with an Internet service and protocol."
 sidebar:
-  order: 186
+  order: 188
 ---
 
 ## getservbyname()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `getservbyname` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/getservbyname.md).
-

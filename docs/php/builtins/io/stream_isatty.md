@@ -2,7 +2,7 @@
 title: "stream_isatty()"
 description: "Checks if a stream is a TTY."
 sidebar:
-  order: 225
+  order: 227
 ---
 
 ## stream_isatty()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_isatty` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_isatty.md).
-

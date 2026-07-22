@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `min` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `min` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required because the return type depends on argument types:
@@ -11,10 +10,7 @@
 //! - `min_args: 2` enforces the legacy requirement that at least two values be provided.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,7 +22,9 @@ builtin! {
     arity_error: "min() requires at least 2 arguments",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Min,
+    ),
     summary: "Find lowest value.",
     php_manual: "https://www.php.net/manual/en/function.min.php",
 }
@@ -45,9 +43,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     } else {
         Ok(PhpType::Int)
     }
-}
-
-/// Lowers a `min` call by dispatching to the shared min/max emitter with `want_max = false`.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::math::lower_min_max(ctx, inst, false)
 }

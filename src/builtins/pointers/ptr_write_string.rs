@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `ptr_write_string` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `ptr_write_string` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates pointer and string arguments and returns `PhpType::Int`
 //!   (the number of bytes written).
-//! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_write_string` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [pointer: Mixed, string: Mixed],
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::PtrWriteString,
+    ),
     summary: "Copies PHP string bytes into raw memory at the given pointer.",
     extension: true,
 }
@@ -43,9 +40,4 @@ pub(crate) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers a `ptr_write_string` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_string(ctx, inst)
 }

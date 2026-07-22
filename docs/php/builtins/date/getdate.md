@@ -2,7 +2,7 @@
 title: "getdate()"
 description: "Returns date/time information."
 sidebar:
-  order: 93
+  order: 95
 ---
 
 ## getdate()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `getdate` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/getdate.md).
-

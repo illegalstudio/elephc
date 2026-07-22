@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `str_split` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `str_split` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `PhpType::Array(Box::new(PhpType::Str))`. A check hook is
@@ -12,14 +11,10 @@
 //!   inferred by the common registry dispatch path before the hook fires.
 //! - Arity is validated by the registry's `check_arity` before the check hook fires;
 //!   the inline arity check from the legacy arm is therefore not reproduced here.
-//! - `lower` is a thin wrapper over the shared `lower_str_split` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -31,7 +26,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::StrSplit,
+    ),
     summary: "Converts a string into an array of chunks of the given length.",
     php_manual: "https://www.php.net/manual/en/function.str-split.php",
 }
@@ -43,12 +40,4 @@ builtin! {
 /// dispatch path before this hook fires; arity is pre-validated by the registry.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
-}
-
-/// Lowers a `str_split` call by dispatching to the shared per-arch emitter.
-fn lower(
-    ctx: &mut FunctionContext,
-    inst: &Instruction,
-) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_str_split(ctx, inst)
 }

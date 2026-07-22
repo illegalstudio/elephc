@@ -2,7 +2,7 @@
 title: "preg_match()"
 description: "Performs a regular expression match."
 sidebar:
-  order: 333
+  order: 335
 ---
 
 ## preg_match()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `preg_match` is implemented in the compiler, see [the internals page](../../../internals/builtins/regex/preg_match.md).
-

@@ -2,7 +2,7 @@
 title: "hrtime() — internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 96
+  order: 98
 ---
 
 ## `hrtime()` — internals
@@ -10,23 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/hrtime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:247](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L247) (`lower_hrtime`)
-- **Function symbol**: `lower_hrtime()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper.
-- `__rt_hrtime` reads the as-number flag from the integer result register (`x0`/`rax`) and returns
-- an already-boxed `Mixed` result — a boxed `[sec, nsec]` array when the flag is `0`/false, or a
-- boxed nanosecond integer when truthy — so no post-call boxing is needed. Unlike the timestamp
-- builtins the omitted-argument default is `0` (array form), not the `-1` current-time sentinel.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.hrtime` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_hrtime`
-- `__rt_http_response_code`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.hrtime`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

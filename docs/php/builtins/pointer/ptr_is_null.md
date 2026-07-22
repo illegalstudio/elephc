@@ -2,7 +2,7 @@
 title: "ptr_is_null()"
 description: "Returns true if the pointer is null."
 sidebar:
-  order: 304
+  order: 306
 ---
 
 ## ptr_is_null()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_is_null` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_is_null.md).
-

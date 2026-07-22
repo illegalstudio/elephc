@@ -2,7 +2,7 @@
 title: "isset() — internals"
 description: "Compiler internals for isset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 294
+  order: 296
 ---
 
 ## `isset()` — internals
@@ -18,9 +18,13 @@ sidebar:
 
 - Lowers `isset()` for values already evaluated by the EIR frontend.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
+
+## EIR and runtime boundary
+
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 

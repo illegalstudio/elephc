@@ -2,7 +2,7 @@
 title: "base64_encode()"
 description: "Encodes binary data into a Base64 string."
 sidebar:
-  order: 358
+  order: 360
 ---
 
 ## base64_encode()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `base64_encode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/base64_encode.md).
-

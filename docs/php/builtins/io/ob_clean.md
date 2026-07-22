@@ -2,7 +2,7 @@
 title: "ob_clean()"
 description: "Cleans (erases) the contents of the active output buffer."
 sidebar:
-  order: 189
+  order: 191
 ---
 
 ## ob_clean()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_clean` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_clean.md).
-

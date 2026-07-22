@@ -1,11 +1,11 @@
 //! Purpose:
 //! Defines the `BuiltinSpec` type that describes a single PHP builtin function:
-//! its name, arity, type signature, result-storage ownership, and codegen lowering hook.
+//! its name, arity, type signature, and shared backend-neutral semantics.
 //!
 //! Called from:
 //! - `crate::builtins::registry` (collected via `inventory`).
-//! - `crate::types::checker::builtins` and `crate::codegen::lower_inst::builtins`
-//!   (consumed during type-check and codegen dispatch).
+//! - Checker, optimizer, EIR lowering, ownership, callable, and runtime consumers
+//!   through `crate::builtins::semantics`.
 //!
 //! Key details:
 //! - Every builtin must submit exactly one `BuiltinSpec` via the `builtin!` macro;
@@ -13,11 +13,9 @@
 //! - All `BuiltinSpec` fields are `'static` so the struct can be used in `const` context
 //!   and stored in the `inventory`-collected registry without allocation.
 
-// These new types reference pub(crate) types (Checker, FunctionContext) through their
-// pub interfaces; that mismatch is intentional and will be resolved when the migration
-// elevates or unifies those visibilities. Dead-code warnings are expected during the
-// multi-task migration before the registry wires the types into active code paths.
-#![allow(dead_code, private_interfaces)]
+// Checker hooks are public registry metadata but intentionally receive the crate-private
+// checker implementation rather than exposing compiler internals as public API.
+#![allow(private_interfaces)]
 
 /// Categorises a builtin by functional area, used for documentation grouping
 /// and future area-scoped registry queries.
@@ -41,8 +39,6 @@ pub enum Area {
     Spl,
     /// Pointer and buffer builtins (elephc extensions).
     Pointers,
-    /// Internal compiler builtins not exposed as PHP-visible functions.
-    Internal,
 }
 
 /// Describes the PHP-level type of a parameter or return value at the `BuiltinSpec`
@@ -62,16 +58,8 @@ pub enum TypeSpec {
     Bool,
     /// PHP `mixed`.
     Mixed,
-    /// PHP `null`.
-    Null,
     /// PHP `void` (return position only).
     Void,
-    /// A homogeneous PHP array with element type `T` (`T[]`).
-    ArrayOf(&'static TypeSpec),
-    /// A PHP associative array with value type `T`.
-    AssocOf(&'static TypeSpec),
-    /// A union of two or more PHP types.
-    Union(&'static [TypeSpec]),
 }
 
 /// Describes the default value for an optional parameter at the `BuiltinSpec`
@@ -90,8 +78,6 @@ pub enum DefaultSpec {
     Str(&'static str),
     /// `PHP_INT_MAX` sentinel.
     IntMax,
-    /// `PHP_INT_MIN` sentinel.
-    IntMin,
     /// An empty array `[]` default.
     EmptyArray,
 }
@@ -135,16 +121,6 @@ pub type CheckFn = for<'ctx, 'a> fn(
     &'ctx mut BuiltinCheckCtx<'a>,
 ) -> Result<crate::types::PhpType, crate::errors::CompileError>;
 
-/// The assembly-lowering hook for a builtin, called by the EIR backend.
-///
-/// Receives the active per-function backend context and the `BuiltinCall` instruction,
-/// and emits the required assembly. Returns a `CodegenIrError` if the lowering path
-/// is not yet implemented for this target.
-pub type LowerFn = for<'ctx, 'f, 'i> fn(
-    &'ctx mut crate::codegen::context::FunctionContext<'f>,
-    &'i crate::ir::Instruction,
-) -> Result<(), crate::codegen::CodegenIrError>;
-
 /// Complete static descriptor for one PHP builtin function.
 ///
 /// All fields are `'static` so the spec can be declared as a `const` item and
@@ -163,15 +139,15 @@ pub struct BuiltinSpec {
     /// more than `n` arguments even though the declared parameter list (including
     /// optional params) would otherwise permit more. This affects ONLY
     /// `check_arity`; it does not change `function_sig`, `arity_bounds`, or the
-    /// parity gate, which all keep the full param-derived bounds. It exists to
-    /// preserve a migrated builtin whose legacy CHECK arm enforced a tighter arity
-    /// than its declared (golden) signature allowed.
+    /// parity gate, which all keep the full param-derived bounds. It exists for a
+    /// builtin whose supported compiler contract enforces a tighter arity than its
+    /// declared golden signature allows.
     pub max_args: Option<usize>,
     /// An optional override for the minimum argument count enforced by the
     /// registry's `check_arity`. When `Some(n)`, `check_arity` rejects calls
     /// with fewer than `n` arguments even though the declared parameter list
     /// would otherwise permit fewer (e.g. a variadic golden with min=0 but the
-    /// legacy CHECK arm required ≥2). This affects ONLY `check_arity`; it does
+    /// supported compiler contract requires at least two). This affects ONLY `check_arity`; it does
     /// not change `function_sig`, `arity_bounds`, or the parity gate.
     pub min_args: Option<usize>,
     /// A verbatim error message used by `check_arity` instead of the standard
@@ -181,52 +157,15 @@ pub struct BuiltinSpec {
     /// gate are unaffected.
     pub arity_error: Option<&'static str>,
 
-    /// The PHP-level return type used by the type CHECKER when no `check` hook is
-    /// present (a `check` hook, when present, overrides this — see `check`).
-    ///
-    /// NOTE: this drives the *type checker* only. The EIR backend derives call
-    /// return types independently in `call_return_type`
-    /// (`src/ir_lower/expr/mod.rs`) from `sig.return_type` plus the
-    /// `*_builtin_return_type` override chain; it does NOT consult `returns` or
-    /// `check`. A builtin declared `returns: Mixed` with a precise `check` hook
-    /// (the standard pattern for non-scalar returns) therefore also needs a
-    /// matching EIR return-type arm, or the checker and EIR will disagree on the
-    /// value's type at the use site.
+    /// The declared PHP-level return type. The shared semantic descriptor decides
+    /// whether checker and EIR consumers use this declaration, a checked call-site
+    /// type, or one shared argument-sensitive resolver.
     pub returns: TypeSpec,
-    /// Whether every refcounted result variant is freshly allocated for the caller.
-    ///
-    /// EIR ownership lowering uses this contract to release a builtin result after a
-    /// retaining consumer has copied or retained it. Leave this `false` for borrowed
-    /// results that can alias argument or runtime storage; releasing those would corrupt
-    /// their original owner. Non-refcounted result variants are unaffected.
-    pub returns_fresh_storage: bool,
-    /// Whether a non-fresh result is guaranteed not to reuse any argument's storage.
-    ///
-    /// Fresh heap ownership implies independence without this flag; this field
-    /// covers scratch-backed independent results. EIR uses the effective contract
-    /// to release owning argument temporaries after the call and to derive
-    /// return/argument alias summaries for source wrappers.
-    pub returns_independent_storage: bool,
     /// Whether the function returns by reference.
     pub by_ref_return: bool,
-    /// An optional type-checking hook for builtins whose return type depends
-    /// on the argument types or values. When present, its returned `PhpType` is
-    /// authoritative for the type CHECKER (it overrides `returns`). It is NOT
-    /// consulted by the EIR backend — see the note on `returns`.
-    pub check: Option<CheckFn>,
-    /// When `true`, the registry's `check_builtin` dispatcher skips the standard
-    /// argument pre-inference loop before calling the `check` hook. The check hook
-    /// is then responsible for calling `infer_type` on each argument as needed.
-    ///
-    /// This is required for builtins like `usort`/`uasort` whose check hook uses
-    /// `infer_closure_type_with_param_hints` to supply object-element type hints to
-    /// an unannotated callback closure: the standard pre-inference loop would call
-    /// `infer_type` on the closure without hints first, causing the closure body to
-    /// be checked with default `Int` parameter types — making `$a->property` fail
-    /// before the hook can supply the correct hints.
-    pub lazy_check: bool,
-    /// The assembly-lowering hook called by the EIR backend for this builtin.
-    pub lower: LowerFn,
+    /// Shared backend-neutral semantics consumed by checker, optimizer, EIR, ownership,
+    /// requirements, and callable paths.
+    pub semantics: crate::builtins::semantics::BuiltinSemantics,
     /// A short one-line summary for generated documentation.
     pub summary: &'static str,
     /// Example PHP snippets demonstrating the builtin, for generated documentation.
@@ -252,33 +191,20 @@ inventory::collect!(BuiltinSpec);
 #[cfg(test)]
 mod macro_tests {
     use crate::builtins::spec::*;
-    /// No-op `LowerFn` used to satisfy the `builtin!` macro in this test module.
-    fn lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
-    builtin! { name: "__macro_probe", area: Internal, params: [x: Int], returns: Int, lower: lower, summary: "probe", internal: true }
-    builtin! { name: "__macro_owned_probe", area: Internal, params: [], returns: Mixed, returns_fresh_storage: true, lower: lower, summary: "owned probe", internal: true }
-    builtin! { name: "__macro_independent_probe", area: Internal, params: [value: Str], returns: Str, returns_independent_storage: true, lower: lower, summary: "independent probe", internal: true }
-    builtin! { name: "__macro_ext_probe", area: Internal, params: [], returns: Null, lower: lower, summary: "extension probe", extension: true, internal: true }
+    builtin! { name: "__macro_probe", area: Types, params: [x: Int], returns: Int, semantics: crate::builtins::semantics::test_probe_semantics(), summary: "probe", internal: true }
+    builtin! { name: "__macro_ext_probe", area: Types, params: [], returns: Void, semantics: crate::builtins::semantics::test_probe_semantics(), summary: "extension probe", extension: true, internal: true }
 
-    /// Verifies macro registration and the fresh/independent storage metadata defaults.
+    /// Verifies the macro registers a builtin with its semantic descriptor.
     #[test]
     fn macro_registers_builtin() {
         let default_spec = inventory::iter::<BuiltinSpec>
             .into_iter()
             .find(|s| s.name == "__macro_probe")
             .expect("macro probe must be registered");
-        let owned_spec = inventory::iter::<BuiltinSpec>
-            .into_iter()
-            .find(|s| s.name == "__macro_owned_probe")
-            .expect("owned macro probe must be registered");
-        let independent_spec = inventory::iter::<BuiltinSpec>
-            .into_iter()
-            .find(|s| s.name == "__macro_independent_probe")
-            .expect("independent macro probe must be registered");
-        assert!(!default_spec.returns_fresh_storage);
-        assert!(!default_spec.returns_independent_storage);
-        assert!(owned_spec.returns_fresh_storage);
-        assert!(independent_spec.returns_independent_storage);
+        assert!(matches!(
+            default_spec.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments
+        ));
     }
 
     /// Verifies the `extension` flag defaults to false and is set by the macro arm,
@@ -309,18 +235,17 @@ mod tests {
         const S: BuiltinSpec = BuiltinSpec {
             name: "strlen", area: Area::String, params: P, variadic: None,
             max_args: None, min_args: None, arity_error: None,
-            returns: TypeSpec::Int, returns_fresh_storage: false,
-            returns_independent_storage: false,
-            by_ref_return: false, check: None, lazy_check: false,
-            lower: noop_lower, summary: "len", examples: &[], php_manual: None,
+            returns: TypeSpec::Int,
+            by_ref_return: false,
+            semantics: crate::builtins::semantics::test_probe_semantics(),
+            summary: "len", examples: &[], php_manual: None,
             deprecation: None, extension: false, internal: false,
         };
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);
-        assert!(!S.returns_fresh_storage);
-        assert!(!S.returns_independent_storage);
+        assert!(matches!(
+            S.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments
+        ));
     }
-    /// No-op `LowerFn` used to satisfy the `BuiltinSpec` struct literal in this test module.
-    fn noop_lower(_c: &mut crate::codegen::context::FunctionContext, _i: &crate::ir::Instruction)
-        -> Result<(), crate::codegen::CodegenIrError> { Ok(()) }
 }

@@ -3,7 +3,7 @@
 //! Bridges already-evaluated EIR operands to the shared serialize runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - `serialize()` prepares a `(tag, lo, hi)` triple for the static argument type and

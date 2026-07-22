@@ -1,28 +1,21 @@
 //! Purpose:
-//! Home of the PHP `gettype` builtin: its declaration and lowering.
+//! Home of the PHP `gettype` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook), via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - Pure-data builtin with no check hook; arity and arg inference are handled by the registry common path.
-//! - `lower` is a thin wrapper over the shared gettype emitter.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "gettype",
     area: Types,
     params: [value: Mixed],
     returns: Str,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Gettype,
+    ),
     summary: "Returns the type of a variable as a string.",
     php_manual: "function.gettype",
-}
-
-/// Lowers a `gettype` call by dispatching to the shared gettype emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_gettype(ctx, inst)
 }

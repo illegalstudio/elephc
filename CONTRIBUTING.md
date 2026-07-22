@@ -291,8 +291,8 @@ with the `builtin!` macro; all declarations are collected at link time through t
 `inventory` crate. From that single declaration the compiler derives the catalog
 name-set (case-insensitive lookup, `function_exists`, namespace fallback,
 redeclaration checks), the call signature (named arguments, defaults, by-ref params,
-variadic, arity), the type-check entry, the EIR lowering dispatch, and the generated
-documentation.
+variadic, arity), the shared semantic contract, backend-neutral EIR lowering, and the
+generated documentation.
 
 Do **not** re-add builtin names to the old hand-maintained tables (`catalog.rs`,
 `signatures.rs`, per-area `check_builtin` arms). They are superseded by the registry;
@@ -303,8 +303,9 @@ a builtin is fully wired the moment its home file compiles.
 Add `src/builtins/<area>/<name>.rs` and register it in `src/builtins/<area>/mod.rs`
 with `pub mod <name>;` (keep the list alphabetical). Areas are `string`, `array`,
 `math`, `io`, `system`, `types`, `callables`, `spl`, `pointers` (plus `internal` for
-compiler-internal builtins). One builtin per home file; the file owns its declaration
-plus its `check`/`lower` hooks. Start with the mandatory `//!` module preamble.
+compiler-internal builtins). One builtin per home file; the file owns its declaration,
+optional checker hook, and complete backend-neutral semantic descriptor. Start with
+the mandatory `//!` module preamble.
 
 ### 2. Declare it with `builtin!`
 
@@ -314,9 +315,19 @@ builtin! {
     area: String,
     params: [string: Str],
     returns: Int,
-    check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: BuiltinSemantics {
+        validation: BuiltinValidation::Shared(validate),
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Shared(effects),
+        result_ownership: BuiltinResultOwnership::NonHeap,
+        requirements: BuiltinRequirements::Static(&[]),
+        target_strategy: BuiltinTargetStrategy::EirGraph,
+        target_support: BuiltinTargetSupport::All,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::Standard,
+        callable: BuiltinCallablePolicy::Dynamic(callable_accepts_strlen_source),
+        lowering: BuiltinLowering::Eir(lower),
+    },
     summary: "Returns the length of a string.",
     php_manual: "function.strlen",
 }
@@ -326,7 +337,7 @@ Fields must appear in this canonical order; optional fields (marked `?`) may be
 omitted:
 
 `name`, `area`, `params`, `variadic?`, `min_args?`, `max_args?`, `arity_error?`,
-`returns`, `returns_fresh_storage?`, `by_ref_return?`, `check?`, `lazy_check?`, `lower`,
+`returns`, `by_ref_return?`, `check?`, `lazy_check?`, `semantics`, `requirements?`,
 `summary`, `examples?`, `php_manual?`, `deprecation?`, `extension?`, `internal?`.
 
 - **`params`** — `[name: TypeSpec, name: TypeSpec = DefaultSpec::Variant, ...]`. A
@@ -339,10 +350,16 @@ omitted:
   `Float`, `Str`, `Bool`, `Mixed`, `Null`, `Void`. Non-scalar shapes (arrays, unions,
   resources) are declared as `Mixed`; supply the precise type from a `check` hook when
   it matters (see the note in step 3).
-- **`returns_fresh_storage: true`** — declare this when every refcounted return
-  variant is freshly allocated for the caller. EIR ownership lowering can then release
-  the result after a retaining consumer has copied or retained it. Omit it for borrowed
-  results that can alias an argument or runtime-owned storage.
+- **`semantics`** — the complete shared contract for validation, result typing,
+  effects, ownership/aliasing, runtime/link requirements, target strategy/support,
+  typed runtime-function inventory, argument lowering, callable availability, and
+  backend-neutral EIR lowering. For the common case use
+  `runtime_fn_semantics(RuntimeFnId::...)`; for type predicates use
+  `type_predicate_semantics(...)`; use a custom `BuiltinSemantics` only when the
+  builtin composes EIR primitives or needs source/type-dependent contracts.
+- **`requirements`** — an optional source-dependent resolver layered over the
+  descriptor's fixed requirements. Do not rediscover bridges or runtime features from
+  PHP names later in the pipeline.
 - **`DefaultSpec`** — full path form: `DefaultSpec::Null`, `DefaultSpec::Int(0)`,
   `DefaultSpec::Bool(false)`, `DefaultSpec::Float(1.5)`, `DefaultSpec::Str("…")`,
   `DefaultSpec::IntMax`, `DefaultSpec::IntMin`, `DefaultSpec::EmptyArray`.
@@ -390,53 +407,57 @@ an unannotated closure argument *before* that closure is inferred (e.g. `usort`,
 `array_map` with a callback). With `lazy_check: true` the hook is responsible for
 inferring each argument itself.
 
-> **Return typing is a checker-only contract.** The `returns:` field and the `check`
-> hook drive the **type checker** only. The EIR backend derives call return types
-> independently in `call_return_type` (`src/ir_lower/expr/mod.rs`). If you declare
-> `returns: Mixed` + a precise `check` hook (the standard pattern for non-scalar
-> returns), you must also add a matching arm to the EIR return-type derivation, or the
-> checker and EIR will disagree on the value's type. This caveat is documented on the
-> `returns`/`check` fields in `src/builtins/spec.rs`.
+The macro embeds a `check` hook into `semantics.validation` and changes a declared
+result contract to `BuiltinResultType::Checked` when needed. EIR lowering consumes the
+checked call-site type from that same descriptor. If the backend returns a different
+storage representation from the checker-facing type (for example, a boxed dynamic
+result), set `BuiltinResultType::Shared(resolve)` and make the resolver return the
+actual EIR/backend representation. Do not add PHP-name arms to `call_return_type`.
 
-### 4. The `lower` hook (EIR codegen)
+### 4. Backend-neutral EIR lowering
 
-`lower` is mandatory — it is the builtin's EIR lowering entry point. Keep it a thin
-wrapper that dispatches to the actual emitter:
+The descriptor's `lowering` field is mandatory. Most builtins lower to one typed
+runtime operation:
 
 ```rust
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_strlen(ctx, inst)
-}
+semantics: runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap),
 ```
 
-Write the emitter itself under `src/codegen/lower_inst/builtins/<area>/`, following
-the target-aware codegen conventions in `CLAUDE.md` (support every target through
-`emitter.target`, one emitter per leaf file, an inline `//` comment on every
-`emitter.instruction(...)`). If the builtin needs a runtime routine, add it under
-`src/codegen_support/runtime/<category>/`. The registry dispatches `spec.lower` first, so no
-match arm needs editing.
+The backend receives `Op::RuntimeCall` with a typed `RuntimeCallTarget`; PHP names are
+not present at that boundary. Add the target to `RuntimeFnId` (or another typed target
+enum), implement it under `src/codegen/lower_inst/runtime_functions/` or
+`runtime_calls.rs`, and keep every supported ABI in the same path. If it needs a
+runtime routine, add it under `src/codegen_support/runtime/<category>/`.
+
+For a builtin that is naturally expressed as reusable EIR operations, use
+`BuiltinLowering::Eir(lower)`. The hook receives only `BuiltinLoweringContext` and a
+`NormalizedBuiltinCall`; it may emit typed EIR values/runtime calls, but must not
+import `crate::codegen`, mention physical registers, choose concrete helper symbols,
+or emit assembly. `BuiltinLowering::TypePredicate` is the shared primitive for PHP
+type predicates.
 
 ### 5. What derives automatically
 
 Once the home file compiles, all of the following see the builtin with no further
 edits: `function_exists()` and case-insensitive/namespaced lookup, the named-argument
-`FunctionSig`, first-class-callable syntax (`strlen(...)`), the arity check and its
-error message, and the `gen_builtins` JSON docs export.
+`FunctionSig`, checker validation/result typing, optimizer effects, ownership cleanup,
+runtime/link requirements, direct and runtime-selected callable policy,
+backend-neutral EIR lowering, the arity check and its error message, and the
+`gen_builtins` JSON docs export.
 
 ### 6. Surfaces you still wire by hand
 
-The registry single-sources the declaration, signature, checker entry, lowering
-*dispatch*, and docs. These related surfaces are **not** derived and must be updated
-when relevant:
+The registry single-sources the semantic compiler contract. These implementation and
+user-facing surfaces still need updates when relevant:
 
-- **The EIR emitter** the `lower` hook calls (and any runtime routine it needs).
-- **EIR return typing** — see the note in step 3.
-- **Optimizer effects** in `src/optimize/effects/builtins.rs` when purity, reads/writes,
-  or thrown/fatal behavior matter for DCE and constant propagation. Never mark a call
-  pure if it can read/write globals, files, the environment, heap state, or emit output.
-- **Runtime-callable wrapper exclusion** — if the builtin cannot be dispatched through
-  the dynamic string-callable wrapper, add it to `runtime_builtin_wrapper_excluded()`
-  in `src/codegen/callable_dispatch.rs`.
+- **The typed backend target** and any runtime routine it needs. Every target must
+  validate the operand/result contract and support macOS ARM64, Linux ARM64, and Linux
+  x86_64.
+- **The descriptor itself** when effects, ownership, requirements, argument lowering,
+  or runtime-callable availability differ from the selected target's defaults. Never
+  mark a call pure if it can read/write globals, files, the environment, heap state,
+  argument storage, or emit output.
+- **Examples and generated docs** for the PHP-visible surface.
 
 ### 7. Tests, examples, and docs
 
@@ -562,10 +583,10 @@ bridge automatically when the feature is used.
 
 - **Core builtins** — when the feature is a set of PHP built-in functions
   (`md5()`, `hash()`, …). Follow "Adding a built-in function" above (declare each
-  builtin in `src/builtins/<area>/` with its `check`/`lower` hooks), and call
-  `Checker::require_builtin_library("elephc_<name>")` from the `check` hook when a
-  builtin that needs the crate is used. The PHP names are always available, so no
-  prelude is needed.
+  builtin in `src/builtins/<area>/` with its semantic descriptor), and declare
+  `BuiltinRequirement::Bridge("elephc_<name>")` in its fixed requirements or return
+  it from the descriptor's source-dependent `requirements` resolver. The PHP names
+  are always available, so no prelude is needed.
 
 - **A prelude** — when the feature is a set of classes/functions written in
   elephc-PHP that wrap the crate (PDO, timezone introspection, image). Add

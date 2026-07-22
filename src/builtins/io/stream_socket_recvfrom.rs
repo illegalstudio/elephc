@@ -1,22 +1,17 @@
 //! Purpose:
-//! Home of the PHP `stream_socket_recvfrom` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `stream_socket_recvfrom` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates arg[0] is a stream resource and that `address` (arg[3]), if provided,
 //!   is a plain string variable (it is written by reference). The double-infer of arg[3]
 //!   matches the legacy behavior.
 //! - Arguments are pre-inferred by the registry before the hook runs.
-//! - `lower` dispatches to `io::lower_stream_socket_recvfrom` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -31,7 +26,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::StreamSocketRecvfrom,
+    ),
     summary: "Receives data from a socket, connected or not.",
     php_manual: "function.stream-socket-recvfrom",
 }
@@ -56,9 +53,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
-}
-
-/// Lowers a `stream_socket_recvfrom` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_stream_socket_recvfrom(ctx, inst)
 }

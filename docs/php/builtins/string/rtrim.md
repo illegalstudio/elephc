@@ -2,7 +2,7 @@
 title: "rtrim()"
 description: "Strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 396
+  order: 398
 ---
 
 ## rtrim()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rtrim` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rtrim.md).
-

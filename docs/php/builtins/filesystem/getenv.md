@@ -2,7 +2,7 @@
 title: "getenv()"
 description: "Gets the value of an environment variable."
 sidebar:
-  order: 124
+  order: 126
 ---
 
 ## getenv()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `getenv` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/getenv.md).
-

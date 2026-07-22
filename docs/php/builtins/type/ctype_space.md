@@ -2,7 +2,7 @@
 title: "ctype_space()"
 description: "Checks if all characters in the string are whitespace characters."
 sidebar:
-  order: 432
+  order: 434
 ---
 
 ## ctype_space()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ctype_space` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/ctype_space.md).
-
