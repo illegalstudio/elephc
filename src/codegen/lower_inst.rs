@@ -2047,14 +2047,6 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
         return lower_property_array_runtime_set(ctx, inst);
     }
-    if inst.operands.len() == 2
-        && matches!(
-            inst.immediate,
-            Some(Immediate::I64(crate::ir::RUNTIME_CALL_FETCH_FOR_WRITE))
-        )
-    {
-        return lower_array_fetch_for_write_runtime_call(ctx, inst);
-    }
     if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
         return Ok(());
     }
@@ -2484,9 +2476,9 @@ fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
-/// Lowers marker-tagged fetch-for-write parent reads of nested array writes (issue #555).
+/// Lowers typed fetch-for-write parent reads of nested array writes (issue #555).
 ///
-/// Two receiver shapes share the `RUNTIME_CALL_FETCH_FOR_WRITE` marker:
+/// Two receiver shapes share the `ArrayFetchForWrite` runtime target:
 /// - boxed `Mixed` receiver → `__rt_mixed_array_get_for_write(cell, key)`
 ///   autovivifies missing/null elements inside the receiver cell and returns
 ///   an owned boxed cell (the STORED one whenever storage is boxed);

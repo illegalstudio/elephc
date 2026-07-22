@@ -38,7 +38,7 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PhpTypePredicate,
-    RuntimeId, PassOrigin, RUNTIME_CALL_FETCH_FOR_WRITE,
+    RuntimeId, PassOrigin,
 };
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,

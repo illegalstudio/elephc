@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
-    Terminator,
+    RuntimeCallTarget, Terminator,
 };
 use crate::ir_lower::context::{
     FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext,
@@ -1102,7 +1102,7 @@ fn lower_nested_assign_parent(
         let parent = ctx.emit_value(
             Op::RuntimeCall,
             vec![receiver.value, key.value],
-            Some(Immediate::I64(crate::ir::RUNTIME_CALL_FETCH_FOR_WRITE)),
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
             Some(expr.span),
@@ -1154,7 +1154,7 @@ fn lower_local_parent_fetch_for_write(
                     let ensured = ctx.emit_value(
                         Op::RuntimeCall,
                         vec![array_value.value, key.value],
-                        Some(Immediate::I64(crate::ir::RUNTIME_CALL_FETCH_FOR_WRITE)),
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
                         ensured_ty.clone(),
                         effects_lookup::runtime_effects(),
                         Some(span),
@@ -1221,7 +1221,7 @@ fn lower_hash_parent_fetch_for_write(
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],
-        Some(Immediate::I64(crate::ir::RUNTIME_CALL_FETCH_FOR_WRITE)),
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
         assoc_ty.clone(),
         effects_lookup::runtime_effects(),
         Some(span),

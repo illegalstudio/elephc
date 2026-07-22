@@ -19,7 +19,50 @@
 //! - PHP emits no undefined-key warning for a legal autovivifying write, so
 //!   these tests also assert the absence of the warning on stderr.
 
-use crate::support::compile_and_run_with_heap_debug;
+use std::process::Command;
+
+use crate::support::{
+    compile_and_run_with_heap_debug, elephc_cli_command, make_cli_test_dir,
+};
+
+/// Compiles and runs the issue #555 repro through one explicit EIR optimizer mode.
+fn run_autovivify_optimizer_fixture(ir_opt: bool) -> (String, String) {
+    let dir = make_cli_test_dir("elephc_nested_autovivify_optimizer");
+    let php_path = dir.join("main.php");
+    std::fs::write(
+        &php_path,
+        r#"<?php
+$a = [['x', 'y'], 7];
+$a[7][1] = 'patched';
+echo $a[7][1] . "\n";
+"#,
+    )
+    .expect("failed to write nested-autovivify optimizer fixture");
+    let mode = if ir_opt { "--ir-opt=on" } else { "--ir-opt=off" };
+    let compile = elephc_cli_command(&dir)
+        .arg("--heap-debug")
+        .arg(mode)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile nested-autovivify optimizer fixture");
+    assert!(
+        compile.status.success(),
+        "fixture compilation failed with ir_opt={ir_opt}: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let output = Command::new(dir.join("main"))
+        .output()
+        .expect("failed to run nested-autovivify optimizer fixture");
+    assert!(
+        output.status.success(),
+        "fixture execution failed with ir_opt={ir_opt}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+    (stdout, stderr)
+}
 
 /// Issue #555 exact repro: index 7 is past the end of the outer array, the
 /// write must create `$a[7]` as an array, store the value, print `patched`,
@@ -366,4 +409,21 @@ echo $r[7][1] . "\n";
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies the issue repro stays silent and heap-clean with EIR optimization on and off.
+#[test]
+fn test_autovivify_with_optimizer_on_and_off() {
+    for ir_opt in [false, true] {
+        let (stdout, stderr) = run_autovivify_optimizer_fixture(ir_opt);
+        assert_eq!(stdout, "patched\n", "unexpected stdout with ir_opt={ir_opt}");
+        assert!(
+            !stderr.contains("Undefined array key"),
+            "autovivifying write must not warn with ir_opt={ir_opt}, got: {stderr}"
+        );
+        assert!(
+            stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected clean heap with ir_opt={ir_opt}, got: {stderr}"
+        );
+    }
 }

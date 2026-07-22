@@ -165,6 +165,19 @@ fn strlen_uses_backend_neutral_eir_graph() {
     );
 }
 
+/// Verifies nested autovivification carries a typed fetch-for-write runtime identity.
+#[test]
+fn nested_autovivify_uses_typed_fetch_for_write_runtime_call() {
+    let module = lower_source(
+        "<?php $items = [['x', 'y'], 7]; $items[7][1] = 'patched'; echo $items[7][1];",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("runtime.array.fetch_for_write"),
+        "missing typed fetch-for-write runtime call: {text}"
+    );
+}
+
 /// Verifies unary string transforms carry typed runtime identities rather than PHP names.
 #[test]
 fn unary_string_builtins_use_typed_runtime_calls() {

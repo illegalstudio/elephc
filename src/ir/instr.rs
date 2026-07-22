@@ -105,17 +105,6 @@ impl Instruction {
     }
 }
 
-/// Marker immediate distinguishing fetch-for-write parent reads of nested
-/// array assignments from plain reads (issue #555).
-///
-/// Attached as `Immediate::I64` to two-operand `Op::RuntimeCall` instructions:
-/// - receiver `Mixed` → codegen calls `__rt_mixed_array_get_for_write`
-///   (autovivifies missing/null elements and returns the STORED cell);
-/// - receiver `Array`/`AssocArray` → codegen calls
-///   `__rt_array_ensure_elem_for_write` and yields the possibly reallocated
-///   container pointer for the local storeback.
-pub const RUNTIME_CALL_FETCH_FOR_WRITE: i64 = 0x4657;
-
 /// Literal or metadata operand attached to an opcode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Immediate {
