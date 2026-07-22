@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed reading a value through `?? default` and using the result directly as a condition leaking the boxed coalesce temporary on every evaluation (issue #586): `if`, ternary, `while`/`do-while`/`for`, short-circuit `&&`/`||`, negation `!`, and magic `__isset` now release the owned operand after coercing it to a boolean, so shapes like `($r[0] ?? 0 ? 1 : 0)` in a loop keep a flat heap. Values still owned by a local (short ternary `?:`, direct element reads) stay balanced without double frees.
 - Migrated every registry-backed PHP builtin to the backend-neutral EIR boundary. Builtin declarations now own one shared semantic descriptor for validation, result typing, effects, ownership, runtime/bridge requirements, callable policy, and lowering strategy; direct calls and generated callable wrappers emit typed EIR primitives or runtime calls that the target-aware backend materializes uniformly on macOS AArch64, Linux AArch64, and Linux x86_64. The old assembly hooks, opaque builtin opcode, duplicated per-name result/effect/requirement tables, legacy checker/signature fallbacks, and separately maintained callable wrappers have been removed.
 
 ## [0.26.2]

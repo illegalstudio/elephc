@@ -3801,3 +3801,208 @@ echo "Total: " . $total . "\n";
         out.stderr
     );
 }
+
+/// Regression test (issue #586): reading a `match`-branch merge through the
+/// null-coalescing form (`$r[0] ?? default`) and using that result directly as
+/// a ternary condition must not leak the boxed coalesce temporary each
+/// iteration. `IsTruthy` consumes the owned box but produced a fresh boolean,
+/// so the box has to be released on the condition path. `$i % 2` keeps the
+/// `match` runtime-selected so it is not constant-folded away.
+#[test]
+fn test_match_merge_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = match($i % 2) {
+        0 => [1, 2],
+        default => [3, 4],
+    };
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): the same leak reproduces when the merge comes
+/// from a ternary instead of a `match`, proving the fault is the `??`-read
+/// feeding a condition, not the `match` merge itself.
+#[test]
+fn test_ternary_merge_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = ($i % 2 == 0) ? [1, 2] : [3, 4];
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): the leak is not tied to any merge at all — a
+/// plain array local read through `?? default` and used as a ternary condition
+/// leaks the coalesce box just the same. `[$i + 1, 5]` keeps the read runtime.
+#[test]
+fn test_plain_array_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): an `if` condition consumes truthiness the same
+/// way a ternary does, so `if ($r[0] ?? 0)` must release the coalesce box too.
+#[test]
+fn test_array_read_through_coalesce_in_if_condition_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    if ($r[0] ?? 0) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the if-condition to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): a short-circuiting `&&` evaluates its left
+/// operand's truthiness, so `($r[0] ?? 0) && true` must release the owned
+/// coalesce box on the truthiness path.
+#[test]
+fn test_array_read_through_coalesce_in_logical_and_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    if (($r[0] ?? 0) && true) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the && to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): logical negation coerces its operand to a
+/// boolean, so `!($r[0] ?? 0)` must release the owned coalesce box.
+#[test]
+fn test_array_read_through_coalesce_in_negation_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i, 5];
+    if (!($r[0] ?? 0)) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // Only $i == 0 makes $r[0] falsy, so the negated branch runs once.
+    assert_eq!(out.stdout, "1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the negation to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Control (issue #586): storing the coalesce result in a local first and then
+/// testing that local was already heap-clean; the fix must not regress it into
+/// a double free of the now-owned local.
+#[test]
+fn test_coalesce_result_stored_in_local_then_tested_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $v = ($r[0] ?? 0);
+    $count = $count + ($v ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected storing then testing to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Control (issue #586): a direct element read fed into a ternary condition was
+/// already heap-clean and must stay clean after the fix (guards against a
+/// double free of borrowed element reads).
+#[test]
+fn test_direct_array_read_in_ternary_condition_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $probe = $r[0];
+    $count = $count + ($probe ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a direct element read in a ternary condition to stay clean, got: {}",
+        out.stderr
+    );
+}
