@@ -1937,6 +1937,28 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
+/// Verifies every shim-backed regex family handles an invalid pattern without exposing a
+/// partial handle, invoking callbacks, or returning partially initialized capture data.
+#[test]
+fn test_regex_families_reject_invalid_patterns_safely() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$callbackCalls = 0;
+echo (int)mb_ereg_match("(", "subject") . "|";
+echo preg_match("/(/", "subject", $matches) . ":" . count($matches) . "|";
+echo preg_match_all("/(/", "subject") . "|";
+echo preg_replace("/(/", "x", "subject") . "|";
+echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
+    $callbackCalls = $callbackCalls + 1;
+    return "called";
+}, "subject") . ":" . $callbackCalls . "|";
+echo count(preg_split("/(/", "subject"));
+"#,
+    );
+    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+}
+
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
 #[test]
 fn test_preg_replace_simple() {

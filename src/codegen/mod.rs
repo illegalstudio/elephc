@@ -55,8 +55,8 @@ pub(crate) use crate::codegen_support::{
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
-    required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
-    RuntimeFeatures,
+    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
+    LinkRequirement, RuntimeFeatures,
 };
 pub use crate::codegen_support::{prepare_declared_name_order, set_autoload_rule_count};
 

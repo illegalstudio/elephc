@@ -10,17 +10,14 @@
 use super::*;
 
 /// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_runtime_features(
+fn link_requirements_for_runtime_features(
     check_result: &elephc::types::CheckResult,
     runtime_features: elephc::codegen::RuntimeFeatures,
-) -> Vec<String> {
-    let mut required_libraries = check_result.required_libraries.clone();
-    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
-        if !required_libraries.contains(&lib) {
-            required_libraries.push(lib);
-        }
-    }
-    required_libraries
+) -> TestLinkRequirements {
+    TestLinkRequirements::new(
+        check_result.required_libraries.clone(),
+        elephc::codegen::link_requirements_for_runtime_features(runtime_features),
+    )
 }
 
 /// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
@@ -279,7 +276,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -353,7 +350,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -461,7 +458,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");

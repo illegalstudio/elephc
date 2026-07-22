@@ -8,6 +8,8 @@
 //! - Handles platform-specific linker flags, qemu ARM64 execution, and runtime object caching.
 //! - Archived CI shards trust the bridge staticlibs packaged by the build job,
 //!   avoiding source-mtime rebuilds and network access on test runners.
+//! - Translates typed runtime requirements through `LinkPlan` and supplies a test-only,
+//!   system-header-aligned build of the embedded PCRE2 shim.
 //! - Per-test assembly is fed to `as` over stdin so no intermediate `test.s`
 //!   file is written, which shaves ~1/3 of the file-system events the macOS
 //!   `syspolicyd` / on-access AV scans inspect during a full `cargo test`.
@@ -24,6 +26,12 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
+}
+
+/// Header/library pair used by the test-only system PCRE2 provider.
+struct TestPcre2Provider {
+    include_dir: std::path::PathBuf,
+    library_dir: std::path::PathBuf,
 }
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
@@ -60,6 +68,48 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
 
 /// Default timeout for executing one compiled codegen fixture binary.
 const DEFAULT_BINARY_TIMEOUT_SECS: u64 = 60;
+
+/// Typed linker requirements returned by the codegen fixture compiler.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TestLinkRequirements {
+    checker_libraries: Vec<String>,
+    runtime_requirements: Vec<elephc::codegen::LinkRequirement>,
+    legacy_libraries: Vec<String>,
+}
+
+impl TestLinkRequirements {
+    /// Preserves checker provenance and typed runtime requirements for test-only planning.
+    pub(crate) fn new(
+        checker_libraries: Vec<String>,
+        runtime_requirements: Vec<elephc::codegen::LinkRequirement>,
+    ) -> Self {
+        let mut legacy_libraries = checker_libraries.clone();
+        for requirement in &runtime_requirements {
+            let name = match requirement {
+                elephc::codegen::LinkRequirement::NativePackage(package) => *package,
+                elephc::codegen::LinkRequirement::Bridge(bridge) => *bridge,
+                elephc::codegen::LinkRequirement::SystemLibrary(library) => library,
+            };
+            if !legacy_libraries.iter().any(|existing| existing == name) {
+                legacy_libraries.push(name.to_string());
+            }
+        }
+        Self {
+            checker_libraries,
+            runtime_requirements,
+            legacy_libraries,
+        }
+    }
+}
+
+impl std::ops::Deref for TestLinkRequirements {
+    type Target = [String];
+
+    /// Exposes a read-only flattened name view for existing requirement assertions.
+    fn deref(&self) -> &Self::Target {
+        &self.legacy_libraries
+    }
+}
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
@@ -355,11 +405,12 @@ pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
     bin_path: &Path,
-    extra_link_libs: &[String],
+    requirements: &TestLinkRequirements,
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
-    let actual_link_libs = effective_link_libs(extra_link_libs);
+    let plan = test_link_plan(requirements, extra_link_paths, extra_frameworks);
+    let actual_link_libs = named_libraries(&plan);
 
     // Bridge staticlibs live in `<target>/debug` alongside the test binaries;
     // surface that directory automatically whenever a compiled program links a
@@ -391,15 +442,9 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            for path in extra_link_paths {
-                ld_cmd.arg(format!("-L{}", path));
-            }
-            for lib in &actual_link_libs {
-                ld_cmd.arg(format!("-l{}", lib));
-            }
-            for framework in extra_frameworks {
-                ld_cmd.args(["-framework", framework]);
-            }
+            append_test_search_paths(&mut ld_cmd, &plan);
+            append_test_link_inputs(&mut ld_cmd, &plan, Platform::MacOS);
+            append_test_frameworks(&mut ld_cmd, &plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which
             // references CoreFoundation / SystemConfiguration on macOS.
             if actual_link_libs.iter().any(|lib| *lib == "elephc_pdo") {
@@ -418,7 +463,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg("-o").arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            if actual_link_libs.is_empty() {
+            if matches!(plan.linux_mode(), elephc::link_plan::LinuxLinkMode::Static) {
                 ld_cmd.arg("-static");
             }
             if !actual_link_libs.is_empty() {
@@ -427,12 +472,8 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            for path in extra_link_paths {
-                ld_cmd.arg(format!("-L{}", path));
-            }
-            for lib in &actual_link_libs {
-                ld_cmd.arg(format!("-l{}", lib));
-            }
+            append_test_search_paths(&mut ld_cmd, &plan);
+            append_test_link_inputs(&mut ld_cmd, &plan, Platform::Linux);
             if !actual_link_libs.is_empty() {
                 ld_cmd.arg("-Wl,--as-needed");
             }
@@ -454,6 +495,277 @@ pub(crate) fn link_binary(
             panic!("Windows target is not yet supported (see issue #379)");
         }
     }
+}
+
+/// Translates compiler requirements through the production `LinkPlan` types.
+fn test_link_plan(
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> elephc::link_plan::LinkPlan {
+    use elephc::link_plan::{LinkItem, LinkOrigin, LinkPlan};
+
+    let mut plan = LinkPlan::new();
+    let mut named = std::collections::HashSet::new();
+    for library in &requirements.checker_libraries {
+        if library == "System" || !named.insert(library.clone()) {
+            continue;
+        }
+        let origin = if TEST_BRIDGE_STATICLIBS
+            .iter()
+            .any(|bridge| bridge.lib_name == library)
+        {
+            LinkOrigin::Bridge {
+                name: library.clone(),
+            }
+        } else {
+            LinkOrigin::Extern
+        };
+        plan.push(LinkItem::NamedLibrary {
+            name: library.clone(),
+            origin,
+        });
+    }
+    for requirement in &requirements.runtime_requirements {
+        match requirement {
+            elephc::codegen::LinkRequirement::NativePackage("pcre2") => {
+                plan.push(LinkItem::SearchPath(
+                    test_pcre2_provider().library_dir.clone(),
+                ));
+                plan.push(LinkItem::managed_archive(
+                    test_pcre2_shim_archive(),
+                    "pcre2-test-provider",
+                ));
+                for library in ["pcre2-posix", "pcre2-8"] {
+                    if named.insert(library.to_string()) {
+                        plan.push(LinkItem::named_runtime(library));
+                    }
+                }
+            }
+            elephc::codegen::LinkRequirement::NativePackage(package) => {
+                panic!("no codegen test provider for managed native package {package}")
+            }
+            elephc::codegen::LinkRequirement::Bridge(bridge) => {
+                if named.insert((*bridge).to_string()) {
+                    plan.push(LinkItem::NamedLibrary {
+                        name: (*bridge).to_string(),
+                        origin: LinkOrigin::Bridge {
+                            name: (*bridge).to_string(),
+                        },
+                    });
+                }
+            }
+            elephc::codegen::LinkRequirement::SystemLibrary(library) => {
+                if named.insert(library.clone()) {
+                    plan.push(LinkItem::named_runtime(library));
+                }
+            }
+        }
+    }
+    for path in extra_link_paths {
+        plan.push(LinkItem::SearchPath(path.as_str().into()));
+    }
+    for framework in extra_frameworks {
+        plan.push(LinkItem::Framework(framework.clone()));
+    }
+    plan
+}
+
+/// Appends every typed search path before archive and named-library inputs.
+fn append_test_search_paths(command: &mut Command, plan: &elephc::link_plan::LinkPlan) {
+    for item in plan.items() {
+        if let elephc::link_plan::LinkItem::SearchPath(path) = item {
+            command.arg(format!("-L{}", path.display()));
+        }
+    }
+}
+
+/// Returns named-library inputs from a typed test plan in semantic order.
+fn named_libraries(plan: &elephc::link_plan::LinkPlan) -> Vec<&str> {
+    plan.items()
+        .iter()
+        .filter_map(|item| match item {
+            elephc::link_plan::LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Appends exact archives and named libraries in plan order to a test linker command.
+fn append_test_link_inputs(
+    command: &mut Command,
+    plan: &elephc::link_plan::LinkPlan,
+    platform: Platform,
+) {
+    use elephc::link_plan::LinkItem;
+
+    for item in plan.items() {
+        match item {
+            LinkItem::StaticArchive {
+                path,
+                whole_archive,
+                ..
+            } => match (platform, *whole_archive) {
+                (Platform::MacOS, true) => {
+                    command.arg("-force_load").arg(path);
+                }
+                (Platform::Linux, true) => {
+                    command.arg("-Wl,--whole-archive").arg(path).arg("-Wl,--no-whole-archive");
+                }
+                (_, false) => {
+                    command.arg(path);
+                }
+                (Platform::Windows, _) => {
+                    panic!("Windows target is not yet supported (see issue #379)")
+                }
+            },
+            LinkItem::NamedLibrary { name, .. } => {
+                command.arg(format!("-l{name}"));
+            }
+            LinkItem::SearchPath(_) | LinkItem::Framework(_) => {}
+        }
+    }
+}
+
+/// Appends macOS frameworks from a typed plan after all archive/library inputs.
+fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkPlan) {
+    for item in plan.items() {
+        if let elephc::link_plan::LinkItem::Framework(framework) = item {
+            command.args(["-framework", framework]);
+        }
+    }
+}
+
+/// Compiles and archives the embedded shim against the test provider's system PCRE2 headers.
+fn test_pcre2_shim_archive() -> &'static Path {
+    static SHIM: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+    SHIM.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_test_pcre2_shim_{}_{}",
+            std::process::id(),
+            target().as_str()
+        ));
+        fs::create_dir_all(&dir).expect("failed to create PCRE2 shim test directory");
+        let source = dir.join("elephc_pcre2_shim.c");
+        let object = dir.join("elephc_pcre2_shim.o");
+        let archive = dir.join("libelephc_pcre2_shim.a");
+        fs::write(
+            &source,
+            include_str!("../../../src/native_deps/recipes/pcre2_shim.c"),
+        )
+        .expect("failed to write embedded PCRE2 shim source");
+
+        let compiler = test_c_compiler();
+        let mut compile = Command::new(compiler);
+        compile.args(["-c", "-fPIC", "-DPCRE2_STATIC"]);
+        if target().platform == Platform::MacOS {
+            compile.args(["-arch", target().darwin_arch_name()]);
+        }
+        compile.arg(format!(
+            "-I{}",
+            test_pcre2_provider().include_dir.display()
+        ));
+        let output = compile
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .expect("failed to run C compiler for PCRE2 shim test provider");
+        assert!(
+            output.status.success(),
+            "PCRE2 shim test-provider compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let archiver = compiler
+            .strip_suffix("gcc")
+            .map(|prefix| format!("{prefix}ar"))
+            .unwrap_or_else(|| "ar".to_string());
+        let output = Command::new(archiver)
+            .arg("rcs")
+            .arg(&archive)
+            .arg(&object)
+            .output()
+            .expect("failed to archive PCRE2 shim test provider");
+        assert!(
+            output.status.success(),
+            "PCRE2 shim test-provider archive failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        archive
+    })
+}
+
+/// Returns the target-aware C compiler used by the system-aligned shim test provider.
+fn test_c_compiler() -> &'static str {
+    match target().platform {
+        Platform::MacOS => "cc",
+        Platform::Linux => gcc_cmd(),
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    }
+}
+
+/// Discovers one target-aligned system PCRE2 header/library prefix for codegen tests.
+fn test_pcre2_provider() -> &'static TestPcre2Provider {
+    static PROVIDER: OnceLock<TestPcre2Provider> = OnceLock::new();
+
+    PROVIDER.get_or_init(|| {
+        let candidates: Vec<(std::path::PathBuf, std::path::PathBuf)> = match target().platform {
+            Platform::MacOS => {
+                let mut candidates = Vec::new();
+                if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
+                    let pcre2 = std::path::PathBuf::from(prefix).join("opt/pcre2");
+                    candidates.push((pcre2.join("include"), pcre2.join("lib")));
+                }
+                candidates.extend([
+                    (
+                        "/opt/homebrew/opt/pcre2/include".into(),
+                        "/opt/homebrew/opt/pcre2/lib".into(),
+                    ),
+                    (
+                        "/usr/local/opt/pcre2/include".into(),
+                        "/usr/local/opt/pcre2/lib".into(),
+                    ),
+                ]);
+                candidates
+            }
+            Platform::Linux => {
+                let tuple = match target().arch {
+                    Arch::AArch64 => "aarch64-linux-gnu",
+                    Arch::X86_64 => "x86_64-linux-gnu",
+                };
+                vec![
+                    ("/usr/include".into(), "/usr/lib".into()),
+                    ("/usr/local/include".into(), "/usr/local/lib".into()),
+                    ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
+                    ("/usr/include".into(), format!("/lib/{tuple}").into()),
+                ]
+            }
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        };
+        for (include, library) in candidates {
+            let include_dir = include.as_path();
+            let library_dir = library.as_path();
+            let has_headers = include_dir.join("pcre2.h").is_file()
+                && include_dir.join("pcre2posix.h").is_file();
+            let has_posix = ["a", "so", "dylib"]
+                .iter()
+                .any(|extension| library_dir.join(format!("libpcre2-posix.{extension}")).is_file());
+            let has_core = ["a", "so", "dylib"]
+                .iter()
+                .any(|extension| library_dir.join(format!("libpcre2-8.{extension}")).is_file());
+            if has_headers && has_posix && has_core {
+                return TestPcre2Provider {
+                    include_dir: include_dir.to_path_buf(),
+                    library_dir: library_dir.to_path_buf(),
+                };
+            }
+        }
+        panic!(
+            "codegen regex tests require aligned pcre2.h, pcre2posix.h, libpcre2-posix and libpcre2-8"
+        );
+    })
 }
 
 /// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
@@ -550,7 +862,7 @@ pub(crate) fn assemble_and_run(
     user_asm: &str,
     runtime_obj: &Path,
     dir: &Path,
-    extra_link_libs: &[String],
+    requirements: &TestLinkRequirements,
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) -> String {
@@ -563,7 +875,7 @@ pub(crate) fn assemble_and_run(
         &obj_path,
         runtime_obj,
         &bin_path,
-        extra_link_libs,
+        requirements,
         extra_link_paths,
         extra_frameworks,
     );
@@ -596,7 +908,7 @@ pub(crate) fn assemble_and_run_capture(
     user_asm: &str,
     runtime_obj: &Path,
     dir: &Path,
-    extra_link_libs: &[String],
+    requirements: &TestLinkRequirements,
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) -> ProgramOutput {
@@ -609,7 +921,7 @@ pub(crate) fn assemble_and_run_capture(
         &obj_path,
         runtime_obj,
         &bin_path,
-        extra_link_libs,
+        requirements,
         extra_link_paths,
         extra_frameworks,
     );
@@ -629,7 +941,7 @@ pub(crate) fn assemble_and_run_expect_failure(
     user_asm: &str,
     runtime_obj: &Path,
     dir: &Path,
-    extra_link_libs: &[String],
+    requirements: &TestLinkRequirements,
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) -> String {
@@ -642,7 +954,7 @@ pub(crate) fn assemble_and_run_expect_failure(
         &obj_path,
         runtime_obj,
         &bin_path,
-        extra_link_libs,
+        requirements,
         extra_link_paths,
         extra_frameworks,
     );

@@ -5,19 +5,45 @@ sidebar:
   order: 3
 ---
 
-This page lists every flag the `elephc` command accepts. Topical pages
+This page lists every compiler flag and native-package subcommand the `elephc`
+command accepts. Topical pages
 ([optimization](optimization.md), [output](output-and-diagnostics.md),
-[linking](linking-and-conditional-compilation.md)) explain the *why*; this page is
-the exhaustive *what*.
+[linking](linking-and-conditional-compilation.md), [native
+dependencies](native-dependencies.md)) explain the *why*; this page is the
+exhaustive *what*.
 
 ## Synopsis
 
 ```text
 elephc [OPTIONS] <source.php>
+elephc native <COMMAND> [OPTIONS]
 ```
 
 Exactly one positional argument is required: the path to the PHP source file. The
 binary is written next to it, named after the source without its extension.
+Only an exact first argument of `native` selects the package command family. A
+source file literally named `native` must therefore be passed as `./native` or
+by another explicit path.
+
+## Native dependency commands
+
+| Command | Arguments and flags | Description |
+|---|---|---|
+| `native add` | `<package>[@<exact-version>] [--target TARGET] [--offline] [--manifest-path FILE]` | Declare, lock, and install one catalog package. |
+| `native install` | `[--target TARGET] [--locked] [--offline] [--manifest-path FILE]` | Materialize declared artifacts; without `--locked`, reconcile the lock from the manifest. |
+| `native update` | `[<package>[@<exact-version>]] [--target TARGET] [--offline] [--manifest-path FILE]` | Refresh one or every dependency from the current catalog and install it. |
+| `native remove` | `<package> [--manifest-path FILE]` | Remove a declaration and lock entry without deleting the shared cache. |
+| `native list` | `[--target TARGET] [--manifest-path FILE]` | Print deterministic read-only package status. |
+| `native doctor` | `[--target TARGET] [--manifest-path FILE]` | Diagnose project, lock, cache, toolchain, and receipt state without mutation. |
+
+`--offline` guarantees that the downloader is never invoked. `--locked` is
+accepted only by `install` and rejects an absent or stale lock without rewriting
+it. `--manifest-path` names an `elephc.toml` file and disables ancestor
+discovery. Package versions are exact catalog versions; ranges and arbitrary
+URLs are rejected. `native --help` and `<command> --help` need no project.
+
+See [Native dependencies](native-dependencies.md) for project files, cache
+selection, toolchain overrides, and transactional behavior.
 
 ## Input and output
 
@@ -162,12 +188,21 @@ See [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Environment variables
 
-Three environment variables provide defaults that the matching flag overrides.
-They exist mainly so a whole test run or benchmark can flip a default without
-changing every invocation:
+Compiler environment variables provide defaults that the matching flag
+overrides. Native-package variables select the cache and target C toolchain:
 
 | Variable | Values | Equivalent flag |
 |---|---|---|
 | `ELEPHC_IR_OPT` | `on`, `off` | `--ir-opt=` |
 | `ELEPHC_REGALLOC` | `linear`, `stack` | `--regalloc=` |
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
+| `ELEPHC_NATIVE_CACHE` | absolute or invocation-relative directory | Native artifact/source cache root |
+| `ELEPHC_NATIVE_CC` | executable | Host or explicit cross C compiler fallback |
+| `ELEPHC_NATIVE_AR` | executable | Host or explicit cross archiver fallback |
+| `ELEPHC_NATIVE_RANLIB` | executable | Host or explicit cross archive indexer fallback |
+| `ELEPHC_NATIVE_CC_<TARGET_ENV>` | executable | Target-specific C compiler; takes precedence over the unsuffixed value |
+| `ELEPHC_NATIVE_AR_<TARGET_ENV>` | executable | Target-specific archiver; takes precedence over the unsuffixed value |
+| `ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` | executable | Target-specific archive indexer; takes precedence over the unsuffixed value |
+
+`TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
+as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.

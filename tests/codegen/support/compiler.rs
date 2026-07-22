@@ -24,7 +24,7 @@ pub(crate) fn compile_source_to_asm_with_options(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
-) -> (String, String, Vec<String>) {
+) -> (String, String, TestLinkRequirements) {
     compile_source_to_asm_with_defines(
         source,
         dir,
@@ -49,7 +49,7 @@ pub(crate) fn compile_source_to_asm_with_defines(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
-) -> (String, String, Vec<String>) {
+) -> (String, String, TestLinkRequirements) {
     compile_source_to_asm_with_defines_repr(
         source,
         dir,
@@ -81,7 +81,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     gc_stats: bool,
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
-) -> (String, String, Vec<String>) {
+) -> (String, String, TestLinkRequirements) {
     elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -131,14 +131,12 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
-    let mut required_libraries = check_result.required_libraries;
-    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
-        if !required_libraries.contains(&lib) {
-            required_libraries.push(lib);
-        }
-    }
+    let link_requirements = TestLinkRequirements::new(
+        check_result.required_libraries,
+        elephc::codegen::link_requirements_for_runtime_features(runtime_features),
+    );
     // user assembly is already platform-correct (emitters handle platform at emit time)
-    (user_asm, runtime_asm, required_libraries)
+    (user_asm, runtime_asm, link_requirements)
 }
 
 /// Lowers codegen fixtures to EIR, runs the default-on IR optimizer, and validates the result.

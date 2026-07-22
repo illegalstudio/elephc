@@ -29,6 +29,17 @@ use crate::types::ClassInfo;
 
 use super::program_usage::{collect_required_class_names, program_has_dynamic_instanceof};
 
+/// A logical final-link requirement selected by compiler/runtime feature detection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkRequirement {
+    /// A curated project-native package resolved to exact verified archives.
+    NativePackage(&'static str),
+    /// An Elephc Rust bridge resolved by the authoritative bridge table.
+    Bridge(&'static str),
+    /// A conventional platform library resolved by the system linker.
+    SystemLibrary(String),
+}
+
 /// Runtime helper families that can be emitted independently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
@@ -95,38 +106,28 @@ pub fn runtime_features_for_program_and_classes(
     runtime_features_for_program_and_classes_opt(program, Some(classes))
 }
 
-/// Returns native libraries required by the selected optional runtime features.
-pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec<String> {
-    let mut libs = Vec::new();
-    if features.regex {
-        push_required_library(&mut libs, "pcre2-posix");
-        push_required_library(&mut libs, "pcre2-8");
+/// Returns typed final-link requirements for the selected optional runtime features.
+pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
+    let mut requirements = Vec::new();
+    if features.regex || features.eval_bridge {
+        requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
     if features.phar_archive {
-        libs.push("elephc_phar".to_string());
-        libs.push("z".to_string());
-        libs.push("bz2".to_string());
+        requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
+        requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
     if features.descriptor_invoker {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
         // reference `elephc_crypto_hash`; force the crate to link on all targets.
-        libs.push("elephc_crypto".to_string());
+        requirements.push(LinkRequirement::Bridge("elephc_crypto"));
     }
     if features.eval_bridge {
-        // Eval code can call preg_* from dynamically parsed source, so PCRE2 is
-        // required even when no static preg call appears in the AOT AST.
-        push_required_library(&mut libs, "pcre2-posix");
-        push_required_library(&mut libs, "pcre2-8");
-        push_required_library(&mut libs, "elephc_magician");
+        // Dynamic eval can call preg_* without a static AOT reference, while the
+        // interpreter itself remains an ordinary table-driven Elephc bridge.
+        requirements.push(LinkRequirement::Bridge("elephc_magician"));
     }
-    libs
-}
-
-/// Appends a required link library once while preserving feature order.
-fn push_required_library(libs: &mut Vec<String>, library: &str) {
-    if !libs.iter().any(|existing| existing == library) {
-        libs.push(library.to_string());
-    }
+    requirements
 }
 
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
@@ -982,31 +983,30 @@ mod tests {
         );
     }
 
-    /// Verifies regex runtime features request PCRE2 libraries for final linking.
+    /// Verifies regex features emit one managed PCRE2 requirement without raw library names.
     #[test]
-    fn test_regex_runtime_features_require_pcre2_libraries() {
+    fn test_regex_runtime_features_require_managed_pcre2() {
         assert_eq!(
-            required_libraries_for_runtime_features(RuntimeFeatures {
+            link_requirements_for_runtime_features(RuntimeFeatures {
                 regex: true,
                 ..RuntimeFeatures::none()
             }),
-            vec!["pcre2-posix".to_string(), "pcre2-8".to_string()]
+            vec![LinkRequirement::NativePackage("pcre2")]
         );
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval runtime features request PCRE2 plus the magician bridge staticlib for final linking.
+    /// Verifies eval runtime features request managed PCRE2 plus the magician bridge.
     #[test]
-    fn test_eval_runtime_features_require_elephc_magician_library() {
+    fn test_eval_runtime_features_require_managed_pcre2_and_magician_bridge() {
         assert_eq!(
-            required_libraries_for_runtime_features(RuntimeFeatures {
+            link_requirements_for_runtime_features(RuntimeFeatures {
                 eval_bridge: true,
                 ..RuntimeFeatures::none()
             }),
             vec![
-                "pcre2-posix".to_string(),
-                "pcre2-8".to_string(),
-                "elephc_magician".to_string()
+                LinkRequirement::NativePackage("pcre2"),
+                LinkRequirement::Bridge("elephc_magician")
             ]
         );
     }
@@ -1014,7 +1014,7 @@ mod tests {
     /// Verifies eval scope-only support no longer pulls the dynamic eval bridge libraries.
     #[test]
     fn test_eval_scope_runtime_features_omit_bridge_libraries() {
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures {
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             eval_scope: true,
             ..RuntimeFeatures::none()
         })
@@ -1162,10 +1162,10 @@ mod tests {
         );
     }
 
-    /// Verifies the dynamic dispatcher feature requests the crypto staticlib for linking.
+    /// Verifies the dynamic dispatcher feature requests the typed crypto bridge.
     #[test]
-    fn test_descriptor_invoker_runtime_features_require_elephc_crypto_library() {
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures {
+    fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
             mb_strlen: false,
             phar_archive: false,
@@ -1175,11 +1175,9 @@ mod tests {
             web: false,
         })
         .iter()
-        .any(|lib| lib == "elephc_crypto"));
-        assert!(
-            !required_libraries_for_runtime_features(RuntimeFeatures::none())
-                .iter()
-                .any(|lib| lib == "elephc_crypto")
-        );
+        .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
+        assert!(!link_requirements_for_runtime_features(RuntimeFeatures::none())
+            .iter()
+            .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
     }
 }

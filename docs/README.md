@@ -27,6 +27,7 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
 - [Targets and cross-compilation](compiling/targets.md) — the supported target matrix and `--target`
+- [Native dependencies](compiling/native-dependencies.md) — declare, lock, build, cache, and diagnose curated native packages with `elephc native`
 - [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR identity, peephole, and dead-instruction passes), `--regalloc`, `--null-repr`
 - [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
 - [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
@@ -42,7 +43,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
 - [Eval](php/eval.md) — experimental literal-AOT and runtime PHP fragment evaluation, scope synchronization, dynamic declarations, safety, supported builtins, and limitations
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 70+ built-in string functions
-- [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and native PCRE2 build requirements
+- [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and the managed `pcre2` package
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods

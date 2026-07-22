@@ -512,16 +512,6 @@ impl Platform {
         }
     }
 
-    /// Returns the size of PCRE2 POSIX-wrapper `struct regex_t` in bytes.
-    pub fn regex_t_size(&self) -> usize {
-        48
-    }
-
-    /// Returns the byte offset of `re_nsub` within PCRE2 POSIX-wrapper `struct regex_t`.
-    pub fn regex_re_nsub_offset(&self) -> usize {
-        24
-    }
-
     /// Returns the value of `LC_CTYPE` for `setlocale()`.
     pub fn lc_ctype(&self) -> u32 {
         match self {
@@ -531,22 +521,6 @@ impl Platform {
         }
     }
 
-    /// Returns the size of PCRE2 POSIX-wrapper `struct regmatch_t` in bytes.
-    pub fn regmatch_t_size(&self) -> usize {
-        8
-    }
-
-    /// Returns the byte offset of `rm_eo` within PCRE2 POSIX-wrapper `struct regmatch_t`.
-    pub fn regmatch_rm_eo_offset(&self) -> usize {
-        4
-    }
-
-    /// Returns the ARM64 load instruction for a `regoff_t` field (regex match offset).
-    ///
-    /// PCRE2's POSIX wrapper uses signed 32-bit offsets on all supported targets.
-    pub fn regoff_load_instr(&self, dest: &str, base: &str, offset: usize) -> String {
-        format!("ldrsw {}, [{}, #{}]", dest, base, offset)
-    }
 }
 
 impl Arch {

@@ -485,18 +485,37 @@ These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes 
 
 ### Regex routines
 
-**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_replace_callback.rs`, `system/preg_split.rs`
+**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`,
+`system/mb_ereg_match.rs`, `system/preg_match.rs`,
+`system/preg_match_all.rs`, `system/preg_replace.rs`,
+`system/preg_replace_callback.rs`, `system/preg_split.rs`; the embedded shim
+source is `src/native_deps/recipes/pcre2_shim.c`.
 
-All regex routines use PCRE2 through the PCRE2 POSIX-compatible wrapper (`pcre2_regcomp()`, `pcre2_regexec()`, and `pcre2_regfree()`). `__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`, `m`, `s`, `u`, `U`) to PCRE2 wrapper flags. `__rt_pcre_to_posix` keeps its historic symbol name for compatibility with existing emitters, but now only materializes the stripped PCRE pattern as a null-terminated C string. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same wrapper. The whole regex family is emitted only when the program's `RuntimeFeatures` request it, and regex-enabled programs request `pcre2-posix` and `pcre2-8` during final linking.
+Generated runtime assembly calls only the versioned
+`elephc_pcre2_v1_compile`, `elephc_pcre2_v1_exec`, and
+`elephc_pcre2_v1_free` ABI. The Elephc-owned C shim uses PCRE2's POSIX wrapper
+internally, but no `regex_t`, `regmatch_t`, `regoff_t`, or other PCRE2-owned
+layout crosses the boundary. `compile` returns an opaque handle and slot count;
+`exec` writes fixed 16-byte `[start, end]` signed-64-bit pairs, initializing
+unmatched and surplus slots to `[-1, -1]`.
+
+`__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`,
+`m`, `s`, `u`, `U`) to shim compile flags. `__rt_pcre_to_posix` keeps its
+historic symbol name for compatibility but only materializes a null-terminated
+pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
+whole regex family is emitted only when the program's `RuntimeFeatures` request
+it. A final-link regex or dynamic-eval program resolves the managed `pcre2` package and
+links exact verified archives in shim, POSIX, then 8-bit order. There is no
+production system-PCRE2 fallback; compilation itself never installs a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
-| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the compiled `regex_t.re_nsub` capture count, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
+| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
-| `__rt_preg_replace_callback` | Replace all regex matches by allocating capture storage from `regex_t.re_nsub`, building an indexed `$matches` string array, invoking the callback, and appending the callback string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
-| `__rt_preg_split` | Split the subject string at regex match boundaries using `regex_t.re_nsub`-sized capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
+| `__rt_preg_replace_callback` | Replace all regex matches using shim-sized fixed-pair capture storage, building an indexed `$matches` string array, invoking the callback, and appending its string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
+| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
 
 ## I/O routines
 

@@ -117,9 +117,9 @@ pub use driver_support::{
 };
 pub(crate) use prescan::collect_constants;
 use program_usage::{collect_required_class_names, collect_required_class_names_in_stmts};
-pub use runtime_features::RuntimeFeatures;
+pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
-    required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
+    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{

@@ -19,9 +19,10 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
         return;
     }
 
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regmatch_off = regex_t_size;
-    let pattern_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let handle_off = 0;
+    let match_slot_count_off = handle_off + 8;
+    let match_pair_off = match_slot_count_off + 8;
+    let pattern_ptr_off = match_pair_off + 16;
     let pattern_len_off = pattern_ptr_off + 8;
     let subject_ptr_off = pattern_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
@@ -60,10 +61,11 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     super::emit_prepare_regex_locale(emitter);
 
     // -- compile regex --
-    emitter.instruction("mov x0, sp");                                          // regex_t at sp
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pattern
+    emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_all_fail");                   // fail
 
     // -- null-terminate subject --
@@ -81,11 +83,11 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // current subject position
     emitter.instruction("ldrb w9, [x1]");                                       // load byte at current pos
     emitter.instruction("cbz w9, __rt_preg_match_all_done");                    // null terminator = done
-    emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.instruction("mov x2, #1");                                          // nmatch = 1
-    emitter.instruction(&format!("add x3, sp, #{}", regmatch_off));             // regmatch_t buffer
-    emitter.instruction("mov x4, #0");                                          // eflags = 0
-    emitter.bl_c("pcre2_regexec");                                                    // execute
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
+    emitter.instruction("mov x2, #1");                                          // request only the full-match pair
+    emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
+    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_all_done");                   // no more matches
 
     // -- found a match, increment count --
@@ -93,9 +95,9 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // increment
     emitter.instruction(&format!("str x9, [sp, #{}]", match_count_off));        // save count
 
-    // -- advance past this match (rm_eo is 8 bytes at sp+40) --
+    // -- advance past this match --
     emitter.instruction(&format!("ldr x10, [sp, #{}]", current_pos_off));       // current pos
-    emitter.instruction(&emitter.platform.regoff_load_instr("x11", "sp", regmatch_off + emitter.platform.regmatch_rm_eo_offset())); // load rm_eo with the native regoff_t width
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", match_pair_off + 8));    // load fixed signed-64-bit match end
     emitter.instruction("cmp x11, #0");                                         // check for zero-length match
     emitter.instruction("b.gt __rt_preg_match_all_adv");                        // non-zero advance
     emitter.instruction("mov x11, #1");                                         // advance by at least 1
@@ -105,8 +107,8 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_all_loop");                          // continue
 
     emitter.label("__rt_preg_match_all_done");
-    emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.bl_c("pcre2_regfree");                                                    // free
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", match_count_off));        // return count
     emitter.instruction("b __rt_preg_match_all_ret");                           // return
 
@@ -124,9 +126,10 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 /// Returns the non-overlapping match count in rax.
 /// Handles zero-length matches by advancing at least one byte to avoid infinite loops.
 fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regmatch_off = regex_t_size;
-    let subject_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let handle_off = 0;
+    let match_slot_count_off = handle_off + 8;
+    let match_pair_off = match_slot_count_off + 8;
+    let subject_ptr_off = match_pair_off + 16;
     let subject_len_off = subject_ptr_off + 8;
     let flags_off = subject_len_off + 8;
     let pattern_cstr_off = flags_off + 8;
@@ -134,20 +137,13 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     let match_count_off = subject_cstr_off + 8;
     let current_pos_off = match_count_off + 8;
     let stack_size = (current_pos_off + 16 + 15) & !15;
-    let rm_eo_off = regmatch_off + emitter.platform.regmatch_rm_eo_offset();
-    let load_rm_eo = if emitter.platform.regmatch_t_size() == 16 {
-        format!("mov r11, QWORD PTR [rsp + {}]", rm_eo_off)
-    } else {
-        format!("movsxd r11, DWORD PTR [rsp + {}]", rm_eo_off)
-    };
-
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all ---");
     emitter.label_global("__rt_preg_match_all");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex-counting scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the regex object, regmatch buffer, and loop spill slots
-    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch_t, and match-count bookkeeping
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the opaque handle, pair, and match count
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
@@ -157,10 +153,11 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern C string across compilation and loop setup
     super::emit_prepare_regex_locale(emitter);
-    emitter.instruction("lea rdi, [rsp]");                                      // pass the local regex_t storage as the first regcomp() argument
+    emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile the PCRE pattern into the local regex_t storage
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
     emitter.instruction("jnz __rt_preg_match_all_fail_linux_x86_64");           // failed regex compilation maps to a zero-count result
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
@@ -175,17 +172,17 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // check whether the current subject cursor already points at the trailing null terminator
     emitter.instruction("test r9d, r9d");                                       // treat the terminating null byte as the loop completion condition
     emitter.instruction("jz __rt_preg_match_all_done_linux_x86_64");            // stop counting once the full null-terminated subject has been consumed
-    emitter.instruction("lea rdi, [rsp]");                                      // pass the compiled regex_t storage as the first regexec() argument
-    emitter.instruction("mov edx, 1");                                          // request exactly one regmatch_t capture because the loop only needs the overall match extent
-    emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass the local regmatch_t buffer as the match extent output slot
-    emitter.instruction("xor r8d, r8d");                                        // pass eflags = 0 so regexec() matches from the current subject cursor
-    emitter.bl_c("pcre2_regexec");                                                    // execute the compiled PCRE2 regex at the current subject cursor
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
+    emitter.instruction("mov edx, 1");                                          // request only the full-match pair
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
+    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_match_all_done_linux_x86_64");           // stop counting when regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_count_off)); // reload the running non-overlapping match count before incrementing it
     emitter.instruction("add r9, 1");                                           // count the newly discovered regex match
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_count_off)); // preserve the updated match count for the next loop iteration
-    emitter.instruction(&load_rm_eo);                                           // load rm_eo from the native Linux regmatch_t layout using the correct regoff_t width
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", match_pair_off + 8)); // load fixed signed-64-bit match end
     emitter.instruction("cmp r11, 0");                                          // detect zero-length regex matches so the loop still makes forward progress
     emitter.instruction("jg __rt_preg_match_all_adv_linux_x86_64");             // use the reported end offset directly when the regex consumed at least one byte
     emitter.instruction("mov r11, 1");                                          // force zero-length matches to advance by one byte and avoid infinite loops
@@ -196,8 +193,8 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_all_loop_linux_x86_64");           // continue counting the remaining non-overlapping regex matches
 
     emitter.label("__rt_preg_match_all_done_linux_x86_64");
-    emitter.instruction("lea rdi, [rsp]");                                      // reload the compiled regex_t storage before freeing it with regfree()
-    emitter.bl_c("pcre2_regfree");                                                    // release the compiled PCRE2 regex resources before returning the match count
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before returning the match count
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_count_off)); // return the total number of non-overlapping regex matches discovered in the subject
     emitter.instruction("jmp __rt_preg_match_all_ret_linux_x86_64");            // share the common epilogue after the successful match-count path
 
@@ -205,7 +202,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // return zero when regex compilation fails for preg_match_all()
 
     emitter.label("__rt_preg_match_all_ret_linux_x86_64");
-    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the local regex_t, regmatch_t, and counting spill storage before returning
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, pair, and counting spill storage before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the regex-count helper completes
     emitter.instruction("ret");                                                 // return the preg_match_all() integer count in the x86_64 integer result register
 }

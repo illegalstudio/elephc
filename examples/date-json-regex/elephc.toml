@@ -1,0 +1,5 @@
+[native]
+schema = 1
+
+[native.dependencies]
+pcre2 = "10.47"

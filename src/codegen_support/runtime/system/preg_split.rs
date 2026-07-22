@@ -21,8 +21,8 @@ const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 /// Dispatches to the x86_64 Linux implementation or runs the generic ARM64 path.
 /// The helper accepts a PHP PCRE-flavored pattern, subject, limit, and preg_split
 /// flags. It strips slash delimiters via `__rt_preg_strip`, materializes the
-/// PCRE pattern via `__rt_pcre_to_posix`, compiles with PCRE2, then loops with
-/// `pcre2_regexec` to extract pre-match segments and optional captured
+/// PCRE pattern via `__rt_pcre_to_posix`, compiles through the opaque shim, then
+/// executes it repeatedly to extract pre-match segments and optional captured
 /// delimiters. Offset capture returns boxed rows shaped as `[string, offset]`.
 ///
 /// ARM64 input: x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len,
@@ -33,10 +33,8 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
         return;
     }
 
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regex_re_nsub_off = emitter.platform.regex_re_nsub_offset();
-    let regmatch_size = emitter.platform.regmatch_t_size();
-    let regmatches_ptr_off = regex_t_size;
+    let handle_off = 0;
+    let regmatches_ptr_off = handle_off + 8;
     let nmatch_off = regmatches_ptr_off + 8;
     let pattern_ptr_off = nmatch_off + 8;
     let pattern_len_off = pattern_ptr_off + 8;
@@ -90,24 +88,21 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     super::emit_prepare_regex_locale(emitter);
 
     // -- compile regex --
-    emitter.instruction("mov x0, sp");                                          // pass the local regex_t storage to PCRE2
+    emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated PCRE pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", regex_flags_off));        // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_split_fail");                       // return an empty result array when compilation fails
 
-    // -- allocate a reusable capture buffer sized from regex_t.re_nsub --
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", regex_re_nsub_off));      // load regex_t.re_nsub after successful compilation
-    emitter.instruction("add x9, x9, #1");                                      // include the full-match slot in the regmatch count
-    emitter.instruction(&format!("str x9, [sp, #{}]", nmatch_off));             // save dynamic regmatch count for split capture loops
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x0, x9, #4");                                  // malloc bytes = nmatch * 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("lsl x0, x9, #3");                                  // malloc bytes = nmatch * 8-byte regmatch_t slots
-    }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
-    emitter.instruction("cbz x0, __rt_preg_split_malloc_fail");                 // allocation failure frees regex_t and returns an empty array
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic regmatch_t buffer pointer
+    // -- allocate a reusable fixed offset-pair buffer --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
+    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
+    emitter.instruction("cbnz x10, __rt_preg_split_malloc_fail");               // free the handle instead of allocating a wrapped size
+    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
+    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.instruction("cbz x0, __rt_preg_split_malloc_fail");                 // allocation failure frees the handle and returns an empty array
+    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
     // -- create result array with the required runtime element layout --
     emit_preg_split_alloc_result_arm64(emitter, "main", preg_flags_off, array_ptr_off);
@@ -139,18 +134,17 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x1]");                                       // inspect current subject byte
     emitter.instruction("cbz w9, __rt_preg_split_last");                        // end of string means only the trailing segment remains
 
-    emit_preg_split_init_regmatches_arm64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
-    emitter.instruction("mov x0, sp");                                          // pass compiled regex_t to regexec
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));       // pass current C-string cursor
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic regmatch_t capture buffer
-    emitter.instruction("mov x4, #0");                                          // eflags = 0 for ordinary matching
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex against remaining subject
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
+    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction("cbnz x0, __rt_preg_split_last");                       // no more matches means the trailing segment remains
 
     // -- add segment before match to array --
-    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match slot for the pre-match extent
-    emit_arm_load_regoff_from_addr(emitter, "x9", "x14", regmatch_size);
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair for the pre-match extent
+    emitter.instruction("ldr x9, [x14]");                                       // load full-match signed-64-bit start
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_elephc_off));     // load pre-match segment start
     emitter.instruction("mov x2, x9");                                          // use rm_so as the pre-match segment length
     emitter.instruction(&format!("ldr x3, [sp, #{}]", current_elephc_off));     // reload segment start for offset calculation
@@ -172,7 +166,6 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
         emitter,
         regmatches_ptr_off,
         nmatch_off,
-        regmatch_size,
         preg_flags_off,
         subject_ptr_off,
         current_elephc_off,
@@ -189,13 +182,8 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", split_count_off));        // reload processed separator count
     emitter.instruction("add x9, x9, #1");                                      // account for the separator just processed
     emitter.instruction(&format!("str x9, [sp, #{}]", split_count_off));        // save updated separator count
-    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match slot for cursor advancement
-    emit_arm_load_regoff_from_addr(
-        emitter,
-        "x9",
-        &format!("x14, #{}", emitter.platform.regmatch_rm_eo_offset()),
-        regmatch_size,
-    );
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair for cursor advancement
+    emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
     emitter.instruction("cmp x9, #0");                                          // detect zero-length separators
     emitter.instruction("b.gt __rt_preg_split_advance_ok");                     // trust rm_eo when the separator consumed bytes
     emitter.instruction("mov x9, #1");                                          // force progress for zero-length matches
@@ -229,10 +217,10 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     );
 
     // -- free regex and return --
-    emitter.instruction("mov x0, sp");                                          // pass compiled regex_t to regfree
-    emitter.bl_c("pcre2_regfree");                                                    // release regex resources
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload result array pointer
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
@@ -243,8 +231,8 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
     emitter.label("__rt_preg_split_malloc_fail");
-    emitter.instruction("mov x0, sp");                                          // reload compiled regex_t storage after allocation failure
-    emitter.bl_c("pcre2_regfree");                                                    // release regex resources before returning an empty array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after allocation failure
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release regex resources before returning an empty array
     emit_preg_split_alloc_result_arm64(emitter, "malloc_fail", preg_flags_off, array_ptr_off);
     emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload empty result array pointer after allocation failure
 
@@ -284,33 +272,6 @@ fn emit_preg_split_alloc_result_arm64(
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
     emitter.instruction(&format!("str x0, [sp, #{}]", array_ptr_off));          // save result array pointer
     emitter.label(&done);
-}
-
-/// Emits the ARM64 loop that initializes regmatch slots to "unmatched".
-fn emit_preg_split_init_regmatches_arm64(
-    emitter: &mut Emitter,
-    regmatches_ptr_off: usize,
-    nmatch_off: usize,
-    regmatch_size: usize,
-) {
-    emitter.instruction("mov x9, #-1");                                         // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", regmatches_ptr_off));    // load dynamic regmatch_t buffer base
-    emitter.instruction(&format!("ldr x11, [sp, #{}]", nmatch_off));            // load dynamic regmatch slot count
-    emitter.instruction("mov x12, #0");                                         // initialize regmatch initialization index
-    emitter.label("__rt_preg_split_init_loop");
-    emitter.instruction("cmp x12, x11");                                        // have all dynamic regmatch slots been initialized?
-    emitter.instruction("b.ge __rt_preg_split_init_done");                      // stop once every slot has an unmatched sentinel
-    emitter.instruction("mov x13, x12");                                        // copy index before scaling to native regmatch_t size
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x13, x13, #4");                                // scale index by 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("lsl x13, x13, #3");                                // scale index by compact 8-byte regmatch_t slots
-    }
-    emitter.instruction("add x13, x10, x13");                                   // compute the current dynamic regmatch slot address
-    emitter.instruction("str x9, [x13]");                                       // mark capture start offset as unmatched before regexec
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next capture slot
-    emitter.instruction("b __rt_preg_split_init_loop");                         // continue initializing dynamic capture slots
-    emitter.label("__rt_preg_split_init_done");
 }
 
 /// Emits ARM64 code that appends one split piece using the currently saved flags.
@@ -453,7 +414,6 @@ fn emit_preg_split_capture_loop_arm64(
     emitter: &mut Emitter,
     regmatches_ptr_off: usize,
     nmatch_off: usize,
-    regmatch_size: usize,
     preg_flags_off: usize,
     subject_ptr_off: usize,
     current_elephc_off: usize,
@@ -475,18 +435,13 @@ fn emit_preg_split_capture_loop_arm64(
     emitter.instruction(&format!("ldr x10, [sp, #{}]", nmatch_off));            // reload dynamic regmatch slot count
     emitter.instruction("cmp x9, x10");                                         // stop after all compiled capture groups
     emitter.instruction("b.ge __rt_preg_split_captures_done");                  // finish capture processing
-    emitter.instruction(&format!("ldr x11, [sp, #{}]", regmatches_ptr_off));    // load dynamic regmatch buffer base
-    emitter.instruction(&format!("mov x10, #{}", regmatch_size));               // materialize native regmatch_t stride
-    emitter.instruction("madd x11, x9, x10, x11");                              // address this capture group's regmatch_t slot
-    emit_arm_load_regoff_from_addr(emitter, "x12", "x11", regmatch_size);
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
+    emitter.instruction("lsl x10, x9, #4");                                     // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction("add x11, x11, x10");                                   // address this capture group's offset pair
+    emitter.instruction("ldr x12, [x11]");                                      // load signed-64-bit capture start
     emitter.instruction("cmp x12, #0");                                         // unmatched captures have negative rm_so
     emitter.instruction("b.lt __rt_preg_split_capture_next");                   // skip unmatched capture groups
-    emit_arm_load_regoff_from_addr(
-        emitter,
-        "x13",
-        &format!("x11, #{}", emitter.platform.regmatch_rm_eo_offset()),
-        regmatch_size,
-    );
+    emitter.instruction("ldr x13, [x11, #8]");                                  // load signed-64-bit capture end
     emitter.instruction("sub x2, x13, x12");                                    // compute captured delimiter length
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_elephc_off));     // load current elephc cursor
     emitter.instruction("add x1, x1, x12");                                     // compute captured delimiter pointer
@@ -513,34 +468,18 @@ fn emit_preg_split_capture_loop_arm64(
     emitter.label("__rt_preg_split_captures_done");
 }
 
-/// Loads a regoff_t value from an ARM64 address register.
-fn emit_arm_load_regoff_from_addr(
-    emitter: &mut Emitter,
-    dst: &str,
-    addr: &str,
-    regmatch_size: usize,
-) {
-    if regmatch_size == 16 {
-        emitter.instruction(&format!("ldr {dst}, [{addr}]"));                   // load native 64-bit regoff_t from computed regmatch slot
-    } else {
-        emitter.instruction(&format!("ldrsw {dst}, [{addr}]"));                 // sign-extend native 32-bit regoff_t from computed regmatch slot
-    }
-}
-
 /// Emits the x86_64 Linux-specific `__rt_preg_split` runtime helper.
 ///
 /// Uses the System V AMD64 ABI: pattern ptr/len in rdi/rsi, subject ptr/len in
 /// rdx/rcx, limit in r8, flags in r9. The helper strips delimiters, translates
-/// PCRE pattern as a C string, compiles via PCRE2, then iterates `pcre2_regexec` to
+/// PCRE pattern as a C string, compiles through the opaque shim, then iterates it to
 /// collect pre-match segments, optional delimiter captures, and optional
 /// offset-capture rows. Zero-length matches advance by one byte to avoid
 /// infinite loops. On failure returns a small empty array with the requested
 /// result layout.
 fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regex_re_nsub_off = emitter.platform.regex_re_nsub_offset();
-    let regmatch_size = emitter.platform.regmatch_t_size();
-    let regmatches_ptr_off = regex_t_size;
+    let handle_off = 0;
+    let regmatches_ptr_off = handle_off + 8;
     let nmatch_off = regmatches_ptr_off + 8;
     let subject_ptr_off = nmatch_off + 8;
     let subject_len_off = subject_ptr_off + 8;
@@ -567,7 +506,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex-split scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex object and split bookkeeping
-    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch buffer, and split spill slots
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the handle, offset pairs, and split spills
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", limit_off));   // preserve the PHP split limit
@@ -579,26 +518,23 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern
     super::emit_prepare_regex_locale(emitter);
-    emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to PCRE2
+    emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to PCRE2
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", regex_flags_off)); // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_split_fail_linux_x86_64");               // return an empty result array on compilation failure
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); // load regex_t.re_nsub after successful compilation
-    emitter.instruction("add r9, 1");                                           // include the full-match slot in the regmatch count
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // save dynamic regmatch count for split capture loops
-    emitter.instruction("mov rdi, r9");                                         // copy nmatch before scaling it to a malloc byte count
-    if regmatch_size == 16 {
-        emitter.instruction("shl rdi, 4");                                      // malloc bytes = nmatch * 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("shl rdi, 3");                                      // malloc bytes = nmatch * 8-byte regmatch_t slots
-    }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
+    emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
+    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
+    emitter.instruction("jnz __rt_preg_split_malloc_fail_linux_x86_64");        // free the handle instead of allocating a wrapped size
+    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
+    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees regex_t and returns an empty array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
+    emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees the opaque handle and returns an empty array
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
 
     emit_preg_split_alloc_result_x86_64(emitter, "main", preg_flags_off, array_ptr_off);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload elephc subject pointer before C-string conversion
@@ -623,18 +559,17 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // inspect current subject byte
     emitter.instruction("test r9d, r9d");                                       // is the current byte the trailing null terminator?
     emitter.instruction("jz __rt_preg_split_last_linux_x86_64");                // emit the final segment at end of string
-    emit_preg_split_init_regmatches_x86_64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
-    emitter.instruction("lea rdi, [rsp]");                                      // pass compiled regex_t storage to regexec
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // pass current C-string cursor to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
-    emitter.instruction("xor r8d, r8d");                                        // eflags = 0 for ordinary matching
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex against remaining subject
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
+    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction("test eax, eax");                                       // did regexec find another separator?
     emitter.instruction("jnz __rt_preg_split_last_linux_x86_64");               // no more matches means the trailing segment remains
 
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot for the pre-match extent
-    emit_x86_load_regoff_from_ptr(emitter, "r9", "r12", 0, regmatch_size);
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair for the pre-match extent
+    emitter.instruction("mov r9, QWORD PTR [r12]");                             // load full-match signed-64-bit start
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); // load pre-match segment start
     emitter.instruction("mov rdx, r9");                                         // use rm_so as the pre-match segment length
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_elephc_off)); // reload current elephc cursor for offset calculation
@@ -656,7 +591,6 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         emitter,
         regmatches_ptr_off,
         nmatch_off,
-        regmatch_size,
         preg_flags_off,
         subject_ptr_off,
         current_elephc_off,
@@ -672,14 +606,8 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", split_count_off)); // reload processed separator count
     emitter.instruction("add r9, 1");                                           // account for the separator just processed
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", split_count_off)); // save updated separator count
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot for cursor advancement
-    emit_x86_load_regoff_from_ptr(
-        emitter,
-        "r9",
-        "r12",
-        emitter.platform.regmatch_rm_eo_offset(),
-        regmatch_size,
-    );
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair for cursor advancement
+    emitter.instruction("mov r9, QWORD PTR [r12 + 8]");                         // load full-match signed-64-bit end
     emitter.instruction("cmp r9, 0");                                           // detect zero-length separators
     emitter.instruction("jg __rt_preg_split_advance_ok_linux_x86_64");          // trust rm_eo when the separator consumed bytes
     emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
@@ -712,10 +640,10 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         pair_ptr_off,
         mixed_ptr_off,
     );
-    emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage before freeing
-    emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return final result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 
@@ -725,13 +653,13 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // return through common epilogue
 
     emitter.label("__rt_preg_split_malloc_fail_linux_x86_64");
-    emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage after allocation failure
-    emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources before returning empty
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after allocation failure
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before returning empty
     emit_preg_split_alloc_result_x86_64(emitter, "malloc_fail", preg_flags_off, array_ptr_off);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return empty result array pointer after allocation failure
 
     emitter.label("__rt_preg_split_ret_linux_x86_64");
-    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release local regex_t, regmatch buffer, and split spill storage
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release opaque-handle, offset-pair, and split spill storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return preg_split result in rax
 }
@@ -764,29 +692,6 @@ fn emit_preg_split_alloc_result_x86_64(
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save result array pointer
     emitter.label(&done);
-}
-
-/// Emits x86_64 code that initializes regmatch slots to "unmatched".
-fn emit_preg_split_init_regmatches_x86_64(
-    emitter: &mut Emitter,
-    regmatches_ptr_off: usize,
-    nmatch_off: usize,
-    regmatch_size: usize,
-) {
-    emitter.instruction("mov r9, -1");                                          // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch_t buffer base
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", nmatch_off)); // load dynamic regmatch slot count
-    emitter.instruction("xor r12d, r12d");                                      // initialize regmatch initialization index
-    emitter.label("__rt_preg_split_init_loop_linux_x86_64");
-    emitter.instruction("cmp r12, r11");                                        // have all dynamic regmatch slots been initialized?
-    emitter.instruction("jge __rt_preg_split_init_done_linux_x86_64");          // stop once every slot has an unmatched sentinel
-    emitter.instruction("mov r13, r12");                                        // copy index before scaling to native regmatch_t size
-    emitter.instruction(&format!("imul r13, {}", regmatch_size));               // scale index by the target regmatch_t stride
-    emitter.instruction("add r13, r10");                                        // compute the current dynamic regmatch slot address
-    emitter.instruction("mov QWORD PTR [r13], r9");                             // mark capture start offset as unmatched before regexec
-    emitter.instruction("add r12, 1");                                          // advance to the next capture slot
-    emitter.instruction("jmp __rt_preg_split_init_loop_linux_x86_64");          // continue initializing dynamic capture slots
-    emitter.label("__rt_preg_split_init_done_linux_x86_64");
 }
 
 /// Emits x86_64 code that appends one split piece using the currently saved flags.
@@ -925,7 +830,6 @@ fn emit_preg_split_capture_loop_x86_64(
     emitter: &mut Emitter,
     regmatches_ptr_off: usize,
     nmatch_off: usize,
-    regmatch_size: usize,
     preg_flags_off: usize,
     subject_ptr_off: usize,
     current_elephc_off: usize,
@@ -946,19 +850,13 @@ fn emit_preg_split_capture_loop_x86_64(
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload dynamic regmatch slot count
     emitter.instruction("cmp r10, r9");                                         // stop after all compiled capture groups
     emitter.instruction("jge __rt_preg_split_captures_done_linux_x86_64");      // finish capture processing
-    emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch buffer base
-    emitter.instruction("add r10, r12");                                        // address this capture group's regmatch_t slot
-    emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction("add r10, r12");                                        // address this capture group's offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
     emitter.instruction("cmp r11, 0");                                          // unmatched captures have negative rm_so
     emitter.instruction("jl __rt_preg_split_capture_next_linux_x86_64");        // skip unmatched capture groups
-    emit_x86_load_regoff_from_ptr(
-        emitter,
-        "r9",
-        "r10",
-        emitter.platform.regmatch_rm_eo_offset(),
-        regmatch_size,
-    );
+    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load signed-64-bit capture end
     emitter.instruction("mov rdx, r9");                                         // seed captured delimiter end offset
     emitter.instruction("sub rdx, r11");                                        // compute captured delimiter length
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); // load current elephc cursor
@@ -984,24 +882,4 @@ fn emit_preg_split_capture_loop_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", capture_idx_off)); // save next capture-group index
     emitter.instruction("jmp __rt_preg_split_capture_loop_linux_x86_64");       // continue capture processing
     emitter.label("__rt_preg_split_captures_done_linux_x86_64");
-}
-
-/// Loads a regoff_t value from a computed x86_64 regmatch slot pointer.
-fn emit_x86_load_regoff_from_ptr(
-    emitter: &mut Emitter,
-    dst: &str,
-    addr: &str,
-    extra_off: usize,
-    regmatch_size: usize,
-) {
-    let suffix = if extra_off == 0 {
-        String::new()
-    } else {
-        format!(" + {extra_off}")
-    };
-    if regmatch_size == 16 {
-        emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
-    } else {
-        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
-    }
 }
