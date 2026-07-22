@@ -1289,8 +1289,28 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         return left;
     }
     match (&left, &right) {
-        (PhpType::Array(_), PhpType::Array(_)) => right.clone(),
-        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => right.clone(),
+        // Mismatched element types must widen elementwise (issue #549): letting
+        // one side win wholesale relabels the other side's runtime slots, so
+        // typed reads through the merged type misinterpret the payload bytes.
+        (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
+            PhpType::Array(Box::new(merge_ir_indexed_element_type(
+                left_elem.codegen_repr(),
+                right_elem.codegen_repr(),
+            )))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_ir_assoc_value_type(
+                left_key.codegen_repr(),
+                right_key.codegen_repr(),
+            )),
+            value: Box::new(merge_ir_assoc_value_type(
+                left_value.codegen_repr(),
+                right_value.codegen_repr(),
+            )),
+        },
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
@@ -14615,15 +14635,129 @@ fn coerce_value_for_temp(
     if source_ty == target_ty {
         return value;
     }
-    match target_ty {
+    match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => value,
+        _ => widen_container_value_for_temp(ctx, value, &source_ty, &target_ty, span),
     }
+}
+
+/// Widens a typed container branch value to a hidden temp's boxed-Mixed
+/// element storage before it is stored.
+///
+/// Mismatched array/array (or assoc/assoc) branch merges declare the temp with
+/// `Mixed` element storage (`wider_type_for_merge`, issue #549), so each
+/// branch's concrete container must box its slots via `ArrayToMixed` /
+/// `HashToMixed`: storing the raw pointer would let Mixed-element reads
+/// misinterpret the typed slot bytes. Borrowed sources (live locals, container
+/// element reads) are retained first so the conversion's copy-on-write split
+/// rewrites a private copy instead of boxing the source's slots in place; the
+/// conversion consumes that reference, and owning temporaries transfer their
+/// reference into the converted result, so no release is emitted here
+/// (mirrors `coerce_container_to_return_type`).
+fn widen_container_value_for_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let target_has_mixed_payload = match target_ty {
+        PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !target_has_mixed_payload {
+        return value;
+    }
+    let op = match (source_ty, target_ty) {
+        (PhpType::Array(source_elem), PhpType::Array(_))
+            if source_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::ArrayToMixed
+        }
+        (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
+            if source_value.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::HashToMixed
+        }
+        (PhpType::Mixed | PhpType::Union(_), _)
+            if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            // Whole-boxed sources (a `?array` value flowing through `??`)
+            // unbox the cell payload and convert it with the same
+            // runtime-call coercion declared container returns use. The
+            // conversion borrows the cell and owns a fresh container
+            // reference, so an owning cell must be consumed here.
+            //
+            // The indexed conversion consumes one owned payload reference
+            // and rewrites sole-owner arrays in place, which is only sound
+            // when the cell owns its payload. A borrowed cell (a `?array`
+            // parameter or local) shares its payload with a live caller
+            // array, so it unboxes through the owned-payload coercion —
+            // which retains the payload — and the consuming `ArrayToMixed`
+            // copy-on-write-splits into a private converted copy. The
+            // associative helper returns a fresh hash without consuming the
+            // payload reference, so borrowed hash cells keep the
+            // single-call coercion.
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
+                let unboxed = ctx.emit_value(
+                    Op::RuntimeCall,
+                    vec![value.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Never)),
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![unboxed.value],
+                    None,
+                    target_ty.clone(),
+                    Op::ArrayToMixed.default_effects(),
+                    Some(span),
+                );
+            }
+            let converted = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return converted;
+        }
+        _ => return value,
+    };
+    // Local loads report as *provisional* owners (their compensating releases
+    // are pruned at builder finalization when the slot stays concrete), so
+    // they must be treated as borrowed here: without a real retain the
+    // conversion's copy-on-write split would never trigger and the local's
+    // own array would be boxed in place while its slot type stays concrete.
+    let source_is_consumable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let source = if source_is_consumable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.emit_value(
+        op,
+        vec![source.value],
+        None,
+        target_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    )
 }
 
 /// Emits a branch to a target block when the current block can still fall through.
