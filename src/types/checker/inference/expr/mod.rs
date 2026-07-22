@@ -852,10 +852,50 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     if next == PhpType::Void {
         return nullable_match_arm_type(acc);
     }
+    if let Some(merged) = merge_array_branch_types(&acc, &next) {
+        return merged;
+    }
     if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
         return merge_object_union_match_arm_types(checker, acc, next);
     }
     PhpType::Mixed
+}
+
+/// Merges two array branch types elementwise so a heterogeneous `match`/ternary/`??`
+/// merge stays an array instead of collapsing to bare `Mixed`.
+///
+/// Mirrors the lowering-side `wider_type_for_merge` (src/ir_lower/expr/mod.rs)
+/// array/array and assoc/assoc rules: differing element (or key/value) types widen
+/// to `Mixed`, keeping the merged value an `array<mixed>` (or `array<mixed, mixed>`)
+/// that still type-checks for array operations — by-ref `array` parameters,
+/// `in_array()`/`array_sum()`, and spread. Returns `None` for any pair that is not
+/// array/array or assoc/assoc (including an indexed-vs-associative mix), leaving the
+/// caller's object-union or `Mixed` handling untouched so non-array merges are
+/// unaffected. Callers reach this only after the identical-type short circuit, so a
+/// returned array always reflects a genuine element-type divergence.
+fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
+    match (acc, next) {
+        (PhpType::Array(acc_elem), PhpType::Array(next_elem)) => Some(PhpType::Array(Box::new(
+            PhpType::widen((**acc_elem).clone(), (**next_elem).clone()),
+        ))),
+        (
+            PhpType::AssocArray {
+                key: acc_key,
+                value: acc_value,
+            },
+            PhpType::AssocArray {
+                key: next_key,
+                value: next_value,
+            },
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::widen((**acc_key).clone(), (**next_key).clone())),
+            value: Box::new(PhpType::widen(
+                (**acc_value).clone(),
+                (**next_value).clone(),
+            )),
+        }),
+        _ => None,
+    }
 }
 
 /// Joins object/sentinel branch types at their existing compatible supertype
@@ -907,5 +947,87 @@ fn nullable_match_arm_type(ty: PhpType) -> PhpType {
             PhpType::Union(members)
         }
         other => PhpType::Union(vec![other, PhpType::Void]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two indexed arrays with divergent element types must merge to `array<mixed>`
+    /// (issue #587), keeping the branch result usable as an array.
+    #[test]
+    fn test_merge_array_branch_types_widens_heterogeneous_indexed() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::Array(Box::new(PhpType::Str)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Mixed))));
+    }
+
+    /// Two associative arrays whose value types differ must widen elementwise to
+    /// `array<string, mixed>` rather than collapsing to bare `Mixed`.
+    #[test]
+    fn test_merge_array_branch_types_widens_heterogeneous_assoc() {
+        let merged = merge_array_branch_types(
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            },
+        );
+        assert_eq!(
+            merged,
+            Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            })
+        );
+    }
+
+    /// Arrays that agree on their element type keep it (the `widen` no-op), so the
+    /// fix never over-widens a homogeneous merge.
+    #[test]
+    fn test_merge_array_branch_types_keeps_shared_element() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::Array(Box::new(PhpType::Int)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Int))));
+    }
+
+    /// An indexed-vs-associative mix is not covered by the elementwise rule and must
+    /// return `None`, matching the lowering side and preserving `Mixed` handling.
+    #[test]
+    fn test_merge_array_branch_types_rejects_indexed_assoc_mix() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Str),
+            },
+        );
+        assert_eq!(merged, None);
+    }
+
+    /// Non-array pairs (scalars, objects, `null`) must return `None` so scalar unions,
+    /// object unions, and nullable merges are left to their existing handling.
+    #[test]
+    fn test_merge_array_branch_types_rejects_non_array() {
+        assert_eq!(merge_array_branch_types(&PhpType::Int, &PhpType::Str), None);
+        assert_eq!(
+            merge_array_branch_types(
+                &PhpType::Object("A".to_string()),
+                &PhpType::Object("B".to_string())
+            ),
+            None
+        );
+        assert_eq!(
+            merge_array_branch_types(&PhpType::Array(Box::new(PhpType::Int)), &PhpType::Void),
+            None
+        );
     }
 }

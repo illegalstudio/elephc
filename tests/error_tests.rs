@@ -98,6 +98,17 @@ fn expect_error(src: &str, expected_substr: &str) {
     }
 }
 
+/// Verifies that a snippet type-checks without any diagnostic.
+///
+/// Used for regressions where a previously rejected but PHP-valid program must
+/// now be accepted; it asserts only the checker outcome (no compilation/run), so
+/// shapes whose runtime lowering is tracked elsewhere stay safe to assert here.
+fn expect_no_error(src: &str) {
+    if let Err(msg) = check_source(src) {
+        panic!("Expected source to type-check, but got error: {}", msg);
+    }
+}
+
 /// Verifies expect warning.
 fn expect_warning(src: &str, expected_substr: &str) {
     let result = check_source_full(src).expect("expected source to type-check");
