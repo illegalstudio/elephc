@@ -269,11 +269,10 @@ impl Checker {
                     }
                 }
 
-                // Keep the accumulated complement for the statements after the `if` only when the
-                // chain is exhaustive by divergence: no else and every clause body diverges, so a
-                // fallthrough implies all conditions were false. Otherwise a taken non-diverging
-                // branch could reach the following code without the complement holding, so restore
-                // every narrowed variable to its pre-`if` type.
+                // Keep the accumulated complement for the statements after the `if` only when no
+                // guarded clause can fall through: there is no else and every clause ends in a
+                // non-fallthrough statement, so reaching the following code implies all conditions
+                // were false. Otherwise restore every narrowed variable to its pre-`if` type.
                 let keep_complement_after_if = applied_any_guard
                     && else_body.is_none()
                     && clauses
