@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed a segfault when a missed array read is forwarded through a ternary merge and then indexed or written (issue #585): a missed indexed read (`$rows[5]`) whose arm whole-boxes into a `mixed` produced a boxed cell whose payload pointer was the in-band null-container sentinel, and `$r[0] ?? "none"` (or `$r[0] = …`) dereferenced it in the boxed-`mixed` array reader/writer. The `__rt_mixed_array_get` and `__rt_mixed_array_set` runtime helpers now treat a null or sentinel container payload as an absent container on every supported target — the read yields `null` (with PHP's undefined-key warning) and the write is dropped — instead of crashing.
 - Migrated every registry-backed PHP builtin to the backend-neutral EIR boundary. Builtin declarations now own one shared semantic descriptor for validation, result typing, effects, ownership, runtime/bridge requirements, callable policy, and lowering strategy; direct calls and generated callable wrappers emit typed EIR primitives or runtime calls that the target-aware backend materializes uniformly on macOS AArch64, Linux AArch64, and Linux x86_64. The old assembly hooks, opaque builtin opcode, duplicated per-name result/effect/requirement tables, legacy checker/signature fallbacks, and separately maintained callable wrappers have been removed.
 
 ## [0.26.2]

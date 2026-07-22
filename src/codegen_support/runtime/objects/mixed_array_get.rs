@@ -8,11 +8,15 @@
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - Unsupported payloads and missing keys return boxed `Mixed(null)` for PHP-like quiet access.
+//! - A container payload that is null or the in-band null-container sentinel
+//!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
+//!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Dispatches to the target-specific `__rt_mixed_array_get` emitter.
 ///
@@ -75,7 +79,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_get_null");
     emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
     emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
     emitter.instruction("b.ne __rt_mixed_array_get_null");                      // string keys on indexed arrays → null
@@ -134,7 +139,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     // Associative array: hash_get with normalized key.
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_get_null");
     emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
@@ -164,7 +170,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     // Object: SPL ArrayAccess containers or stdClass with string key.
     emitter.label("__rt_mixed_array_get_object");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = obj pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_get_null");
     emitter.instruction("ldr x11, [x10]");                                      // x11 = class_id
     abi::emit_symbol_address(emitter, "x12", "_spl_fixed_array_class_id");
     emitter.instruction("ldr x12, [x12]");                                      // x12 = compile-time SplFixedArray class_id
@@ -287,8 +294,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_get_null");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
     emitter.instruction("jne __rt_mixed_array_get_null");                       // string key on indexed array → null
@@ -350,8 +357,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_get_null");
     emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
@@ -382,8 +389,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_object");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = obj pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_get_null");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = class_id
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is the receiver a SplFixedArray instance?

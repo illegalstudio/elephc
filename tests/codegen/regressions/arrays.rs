@@ -1268,3 +1268,108 @@ echo "[" . (str_repeat("x", 0) ?? "bad") . "]";
     assert_eq!(out.stdout, "[fallback][][]");
     assert_eq!(out.stderr, "");
 }
+
+// --- Issue #585: missed array read forwarded through a ternary merge into the boxed
+// Mixed array reader/writer (unguarded null-container sentinel) ---
+
+/// Regression for issue #585: a missed indexed read (`$rows[5]`) forwarded as one
+/// arm of a ternary whole-boxes into a Mixed whose payload pointer is the in-band
+/// null-container sentinel. Reading `$r[0] ?? "none"` must warn for the miss and
+/// yield the default instead of dereferencing the sentinel in `__rt_mixed_array_get`.
+/// `$argc` keeps the ternary runtime-live so the nullable-union boxing path (which
+/// bypasses `wider_type_for_merge`) is exercised instead of being constant-folded.
+#[test]
+fn test_ternary_missed_indexed_read_merge_read_yields_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "none\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+}
+
+/// Guard for issue #585: the present ternary arm (taken when `$argc != 1` is false)
+/// still whole-boxes into a Mixed indexed array and reads back through the same
+/// guarded helper, so the sentinel guard does not regress valid boxed reads.
+#[test]
+fn test_ternary_indexed_merge_present_arm_reads_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc != 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "a\ndone\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #585: the previously crashing read path must leave the heap
+/// clean — the boxed Mixed carrying the sentinel container is released like any other
+/// temporary rather than entering refcount traffic on a bogus pointer.
+#[test]
+fn test_ternary_missed_indexed_read_merge_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "none\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #585 (sibling writer): an indexed write into the
+/// sentinel-container Mixed produced by the same ternary merge must not dereference
+/// the sentinel in `__rt_mixed_array_set`. The write is dropped (matching elephc's
+/// existing null-target behavior) and execution continues; the follow-up read yields
+/// the default through the guarded reader.
+#[test]
+fn test_ternary_missed_indexed_read_merge_write_does_not_crash() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+$r[0] = "z";
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "none\ndone\n");
+}
+
+/// Regression for issue #585 (sibling writer): the dropped write into the
+/// sentinel-container Mixed releases the boxed value it consumes, leaving the heap
+/// clean instead of leaking the assigned string.
+#[test]
+fn test_ternary_missed_indexed_read_merge_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+$r[0] = "z";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
