@@ -2,7 +2,7 @@
 title: "copy()"
 description: "Copies a file."
 sidebar:
-  order: 108
+  order: 110
 ---
 
 ## copy()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `copy` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/copy.md).
-

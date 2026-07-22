@@ -84,6 +84,24 @@ impl Checker {
         for (name, _value) in ERROR_LEVEL_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
+        // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
+        constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
+        constants.insert("PHP_INT_MIN".to_string(), PhpType::Int);
+        constants.insert("PHP_FLOAT_MAX".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_MIN".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_EPSILON".to_string(), PhpType::Float);
+        constants.insert("INF".to_string(), PhpType::Float);
+        constants.insert("NAN".to_string(), PhpType::Float);
+        constants.insert("M_PI".to_string(), PhpType::Float);
+        constants.insert("M_E".to_string(), PhpType::Float);
+        constants.insert("M_SQRT2".to_string(), PhpType::Float);
+        constants.insert("M_PI_2".to_string(), PhpType::Float);
+        constants.insert("M_PI_4".to_string(), PhpType::Float);
+        constants.insert("M_LOG2E".to_string(), PhpType::Float);
+        constants.insert("M_LOG10E".to_string(), PhpType::Float);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target_platform,
@@ -132,6 +150,7 @@ impl Checker {
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
+            builtin_call_types: HashMap::new(),
         }
     }
 }

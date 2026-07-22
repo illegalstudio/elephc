@@ -2,7 +2,7 @@
 title: "is_scalar() — internals"
 description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 454
 ---
 
 ## `is_scalar()` — internals
@@ -10,19 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_scalar.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1648](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1648) (`lower_is_scalar`)
-- **Function symbol**: `lower_is_scalar()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
-- Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,
-- arrays, objects, and resources are not scalars, matching PHP.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

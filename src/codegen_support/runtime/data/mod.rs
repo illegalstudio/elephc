@@ -24,6 +24,56 @@ pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
 pub(crate) const PHP_UNAME_MODE_VALUE_MSG: &str =
     "Fatal error: php_uname(): Argument #1 ($mode) must be one of \"a\", \"m\", \"n\", \"r\", \"s\", or \"v\"\n";
 /// Fatal error message when `dirname()` receives a `$levels` argument less than 1.
+/// ob_* PHP-parity diagnostics shared by the fixed data section and the
+/// output-buffering runtime emitters (which need the exact byte lengths).
+pub(crate) const OB_NTC_NO_END_FLUSH: &str =
+    "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
+/// ob_get_flush() no-buffer notice line.
+pub(crate) const OB_NTC_NO_GET_FLUSH: &str =
+    "Notice: ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
+/// ob_end_clean() no-buffer notice line.
+pub(crate) const OB_NTC_NO_END_CLEAN: &str =
+    "Notice: ob_end_clean(): Failed to delete buffer. No buffer to delete\n";
+/// ob_flush() no-buffer notice line.
+pub(crate) const OB_NTC_NO_FLUSH: &str =
+    "Notice: ob_flush(): Failed to flush buffer. No buffer to flush\n";
+/// ob_clean() no-buffer notice line.
+pub(crate) const OB_NTC_NO_CLEAN: &str =
+    "Notice: ob_clean(): Failed to delete buffer. No buffer to delete\n";
+/// ob_clean() flags-gated notice prefix (completed with "NAME (LEVEL)\n").
+pub(crate) const OB_NTC_G_CLEAN: &str = "Notice: ob_clean(): Failed to delete buffer of ";
+/// ob_flush() flags-gated notice prefix.
+pub(crate) const OB_NTC_G_FLUSH: &str = "Notice: ob_flush(): Failed to flush buffer of ";
+/// ob_end_clean() flags-gated notice prefix.
+pub(crate) const OB_NTC_G_END_CLEAN: &str =
+    "Notice: ob_end_clean(): Failed to discard buffer of ";
+/// ob_get_clean() flags-gated notice prefix.
+pub(crate) const OB_NTC_G_GET_CLEAN: &str =
+    "Notice: ob_get_clean(): Failed to discard buffer of ";
+/// ob_end_flush() flags-gated notice prefix.
+pub(crate) const OB_NTC_G_END_FLUSH: &str =
+    "Notice: ob_end_flush(): Failed to send buffer of ";
+/// ob_get_flush() flags-gated notice prefix.
+pub(crate) const OB_NTC_G_GET_FLUSH: &str =
+    "Notice: ob_get_flush(): Failed to send buffer of ";
+/// ob_start() invalid-callback warning prefix (completed with the name + suffix).
+pub(crate) const OB_WARN_BAD_CALLBACK_PREFIX: &str = "Warning: ob_start(): function \"";
+/// ob_start() invalid-callback warning suffix.
+pub(crate) const OB_WARN_BAD_CALLBACK_SUFFIX: &str =
+    "\" not found or invalid function name\n";
+/// ob_start() invalid-callback warning for non-string, non-callable values.
+pub(crate) const OB_WARN_BAD_CALLBACK_GENERIC: &str =
+    "Warning: ob_start(): no array or string given\n";
+/// ob_start() failed-create notice line.
+pub(crate) const OB_NTC_CREATE_FAIL: &str = "Notice: ob_start(): Failed to create buffer\n";
+/// ob_start()-inside-a-handler fatal line.
+pub(crate) const OB_FATAL_IN_HANDLER: &str =
+    "Fatal error: ob_start(): Cannot use output buffering in output buffering display handlers\n";
+/// PHP's default output-handler display name.
+pub(crate) const OB_DEFAULT_HANDLER_NAME: &str = "default output handler";
+/// PHP's closure / first-class-callable handler display name.
+pub(crate) const OB_CLOSURE_INVOKE_NAME: &str = "Closure::__invoke";
+
 pub(crate) const DIRNAME_LEVELS_MSG: &str =
     "Fatal error: dirname(): Argument #2 ($levels) must be greater than or equal to 1\n";
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.

@@ -9,7 +9,7 @@
 //! - FFI syntax is compiler-specific and should remain clearly separated from PHP-compatible parsing.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{CType, ExternField, ExternParam, Stmt, StmtKind};
 use crate::span::Span;
 
@@ -18,9 +18,9 @@ use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 /// Parses a C type token and returns the corresponding CType variant.
 /// Handles primitive types (int, float, string, bool, void, callable) and pointer types
 /// including ptr and ptr<TypeName>. Advances `pos` on success.
-fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, CompileError> {
+fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
-        tokens[*pos].1
+        tokens[*pos].1.span
     } else {
         Span::dummy()
     };
@@ -75,7 +75,7 @@ fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, Comp
 /// Each parameter is a C type followed by a PHP-style variable name. Advances `pos` to the closing `)`.
 /// Returns the list of ExternParam nodes, each with a name and CType.
 fn parse_extern_params(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Vec<ExternParam>, CompileError> {
     let mut params = Vec::new();
@@ -83,7 +83,7 @@ fn parse_extern_params(
         if !params.is_empty() {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Expected ',' between extern parameters",
                 ));
             }
@@ -99,7 +99,7 @@ fn parse_extern_params(
             _ => {
                 return Err(CompileError::new(
                     if *pos < tokens.len() {
-                        tokens[*pos].1
+                        tokens[*pos].1.span
                     } else {
                         Span::dummy()
                     },
@@ -116,7 +116,7 @@ fn parse_extern_params(
 /// Consumes the `function` keyword, then reads the identifier, parameter list, optional return type,
 /// and trailing semicolon. Advances `pos` to the token after the semicolon.
 fn parse_extern_function(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     library: Option<String>,
@@ -172,10 +172,10 @@ fn parse_extern_function(
 /// Parse extern declarations. Returns Vec<Stmt> because extern "lib" { } blocks produce multiple stmts.
 /// Called from parse() in mod.rs, not from parse_stmt.
 pub fn parse_extern_stmts(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Vec<Stmt>, CompileError> {
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     *pos += 1; // consume 'extern'
 
     match tokens.get(*pos).map(|(t, _)| t) {
@@ -205,7 +205,7 @@ pub fn parse_extern_stmts(
             while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
                 if tokens[*pos].0 != Token::Function {
                     errors.push(CompileError::new(
-                        tokens[*pos].1,
+                        tokens[*pos].1.span,
                         "Expected 'function' inside extern block",
                     ));
                     recover_to_statement_boundary(tokens, pos);
@@ -276,7 +276,7 @@ pub fn parse_extern_stmts(
                     _ => {
                         return Err(CompileError::new(
                             if *pos < tokens.len() {
-                                tokens[*pos].1
+                                tokens[*pos].1.span
                             } else {
                                 Span::dummy()
                             },

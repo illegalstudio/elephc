@@ -14,11 +14,9 @@ mod scan;
 /// Lexer token module.
 pub mod token;
 
-pub use token::Token;
+pub use token::{SpannedToken, Token, TokenMetadata};
 
 use crate::errors::CompileError;
-use crate::span::Span;
-
 /// Tokenizes PHP source text into a stream of spanned tokens.
 ///
 /// Entry point for the lexer pipeline. Requires the source to begin with `<?php`.
@@ -26,6 +24,6 @@ use crate::span::Span;
 ///
 /// Returns `Err` if the source is missing the opening `<?php` tag or contains
 /// an unterminated string literal.
-pub fn tokenize(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
+pub fn tokenize(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     scan::scan_tokens(source)
 }

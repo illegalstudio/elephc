@@ -2,7 +2,7 @@
 title: "fopen()"
 description: "Opens file or URL."
 sidebar:
-  order: 169
+  order: 171
 ---
 
 ## fopen()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fopen` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fopen.md).
-

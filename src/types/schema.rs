@@ -216,11 +216,15 @@ pub struct InterfaceInfo {
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
+    /// Source declarations retained so Reflection can preserve lexical parameter-default names.
+    pub method_decls: Vec<crate::parser::ast::ClassMethod>,
     /// Instance method contracts, keyed by PHP's case-insensitive method key.
     ///
     /// These entries are the only methods that participate in interface
     /// dispatch tables and `method_slots`.
     pub methods: HashMap<String, FunctionSig>,
+    /// Exact return syntax for instance methods containing PHP's late-bound `static` type.
+    pub late_static_method_returns: HashMap<String, TypeExpr>,
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
@@ -229,6 +233,8 @@ pub struct InterfaceInfo {
     /// PHP requires implementors to provide matching public static methods, but
     /// these entries never participate in instance interface dispatch tables.
     pub static_methods: HashMap<String, FunctionSig>,
+    /// Exact return syntax for static methods containing PHP's late-bound `static` type.
+    pub late_static_static_method_returns: HashMap<String, TypeExpr>,
     pub static_method_declaring_interfaces: HashMap<String, String>,
     pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
@@ -342,6 +348,10 @@ pub struct ClassInfo {
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    /// Exact return syntax for instance methods containing PHP's late-bound `static` type.
+    pub late_static_method_returns: HashMap<String, TypeExpr>,
+    /// Exact return syntax for static methods containing PHP's late-bound `static` type.
+    pub late_static_static_method_returns: HashMap<String, TypeExpr>,
     /// Callable signatures returned by instance/static methods, keyed by PHP's
     /// case-insensitive method key. The method body pass fills this after schemas exist.
     pub callable_method_return_sigs: HashMap<String, FunctionSig>,

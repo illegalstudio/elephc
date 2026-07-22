@@ -7,13 +7,12 @@
 //! - `crate::name_resolver`
 //!
 //! Key details:
-//! - `SUPPORTED_BUILTIN_FUNCTIONS` is the source of truth for PHP-visible builtin names.
-//! - `INTERNAL_BUILTIN_FUNCTIONS` is now an empty placeholder; internal builtins are
-//!   registered via `internal: true` in `src/builtins/` and recognized through the registry.
+//! - `COMPILER_RESIDENT_BUILTIN_FUNCTIONS` lists only language constructs or
+//!   dedicated syntax that cannot be represented by an ordinary registry call.
 //! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
 //!   hidden from `function_exists()` and first-class callable surfaces.
 
-const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
+const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
     // `buffer_new` is a catalog-name-only entry: `buffer_new<T>(len)` is parsed as
     // dedicated syntax (`ExprKind::BufferNew`), so the name never dispatches as a
     // builtin call; it is listed here for `function_exists`, case-insensitive
@@ -24,30 +23,16 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "die",
     "empty",
     "exit",
-    "is_double",
-    "is_integer",
-    "is_long",
-    "is_real",
     "isset",
-    "method_exists",
-    "property_exists",
-    "strval",
     "unset",
 ];
-
-// All former entries migrated to `src/builtins/io/__elephc_phar_*.rs` with `internal: true`
-// (io batch C2). Name recognition now flows through `registry::is_supported` inside
-// `canonical_builtin_function_name`. The slice is kept as an empty placeholder so that
-// `is_supported_builtin_function_exact` compiles unchanged.
-const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[];
 
 const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];
 
 /// Checks if the exact (lowercase) name is in any callable-resolution builtin list.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
-        || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+    COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&name)
         || LANGUAGE_CONSTRUCT_FUNCTIONS.contains(&name)
 }
 
@@ -72,14 +57,14 @@ pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Returns the union of PHP-visible builtin names from the legacy static list
-/// and the builtin registry, WITHOUT the strict-PHP filter.
+/// Returns PHP-visible registry names plus compiler-resident call-like names,
+/// without applying the strict-PHP filter.
 ///
 /// This is the raw catalog snapshot for metadata consumers (parity gates, docs
 /// exporters) that memoize the result and must be independent of the thread's
 /// strict-mode state. Compilation surfaces use `supported_builtin_function_names`.
 pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
-    let mut result: Vec<&'static str> = SUPPORTED_BUILTIN_FUNCTIONS.to_vec();
+    let mut result: Vec<&'static str> = COMPILER_RESIDENT_BUILTIN_FUNCTIONS.to_vec();
     for name in crate::builtins::registry::names() {
         let def = match crate::builtins::registry::lookup(name) {
             Some(d) => d,
@@ -88,23 +73,20 @@ pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
         if def.spec.internal {
             continue;
         }
-        // De-duplicate: skip names already present in the legacy list.
+        // De-duplicate any name also represented by dedicated compiler syntax.
         let lower = name.to_ascii_lowercase();
-        if !SUPPORTED_BUILTIN_FUNCTIONS.contains(&lower.as_str()) {
+        if !COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&lower.as_str()) {
             result.push(def.name);
         }
     }
     result
 }
 
-/// Returns the union of PHP-visible supported builtin function names from the
-/// legacy static list and the builtin registry.
+/// Returns the union of PHP-visible registry and compiler-resident builtin names.
 ///
 /// Registry entries flagged as `internal` are excluded, mirroring the semantics
 /// of `is_php_visible_builtin_function`. Names present in both sources appear
-/// exactly once. With an empty registry this returns the legacy list unchanged,
-/// so behavior is preserved while the registry is empty. Under `--strict-php`,
-/// extension builtins are excluded entirely.
+/// exactly once. Under `--strict-php`, extension builtins are excluded entirely.
 pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
     all_supported_builtin_function_names()
         .into_iter()
@@ -114,10 +96,8 @@ pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
 ///
-/// Returns `None` if the name is not in either the legacy catalog or the builtin
-/// registry, or if `--strict-php` hides it (extension builtins). Implements PHP's
-/// case-insensitive builtin lookup. The legacy static list is consulted first;
-/// the registry is the fallback.
+/// Returns `None` if the name is neither registry-backed nor compiler-resident,
+/// or if `--strict-php` hides it. Implements PHP's case-insensitive builtin lookup.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
     if strict_php_hidden_builtin(&canonical) {
@@ -134,7 +114,7 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).
 ///
-/// Checks both the legacy static list and the builtin registry. Registry entries
+/// Checks both compiler-resident names and the builtin registry. Registry entries
 /// flagged as `internal` are excluded from the PHP-visible set, and `--strict-php`
 /// additionally excludes extension builtins.
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
@@ -142,7 +122,7 @@ pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
     if strict_php_hidden_builtin(&canonical) {
         return false;
     }
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
+    COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
         || crate::builtins::registry::lookup(&canonical)
             .map(|def| !def.spec.internal)
             .unwrap_or(false)
@@ -159,23 +139,15 @@ mod tests {
     use super::*;
     use crate::builtin;
 
-    /// No-op lowering hook for test probe; does nothing and succeeds.
-    fn noop_lower(
-        _c: &mut crate::codegen::context::FunctionContext,
-        _i: &crate::ir::Instruction,
-    ) -> Result<(), crate::codegen::CodegenIrError> {
-        Ok(())
-    }
-
     // Register a PHP-visible (non-internal) probe to exercise the catalog API.
     // This verifies that `supported_builtin_function_names` and the catalog
     // lookup functions include registry entries with `internal: false`.
     builtin! {
         name: "__catalog_probe_visible",
-        area: Internal,
+        area: Types,
         params: [x: Int],
         returns: Bool,
-        lower: noop_lower,
+        semantics: crate::builtins::semantics::test_probe_semantics(),
         summary: "catalog probe for PHP-visibility test",
         internal: false,
     }

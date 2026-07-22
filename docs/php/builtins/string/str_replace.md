@@ -2,7 +2,7 @@
 title: "str_replace()"
 description: "Replaces all occurrences of a search string with a replacement string."
 sidebar:
-  order: 392
+  order: 407
 ---
 
 ## str_replace()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `str_replace` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_replace.md).
-

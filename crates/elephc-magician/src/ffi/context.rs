@@ -16,6 +16,8 @@ use crate::context::native_frame_called_class_override_bytes;
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
+#[cfg(not(test))]
+use crate::ffi::ob_handlers::install_ob_handler_hook;
 use std::ptr;
 
 /// Returns the ABI version expected by generated elephc eval call sites.
@@ -29,6 +31,8 @@ pub extern "C" fn __elephc_eval_abi_version() -> u32 {
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     #[cfg(not(test))]
     install_dynamic_object_destructor_hook();
+    #[cfg(not(test))]
+    install_ob_handler_hook();
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
@@ -56,6 +60,7 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
         if let Some(context) = unsafe { ctx.as_ref() } {
             context.unregister_dynamic_object_context();
         }
+        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
         drop(Box::from_raw(ctx));
     }
 }

@@ -2,7 +2,7 @@
 title: "popen()"
 description: "Opens process file pointer."
 sidebar:
-  order: 313
+  order: 328
 ---
 
 ## popen()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `popen` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/popen.md).
-

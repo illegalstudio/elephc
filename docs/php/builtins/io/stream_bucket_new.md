@@ -2,7 +2,7 @@
 title: "stream_bucket_new()"
 description: "Creates a new bucket for use in a stream filter."
 sidebar:
-  order: 194
+  order: 209
 ---
 
 ## stream_bucket_new()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_bucket_new` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_bucket_new.md).
-

@@ -2,7 +2,7 @@
 title: "implode()"
 description: "Joins array elements into a single string using a separator."
 sidebar:
-  order: 368
+  order: 383
 ---
 
 ## implode()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `implode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/implode.md).
-

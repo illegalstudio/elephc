@@ -73,11 +73,12 @@ pub(crate) fn lower_main(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         None,
         PhpType::Void,
@@ -264,11 +265,12 @@ pub(crate) fn lower_user_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         None,
         body_return_type.clone(),
@@ -361,11 +363,12 @@ pub(crate) fn lower_class_method(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
@@ -423,11 +426,12 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         None,
         return_type,
@@ -525,11 +529,12 @@ pub(crate) fn lower_eval_aot_scope_read_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         None,
         return_type,
@@ -621,11 +626,12 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
@@ -642,6 +648,10 @@ pub(crate) fn lower_property_init_thunk(
 }
 
 /// Builds `$this->property = <default>;` statements for property-default initialization.
+///
+/// A null default whose slot type cannot represent null (a scalar slot rebound by
+/// constructor-argument propagation) is skipped: those slots are always overwritten
+/// before an observable read, and the store would be unrepresentable.
 fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
     let span = Span::dummy();
     class_info
@@ -650,7 +660,11 @@ fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
         .enumerate()
         .filter_map(|(index, default)| {
             let default = default.as_ref()?;
-            let property = class_info.properties.get(index)?.0.clone();
+            let (name, php_type) = class_info.properties.get(index)?;
+            if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
+                return None;
+            }
+            let property = name.clone();
             Some(Stmt::new(
                 StmtKind::ExprStmt(Expr::new(
                     ExprKind::Assignment {
@@ -805,6 +819,7 @@ fn lower_closure_function_with_signature(
         parent.interfaces,
         parent.packed_classes,
         parent.throw_access_sites,
+        parent.builtin_call_types,
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
@@ -838,6 +853,7 @@ fn lower_body_into_function(
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
@@ -880,6 +896,7 @@ fn lower_body_into_function(
         interfaces,
         packed_classes,
         throw_access_sites,
+        builtin_call_types,
         constants,
         top_level_env,
         current_class,

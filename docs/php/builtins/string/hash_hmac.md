@@ -2,7 +2,7 @@
 title: "hash_hmac()"
 description: "Generates a keyed hash value using the HMAC method."
 sidebar:
-  order: 361
+  order: 376
 ---
 
 ## hash_hmac()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_hmac` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_hmac.md).
-

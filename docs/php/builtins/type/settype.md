@@ -2,7 +2,7 @@
 title: "settype()"
 description: "Sets the type of a variable."
 sidebar:
-  order: 437
+  order: 456
 ---
 
 ## settype()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `settype` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/settype.md).
-

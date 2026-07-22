@@ -2,7 +2,7 @@
 title: "ptr_write32()"
 description: "Writes one 32-bit word through a raw pointer."
 sidebar:
-  order: 301
+  order: 316
 ---
 
 ## ptr_write32()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_write32` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_write32.md).
-

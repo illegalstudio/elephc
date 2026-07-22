@@ -21,7 +21,6 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// format_sockaddr_in: render a `sockaddr_in` as `A.B.C.D:port`.
 /// Input:  AArch64 x0 = sockaddr_in pointer / x86_64 rdi = sockaddr_in pointer
@@ -202,7 +201,7 @@ fn emit_format_sockaddr_in_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer, rax = pointer
     emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
 
@@ -473,9 +472,7 @@ fn emit_format_sockaddr_in6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, QWORD PTR [rbp - 104]");                      // plus port length
     emitter.instruction("add rax, 3");                                          // plus '[', ']', ':'
     emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer, rax = pointer
-    emitter.instruction("mov r10, 0x4540504800000001");                         // owned-string heap-kind word with the x86_64 heap marker (low byte 1 = persisted elephc string)
-    // The marker constant matches X86_64_HEAP_MAGIC_HI32 (0x454C5048 << 32) | 1
-    emitter.instruction("mov r10, 0x454C504800000001");                         // (corrected: heap_magic_hi32 = 0x454C5048)
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // stamp owned-string heap-kind word (magic + kind 1)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
 
     // -- write '[' at index 0 --
@@ -647,7 +644,7 @@ fn emit_format_sockaddr_unix_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // rax = persisted-string buffer pointer
     emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
 
@@ -675,7 +672,7 @@ fn emit_format_sockaddr_unix_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
     emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 1
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
     ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("xor edx, edx");                                        // result length = 0 (empty string)

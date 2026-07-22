@@ -2,7 +2,7 @@
 title: "rawurldecode()"
 description: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space."
 sidebar:
-  order: 381
+  order: 396
 ---
 
 ## rawurldecode()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rawurldecode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rawurldecode.md).
-

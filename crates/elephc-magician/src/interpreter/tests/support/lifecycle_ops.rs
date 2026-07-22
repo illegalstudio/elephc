@@ -27,10 +27,13 @@ impl FakeOps {
         self.warnings.push(message.to_string());
         Ok(())
     }
-    /// Appends fake echo output for interpreter tests.
+    /// Appends fake echo output for interpreter tests, honoring the fake ob_* stack.
     pub(super) fn runtime_echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         let value = self.stringify(value);
-        self.output.push_str(&value);
+        match self.ob_stack.last_mut() {
+            Some(level) => level.buffer.push_str(&value),
+            None => self.output.push_str(&value),
+        }
         Ok(())
     }
 }

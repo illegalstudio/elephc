@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Verifies `Enum` can name an enum and remain usable in type hints and scoped access.
+#[test]
+fn test_enum_soft_keyword_name_across_runtime_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+enum Enum { case X; }
+function describe(Enum $value): string {
+    return Enum::class . ":" . $value->name;
+}
+echo describe(Enum::X);
+"#,
+    );
+    assert_eq!(out, "Enum:X");
+}
+
 /// Verifies backed enum with `int` underlying type: `->value` returns the integer case value
 /// and `Color::from(2)` resolves to `Color::Green` by identity comparison.
 #[test]
@@ -50,6 +65,95 @@ fn test_enum_as_promoted_constructor_param_type() {
         ",
     );
     assert_eq!(out, "<div>hi</div>");
+}
+
+/// Verifies an unused function accepts an enum case as the default for an enum-typed parameter.
+#[test]
+fn test_unused_function_accepts_enum_case_parameter_default() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+function unused_level(Level $level = Level::Low): string {
+    return $level->value;
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies method and promoted-constructor parameters materialize enum case defaults.
+#[test]
+fn test_method_and_promoted_constructor_accept_enum_case_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+final class Config {
+    public function __construct(public Level $level = Level::Low) {}
+    public function value(Level $level = Level::High): string {
+        return $level->value;
+    }
+}
+$config = new Config();
+echo $config->level->value;
+echo ":";
+echo $config->value();
+"#,
+    );
+    assert_eq!(out, "low:high");
+}
+
+/// Verifies `self::` and `parent::` defaults resolve in their declaring method contexts.
+#[test]
+fn test_method_enum_case_defaults_resolve_relative_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+
+    public function value(self $level = self::Low): string {
+        return $level->value;
+    }
+}
+class LevelDefaults {
+    public const DEFAULT_LEVEL = Level::High;
+}
+class ChildDefaults extends LevelDefaults {
+    public function value(Level $level = parent::DEFAULT_LEVEL): string {
+        return $level->value;
+    }
+}
+echo Level::High->value();
+echo ":";
+echo (new ChildDefaults())->value();
+"#,
+    );
+    assert_eq!(out, "low:high");
+}
+
+/// Verifies closure signatures accept and materialize enum case parameter defaults.
+#[test]
+fn test_closure_accepts_enum_case_parameter_default() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: string {
+    case Low = "low";
+    case High = "high";
+}
+$value = function (Level $level = Level::Low): string {
+    return $level->value;
+};
+echo $value();
+"#,
+    );
+    assert_eq!(out, "low");
 }
 
 /// Verifies `Color::tryFrom(99)` returns `null` for an unknown value (with null coalescing to `Color::Red`),
@@ -233,7 +337,10 @@ fn test_enum_from_string_failure_throws_value_error() {
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
-    assert_eq!(out, "1\n2\n3\nRed=1 Green=2 Blue=3 \nDESC");
+    assert_eq!(
+        out,
+        "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC"
+    );
 }
 
 /// Verifies `Color::tryFrom(2)` returns a non-null value and `Color::tryFrom(99)` returns `null`,
@@ -865,6 +972,30 @@ fn test_backed_int_enum_from_mixed_untyped_param() {
         ",
     );
     assert_eq!(out, "LowHighHigh");
+}
+
+/// Verifies keyword-named enum cases remain distinct by exact case, resolve only through their
+/// declared spelling, and expose that spelling through the PHP `->name` property.
+#[test]
+fn test_keyword_named_enum_cases_preserve_case_and_name() {
+    let out = compile_and_run(
+        "<?php
+        enum KeywordCase: string {
+            case Default = 'default';
+            case DEFAULT = 'upper-default';
+            case Match = 'match';
+            case MATCH = 'upper-match';
+            case Print = 'print';
+        }
+        foreach (KeywordCase::cases() as $case) {
+            echo $case->name, '=', $case->value, ';';
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "Default=default;DEFAULT=upper-default;Match=match;MATCH=upper-match;Print=print;"
+    );
 }
 
 /// Regression for #449: a heterogeneous (`Mixed`) array mixing coercible and non-coercible

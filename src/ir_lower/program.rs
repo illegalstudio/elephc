@@ -358,6 +358,9 @@ fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>) -> 
                     .is_some_and(|expr| expr_exposes_dynamic_param(expr, dynamic_params))
         }
         ExprKind::ErrorSuppress(inner) => expr_exposes_dynamic_param(inner, dynamic_params),
+        ExprKind::Assignment { value, .. } => {
+            expr_exposes_dynamic_param(value, dynamic_params)
+        }
         _ => false,
     }
 }
@@ -385,20 +388,18 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         }
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
-                Op::BuiltinCall => {
-                    if builtin_call_requires_regex(module, inst) {
-                        features.regex = true;
+                Op::RuntimeCall => {
+                    if let Some(target) = typed_builtin_target(inst) {
+                        features.regex |= target.uses_regex_runtime();
+                        features.mb_strlen |= target.uses_mb_strlen_runtime();
+                        features.phar_archive |= target.publishes_phar_symbols()
+                            && function_belongs_to_phar_archive_helper_class(function);
+                        features.descriptor_invoker |=
+                            typed_builtin_requires_descriptor_invoker(function, inst, target);
                     }
-                    if builtin_call_requires_mb_strlen(module, inst) {
-                        features.mb_strlen = true;
-                    }
-                    if builtin_call_requires_phar_archive(module, function, inst) {
-                        features.phar_archive = true;
-                    }
-                    if builtin_call_requires_descriptor_invoker(module, function, inst) {
-                        features.descriptor_invoker = true;
-                    }
-                    if builtin_call_requires_eval(module, inst) {
+                }
+                Op::LanguageConstructCall => {
+                    if language_construct_call_requires_eval(module, inst) {
                         features.eval_bridge = true;
                     }
                 }
@@ -974,54 +975,23 @@ pub(super) fn all_lowered_functions(module: &Module) -> impl Iterator<Item = &Fu
         .chain(module.runtime_callable_invokers.iter())
 }
 
-/// Returns true when a lowered builtin call references the optional regex runtime family.
-fn builtin_call_requires_regex(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
-    };
-    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
-        return false;
-    };
-    is_regex_builtin_name(name)
+/// Returns the typed builtin target carried by a runtime-call instruction.
+fn typed_builtin_target(
+    inst: &crate::ir::Instruction,
+) -> Option<crate::ir::RuntimeFnId> {
+    match inst.immediate {
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+        _ => None,
+    }
 }
 
-/// Returns true when a lowered builtin call references the optional `mb_strlen()` runtime helper.
-fn builtin_call_requires_mb_strlen(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    builtin_call_name(module, inst).is_some_and(|name| {
-        php_symbol_key(name.trim_start_matches('\\')) == "mb_strlen"
-    })
-}
-
-/// Returns true when a lowered builtin call emits PHAR bridge pointer publishing.
-fn builtin_call_requires_phar_archive(
-    module: &Module,
+/// Returns whether a typed builtin callback operand needs descriptor invocation support.
+fn typed_builtin_requires_descriptor_invoker(
     function: &Function,
     inst: &crate::ir::Instruction,
+    target: crate::ir::RuntimeFnId,
 ) -> bool {
-    let Some(name) = builtin_call_name(module, inst) else {
-        return false;
-    };
-    is_phar_archive_builtin_name(name) && function_belongs_to_phar_archive_helper_class(function)
-}
-
-/// Returns true when a class method belongs to a stream/archive helper class.
-fn function_belongs_to_phar_archive_helper_class(function: &Function) -> bool {
-    let Some((class_name, _)) = function.name.split_once("::") else {
-        return false;
-    };
-    is_phar_archive_helper_class_name(class_name)
-}
-
-/// Returns true when a lowered builtin call emits runtime string-callable dispatch.
-fn builtin_call_requires_descriptor_invoker(
-    module: &Module,
-    function: &Function,
-    inst: &crate::ir::Instruction,
-) -> bool {
-    let Some(name) = builtin_call_name(module, inst) else {
-        return false;
-    };
-    let Some(callback_index) = string_callback_operand_index(name) else {
+    let Some(callback_index) = target.string_callback_operand_index() else {
         return false;
     };
     let Some(callback) = inst.operands.get(callback_index).copied() else {
@@ -1032,74 +1002,27 @@ fn builtin_call_requires_descriptor_invoker(
         .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Str)
 }
 
-/// Returns true when a lowered builtin call references the optional eval bridge.
-fn builtin_call_requires_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    let Some(name) = builtin_call_name(module, inst) else {
-        return false;
-    };
-    is_eval_builtin_name(name)
-}
-
-/// Returns the canonical builtin name attached to a lowered builtin instruction.
-fn builtin_call_name<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> Option<&'a str> {
+/// Returns whether a compiler-resident call references the optional eval bridge.
+fn language_construct_call_requires_eval(
+    module: &Module,
+    inst: &crate::ir::Instruction,
+) -> bool {
     let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+        return false;
     };
     module
         .data
         .function_names
         .get(data.as_raw() as usize)
-        .map(String::as_str)
+        .is_some_and(|name| php_symbol_key(name.trim_start_matches('\\')) == "eval")
 }
 
-/// Returns the callback operand index for builtins with runtime string callbacks.
-fn string_callback_operand_index(name: &str) -> Option<usize> {
-    match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "array_map" => Some(0),
-        "array_filter" | "array_reduce" | "array_walk" | "array_walk_recursive" | "usort"
-        | "uksort" | "uasort" | "iterator_apply" | "preg_replace_callback" | "array_find"
-        | "array_any" | "array_all" => Some(1),
-        "array_udiff" | "array_uintersect" => Some(2),
-        _ => None,
-    }
-}
-
-/// Returns true when a builtin name denotes PHP's eval language construct.
-fn is_eval_builtin_name(name: &str) -> bool {
-    php_symbol_key(name.trim_start_matches('\\')) == "eval"
-}
-
-/// Returns true when a builtin name is lowered through the regex runtime helpers.
-fn is_regex_builtin_name(name: &str) -> bool {
-    matches!(
-        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
-    )
-}
-
-/// Returns true when an EIR builtin lowerer can publish PHAR bridge symbols.
-fn is_phar_archive_builtin_name(name: &str) -> bool {
-    matches!(
-        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "__elephc_phar_list_entries"
-            | "__elephc_phar_get_metadata"
-            | "__elephc_phar_get_stub"
-            | "__elephc_phar_set_metadata"
-            | "__elephc_phar_set_stub"
-            | "__elephc_phar_get_file_metadata"
-            | "__elephc_phar_set_file_metadata"
-            | "__elephc_phar_gzip_archive"
-            | "__elephc_phar_bzip2_archive"
-            | "__elephc_phar_decompress_archive"
-            | "__elephc_phar_sign_openssl"
-            | "__elephc_phar_sign_hash"
-            | "__elephc_phar_set_zip_password"
-            | "__elephc_phar_get_signature_hash"
-            | "__elephc_phar_get_signature_type"
-            | "file_get_contents"
-            | "file_put_contents"
-            | "fopen"
-    )
+/// Returns whether a function belongs to a stream/archive helper class.
+fn function_belongs_to_phar_archive_helper_class(function: &Function) -> bool {
+    let Some((class_name, _)) = function.name.split_once("::") else {
+        return false;
+    };
+    is_phar_archive_helper_class_name(class_name)
 }
 
 /// Returns true when a class has generated methods that can route paths through PHAR helpers.

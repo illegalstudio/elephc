@@ -2,7 +2,7 @@
 title: "is_float()"
 description: "Checks whether a variable is a floating-point number."
 sidebar:
-  order: 428
+  order: 444
 ---
 
 ## is_float()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_float` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_float.md).
-

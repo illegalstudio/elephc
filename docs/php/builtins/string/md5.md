@@ -2,7 +2,7 @@
 title: "md5()"
 description: "Calculates the MD5 hash of a string."
 sidebar:
-  order: 376
+  order: 391
 ---
 
 ## md5()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `md5` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/md5.md).
-

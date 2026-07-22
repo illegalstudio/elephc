@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_unshift` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_unshift` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(variadic(["array"], "values"))`: `array`
@@ -13,13 +12,9 @@
 //! - The `ref` marker on `array` is mandatory — it is what makes by-reference mutation
 //!   lower correctly (ir_lower reads `ref_params` from the registry sig).
 //! - Returns `Int` — the new number of elements in the array.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_unshift` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -31,7 +26,9 @@ builtin! {
     max_args: 2,
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayUnshift,
+    ),
     summary: "Prepends one or more elements to the beginning of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-unshift.php",
 }
@@ -51,9 +48,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers an `array_unshift` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_unshift(ctx, inst)
 }

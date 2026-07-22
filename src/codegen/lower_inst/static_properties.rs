@@ -23,7 +23,10 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{builtins, expect_data, expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::{
+    builtins, expect_data, expect_operand, load_value_to_first_int_arg, property_values,
+    store_if_result,
+};
 use crate::codegen::{CodegenIrError, Result};
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
@@ -711,6 +714,9 @@ fn ensure_static_property_value_supported(
     if can_coerce_mixed_to_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -804,6 +810,9 @@ fn load_static_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            PhpType::Object(_) => {
+                property_values::emit_mixed_object_for_property_store(ctx)
+            }
             _ => {}
         }
         return Ok(());
@@ -938,7 +947,7 @@ fn emit_uninitialized_static_property_fatal(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #32");                             // request Throwable payload storage
+            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the Error object payload
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
@@ -950,6 +959,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -958,9 +968,9 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
-            ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
+            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: HE LP magic + kind 6 object
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
@@ -968,6 +978,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing

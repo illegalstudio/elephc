@@ -433,6 +433,22 @@ fn test_parse_keyword_named_constructor_call() {
     }
 }
 
+/// Verifies a keyword token used as a named-argument label retains its exact source spelling.
+#[test]
+fn test_parse_keyword_named_argument_preserves_spelling() {
+    let stmts = parse_source("<?php choose(Match: 42);");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("Expected ExprStmt");
+    };
+    let ExprKind::FunctionCall { args, .. } = &expr.kind else {
+        panic!("Expected FunctionCall");
+    };
+    assert!(matches!(
+        args[0].kind,
+        ExprKind::NamedArg { ref name, .. } if name == "Match"
+    ));
+}
+
 // --- Default parameter values ---
 
 #[test]

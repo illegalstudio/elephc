@@ -95,6 +95,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => Invalidation::none(),
+        ExprKind::ObjectClassName { object } => expr_invalidation(object),
         // Creating a closure executes nothing, but its by-ref captures alias
         // the outer variables from this point on: any existing fact for them
         // must die here (the volatility ledger only blocks *future* facts).
@@ -247,7 +248,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             };
             args_invalidation(args)
                 .union(callee_inv)
-                .union(top_level_globals_guard(function_call_effect(name.as_str())))
+                .union(top_level_globals_guard(function_call_effect(name.as_str(), args)))
         }
         ExprKind::MethodCall {
             object,

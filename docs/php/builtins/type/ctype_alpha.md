@@ -2,7 +2,7 @@
 title: "ctype_alpha()"
 description: "Checks if all characters in the string are alphabetic."
 sidebar:
-  order: 417
+  order: 432
 ---
 
 ## ctype_alpha()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ctype_alpha` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/ctype_alpha.md).
-

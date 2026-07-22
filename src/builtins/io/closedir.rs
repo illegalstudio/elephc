@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `closedir` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `closedir` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates the `dir_handle` argument is a stream resource and returns `Void`.
 //! - Arguments are pre-inferred by the registry before the hook runs.
-//! - `lower` is a thin wrapper over `io::lower_closedir` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [dir_handle: Mixed],
     returns: Void,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Closedir,
+    ),
     summary: "Closes directory handle.",
     php_manual: "function.closedir",
 }
@@ -37,9 +34,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
     )?;
     Ok(PhpType::Void)
-}
-
-/// Lowers a `closedir` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_closedir(ctx, inst)
 }

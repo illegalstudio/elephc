@@ -2,7 +2,7 @@
 title: "rawurlencode()"
 description: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces)."
 sidebar:
-  order: 382
+  order: 397
 ---
 
 ## rawurlencode()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rawurlencode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rawurlencode.md).
-

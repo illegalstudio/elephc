@@ -2,7 +2,7 @@
 title: "log10()"
 description: "Returns the base-10 logarithm of a number."
 sidebar:
-  order: 259
+  order: 274
 ---
 
 ## log10()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `log10` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/log10.md).
-

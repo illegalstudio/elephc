@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `preg_replace_callback` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `preg_replace_callback` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `lazy_check: true` is required: `contextual_closure_sig` injects `array<string>` for the
@@ -12,13 +11,9 @@
 //! - The actual check logic lives in the checker submodule
 //!   `crate::types::checker::builtins::callables::preg_replace_callback::check`, which also
 //!   enforces the arity guard independently (needed for the first-class-callable path).
-//! - `lower` is a thin wrapper over `lower_preg_replace_callback` (not parameterized).
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +23,12 @@ builtin! {
     returns: Str,
     check: check,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::PregReplaceCallback,
+        ),
+        crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback,
+    ),
     summary: "Performs a regular expression search and replace using a callback.",
     php_manual: "function.preg-replace-callback",
 }
@@ -47,9 +47,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.span,
         cx.env,
     )
-}
-
-/// Lowers a `preg_replace_callback` call by dispatching to the shared EIR emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::regex::lower_preg_replace_callback(ctx, inst)
 }

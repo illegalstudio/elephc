@@ -380,6 +380,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             len: Box::new(fold_expr(*len)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(fold_expr(*object)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }

@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `pfsockopen` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `pfsockopen` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that `error_code` (arg[2]) and `error_message` (arg[3]), if provided,
@@ -11,13 +10,9 @@
 //! - Shares the same params, check logic, and lower target as `fsockopen`; `cx.name` is used
 //!   in error messages so diagnostics name `pfsockopen` correctly.
 //! - Arguments are pre-inferred by the registry before the hook runs.
-//! - `lower` dispatches to `io::lower_fsockopen` in the EIR backend (shared emitter).
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -33,7 +28,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Pfsockopen,
+    ),
     summary: "Open persistent Internet or Unix domain socket connection.",
     php_manual: "function.pfsockopen",
 }
@@ -57,9 +54,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::False]))
-}
-
-/// Lowers a `pfsockopen` call by dispatching to the shared io emitter (same as `fsockopen`).
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_fsockopen(ctx, inst)
 }

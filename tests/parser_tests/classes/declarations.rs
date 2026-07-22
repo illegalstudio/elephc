@@ -66,6 +66,23 @@ fn test_parse_typed_class_constant_metadata() {
     assert_eq!(constants[1].name, "string");
 }
 
+/// Verifies keyword-named class constants and methods retain exact declaration spelling.
+#[test]
+fn test_parse_keyword_named_members_preserve_spelling() {
+    let statements = parse_source(
+        "<?php class Keywords { const Match = 1; const MATCH = 2; public function Default() {} }",
+    );
+    let StmtKind::ClassDecl {
+        constants, methods, ..
+    } = &statements[0].kind
+    else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(constants[0].name, "Match");
+    assert_eq!(constants[1].name, "MATCH");
+    assert_eq!(methods[0].name, "Default");
+}
+
 /// Verifies that `clone`, a PHP operator keyword, is still accepted as a method name.
 #[test]
 fn test_parse_clone_named_method() {

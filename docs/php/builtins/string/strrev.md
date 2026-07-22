@@ -2,7 +2,7 @@
 title: "strrev()"
 description: "Reverses a string."
 sidebar:
-  order: 400
+  order: 415
 ---
 
 ## strrev()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strrev` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strrev.md).
-

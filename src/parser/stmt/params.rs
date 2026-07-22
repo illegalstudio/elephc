@@ -9,7 +9,7 @@
 //! - Type-name parsing must allow namespace-qualified PHP names without resolving them here.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{AttributeGroup, Expr, Stmt, StmtKind, TypeExpr};
 use crate::parser::expr::parse_expr;
@@ -21,7 +21,7 @@ use super::{expect_token, name_starts_at, parse_block, parse_name};
 /// Consumes the `function` keyword at `*pos` and advances past the closing `}` of the body.
 /// Returns `StmtKind::FunctionDecl` with params, variadic, return_type, and body.
 pub(super) fn parse_function_decl(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -79,9 +79,9 @@ pub(super) fn parse_function_decl(
 /// be a parameter type annotation, `false` otherwise.
 /// Checks for nullable/union types, pointer/buffer generics, and that the token sequence
 /// ultimately resolves to a variable token (possibly after `&` or `...` markers).
-pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
+pub(crate) fn looks_like_typed_param(tokens: &[SpannedToken], pos: usize) -> bool {
     let mut probe = pos;
-    match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
+    match parse_type_expr(tokens, &mut probe, tokens[pos].1.span) {
         Ok(_) => {
             if matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Ampersand)) {
                 probe += 1;
@@ -100,7 +100,7 @@ pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bo
 /// `Union`, `Ptr`, or `Buffer`. Does not resolve names — emits `TypeExpr::Named` with a
 /// `Name` for class/interface/enum types.
 pub(crate) fn parse_type_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
@@ -159,7 +159,7 @@ pub(crate) fn parse_type_expr(
 
 /// Returns true if the token at `index` can begin a (non-nullable) type — used to tell an
 /// intersection `A&B` apart from a by-reference parameter `A &$x`.
-fn type_starts_at(tokens: &[(Token, Span)], index: usize) -> bool {
+fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
     matches!(
         tokens.get(index).map(|(token, _)| token),
         Some(
@@ -208,7 +208,7 @@ fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
 /// or a qualified/unqualified name. Does not handle `?T` (nullable) — that is handled by
 /// the caller `parse_type_expr`. Advances `*pos` past the consumed token(s).
 fn parse_atomic_type_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
@@ -252,6 +252,10 @@ fn parse_atomic_type_expr(
         Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("callable") => {
             *pos += 1;
             Ok(TypeExpr::Named(crate::names::Name::unqualified("callable")))
+        }
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("object") => {
+            *pos += 1;
+            Ok(TypeExpr::Named(crate::names::Name::unqualified("object")))
         }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
@@ -319,7 +323,7 @@ fn parse_atomic_type_expr(
             *pos += 1;
             Ok(TypeExpr::Named(Name::unqualified("parent")))
         }
-        Some(Token::Identifier(_)) | Some(Token::Backslash) => Ok(TypeExpr::Named(parse_name(
+        Some(_) if name_starts_at(tokens, *pos) => Ok(TypeExpr::Named(parse_name(
             tokens,
             pos,
             span,
@@ -343,7 +347,7 @@ fn ident_matches(name: &str, keywords: &[&str]) -> bool {
 /// Errors if a variadic parameter appears after another parameter or if a typed variadic
 /// is present.
 pub(super) fn parse_params(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<
@@ -439,7 +443,7 @@ pub(super) fn parse_params(
 /// seen. `first_error` is used when the list is empty; a more specific error is used when
 /// a comma is found but no name follows. Advances `*pos` to the first non-name token.
 pub(super) fn parse_name_list(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     first_error: &str,

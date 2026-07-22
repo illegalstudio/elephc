@@ -20,12 +20,15 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
+    array_access_element_result_type, array_access_expr_value_type_for_ir, call_return_type,
+    coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
+    method_call_expr_type_for_ir, property_access_expr_type_for_ir,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
-    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
+    static_method_call_expr_type_for_ir, string_op_uses_scratch_storage,
+    type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -529,8 +532,127 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
+/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
+/// push sites (issue #452) and materializes the promotion once before the loop. Loop bodies
+/// are lowered in a single pass, so without this an early `$a[] = <scalar>` site is emitted
+/// as a raw push against the pre-promotion element type even though the back edge brings the
+/// promoted `array<mixed>` around, writing an unboxed scalar into boxed-cell storage on
+/// iterations >= 2. Converting the array up front (in place, same pointer) and fixing its
+/// type to `array<mixed>` makes every push site box its value. `overrides` supplies types
+/// for names bound by the loop itself (the `foreach` value/key variables) so a push of the
+/// loop variable joins with its real element type. Locals without a materialized slot yet
+/// (first assigned inside the body, hence fresh every iteration) are left untouched.
+fn widen_loop_grown_arrays(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    overrides: &[(&str, PhpType)],
+    span: Option<Span>,
+) {
+    let names = {
+        let lookup = |name: &str| -> Option<PhpType> {
+            if let Some((_, ty)) = overrides.iter().find(|(n, _)| *n == name) {
+                return Some(ty.clone());
+            }
+            // A name with no declared slot yet (first assigned inside the loop body) is
+            // genuinely unknown at loop entry: report it as such instead of the Mixed
+            // fallback `local_type` would return, so the prescan does not take Mixed as
+            // widening evidence for it (mirrors the checker's `env.get` lookup).
+            if !ctx.local_slots.contains_key(name) {
+                return None;
+            }
+            Some(ctx.local_type(name))
+        };
+        crate::types::checker::loop_grown_mixed_array_pushes(
+            body,
+            update,
+            &lookup,
+            &mut |expr| infer_loop_growth_value_type(ctx, expr),
+        )
+    };
+    for name in names {
+        if !ctx.local_slots.contains_key(&name) {
+            continue;
+        }
+        let array_value = ctx.load_local(&name, span);
+        if array_value.ir_type != IrType::Heap(crate::ir::IrHeapKind::Array) {
+            continue;
+        }
+        let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![array_value.value],
+            None,
+            mixed_array_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            span,
+        );
+        ctx.store_mutated_local(&name, converted, mixed_array_ty, span);
+    }
+}
+
+/// Returns the value type that EIR lowering already knows before it emits a loop body.
+fn infer_loop_growth_value_type(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<PhpType> {
+    match &expr.kind {
+        ExprKind::Variable(name) if ctx.local_slots.contains_key(name) => {
+            Some(ctx.local_type(name))
+        }
+        ExprKind::FunctionCall { name, .. } => ctx
+            .builtin_call_types
+            .get(&expr.span)
+            .cloned()
+            .or_else(|| Some(call_return_type(ctx, name.as_str(), &[]))),
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array)
+        }
+        ExprKind::This => ctx.current_class.clone().map(PhpType::Object),
+        ExprKind::NewObject { class_name, .. } => {
+            Some(PhpType::Object(class_name.as_str().to_string()))
+        }
+        ExprKind::ErrorSuppress(inner) => infer_loop_growth_value_type(ctx, inner),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_ty = infer_loop_growth_value_type(ctx, then_expr)?;
+            let else_ty = infer_loop_growth_value_type(ctx, else_expr)?;
+            if then_ty == else_ty {
+                Some(then_ty)
+            } else {
+                Some(PhpType::Mixed)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Mirrors the checker's `foreach` value binding for the loop-widening prescan, preserving
+/// concrete element types from locals, literals, and function-like source expressions.
+fn foreach_prescan_value_type(ctx: &LoweringContext<'_, '_>, array: &Expr) -> PhpType {
+    let source_ty = match &array.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_loop_growth_value_type(ctx, array)
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(array)),
+    };
+    foreach_value_type(&source_ty)
+}
+
 /// Lowers a `while` loop.
 fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
+    widen_loop_grown_arrays(ctx, body, None, &[], Some(condition.span));
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -563,6 +685,7 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 
 /// Lowers a `do while` loop.
 fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr) {
+    widen_loop_grown_arrays(ctx, body, None, &[], Some(condition.span));
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -607,6 +730,10 @@ fn lower_for(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    let widen_span = condition
+        .map(|c| c.span)
+        .or_else(|| body.first().map(|s| s.span));
+    widen_loop_grown_arrays(ctx, body, update, &[], widen_span);
 
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
@@ -893,6 +1020,37 @@ fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    // Lowering the FULL target as an expression routes the write through the
+    // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
+    // whenever the slot storage is not already a boxed Mixed cell; the
+    // two-operand cell replacement then mutated a temporary and the write was
+    // silently lost (#529). Splitting off the innermost key writes through the
+    // parent cell instead (`__rt_mixed_array_set` for Mixed parents,
+    // `offsetSet` for ArrayAccess objects), which mutates the aliased
+    // container for every slot representation.
+    if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        let parent = lower_expr(ctx, array);
+        let key = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![parent.value, key.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, key, span);
+        release_persisted_string_operand(ctx, value, span);
+        // Parent subscript reads of Mixed/refcounted elements are owning
+        // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
+        // reference). The set helper mutates through the cell/object without
+        // consuming that reference, so release it here. Non-owning parents
+        // (plain locals, `$this`) are left to normal scope cleanup.
+        if ctx.value_is_owning_temporary(parent) {
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        }
+        return;
+    }
     let target = lower_expr(ctx, target);
     let value = lower_expr(ctx, value);
     ctx.emit_void(
@@ -1188,6 +1346,15 @@ fn lower_foreach(
     value_by_ref: bool,
     body: &[Stmt],
 ) {
+    // Widen before the source is lowered so an iterated-and-pushed array is loaded with
+    // its fixed-point element type, and bind the loop variables' prescan types so a push
+    // of the foreach value joins with its real element type.
+    let prescan_value_ty = foreach_prescan_value_type(ctx, array);
+    let mut overrides: Vec<(&str, PhpType)> = vec![(value_var, prescan_value_ty)];
+    if let Some(key_var) = key_var {
+        overrides.push((key_var, PhpType::Mixed));
+    }
+    widen_loop_grown_arrays(ctx, body, None, &overrides, Some(array.span));
     let source = lower_expr(ctx, array);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
@@ -1702,6 +1869,21 @@ fn lower_include_once_guard(
 /// Lowers a throwing statement into a terminator.
 fn lower_throw(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) {
     let value = lower_expr(ctx, expr);
+    // The in-flight exception cell owns one reference to the thrown object. Throwing
+    // an owning temporary (e.g. `throw new E()`, `throw f()`) transfers that
+    // reference; throwing a value that still leaves a local slot as owner — a
+    // PhpLocal/StaticLocal heap load such as a rethrown catch variable (`throw $e`)
+    // — must retain it, so the local's own release (rebind or epilogue) stays
+    // balanced with the catch-side release of the in-flight reference (issue #448).
+    // Main classifies concrete object local loads as owning temporaries for
+    // provisional unbox-release tracking; that must not be mistaken for a transfer.
+    let transferable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let value = if transferable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span))
+    };
     terminate_throw(ctx, value.value);
 }
 
@@ -1949,27 +2131,27 @@ fn lower_current_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> Low
     )
 }
 
-/// Binds and clears the active exception for a matched catch clause.
+/// Takes and clears the active exception for a matched catch clause, then stores the
+/// owned result through the ordinary variable-storage planner. This keeps local,
+/// global, static, and reference-cell destinations consistent while preserving the
+/// single in-flight reference transferred by the runtime (issue #448). A variable-less
+/// catch consumes the reference through a hidden owned temporary so it follows the
+/// same lifecycle instead of leaking.
 fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span: Span) {
-    let (immediate, php_type) = catch
-        .variable
-        .as_ref()
-        .map_or((None, PhpType::Void), |variable| {
-            let php_type = catch_variable_type(catch);
-            let slot = ctx.declare_local(variable, php_type.clone());
-            ctx.set_local_type(variable, php_type.clone());
-            (Some(Immediate::LocalSlot(slot)), php_type)
-        });
-    ctx.builder.emit_with_effects(
+    let php_type = catch_variable_type(catch);
+    let variable = match catch.variable.as_ref() {
+        Some(variable) => variable.clone(),
+        None => ctx.declare_owned_hidden_temp(php_type.clone()),
+    };
+    let caught = ctx.emit_owned_value(
         Op::CatchBind,
         Vec::new(),
-        immediate,
-        IrType::Void,
-        php_type,
-        Ownership::NonHeap,
+        None,
+        php_type.clone(),
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    ctx.store_local(&variable, caught, php_type, Some(span));
 }
 
 /// Returns the local type to use for a catch variable.
@@ -2104,6 +2286,11 @@ fn persist_scratch_return_string(
 }
 
 /// Acquires return values read from heap containers before local cleanup runs.
+///
+/// Function-static slots are included: the slot keeps owning its boxed value across
+/// calls, so `return $static_local` must hand the caller an extra reference — the
+/// caller releases call results after consuming them, and without the retain that
+/// release frees the box the slot still points to.
 fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -2125,6 +2312,7 @@ fn acquire_borrowed_return_value(
                 | Op::PropGet
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
+                | Op::LoadStaticLocal
         )
     ) {
         return value;
@@ -2652,7 +2840,7 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
-    if static_property_store_boxes_value(ctx, receiver, property, value) {
+    if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
         if ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
@@ -2667,17 +2855,13 @@ fn lower_static_property_assign(
     store_static_property(ctx, receiver, property, value.value, span);
 }
 
-/// Returns true when the codegen static-property store boxes `value` into a
-/// Mixed/Union slot with its own retained reference.
+/// Returns true when codegen gives the static-property slot an independently retained value.
 ///
-/// This mirrors `box_static_property_value_if_needed` in the EIR backend: a
-/// non-Mixed value assigned to a Mixed/Union slot is boxed with
-/// `__rt_mixed_from_value`, which retains the refcounted child. In that case the
-/// slot holds a reference independent of the source, so `lower_static_property_assign`
-/// releases an owning-temporary source instead of moving it in. When the declaring
-/// class/property metadata is unavailable, this conservatively reports `false` so the
-/// moving-store discipline (acquire-if-borrowed) is used.
-fn static_property_store_boxes_value(
+/// This covers both concrete values boxed into Mixed/Union slots and boxed Mixed values
+/// unboxed into object slots. Both backend paths retain the stored child independently,
+/// so borrowed sources need no `Acquire` and owning temporary sources are released after
+/// the store. Unknown metadata conservatively keeps the moving-store discipline.
+fn static_property_store_retains_independent_value(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
@@ -2687,8 +2871,13 @@ fn static_property_store_boxes_value(
         return false;
     };
     let value_ty = ctx.builder.value_php_type(value.value);
-    matches!(slot_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    let slot_ty = slot_ty.codegen_repr();
+    let value_ty = value_ty.codegen_repr();
+    let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    let unboxes_into_object = matches!(slot_ty, PhpType::Object(_))
+        && matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
+    boxes_into_mixed || unboxes_into_object
 }
 
 /// Lowers `Class::$prop[] = value`.

@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown()"
 description: "Shutdown a full-duplex connection."
 sidebar:
-  order: 228
+  order: 243
 ---
 
 ## stream_socket_shutdown()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_socket_shutdown` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_socket_shutdown.md).
-

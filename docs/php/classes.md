@@ -259,6 +259,8 @@ class User {
 
 Property type declarations are checked at compile time for both instance and static properties. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Typed properties without an explicit default start in PHP's uninitialized state; reading an instance or static property before the first assignment is a fatal runtime error, while assigning values such as `0`, `false`, `""`, or `null` to compatible nullable storage initializes the slot normally. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
 
+An untyped property with no explicit default (`public $x;`, instance or static) is initialized to `null`, exactly like `public $x = null;` — matching PHP, where untyped properties are implicitly nullable. When later assignments give such a property a concrete scalar or array type, the slot keeps nullable storage (the same layout as a typed `?T` property) so the null default stays observable before the first write; heterogeneous assignments widen the slot to `mixed`. Assignments made inside the class's own constructor initialize the slot before any observable read, so those keep the precise inferred type.
+
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
@@ -537,7 +539,9 @@ Called with `::`, no `$this`.
 
 ## Class name reflection (`::class`)
 
-`::class` returns the fully-qualified class name as a string at compile time.
+`::class` returns a fully-qualified class name as a string. Named and scoped
+receivers are resolved without constructing an object; an object-valued receiver
+reads the concrete class from the object at runtime.
 
 ```php
 <?php
@@ -549,11 +553,18 @@ class Logger {
 }
 echo Logger::class;                  // "App\Logger"
 echo \App\Logger::class;             // "App\Logger"
+
+$logger = new Logger("audit");
+echo $logger::class;                 // "App\Logger"
 ```
 
-Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`, `parent::class`, `static::class`.
+Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`,
+`parent::class`, `static::class`, and statically known object-valued expressions
+such as `$object::class` or `make_object()::class`.
 
 `static::class` follows PHP late static binding and resolves to the called class.
+`$object::class` follows the object's concrete runtime class, including when its
+static type is a parent class. The receiver expression is evaluated exactly once.
 For named receivers, elephc preserves PHP's written/imported spelling for the
 `::class` string while still using case-insensitive class lookup for executable
 operations such as `new`, `instanceof`, static method calls, and static property
@@ -589,7 +600,7 @@ class Child extends Base {
 
 ## Relative class types (`self`, `static`, `parent`)
 
-`self`, `static`, and `parent` may be used as type declarations on method parameters, method return types, and properties. They resolve to the enclosing class (`self`, `static`) or its parent (`parent`):
+`self`, `static`, and `parent` may be used as type declarations on method parameters, method return types, and properties. `self` and `parent` resolve lexically; a method return declared as `static` is late-bound to the call-site receiver:
 
 ```php
 <?php
@@ -608,7 +619,7 @@ class Node {
 }
 
 trait Fluent {
-    // In a trait, `static` resolves to the class that uses the trait.
+    // In a trait, `static` stays late-bound within the using class hierarchy.
     public function self(): static {
         return $this;
     }
@@ -617,11 +628,13 @@ trait Fluent {
 
 Rules:
 
-- `self` and `static` resolve to the class the member is declared in; `parent` resolves to that class's parent.
+- `self` resolves to the class the member is declared in; `parent` resolves to that class's parent.
+- A method return declared as `static` binds to the receiver class or interface at each call site, including inherited methods and fluent chains.
+- Overrides and interface implementations must preserve a required late-bound `static`; replacing it with the current concrete class is rejected. Covariant narrowing such as `static|false` to `static` remains valid.
 - They are accepted in parameter, return, and property type positions, and may be combined with the nullable shorthand (`?self`) or unions (`self|null`).
-- Used inside a trait, `self`/`static` resolve to the class that uses the trait, not the trait itself.
+- Used inside a trait, `self` resolves to the using class and a return `static` remains late-bound within that class hierarchy.
 - Using `self`, `static`, or `parent` as a type outside of a class is rejected.
-- For type checking, `static` is treated as the declaring class. A `static` return type chained directly on its declaring class works as expected; when a `static`-returning method is inherited and called on a subclass, the result is typed as the declaring class rather than the subclass.
+- PHPDoc return annotations are not parsed for typing. A fluent API that needs late-static refinement must declare the native PHP return type `: static`; `@return static` alone does not change the inferred type.
 
 ## Dynamic instantiation (`new $variable()`)
 
@@ -738,7 +751,7 @@ echo Color::Red->name;           // Red
 echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
-Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Case names are case-sensitive and may use PHP keywords other than the reserved `class` name; their exact declaration spelling is retained, so `case Match` and `case MATCH` are distinct and report `Match` / `MATCH` through `->name`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
 
 Like PHP, an `int`-backed enum's `::from()` / `::tryFrom()` accept a numeric string and coerce it to the integer backing value (`Color::from("2")` returns `Color::Green`). A numeric string with no matching case throws `ValueError`; a non-numeric string (e.g. `"x"`, `"1abc"`, `"0x1"`, `"INF"`, or `"NAN"`) throws `TypeError`, matching PHP's coercive typing.
 
@@ -1434,7 +1447,7 @@ class Bound implements Limits {
 }
 ```
 
-Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`, PHP 8.3+ declared types) live on classes, interfaces, traits, and enums. Declared types are enforced on initializer values, and an overriding constant must preserve or narrow an inherited class/interface type. PHP-forbidden constant types (`void`, `never`, and `callable`) are rejected. Typed constants expose their declared named, nullable, union, or intersection metadata through `ReflectionClassConstant::hasType()` and `getType()`; untyped constants and enum cases continue to report `false` and `null`.
+Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`, PHP 8.3+ declared types) live on classes, interfaces, traits, and enums. Names are case-sensitive and may use PHP keywords other than the reserved `class` name; exact declaration and access spelling is preserved. Declared types are enforced on initializer values, and an overriding constant must preserve or narrow an inherited class/interface type. PHP-forbidden constant types (`void`, `never`, and `callable`) are rejected. Typed constants expose their declared named, nullable, union, or intersection metadata through `ReflectionClassConstant::hasType()` and `getType()`; untyped constants and enum cases continue to report `false` and `null`.
 
 Constants are inherited from parents and implemented interfaces (transitively). At codegen time elephc inlines the constant's foldable value at every access site — there is no runtime lookup. Class constant expressions may reference other class constants through `ClassName::CONST`, `self::CONST`, or `parent::CONST`; `self::class` and `parent::class` are also accepted. `self::` and `parent::` are early-bound to the declaring class, matching PHP. `static::CONST` is rejected in class constant expressions because PHP does not allow late-static binding in compile-time constants. Attributes on class constants are accepted and retained for reflection.
 

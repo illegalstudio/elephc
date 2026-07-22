@@ -2,7 +2,7 @@
 title: "fflush()"
 description: "Flushes the output to a file."
 sidebar:
-  order: 161
+  order: 163
 ---
 
 ## fflush()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fflush` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fflush.md).
-

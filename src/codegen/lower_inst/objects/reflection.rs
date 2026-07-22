@@ -1394,6 +1394,7 @@ fn reflection_function_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
@@ -1429,6 +1430,7 @@ fn reflection_builtin_function_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
@@ -1716,6 +1718,7 @@ fn reflection_function_parameter_metadata(
         None,
         Some(declaring_function),
         &[],
+        None,
     )?;
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
@@ -3213,7 +3216,12 @@ fn reflection_class_method_member(
         return Ok(None);
     };
     let required_parameter_count = reflection_required_parameter_count(sig);
-    let type_metadata = reflection_return_type_metadata(sig);
+    let late_static_return = if flags.is_static {
+        info.late_static_static_method_returns.get(&method_key)
+    } else {
+        info.late_static_method_returns.get(&method_key)
+    };
+    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
     let is_generator = reflection_method_is_generator(
         ctx,
         declaring_class_name.as_deref().unwrap_or(class_name),
@@ -3232,6 +3240,16 @@ fn reflection_class_method_member(
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
     };
+    let source_defaults = declaring_class_name
+        .as_deref()
+        .and_then(|declaring_class| {
+            reflection_source_method_defaults(
+                ctx,
+                declaring_class,
+                &method_key,
+                flags.is_static,
+            )
+        });
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
@@ -3240,6 +3258,7 @@ fn reflection_class_method_member(
         declaring_class_name.as_deref(),
         Some(declaring_function),
         &reflection_promoted_constructor_parameter_names(info, &method_key),
+        source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key.clone(),
@@ -3304,7 +3323,12 @@ fn reflection_interface_method_member(
         .unwrap_or_else(|| interface_name.to_string());
     let required_parameter_count = reflection_required_parameter_count(sig);
     let flags = reflection_member_flags(is_static, &Visibility::Public, false, true, false, false);
-    let type_metadata = reflection_return_type_metadata(sig);
+    let late_static_return = if is_static {
+        info.late_static_static_method_returns.get(&method_key)
+    } else {
+        info.late_static_method_returns.get(&method_key)
+    };
+    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: Some(declaring_class_name.clone()),
@@ -3316,6 +3340,12 @@ fn reflection_interface_method_member(
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
     };
+    let source_defaults = reflection_source_method_defaults(
+        ctx,
+        declaring_class_name.as_str(),
+        &method_key,
+        is_static,
+    );
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
@@ -3324,6 +3354,7 @@ fn reflection_interface_method_member(
         Some(declaring_class_name.as_str()),
         Some(declaring_function),
         &[],
+        source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key,
@@ -3404,6 +3435,7 @@ fn reflection_trait_method_member(
         Some(trait_name),
         Some(declaring_function),
         &[],
+        None,
     )?;
     Ok(Some(ReflectionListedMember {
         name: method_key,
@@ -3926,6 +3958,39 @@ fn reflection_promoted_constructor_parameter_names(
     }
 }
 
+/// Returns lexical parameter defaults from the method's declaring class or interface.
+/// Semantic signatures may canonicalize relative receivers for runtime materialization, while
+/// ReflectionParameter must preserve source-visible names such as `self::X` and `parent::Y`.
+fn reflection_source_method_defaults(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> Option<Vec<Option<Expr>>> {
+    let declaring_class_name = declaring_class_name.trim_start_matches('\\');
+    let declarations = ctx
+        .module
+        .class_infos
+        .get(declaring_class_name)
+        .map(|info| info.method_decls.as_slice())
+        .or_else(|| {
+            ctx.module
+                .interface_infos
+                .get(declaring_class_name)
+                .map(|info| info.method_decls.as_slice())
+        })?;
+    let method = declarations.iter().find(|method| {
+        method.is_static == is_static && php_symbol_key(&method.name) == method_key
+    })?;
+    Some(
+        method
+            .params
+            .iter()
+            .map(|(_, _, default, _)| default.clone())
+            .collect(),
+    )
+}
+
 /// Builds reflected parameter metadata and attaches declaring class metadata when present.
 fn reflection_parameter_members_with_declaring_class(
     ctx: &FunctionContext<'_>,
@@ -3935,6 +4000,7 @@ fn reflection_parameter_members_with_declaring_class(
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
     promoted_parameter_names: &[String],
+    source_defaults: Option<&[Option<Expr>]>,
 ) -> Result<Vec<ReflectionParameterMember>> {
     reflection_parameter_members_with_declaring_function(
         ctx,
@@ -3944,6 +4010,7 @@ fn reflection_parameter_members_with_declaring_class(
         declaring_class_name,
         declaring_function,
         promoted_parameter_names,
+        source_defaults,
     )
 }
 
@@ -3956,6 +4023,7 @@ fn reflection_parameter_members_with_declaring_function(
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
     promoted_parameter_names: &[String],
+    source_defaults: Option<&[Option<Expr>]>,
 ) -> Result<Vec<ReflectionParameterMember>> {
     let mut parameters = Vec::new();
     for (index, (name, ty)) in sig.params.iter().enumerate() {
@@ -3986,8 +4054,12 @@ fn reflection_parameter_members_with_declaring_function(
             })
             .transpose()?
             .flatten();
-        let default_value_constant_name =
-            default_expr.and_then(reflection_parameter_default_constant_name);
+        let source_default_expr = source_defaults
+            .and_then(|defaults| defaults.get(index))
+            .and_then(Option::as_ref);
+        let default_value_constant_name = source_default_expr
+            .or(default_expr)
+            .and_then(reflection_parameter_default_constant_name);
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
@@ -4393,6 +4465,32 @@ fn reflection_return_type_metadata(sig: &FunctionSig) -> Option<ReflectionParame
         PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
         ty => reflection_named_type_metadata(ty).map(ReflectionParameterTypeMetadata::Named),
     }
+}
+
+/// Converts a method return contract while preserving reflection-visible late-bound `static`.
+fn reflection_method_return_type_metadata(
+    sig: &FunctionSig,
+    late_static_return: Option<&TypeExpr>,
+) -> Option<ReflectionParameterTypeMetadata> {
+    if sig.declared_return {
+        if let Some(return_type) = late_static_return {
+            let mut metadata = reflection_declared_type_metadata(return_type)?;
+            if let ReflectionParameterTypeMetadata::Union(union) = &mut metadata {
+                // PHP reports named class/interface members before `static`, then builtins.
+                union.types.sort_by_key(|member| {
+                    if member.name.eq_ignore_ascii_case("static") {
+                        1
+                    } else if member.is_builtin {
+                        2
+                    } else {
+                        0
+                    }
+                });
+            }
+            return Some(metadata);
+        }
+    }
+    reflection_return_type_metadata(sig)
 }
 
 /// Converts a normalized non-union parameter type into a simple `ReflectionNamedType`.
@@ -5787,8 +5885,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0"); // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("mov x4, xzr"); // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -5800,8 +5898,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax"); // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("xor r8, r8"); // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -6239,8 +6337,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -6252,8 +6350,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -7169,32 +7267,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

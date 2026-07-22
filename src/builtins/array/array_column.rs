@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_column` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_column` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` reproduces the legacy rule: the first argument must be an `Array` of
@@ -13,13 +12,9 @@
 //! - Arity (exactly 2 arguments) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 //!   Note elephc only supports the 2-argument form (`array`, `column_key`).
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_column` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +23,9 @@ builtin! {
     params: [array: Mixed, column_key: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayColumn,
+    ),
     summary: "Returns the values from a single column of an array of arrays.",
     php_manual: "https://www.php.net/manual/en/function.array-column.php",
 }
@@ -54,9 +51,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_column() first argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_column` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_column(ctx, inst)
 }

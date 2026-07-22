@@ -2,7 +2,7 @@
 title: "realpath_cache_size()"
 description: "Returns the amount of memory used by the realpath cache."
 sidebar:
-  order: 145
+  order: 147
 ---
 
 ## realpath_cache_size()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `realpath_cache_size` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/realpath_cache_size.md).
-

@@ -122,7 +122,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
-            let arg_env = (!function_call_effect(name.as_str()).has_side_effects).then_some(env);
+            let arg_env = (!function_call_effect(name.as_str(), &args).has_side_effects).then_some(env);
             let by_ref = function_by_ref_params(name.as_str());
             ExprKind::FunctionCall {
                 name,
@@ -361,6 +361,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             len: Box::new(propagate_expr(*len, env)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(propagate_expr(*object, env)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }

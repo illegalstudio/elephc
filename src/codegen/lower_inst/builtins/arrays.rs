@@ -3,7 +3,7 @@
 //! Delegates aggregate iteration, set operations, and key checks to existing runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Aggregate helpers accept indexed arrays with 8-byte payload slots, and
@@ -592,7 +592,12 @@ where
 
     let call_reg = abi::nested_call_reg(ctx.emitter);
     let specialization_ty = visible_arg_types.first().or(source_arg_ty);
-    let cases = runtime_string_descriptor_cases(ctx, specialization_ty)?;
+    let candidate_names = ctx.runtime_callable_candidates(callback);
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        specialization_ty,
+        candidate_names.as_deref(),
+    )?;
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
@@ -2024,7 +2029,8 @@ fn lower_user_sort_static_callback(
     super::ensure_arg_count(inst, name, 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
-    user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let callback_arg_types = [elem_ty.clone(), elem_ty];
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -2037,7 +2043,7 @@ fn lower_user_sort_static_callback(
             ctx,
             callback,
             &callback_owner,
-            Some(&[PhpType::Int, PhpType::Int]),
+            Some(&callback_arg_types),
         )?;
         return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
     }
@@ -2046,7 +2052,7 @@ fn lower_user_sort_static_callback(
             lower_descriptor_callback_runtime(
                 ctx,
                 callback,
-                vec![PhpType::Int, PhpType::Int],
+                callback_arg_types.to_vec(),
                 PhpType::Int,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -2071,8 +2077,8 @@ fn lower_user_sort_static_callback(
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
-                Some(&PhpType::Array(Box::new(PhpType::Int))),
-                vec![PhpType::Int, PhpType::Int],
+                Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
+                callback_arg_types.to_vec(),
                 PhpType::Int,
                 name,
                 |ctx, wrapper_label, env_bytes| {
@@ -2100,7 +2106,7 @@ fn lower_user_sort_static_callback(
         ctx,
         callback,
         &callback_owner,
-        Some(&[PhpType::Int, PhpType::Int]),
+        Some(&callback_arg_types),
     )?;
     lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
 }
@@ -2265,18 +2271,23 @@ fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Re
 ///
 /// User-comparator sorts (`usort`/`uasort`/`uksort`) permute existing
 /// pointer-sized slots through `__rt_usort`, so integer and object/refcounted
-/// handles (each a single 8-byte payload) are sortable; the comparator decides
-/// the ordering and receives each element by its handle. String elements are
-/// rejected here exactly as before — their multi-word descriptors are not
-/// permuted by the 8-byte slot sorter — so they keep producing a clear
-/// unsupported-feature error rather than a corrupt sort.
+/// handles and boxed `Mixed` cells (each a single 8-byte payload) are sortable;
+/// the comparator decides the ordering and receives each element through an ABI
+/// adapter when the runtime slot type differs from its declared parameters.
+/// String elements are rejected here exactly as before — their multi-word
+/// descriptors are not permuted by the 8-byte slot sorter — so they keep
+/// producing a clear unsupported-feature error rather than a corrupt sort.
 fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
             if matches!(
                 elem,
-                PhpType::Int | PhpType::Void | PhpType::Never | PhpType::Object(_)
+                PhpType::Int
+                    | PhpType::Void
+                    | PhpType::Never
+                    | PhpType::Mixed
+                    | PhpType::Object(_)
             ) {
                 return Ok(elem);
             }
@@ -2674,11 +2685,31 @@ fn static_sort_callback_binding(
         Some(callback) => callback,
         None => static_callback_name_operand(ctx, value, owner)?,
     };
-    if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
+    if let Some((label, param_types, return_ty)) = ctx
+        .callable_function_by_name(&callback.name)
+        .map(|callee| {
+            (
+                function_symbol(&callee.name),
+                callee
+                    .params
+                    .iter()
+                    .map(|param| param.php_type.codegen_repr())
+                    .collect::<Vec<_>>(),
+                callee.return_php_type.codegen_repr(),
+            )
+        })
+    {
+        let (label, env_source) = adapt_direct_callback_visible_args(
+            ctx,
+            label,
+            &param_types,
+            visible_arg_types,
+            owner,
+        )?;
         return Ok(StaticSortCallbackBinding {
-            label: function_symbol(&callee.name),
-            env_source: None,
-            return_ty: callee.return_php_type.codegen_repr(),
+            label,
+            env_source,
+            return_ty,
         });
     }
     if callback.kind == StaticCallbackOperandKind::FirstClassCallable {
@@ -2711,6 +2742,56 @@ fn static_sort_callback_binding(
         "{} '{}' is not a user function or supported first-class static method",
         owner, callback.name
     )))
+}
+
+/// Adapts boxed runtime callback arguments to a direct callback's declared ABI types.
+fn adapt_direct_callback_visible_args(
+    ctx: &mut FunctionContext<'_>,
+    target_label: String,
+    target_param_types: &[PhpType],
+    visible_arg_types: Option<&[PhpType]>,
+    owner: &str,
+) -> Result<(String, Option<StaticCallbackEnvSource>)> {
+    let Some(visible_arg_types) = visible_arg_types else {
+        return Ok((target_label, None));
+    };
+    if visible_arg_types
+        .iter()
+        .map(PhpType::codegen_repr)
+        .eq(target_param_types.iter().map(PhpType::codegen_repr))
+    {
+        return Ok((target_label, None));
+    }
+    if !visible_arg_types
+        .iter()
+        .any(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+    {
+        return Ok((target_label, None));
+    }
+    if visible_arg_types.len() != target_param_types.len() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with runtime callback args {:?} for direct target params {:?}",
+            owner, visible_arg_types, target_param_types
+        )));
+    }
+
+    let wrapper_label = ctx.next_label("direct_callback_arg_adapter");
+    let done_label = ctx.next_label("direct_callback_after_arg_adapter");
+    let wrapper = DeferredCallbackWrapper {
+        label: wrapper_label.clone(),
+        visible_arg_types: visible_arg_types.to_vec(),
+        target_visible_arg_types: Some(target_param_types.to_vec()),
+        capture_types: Vec::new(),
+        descriptor_prefix_types: Vec::new(),
+        descriptor_return_type: None,
+    };
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.label(&done_label);
+    Ok((
+        wrapper_label,
+        Some(StaticCallbackEnvSource::FunctionLabel(target_label)),
+    ))
 }
 
 /// Recovers a static `[class, method]` callable array as a static-method callback name.
@@ -3205,11 +3286,12 @@ enum StaticCallbackCalledClass {
 }
 
 /// Source used by the sort call site to build the callback environment.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum StaticCallbackEnvSource {
     Local(LocalSlotId),
     ThisObject(LocalSlotId),
     Value(ValueId),
+    FunctionLabel(String),
 }
 
 /// Resolves a sort static-method callback, allowing `static::` with an environment.
@@ -4044,6 +4126,13 @@ fn reserve_static_callback_env(
                     source_ty
                 )));
             }
+        }
+        StaticCallbackEnvSource::FunctionLabel(label) => {
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                &label,
+            );
         }
     }
     match ctx.emitter.target.arch {

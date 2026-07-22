@@ -2,7 +2,7 @@
 title: "file_exists()"
 description: "Checks whether a file or directory exists."
 sidebar:
-  order: 112
+  order: 114
 ---
 
 ## file_exists()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `file_exists` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/file_exists.md).
-

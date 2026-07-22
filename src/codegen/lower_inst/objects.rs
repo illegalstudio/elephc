@@ -35,7 +35,7 @@ use super::{
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    store_if_result, store_method_call_result,
+    property_values, store_if_result, store_method_call_result,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -50,7 +50,6 @@ use crate::codegen::{CodegenIrError, Result};
 
 mod reflection;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
@@ -691,28 +690,28 @@ fn emit_push_iterator_iterator_downcast_status_from_lookup(ctx: &mut FunctionCon
     let done = ctx.next_label("iterator_iterator_downcast_lookup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0"); // did the downcast class-string resolve to metadata?
-            ctx.emitter.instruction(&format!("b.eq {}", invalid)); // invalid downcast names throw for IteratorAggregate inputs
-            ctx.emitter.instruction("cmp x2, #0"); // target kind 0 means a concrete class, not an interface
-            ctx.emitter.instruction(&format!("b.ne {}", invalid)); // interface names are invalid downcast targets
-            ctx.emitter.instruction("mov x0, #1"); // status 1 means x1 carries a concrete downcast class id
-            ctx.emitter.instruction(&format!("b {}", done)); // preserve the resolved class id for later validation
+            ctx.emitter.instruction("cmp x0, #0");                              // did the downcast class-string resolve to metadata?
+            ctx.emitter.instruction(&format!("b.eq {}", invalid));              // invalid downcast names throw for IteratorAggregate inputs
+            ctx.emitter.instruction("cmp x2, #0");                              // target kind 0 means a concrete class, not an interface
+            ctx.emitter.instruction(&format!("b.ne {}", invalid));              // interface names are invalid downcast targets
+            ctx.emitter.instruction("mov x0, #1");                              // status 1 means x1 carries a concrete downcast class id
+            ctx.emitter.instruction(&format!("b {}", done));                    // preserve the resolved class id for later validation
 
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("mov x0, #2"); // status 2 means the downcast must throw for aggregates
-            ctx.emitter.instruction("mov x1, #0"); // invalid downcast targets have no usable class id
+            ctx.emitter.instruction("mov x0, #2");                              // status 2 means the downcast must throw for aggregates
+            ctx.emitter.instruction("mov x1, #0");                              // invalid downcast targets have no usable class id
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax"); // did the downcast class-string resolve to metadata?
-            ctx.emitter.instruction(&format!("je {}", invalid)); // invalid downcast names throw for IteratorAggregate inputs
-            ctx.emitter.instruction("test rdx, rdx"); // target kind 0 means a concrete class, not an interface
-            ctx.emitter.instruction(&format!("jne {}", invalid)); // interface names are invalid downcast targets
-            ctx.emitter.instruction("mov rax, 1"); // status 1 means rdi carries a concrete downcast class id
-            ctx.emitter.instruction(&format!("jmp {}", done)); // preserve the resolved class id for later validation
+            ctx.emitter.instruction("test rax, rax");                           // did the downcast class-string resolve to metadata?
+            ctx.emitter.instruction(&format!("je {}", invalid));                // invalid downcast names throw for IteratorAggregate inputs
+            ctx.emitter.instruction("test rdx, rdx");                           // target kind 0 means a concrete class, not an interface
+            ctx.emitter.instruction(&format!("jne {}", invalid));               // interface names are invalid downcast targets
+            ctx.emitter.instruction("mov rax, 1");                              // status 1 means rdi carries a concrete downcast class id
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // preserve the resolved class id for later validation
 
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("mov rax, 2"); // status 2 means the downcast must throw for aggregates
-            ctx.emitter.instruction("xor edi, edi"); // invalid downcast targets have no usable class id
+            ctx.emitter.instruction("mov rax, 2");                              // status 2 means the downcast must throw for aggregates
+            ctx.emitter.instruction("xor edi, edi");                            // invalid downcast targets have no usable class id
         }
     }
     ctx.emitter.label(&done);
@@ -751,41 +750,41 @@ fn emit_validate_iterator_iterator_aggregate_downcast(ctx: &mut FunctionContext<
     let throw = ctx.next_label("iterator_iterator_downcast_throw");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp, #16]"); // load downcast status: 0 omitted/null, 1 class id, 2 invalid
-            ctx.emitter.instruction(&format!("cbz x9, {}", skip)); // omitted/null class arguments do not constrain aggregates
-            ctx.emitter.instruction("cmp x9, #1"); // only status 1 carries a valid concrete class id
-            ctx.emitter.instruction(&format!("b.ne {}", throw)); // invalid names and interfaces throw for aggregates
-            ctx.emitter.instruction("ldr x0, [sp]"); // pass the saved IteratorAggregate object to the class matcher
-            ctx.emitter.instruction("ldr x1, [sp, #24]"); // pass the requested downcast class id to the class matcher
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // load downcast status: 0 omitted/null, 1 class id, 2 invalid
+            ctx.emitter.instruction(&format!("cbz x9, {}", skip));              // omitted/null class arguments do not constrain aggregates
+            ctx.emitter.instruction("cmp x9, #1");                              // only status 1 carries a valid concrete class id
+            ctx.emitter.instruction(&format!("b.ne {}", throw));                // invalid names and interfaces throw for aggregates
+            ctx.emitter.instruction("ldr x0, [sp]");                            // pass the saved IteratorAggregate object to the class matcher
+            ctx.emitter.instruction("ldr x1, [sp, #24]");                       // pass the requested downcast class id to the class matcher
             abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
-            ctx.emitter.instruction("cmp x0, #0"); // did the aggregate object match the requested class?
-            ctx.emitter.instruction(&format!("b.eq {}", throw)); // non-base downcast classes are rejected like PHP
-            ctx.emitter.instruction("ldr x0, [sp, #24]"); // pass the requested class id to the interface checker
+            ctx.emitter.instruction("cmp x0, #0");                              // did the aggregate object match the requested class?
+            ctx.emitter.instruction(&format!("b.eq {}", throw));                // non-base downcast classes are rejected like PHP
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // pass the requested class id to the interface checker
             abi::emit_load_int_immediate(ctx.emitter, "x1", aggregate_interface_id);
             abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
-            ctx.emitter.instruction("cmp x0, #0"); // did the downcast class implement IteratorAggregate?
-            ctx.emitter.instruction(&format!("b.eq {}", throw)); // non-Traversable base classes are rejected like PHP
-            ctx.emitter.instruction(&format!("b {}", skip)); // the aggregate downcast class is valid
+            ctx.emitter.instruction("cmp x0, #0");                              // did the downcast class implement IteratorAggregate?
+            ctx.emitter.instruction(&format!("b.eq {}", throw));                // non-Traversable base classes are rejected like PHP
+            ctx.emitter.instruction(&format!("b {}", skip));                    // the aggregate downcast class is valid
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]"); // load downcast status: 0 omitted/null, 1 class id, 2 invalid
-            ctx.emitter.instruction("test r10, r10"); // is there an explicit downcast class to validate?
-            ctx.emitter.instruction(&format!("je {}", skip)); // omitted/null class arguments do not constrain aggregates
-            ctx.emitter.instruction("cmp r10, 1"); // only status 1 carries a valid concrete class id
-            ctx.emitter.instruction(&format!("jne {}", throw)); // invalid names and interfaces throw for aggregates
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]"); // pass the saved IteratorAggregate object to the class matcher
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]"); // pass the requested downcast class id to the class matcher
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // load downcast status: 0 omitted/null, 1 class id, 2 invalid
+            ctx.emitter.instruction("test r10, r10");                           // is there an explicit downcast class to validate?
+            ctx.emitter.instruction(&format!("je {}", skip));                   // omitted/null class arguments do not constrain aggregates
+            ctx.emitter.instruction("cmp r10, 1");                              // only status 1 carries a valid concrete class id
+            ctx.emitter.instruction(&format!("jne {}", throw));                 // invalid names and interfaces throw for aggregates
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // pass the saved IteratorAggregate object to the class matcher
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // pass the requested downcast class id to the class matcher
             abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
-            ctx.emitter.instruction("test rax, rax"); // did the aggregate object match the requested class?
-            ctx.emitter.instruction(&format!("je {}", throw)); // non-base downcast classes are rejected like PHP
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]"); // pass the requested class id to the interface checker
+            ctx.emitter.instruction("test rax, rax");                           // did the aggregate object match the requested class?
+            ctx.emitter.instruction(&format!("je {}", throw));                  // non-base downcast classes are rejected like PHP
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // pass the requested class id to the interface checker
             abi::emit_load_int_immediate(ctx.emitter, "rsi", aggregate_interface_id);
             abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
-            ctx.emitter.instruction("test rax, rax"); // did the downcast class implement IteratorAggregate?
-            ctx.emitter.instruction(&format!("je {}", throw)); // non-Traversable base classes are rejected like PHP
-            ctx.emitter.instruction(&format!("jmp {}", skip)); // the aggregate downcast class is valid
+            ctx.emitter.instruction("test rax, rax");                           // did the downcast class implement IteratorAggregate?
+            ctx.emitter.instruction(&format!("je {}", throw));                  // non-Traversable base classes are rejected like PHP
+            ctx.emitter.instruction(&format!("jmp {}", skip));                  // the aggregate downcast class is valid
         }
     }
 
@@ -799,49 +798,51 @@ fn emit_validate_iterator_iterator_aggregate_downcast(ctx: &mut FunctionContext<
 fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #32"); // request Throwable payload storage
+            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6"); // heap kind 6 marks object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]"); // stamp allocation as a runtime object
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks object instances
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_logic_exception_class_id");
-            ctx.emitter.instruction("ldr x9, [x9]"); // load LogicException's runtime class id
-            ctx.emitter.instruction("str x9, [x0]"); // store the class id at object header
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load LogicException's runtime class id
+            ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
             abi::emit_symbol_address(ctx.emitter, "x9", "_iterator_iterator_downcast_msg");
-            ctx.emitter.instruction("str x9, [x0, #8]"); // store static exception message pointer
+            ctx.emitter.instruction("str x9, [x0, #8]");                        // store static exception message pointer
             ctx.emitter.instruction(&format!(
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             )); // load static exception message length
-            ctx.emitter.instruction("str x9, [x0, #16]"); // store static exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]"); // exception code defaults to zero
+            ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
+            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
-            ctx.emitter.instruction("str x0, [x9]"); // publish the active exception object
-            ctx.emitter.instruction("b __rt_throw_current"); // enter the standard exception unwinder
+            ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
+            ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("push rbp"); // preserve caller frame pointer for exception allocation
-            ctx.emitter.instruction("mov rbp, rsp"); // establish an aligned helper frame
-            ctx.emitter.instruction("sub rsp, 16"); // keep the nested heap allocation call aligned
-            ctx.emitter.instruction("mov rax, 32"); // request Throwable payload storage
+            ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
+            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006"); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp allocation as a runtime object
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter
                 .instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // store the class id at object header
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object header
             ctx.emitter
                 .instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10"); // store static exception message pointer
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static exception message pointer
             ctx.emitter.instruction(&format!(
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             )); // store static exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0"); // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             ctx.emitter
                 .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
-            ctx.emitter.instruction("mov rsp, rbp"); // release helper frame before throwing
-            ctx.emitter.instruction("pop rbp"); // restore caller frame pointer before throwing
-            ctx.emitter.instruction("jmp __rt_throw_current"); // enter the standard exception unwinder
+            ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
+            ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing
+            ctx.emitter.instruction("jmp __rt_throw_current");                  // enter the standard exception unwinder
         }
     }
 }
@@ -863,16 +864,16 @@ fn emit_branch_if_saved_traversable_implements(
             abi::emit_load_int_immediate(ctx.emitter, "x1", interface_id);
             abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
-            ctx.emitter.instruction("cmp x0, #0"); // test whether the saved Traversable matches this interface
-            ctx.emitter.instruction(&format!("b.ne {}", target_label)); // select the matching IteratorIterator normalization path
+            ctx.emitter.instruction("cmp x0, #0");                              // test whether the saved Traversable matches this interface
+            ctx.emitter.instruction(&format!("b.ne {}", target_label));         // select the matching IteratorIterator normalization path
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
             abi::emit_load_int_immediate(ctx.emitter, "rsi", interface_id);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
-            ctx.emitter.instruction("test rax, rax"); // test whether the saved Traversable matches this interface
-            ctx.emitter.instruction(&format!("jne {}", target_label)); // select the matching IteratorIterator normalization path
+            ctx.emitter.instruction("test rax, rax");                           // test whether the saved Traversable matches this interface
+            ctx.emitter.instruction(&format!("jne {}", target_label));          // select the matching IteratorIterator normalization path
         }
     }
     Ok(())
@@ -881,7 +882,7 @@ fn emit_branch_if_saved_traversable_implements(
 /// Moves the object result into the receiver ABI slot before an interface method call.
 fn move_result_to_receiver_arg(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // pass the normalized object result as the method receiver
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the normalized object result as the method receiver
     }
 }
 
@@ -912,7 +913,7 @@ fn lower_builtin_throwable_new(
     class_name: &str,
     class_id: u64,
 ) -> Result<()> {
-    if inst.operands.len() > 2 {
+    if inst.operands.len() > 3 {
         return Err(CodegenIrError::unsupported(format!(
             "{}::__construct with {} EIR operands",
             class_name,
@@ -923,6 +924,7 @@ fn lower_builtin_throwable_new(
     preserve_throwable_for_init(ctx);
     emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
     emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+    emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
     restore_throwable_after_init(ctx);
     store_if_result(ctx, inst)
 }
@@ -995,27 +997,34 @@ fn class_declares_own_constructor(class_name: &str, class_info: &ClassInfo) -> b
         .is_some_and(|declaring_class| declaring_class == class_name)
 }
 
-/// Allocates a 32-byte Throwable payload and stamps its heap kind and class id.
+/// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
+const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
+
+/// Allocates a compact Throwable payload and stamps its heap kind and class id.
 fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #32"); // request compact Throwable payload storage
+            // -- allocate and stamp the compact Throwable payload --
+            ctx.emitter.instruction(&format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)); // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6"); // heap kind 6 marks runtime object payloads
-            ctx.emitter.instruction("str x9, [x0, #-8]"); // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction(&format!("mov x9, #{}", class_id)); // materialize the Throwable runtime class id
-            ctx.emitter.instruction("str x9, [x0]"); // store class id at payload offset zero
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
+            ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
+            ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
+            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, 32"); // request compact Throwable payload storage
+            // -- allocate and stamp the compact Throwable payload --
+            ctx.emitter.instruction(&format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)); // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
-                (X86_64_HEAP_MAGIC_HI32 << 32) | 6
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
             )); // materialize the x86_64 Throwable heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id)); // materialize the Throwable runtime class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // store class id at payload offset zero
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
+            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
         }
     }
 }
@@ -1052,9 +1061,9 @@ fn emit_throwable_message_fields_aarch64(
     } else {
         emit_empty_string_to_regs(ctx, "x1", "x2");
     }
-    ctx.emitter.instruction("ldr x9, [sp]"); // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("str x1, [x9, #8]"); // store Throwable message pointer
-    ctx.emitter.instruction("str x2, [x9, #16]"); // store Throwable message length
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for message initialization
+    ctx.emitter.instruction("str x1, [x9, #8]");                                // store Throwable message pointer
+    ctx.emitter.instruction("str x2, [x9, #16]");                               // store Throwable message length
     Ok(())
 }
 
@@ -1069,9 +1078,9 @@ fn emit_throwable_message_fields_x86_64(
     } else {
         emit_empty_string_to_regs(ctx, "rax", "rdx");
     }
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]"); // reload the saved Throwable object for message initialization
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax"); // store Throwable message pointer
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 16], rdx"); // store Throwable message length
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for message initialization
+    ctx.emitter.instruction("mov QWORD PTR [r11 + 8], rax");                    // store Throwable message pointer
+    ctx.emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                   // store Throwable message length
     Ok(())
 }
 
@@ -1100,8 +1109,8 @@ fn emit_throwable_code_field_aarch64(
     } else {
         abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
     }
-    ctx.emitter.instruction("ldr x9, [sp]"); // reload the saved Throwable object for code initialization
-    ctx.emitter.instruction("str x1, [x9, #24]"); // store Throwable code
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the saved Throwable object for code initialization
+    ctx.emitter.instruction("str x1, [x9, #24]");                               // store Throwable code
     Ok(())
 }
 
@@ -1115,8 +1124,78 @@ fn emit_throwable_code_field_x86_64(
     } else {
         abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
     }
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]"); // reload the saved Throwable object for code initialization
-    ctx.emitter.instruction("mov QWORD PTR [r11 + 24], rax"); // store Throwable code
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the saved Throwable object for code initialization
+    ctx.emitter.instruction("mov QWORD PTR [r11 + 24], rax");                   // store Throwable code
+    Ok(())
+}
+
+/// Writes PHP's `$previous` object pointer into the compact Throwable payload at offset 40.
+fn emit_throwable_previous_field(
+    ctx: &mut FunctionContext<'_>,
+    previous: Option<ValueId>,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throwable_previous_field_aarch64(ctx, previous),
+        Arch::X86_64 => emit_throwable_previous_field_x86_64(ctx, previous),
+    }
+}
+
+/// Writes the AArch64 Throwable previous field, retaining a non-null previous object.
+fn emit_throwable_previous_field_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    previous: Option<ValueId>,
+) -> Result<()> {
+    if let Some(previous) = previous {
+        // -- normalize and retain the previous Throwable --
+        let store_label = ctx.next_label("throwable_previous_store");
+        let null_label = ctx.next_label("throwable_previous_null");
+        ctx.load_value_to_reg(previous, "x0")?;
+        ctx.emitter.instruction(&format!("cbz x0, {}", null_label));            // missing previous → store null
+        abi::emit_load_int_immediate(ctx.emitter, "x9", RUNTIME_NULL_SENTINEL);
+        ctx.emitter.instruction("cmp x0, x9");                                  // is previous the in-band null sentinel?
+        ctx.emitter.instruction(&format!("b.eq {}", null_label));               // treat sentinel as null payload
+        abi::emit_call_label(ctx.emitter, "__rt_incref"); // retain previous for the Throwable payload
+        ctx.emitter.instruction(&format!("b {}", store_label));                 // keep the retained previous pointer
+        ctx.emitter.label(&null_label);
+        ctx.emitter.instruction("mov x0, xzr");                                 // compact payload stores raw null, not the in-band sentinel
+        ctx.emitter.label(&store_label);
+        ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
+        ctx.emitter.instruction("str x0, [x9, #40]");                           // store Throwable previous pointer
+    } else {
+        // -- initialize an omitted previous Throwable --
+        ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
+        ctx.emitter.instruction("str xzr, [x9, #40]");                          // previous defaults to null
+    }
+    Ok(())
+}
+
+/// Writes the x86_64 Throwable previous field, retaining a non-null previous object.
+fn emit_throwable_previous_field_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    previous: Option<ValueId>,
+) -> Result<()> {
+    if let Some(previous) = previous {
+        // -- normalize and retain the previous Throwable --
+        let store_label = ctx.next_label("throwable_previous_store");
+        let null_label = ctx.next_label("throwable_previous_null");
+        ctx.load_value_to_reg(previous, "rax")?;
+        ctx.emitter.instruction("test rax, rax");                               // missing previous → store null
+        ctx.emitter.instruction(&format!("jz {}", null_label));                 // branch around retain for a missing previous
+        abi::emit_load_int_immediate(ctx.emitter, "r10", RUNTIME_NULL_SENTINEL);
+        ctx.emitter.instruction("cmp rax, r10");                                // is previous the in-band null sentinel?
+        ctx.emitter.instruction(&format!("je {}", null_label));                 // treat sentinel as null payload
+        abi::emit_call_label(ctx.emitter, "__rt_incref"); // retain previous for the Throwable payload
+        ctx.emitter.instruction(&format!("jmp {}", store_label));               // keep the retained previous pointer
+        ctx.emitter.label(&null_label);
+        ctx.emitter.instruction("xor rax, rax");                                // compact payload stores raw null, not the in-band sentinel
+        ctx.emitter.label(&store_label);
+        ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
+        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], rax");               // store Throwable previous pointer
+    } else {
+        // -- initialize an omitted previous Throwable --
+        ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
+        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], 0");                 // previous defaults to null
+    }
     Ok(())
 }
 
@@ -1382,15 +1461,15 @@ fn emit_generic_dynamic_new_class_string(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction("cmp x0, #1"); // require a boxed string class name for dynamic construction
+                    ctx.emitter.instruction("cmp x0, #1");                      // require a boxed string class name for dynamic construction
                     ctx.emitter
                         .instruction(&format!("b.ne {}", non_string_label)); // non-string class names produce the runtime null fallback
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction("cmp rax, 1"); // require a boxed string class name for dynamic construction
+                    ctx.emitter.instruction("cmp rax, 1");                      // require a boxed string class name for dynamic construction
                     ctx.emitter
                         .instruction(&format!("jne {}", non_string_label)); // non-string class names produce the runtime null fallback
-                    ctx.emitter.instruction("mov rax, rdi"); // move the unboxed string pointer into the string result register
+                    ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed string pointer into the string result register
                 }
             }
             Ok(true)
@@ -1589,8 +1668,8 @@ fn emit_branch_if_dynamic_new_mixed_class_name_matches(
             abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0"); // check whether the dynamic class-string matches this AOT class
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // select this AOT allocation path on a class-name match
+            ctx.emitter.instruction("cmp x0, #0");                              // check whether the dynamic class-string matches this AOT class
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select this AOT allocation path on a class-name match
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -1598,8 +1677,8 @@ fn emit_branch_if_dynamic_new_mixed_class_name_matches(
             abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax"); // check whether the dynamic class-string matches this AOT class
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // select this AOT allocation path on a class-name match
+            ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic class-string matches this AOT class
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // select this AOT allocation path on a class-name match
         }
     }
 }
@@ -1779,10 +1858,10 @@ fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
-            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label)); // registry miss is PHP's class-not-found fatal for source-level dynamic construction
+            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // registry miss is PHP's class-not-found fatal for source-level dynamic construction
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("b {}", done_label)); // skip the fatal path after a registry allocation
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the fatal path after a registry allocation
             ctx.emitter.label(&miss_label);
             emit_dynamic_new_class_not_found_fatal(ctx);
             ctx.emitter.label(&done_label);
@@ -1791,11 +1870,11 @@ fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
-            ctx.emitter.instruction("test rax, rax"); // did the runtime class registry produce an object?
-            ctx.emitter.instruction(&format!("jz {}", miss_label)); // registry miss is PHP's class-not-found fatal
+            ctx.emitter.instruction("test rax, rax");                           // did the runtime class registry produce an object?
+            ctx.emitter.instruction(&format!("jz {}", miss_label));             // registry miss is PHP's class-not-found fatal
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the fatal path after a registry allocation
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the fatal path after a registry allocation
             ctx.emitter.label(&miss_label);
             emit_dynamic_new_class_not_found_fatal(ctx);
             ctx.emitter.label(&done_label);
@@ -2020,17 +2099,17 @@ fn emit_dynamic_new_mixed_class_string(ctx: &mut FunctionContext<'_>, required_p
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1"); // runtime tag 1 means the dynamic factory argument is a string
-            ctx.emitter.instruction(&format!("b.eq {}", string_label)); // continue only when the boxed factory argument is a class-string
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 means the dynamic factory argument is a string
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // continue only when the boxed factory argument is a class-string
             emit_dynamic_new_fatal(ctx, required_parent);
             ctx.emitter.label(&string_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1"); // runtime tag 1 means the dynamic factory argument is a string
-            ctx.emitter.instruction(&format!("je {}", string_label)); // continue only when the boxed factory argument is a class-string
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 means the dynamic factory argument is a string
+            ctx.emitter.instruction(&format!("je {}", string_label));           // continue only when the boxed factory argument is a class-string
             emit_dynamic_new_fatal(ctx, required_parent);
             ctx.emitter.label(&string_label);
-            ctx.emitter.instruction("mov rax, rdi"); // move the unboxed string pointer into the lookup input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into the lookup input register
         }
     }
 }
@@ -2039,16 +2118,16 @@ fn emit_dynamic_new_mixed_class_string(ctx: &mut FunctionContext<'_>, required_p
 fn emit_branch_if_dynamic_new_lookup_invalid(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0"); // did the dynamic factory class-string resolve to metadata?
-            ctx.emitter.instruction(&format!("b.eq {}", invalid_label)); // abort unresolved factory classes before construction
-            ctx.emitter.instruction("cmp x2, #0"); // target kind 0 means a concrete class, not an interface
-            ctx.emitter.instruction(&format!("b.ne {}", invalid_label)); // abort interface targets because factories instantiate objects
+            ctx.emitter.instruction("cmp x0, #0");                              // did the dynamic factory class-string resolve to metadata?
+            ctx.emitter.instruction(&format!("b.eq {}", invalid_label));        // abort unresolved factory classes before construction
+            ctx.emitter.instruction("cmp x2, #0");                              // target kind 0 means a concrete class, not an interface
+            ctx.emitter.instruction(&format!("b.ne {}", invalid_label));        // abort interface targets because factories instantiate objects
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax"); // did the dynamic factory class-string resolve to metadata?
-            ctx.emitter.instruction(&format!("je {}", invalid_label)); // abort unresolved factory classes before construction
-            ctx.emitter.instruction("test rdx, rdx"); // target kind 0 means a concrete class, not an interface
-            ctx.emitter.instruction(&format!("jne {}", invalid_label)); // abort interface targets because factories instantiate objects
+            ctx.emitter.instruction("test rax, rax");                           // did the dynamic factory class-string resolve to metadata?
+            ctx.emitter.instruction(&format!("je {}", invalid_label));          // abort unresolved factory classes before construction
+            ctx.emitter.instruction("test rdx, rdx");                           // target kind 0 means a concrete class, not an interface
+            ctx.emitter.instruction(&format!("jne {}", invalid_label));         // abort interface targets because factories instantiate objects
         }
     }
 }
@@ -2073,12 +2152,12 @@ fn emit_compare_dynamic_new_class_id(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", scratch, class_id)); // compare the requested factory class with this candidate class id
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // branch when the runtime class-string selected this constructor
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // branch when the runtime class-string selected this constructor
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", scratch, class_id)); // compare the requested factory class with this candidate class id
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // branch when the runtime class-string selected this constructor
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // branch when the runtime class-string selected this constructor
         }
     }
 }
@@ -2132,37 +2211,37 @@ fn emit_dynamic_new_class_not_found_fatal(ctx: &mut FunctionContext<'_>) {
     let (suffix_label, suffix_len) = ctx.data.add_string(b"\" not found\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // select stderr for the class-not-found prefix
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found prefix
             ctx.emitter.adrp("x1", &prefix_label);
             ctx.emitter.add_lo12("x1", "x1", &prefix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_len)); // pass the class-not-found prefix byte length
+            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_len));       // pass the class-not-found prefix byte length
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2"); // select stderr for the missing class name
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the missing class name
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2"); // select stderr for the class-not-found suffix
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found suffix
             ctx.emitter.adrp("x1", &suffix_label);
             ctx.emitter.add_lo12("x1", "x1", &suffix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", suffix_len)); // pass the class-not-found suffix byte length
+            ctx.emitter.instruction(&format!("mov x2, #{}", suffix_len));       // pass the class-not-found suffix byte length
             ctx.emitter.syscall(4);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", prefix_len)); // pass the class-not-found prefix byte length
-            ctx.emitter.instruction("mov edi, 2"); // select stderr for the class-not-found prefix
-            ctx.emitter.instruction("mov eax, 1"); // select Linux write syscall for the prefix
-            ctx.emitter.instruction("syscall"); // write the class-not-found prefix
+            ctx.emitter.instruction(&format!("mov edx, {}", prefix_len));       // pass the class-not-found prefix byte length
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found prefix
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the prefix
+            ctx.emitter.instruction("syscall");                                 // write the class-not-found prefix
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
-            ctx.emitter.instruction("mov edi, 2"); // select stderr for the missing class name
-            ctx.emitter.instruction("mov eax, 1"); // select Linux write syscall for the class name
-            ctx.emitter.instruction("syscall"); // write the missing class name
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the missing class name
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the class name
+            ctx.emitter.instruction("syscall");                                 // write the missing class name
             abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", suffix_len)); // pass the class-not-found suffix byte length
-            ctx.emitter.instruction("mov edi, 2"); // select stderr for the class-not-found suffix
-            ctx.emitter.instruction("mov eax, 1"); // select Linux write syscall for the suffix
-            ctx.emitter.instruction("syscall"); // write the class-not-found suffix
+            ctx.emitter.instruction(&format!("mov edx, {}", suffix_len));       // pass the class-not-found suffix byte length
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found suffix
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the suffix
+            ctx.emitter.instruction("syscall");                                 // write the class-not-found suffix
         }
     }
     abi::emit_exit(ctx.emitter, 1);
@@ -2181,7 +2260,7 @@ fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
     let (message_label, message_len) = ctx.data.add_string(message);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // select stderr for the fatal diagnostic
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the fatal diagnostic
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -2192,9 +2271,9 @@ fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the fatal diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2"); // select stderr for the fatal diagnostic
-            ctx.emitter.instruction("mov eax, 1"); // select Linux write syscall
-            ctx.emitter.instruction("syscall"); // write the fatal diagnostic bytes
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the fatal diagnostic
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
+            ctx.emitter.instruction("syscall");                                 // write the fatal diagnostic bytes
         }
     }
     abi::emit_exit(ctx.emitter, 1);
@@ -2210,6 +2289,14 @@ fn collect_property_defaults(
         let Some(default_expr) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
+        // A null default whose slot cannot represent null (a scalar slot rebound by
+        // constructor-argument propagation) is skipped; the slot is always written
+        // before an observable read on those paths.
+        if matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
+            && !php_type.null_property_default_required()
+        {
+            continue;
+        }
         let offset = 8 + index * 16;
         defaults.push(PropertyDefault {
             offset,
@@ -2579,7 +2666,6 @@ fn lower_mixed_load_prop_ref_cell(
     }
     let done_label = ctx.next_label("mixed_propref_done");
     let null_label = ctx.next_label("mixed_propref_null");
-    let stdclass_label = ctx.next_label("mixed_propref_stdclass");
     let match_labels = candidates
         .iter()
         .map(|candidate| {
@@ -2590,9 +2676,14 @@ fn lower_mixed_load_prop_ref_cell(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    // stdClass has no declared reference property; route it to the null fallback.
-    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &null_label);
-    let _ = stdclass_label;
+    // stdClass and classes without this reference property have no matching cell.
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &null_label,
+        &null_label,
+    );
 
     let int_reg = abi::int_result_reg(ctx.emitter);
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -2756,9 +2847,9 @@ fn lower_allow_dynamic_prop_get(
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label)); // missing dynamic properties read as PHP null
-            ctx.emitter.instruction("mov x0, x1"); // return the boxed Mixed cell stored in the hash entry
-            ctx.emitter.instruction(&format!("b {}", done_label)); // skip the null fallback after a successful dynamic-property hit
+            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!(
@@ -2768,10 +2859,10 @@ fn lower_allow_dynamic_prop_get(
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction("test rax, rax"); // check whether the dynamic-property key was present
-            ctx.emitter.instruction(&format!("je {}", miss_label)); // missing dynamic properties read as PHP null
-            ctx.emitter.instruction("mov rax, rdi"); // return the boxed Mixed cell stored in the hash entry
-            ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the null fallback after a successful dynamic-property hit
+            ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
+            ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
         }
     }
     ctx.emitter.label(&miss_label);
@@ -2833,6 +2924,7 @@ fn lower_declared_mixed_prop_get(
     candidates: Vec<MixedPropertyCandidate>,
 ) -> Result<()> {
     let null_label = ctx.next_label("mixed_prop_null");
+    let miss_label = ctx.next_label("mixed_prop_miss");
     let done_label = ctx.next_label("mixed_prop_done");
     let stdclass_label = ctx.next_label("mixed_prop_stdclass");
     let match_labels = candidates
@@ -2848,7 +2940,13 @@ fn lower_declared_mixed_prop_get(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &stdclass_label);
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
@@ -2863,6 +2961,11 @@ fn lower_declared_mixed_prop_get(
 
     ctx.emitter.label(&stdclass_label);
     emit_stdclass_get_from_loaded_object(ctx, property);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_boxed_null(ctx);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -2930,43 +3033,46 @@ fn declared_mixed_property_candidates(
 fn emit_mixed_object_payload_or_null(ctx: &mut FunctionContext<'_>, null_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // check whether the Mixed receiver holds an object payload
-            ctx.emitter.instruction(&format!("b.ne {}", null_label)); // non-object Mixed receivers produce a null property result
-            ctx.emitter.instruction("mov x0, x1"); // promote the unboxed object payload for class-id dispatch
+            ctx.emitter.instruction("cmp x0, #6");                              // check whether the Mixed receiver holds an object payload
+            ctx.emitter.instruction(&format!("b.ne {}", null_label));           // non-object Mixed receivers produce a null property result
+            ctx.emitter.instruction("mov x0, x1");                              // promote the unboxed object payload for class-id dispatch
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // check whether the Mixed receiver holds an object payload
-            ctx.emitter.instruction(&format!("jne {}", null_label)); // non-object Mixed receivers produce a null property result
-            ctx.emitter.instruction("mov rax, rdi"); // promote the unboxed object payload for class-id dispatch
+            ctx.emitter.instruction("cmp rax, 6");                              // check whether the Mixed receiver holds an object payload
+            ctx.emitter.instruction(&format!("jne {}", null_label));            // non-object Mixed receivers produce a null property result
+            ctx.emitter.instruction("mov rax, rdi");                            // promote the unboxed object payload for class-id dispatch
         }
     }
 }
 
-/// Emits class-id dispatch for declared property candidates and stdClass fallback.
+/// Emits class-id dispatch for declared property candidates, stdClass, and a real miss branch.
 fn emit_mixed_property_class_dispatch(
     ctx: &mut FunctionContext<'_>,
     candidates: &[MixedPropertyCandidate],
     match_labels: &[String],
     stdclass_label: &str,
+    miss_label: &str,
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]"); // load the receiver class id for Mixed property dispatch
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10"); // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("b.eq {}", label)); // read the declared property when the class id matches
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this declared-property owner
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // read the declared property when the class id matches
             }
             emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
+            abi::emit_jump(ctx.emitter, miss_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]"); // load the receiver class id for Mixed property dispatch
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10"); // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("je {}", label)); // read the declared property when the class id matches
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this declared-property owner
+                ctx.emitter.instruction(&format!("je {}", label));              // read the declared property when the class id matches
             }
             emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
+            abi::emit_jump(ctx.emitter, miss_label);
         }
     }
 }
@@ -2986,12 +3092,12 @@ fn emit_branch_to_stdclass_candidate(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
-            ctx.emitter.instruction(&format!("b.eq {}", stdclass_label)); // route stdClass reads through the hash-backed helper
+            ctx.emitter.instruction(&format!("b.eq {}", stdclass_label));       // route stdClass reads through the hash-backed helper
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
-            ctx.emitter.instruction(&format!("je {}", stdclass_label)); // route stdClass reads through the hash-backed helper
+            ctx.emitter.instruction(&format!("je {}", stdclass_label));         // route stdClass reads through the hash-backed helper
         }
     }
 }
@@ -3025,7 +3131,7 @@ fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>, property:
             abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax"); // pass the unboxed stdClass object pointer to the dynamic getter
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the unboxed stdClass object pointer to the dynamic getter
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
@@ -3037,12 +3143,12 @@ fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>, property:
 fn emit_branch_if_mixed_unboxed_object(ctx: &mut FunctionContext<'_>, object_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the boxed union holds an object payload
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // read the declared property only for object payloads
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // read the declared property only for object payloads
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the boxed union holds an object payload
-            ctx.emitter.instruction(&format!("je {}", object_label)); // read the declared property only for object payloads
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("je {}", object_label));           // read the declared property only for object payloads
         }
     }
 }
@@ -3051,10 +3157,10 @@ fn emit_branch_if_mixed_unboxed_object(ctx: &mut FunctionContext<'_>, object_lab
 fn move_mixed_unboxed_object_payload(ctx: &mut FunctionContext<'_>, base_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, x1", base_reg)); // use the unboxed object pointer as the declared-property base
+            ctx.emitter.instruction(&format!("mov {}, x1", base_reg));          // use the unboxed object pointer as the declared-property base
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, rdi", base_reg)); // use the unboxed object pointer as the declared-property base
+            ctx.emitter.instruction(&format!("mov {}, rdi", base_reg));         // use the unboxed object pointer as the declared-property base
         }
     }
 }
@@ -3108,6 +3214,39 @@ fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Emits `Warning: Undefined property: Class::$name` for an object already in the result register.
+fn emit_undefined_property_warning_for_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    property: &str,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the missing-property receiver class id
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
+            ctx.emitter.instruction("ldr x1, [x10]");                           // load the receiver class-name pointer
+            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the receiver class-name byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the missing-property receiver class id
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9]");           // load the receiver class-name pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r9 + 8]");       // load the receiver class-name byte length
+        }
+    }
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_property_warning_fragment(ctx, b"Warning: Undefined property: ");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi"),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_property_warning_fragment(ctx, format!("::${}\n", property).as_bytes());
 }
 
 /// Lowers a nullsafe declared-property read for nullable object receivers.
@@ -3600,7 +3739,7 @@ fn emit_branch_if_dynamic_name_matches(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             abi::emit_symbol_address(ctx.emitter, "x3", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
-            ctx.emitter.instruction("bl __rt_str_eq"); // compare the runtime property name against this declared property
+            ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this declared property
             ctx.emitter
                 .instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the declared property slot when the names match
         }
@@ -3609,9 +3748,9 @@ fn emit_branch_if_dynamic_name_matches(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
             abi::emit_symbol_address(ctx.emitter, "rdx", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
-            ctx.emitter.instruction("call __rt_str_eq"); // compare the runtime property name against this declared property
-            ctx.emitter.instruction("test rax, rax"); // check whether the runtime string comparison matched
-            ctx.emitter.instruction(&format!("jne {}", target_label)); // dispatch to the declared property slot when the names match
+            ctx.emitter.instruction("call __rt_str_eq");                        // compare the runtime property name against this declared property
+            ctx.emitter.instruction("test rax, rax");                           // check whether the runtime string comparison matched
+            ctx.emitter.instruction(&format!("jne {}", target_label));          // dispatch to the declared property slot when the names match
         }
     }
 }
@@ -3911,12 +4050,12 @@ fn declared_mixed_property_set_candidates(
 fn emit_branch_if_mixed_unboxed_not_object(ctx: &mut FunctionContext<'_>, target_label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // check whether the boxed receiver holds an object payload
-            ctx.emitter.instruction(&format!("b.ne {}", target_label)); // non-object dynamic property writes are ignored
+            ctx.emitter.instruction("cmp x0, #6");                              // check whether the boxed receiver holds an object payload
+            ctx.emitter.instruction(&format!("b.ne {}", target_label));         // non-object dynamic property writes are ignored
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // check whether the boxed receiver holds an object payload
-            ctx.emitter.instruction(&format!("jne {}", target_label)); // non-object dynamic property writes are ignored
+            ctx.emitter.instruction("cmp rax, 6");                              // check whether the boxed receiver holds an object payload
+            ctx.emitter.instruction(&format!("jne {}", target_label));          // non-object dynamic property writes are ignored
         }
     }
 }
@@ -3939,17 +4078,17 @@ fn emit_branch_if_mixed_dynamic_property_candidate_matches(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
-            ctx.emitter.instruction("ldr x10, [x9]"); // load the candidate receiver class id
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the candidate receiver class id
             abi::emit_load_int_immediate(ctx.emitter, "x11", candidate.class_id as i64);
-            ctx.emitter.instruction("cmp x10, x11"); // compare receiver class id before checking the property name
-            ctx.emitter.instruction(&format!("b.ne {}", next_label)); // skip name comparison for unrelated classes
+            ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id before checking the property name
+            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // skip name comparison for unrelated classes
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]"); // load the candidate receiver class id
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the candidate receiver class id
             abi::emit_load_int_immediate(ctx.emitter, "r12", candidate.class_id as i64);
-            ctx.emitter.instruction("cmp r10, r12"); // compare receiver class id before checking the property name
-            ctx.emitter.instruction(&format!("jne {}", next_label)); // skip name comparison for unrelated classes
+            ctx.emitter.instruction("cmp r10, r12");                            // compare receiver class id before checking the property name
+            ctx.emitter.instruction(&format!("jne {}", next_label));            // skip name comparison for unrelated classes
         }
     }
     emit_branch_if_dynamic_name_matches(ctx, &candidate.slot.property, matched_label);
@@ -3968,17 +4107,17 @@ fn emit_branch_if_stacked_object_is_stdclass(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", object_stack_offset);
-            ctx.emitter.instruction("ldr x10, [x9]"); // load the stacked object's class id
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the stacked object's class id
             abi::emit_load_int_immediate(ctx.emitter, "x11", stdclass_id as i64);
-            ctx.emitter.instruction("cmp x10, x11"); // check whether the runtime receiver is stdClass
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // route stdClass writes through the dynamic-property helper
+            ctx.emitter.instruction("cmp x10, x11");                            // check whether the runtime receiver is stdClass
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // route stdClass writes through the dynamic-property helper
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", object_stack_offset);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]"); // load the stacked object's class id
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the stacked object's class id
             abi::emit_load_int_immediate(ctx.emitter, "r12", stdclass_id as i64);
-            ctx.emitter.instruction("cmp r10, r12"); // check whether the runtime receiver is stdClass
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // route stdClass writes through the dynamic-property helper
+            ctx.emitter.instruction("cmp r10, r12");                            // check whether the runtime receiver is stdClass
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // route stdClass writes through the dynamic-property helper
         }
     }
 }
@@ -4109,15 +4248,15 @@ fn lower_allow_dynamic_prop_set(
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, x0", boxed_reg)); // preserve the boxed dynamic-property value across receiver restore
+            ctx.emitter.instruction(&format!("mov {}, x0", boxed_reg));         // preserve the boxed dynamic-property value across receiver restore
             abi::emit_pop_reg(ctx.emitter, object_reg);
             ctx.emitter
                 .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
             abi::emit_push_reg(ctx.emitter, object_reg);
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
-            ctx.emitter.instruction(&format!("mov x3, {}", boxed_reg)); // pass the boxed Mixed cell as the hash value payload
-            ctx.emitter.instruction("mov x4, xzr"); // boxed Mixed hash entries do not use the high payload word
+            ctx.emitter.instruction(&format!("mov x3, {}", boxed_reg));         // pass the boxed Mixed cell as the hash value payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash entries do not use the high payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "x5",
@@ -4128,7 +4267,7 @@ fn lower_allow_dynamic_prop_set(
             abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, rax", boxed_reg)); // preserve the boxed dynamic-property value across receiver restore
+            ctx.emitter.instruction(&format!("mov {}, rax", boxed_reg));        // preserve the boxed dynamic-property value across receiver restore
             abi::emit_pop_reg(ctx.emitter, object_reg);
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
@@ -4137,8 +4276,8 @@ fn lower_allow_dynamic_prop_set(
             abi::emit_push_reg(ctx.emitter, object_reg);
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
-            ctx.emitter.instruction(&format!("mov rcx, {}", boxed_reg)); // pass the boxed Mixed cell as the hash value payload
-            ctx.emitter.instruction("xor r8, r8"); // boxed Mixed hash entries do not use the high payload word
+            ctx.emitter.instruction(&format!("mov rcx, {}", boxed_reg));        // pass the boxed Mixed cell as the hash value payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash entries do not use the high payload word
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "r9",
@@ -4204,7 +4343,7 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the property-assign-on-null fatal to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the property-assign-on-null fatal to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -4213,12 +4352,12 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the property-assign-on-null fatal to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the property-assign-on-null fatal to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the property-assign-on-null fatal byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the property-assign-on-null fatal before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the property-assign-on-null fatal before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
@@ -4300,10 +4439,10 @@ fn emit_object_allocation(
             ctx.emitter
                 .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4"); // heap kind 4 marks object instances for ownership helpers
-            ctx.emitter.instruction("str x9, [x0, #-8]"); // stamp the heap header before the object payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", class_id)); // materialize the compile-time class id
-            ctx.emitter.instruction("str x10, [x0]"); // store the class id at object payload offset zero
+            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
+            ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
+            ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -4311,11 +4450,11 @@ fn emit_object_allocation(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
-                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             )); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the heap header before the object payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id)); // materialize the compile-time class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10"); // store the class id at object payload offset zero
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
+            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
@@ -4459,7 +4598,7 @@ fn emit_clone_dynamic_property_hash(
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the source dynamic-property hash exists
-            ctx.emitter.instruction(&format!("jz {}", null_label)); // missing dynamic-property hash clones as a null hash pointer
+            ctx.emitter.instruction(&format!("jz {}", null_label));             // missing dynamic-property hash clones as a null hash pointer
         }
     }
     abi::emit_push_reg(ctx.emitter, source_reg);
@@ -4507,7 +4646,7 @@ fn emit_dynamic_property_hash_init(ctx: &mut FunctionContext<'_>, object_reg: &s
                 runtime_value_tag(&PhpType::Mixed) as i64,
             );
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-            ctx.emitter.instruction(&format!("mov {}, x0", hash_reg)); // preserve the dynamic-property hash across object restore
+            ctx.emitter.instruction(&format!("mov {}, x0", hash_reg));          // preserve the dynamic-property hash across object restore
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rdi", 4);
@@ -4517,7 +4656,7 @@ fn emit_dynamic_property_hash_init(ctx: &mut FunctionContext<'_>, object_reg: &s
                 runtime_value_tag(&PhpType::Mixed) as i64,
             );
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-            ctx.emitter.instruction(&format!("mov {}, rax", hash_reg)); // preserve the dynamic-property hash across object restore
+            ctx.emitter.instruction(&format!("mov {}, rax", hash_reg));         // preserve the dynamic-property hash across object restore
         }
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
@@ -4900,14 +5039,14 @@ pub(super) fn emit_nullable_receiver_object_payload(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #8"); // check whether the nullable receiver holds PHP null
-            ctx.emitter.instruction(&format!("b.eq {}", null_label)); // short-circuit property access for nullsafe null receivers
-            ctx.emitter.instruction(&format!("mov {}, x1", object_reg)); // promote the unboxed object payload into the property base register
+            ctx.emitter.instruction("cmp x0, #8");                              // check whether the nullable receiver holds PHP null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // short-circuit property access for nullsafe null receivers
+            ctx.emitter.instruction(&format!("mov {}, x1", object_reg));        // promote the unboxed object payload into the property base register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 8"); // check whether the nullable receiver holds PHP null
-            ctx.emitter.instruction(&format!("je {}", null_label)); // short-circuit property access for nullsafe null receivers
-            ctx.emitter.instruction(&format!("mov {}, rdi", object_reg)); // promote the unboxed object payload into the property base register
+            ctx.emitter.instruction("cmp rax, 8");                              // check whether the nullable receiver holds PHP null
+            ctx.emitter.instruction(&format!("je {}", null_label));             // short-circuit property access for nullsafe null receivers
+            ctx.emitter.instruction(&format!("mov {}, rdi", object_reg));       // promote the unboxed object payload into the property base register
         }
     }
     Ok(())
@@ -5028,7 +5167,7 @@ fn ensure_property_value_supported(
     if can_coerce_mixed_to_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
-    if can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
+    if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -5039,14 +5178,6 @@ fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
-}
-
-/// Returns true when a boxed Mixed value can be unboxed into an object-typed
-/// property slot. Untyped parameters widen to the boxed Mixed ABI while the
-/// checker still infers the slot as a concrete object type.
-fn can_unbox_mixed_to_object_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
-    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && matches!(slot_ty.codegen_repr(), PhpType::Object(_))
 }
 
 /// Returns true when a concrete object value is assignable to an object-typed property.
@@ -5846,7 +5977,7 @@ fn load_property_store_value_to_result(
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
-            PhpType::Object(_) => emit_mixed_object_for_property_store(ctx),
+            PhpType::Object(_) => property_values::emit_mixed_object_for_property_store(ctx),
             _ => {}
         }
         return Ok(());
@@ -6004,7 +6135,7 @@ fn emit_uninitialized_typed_property_fatal(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #32");                             // request Throwable payload storage
+            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the Error object payload
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
@@ -6016,6 +6147,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -6024,9 +6156,9 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
-            ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
+            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: HE LP magic + kind 6 object
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
@@ -6034,6 +6166,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing
@@ -6095,61 +6228,26 @@ fn emit_normalized_dynamic_instanceof_value(
     Ok(())
 }
 
-/// Unboxes a Mixed/Union tested value and leaves only object payloads as matchable.
-/// Unboxes a Mixed store value into the object pointer expected by an
-/// object-typed property slot. Non-object payloads store the null sentinel
-/// (matching the other lossy Mixed property coercions rather than raising a
-/// TypeError). The property store retains the object, so the unboxed pointer
-/// is increfed here.
-fn emit_mixed_object_for_property_store(ctx: &mut FunctionContext<'_>) {
-    let object_label = ctx.next_label("prop_store_mixed_value_object");
-    let done = ctx.next_label("prop_store_mixed_value_done");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the boxed payload is an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // object payloads store their unboxed pointer
-            ctx.emitter.instruction("mov x0, #0"); // non-object payloads fall back to the null sentinel
-            ctx.emitter.instruction(&format!("b {}", done)); // skip pointer promotion for non-object payloads
-            ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov x0, x1"); // promote the unboxed object pointer into the result register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the boxed payload is an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // object payloads store their unboxed pointer
-            ctx.emitter.instruction("xor eax, eax"); // non-object payloads fall back to the null sentinel
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip pointer promotion for non-object payloads
-            ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov rax, rdi"); // promote the unboxed object pointer into the result register
-        }
-    }
-    ctx.emitter.label(&done);
-    abi::emit_incref_if_refcounted(
-        ctx.emitter,
-        &PhpType::Object(String::new()), // property stores retain the transferred object
-    );
-}
-
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
     let object_label = ctx.next_label("instanceof_dynamic_value_object");
     let done = ctx.next_label("instanceof_dynamic_value_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the tested mixed payload is an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // object payloads can be matched after dynamic target resolution
-            ctx.emitter.instruction("mov x0, #0"); // scalar mixed payloads become null so the matcher returns false
-            ctx.emitter.instruction(&format!("b {}", done)); // skip object-payload promotion for scalar payloads
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the tested mixed payload is an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // object payloads can be matched after dynamic target resolution
+            ctx.emitter.instruction("mov x0, #0");                              // scalar mixed payloads become null so the matcher returns false
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip object-payload promotion for scalar payloads
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov x0, x1"); // promote the unboxed object pointer into the normal result register
+            ctx.emitter.instruction("mov x0, x1");                              // promote the unboxed object pointer into the normal result register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the tested mixed payload is an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // object payloads can be matched after dynamic target resolution
-            ctx.emitter.instruction("xor eax, eax"); // scalar mixed payloads become null so the matcher returns false
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip object-payload promotion for scalar payloads
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the tested mixed payload is an object
+            ctx.emitter.instruction(&format!("je {}", object_label));           // object payloads can be matched after dynamic target resolution
+            ctx.emitter.instruction("xor eax, eax");                            // scalar mixed payloads become null so the matcher returns false
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip object-payload promotion for scalar payloads
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov rax, rdi"); // promote the unboxed object pointer into the normal result register
+            ctx.emitter.instruction("mov rax, rdi");                            // promote the unboxed object pointer into the normal result register
         }
     }
     ctx.emitter.label(&done);
@@ -6186,15 +6284,15 @@ fn emit_lookup_string_target(ctx: &mut FunctionContext<'_>, false_label: &str) {
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0"); // did the dynamic string resolve to a known class or interface?
-            ctx.emitter.instruction(&format!("b.eq {}", false_label)); // unresolved class-string targets make instanceof false
-            ctx.emitter.instruction("mov x0, x1"); // move the resolved target id into the matcher target-id register
-            ctx.emitter.instruction("mov x1, x2"); // move the resolved target kind into the matcher target-kind register
+            ctx.emitter.instruction("cmp x0, #0");                              // did the dynamic string resolve to a known class or interface?
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // unresolved class-string targets make instanceof false
+            ctx.emitter.instruction("mov x0, x1");                              // move the resolved target id into the matcher target-id register
+            ctx.emitter.instruction("mov x1, x2");                              // move the resolved target kind into the matcher target-kind register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax"); // did the dynamic string resolve to a known class or interface?
-            ctx.emitter.instruction(&format!("je {}", false_label)); // unresolved class-string targets make instanceof false
-            ctx.emitter.instruction("mov rax, rdi"); // move the resolved target id into the matcher target-id register
+            ctx.emitter.instruction("test rax, rax");                           // did the dynamic string resolve to a known class or interface?
+            ctx.emitter.instruction(&format!("je {}", false_label));            // unresolved class-string targets make instanceof false
+            ctx.emitter.instruction("mov rax, rdi");                            // move the resolved target id into the matcher target-id register
         }
     }
 }
@@ -6204,19 +6302,19 @@ fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
     let ok_label = ctx.next_label("instanceof_dynamic_object_target_ok");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz x0, {}", ok_label)); // non-null object targets can provide runtime class metadata
+            ctx.emitter.instruction(&format!("cbnz x0, {}", ok_label));         // non-null object targets can provide runtime class metadata
             emit_invalid_dynamic_target_fatal(ctx);
             ctx.emitter.label(&ok_label);
-            ctx.emitter.instruction("ldr x0, [x0]"); // load the runtime class id from the target object header
-            ctx.emitter.instruction("mov x1, #0"); // object targets always resolve to class target kind
+            ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the target object header
+            ctx.emitter.instruction("mov x1, #0");                              // object targets always resolve to class target kind
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax"); // null object targets are not valid dynamic instanceof targets
-            ctx.emitter.instruction(&format!("jne {}", ok_label)); // non-null object targets can provide runtime class metadata
+            ctx.emitter.instruction("test rax, rax");                           // null object targets are not valid dynamic instanceof targets
+            ctx.emitter.instruction(&format!("jne {}", ok_label));              // non-null object targets can provide runtime class metadata
             emit_invalid_dynamic_target_fatal(ctx);
             ctx.emitter.label(&ok_label);
-            ctx.emitter.instruction("mov rax, QWORD PTR [rax]"); // load the runtime class id from the target object header
-            ctx.emitter.instruction("xor edx, edx"); // object targets always resolve to class target kind
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the target object header
+            ctx.emitter.instruction("xor edx, edx");                            // object targets always resolve to class target kind
         }
     }
 }
@@ -6229,30 +6327,30 @@ fn emit_mixed_target_metadata(ctx: &mut FunctionContext<'_>, false_label: &str) 
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1"); // runtime tag 1 means the dynamic target is a string
-            ctx.emitter.instruction(&format!("b.eq {}", string_label)); // resolve boxed string targets through class-string lookup
-            ctx.emitter.instruction("cmp x0, #6"); // runtime tag 6 means the dynamic target is an object
-            ctx.emitter.instruction(&format!("b.eq {}", object_label)); // resolve boxed object targets through their runtime class id
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 means the dynamic target is a string
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve boxed string targets through class-string lookup
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the dynamic target is an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // resolve boxed object targets through their runtime class id
             emit_invalid_dynamic_target_fatal(ctx);
             ctx.emitter.label(&string_label);
             emit_lookup_string_target(ctx, false_label);
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov x0, x1"); // move the unboxed target object pointer into the result register
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed target object pointer into the result register
             emit_object_target_metadata(ctx);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1"); // runtime tag 1 means the dynamic target is a string
-            ctx.emitter.instruction(&format!("je {}", string_label)); // resolve boxed string targets through class-string lookup
-            ctx.emitter.instruction("cmp rax, 6"); // runtime tag 6 means the dynamic target is an object
-            ctx.emitter.instruction(&format!("je {}", object_label)); // resolve boxed object targets through their runtime class id
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 means the dynamic target is a string
+            ctx.emitter.instruction(&format!("je {}", string_label));           // resolve boxed string targets through class-string lookup
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the dynamic target is an object
+            ctx.emitter.instruction(&format!("je {}", object_label));           // resolve boxed object targets through their runtime class id
             emit_invalid_dynamic_target_fatal(ctx);
             ctx.emitter.label(&string_label);
-            ctx.emitter.instruction("mov rax, rdi"); // move the unboxed target string pointer into the lookup input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed target string pointer into the lookup input register
             emit_lookup_string_target(ctx, false_label);
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&object_label);
-            ctx.emitter.instruction("mov rax, rdi"); // move the unboxed target object pointer into the result register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed target object pointer into the result register
             emit_object_target_metadata(ctx);
         }
     }

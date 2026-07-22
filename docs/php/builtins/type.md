@@ -22,13 +22,18 @@ sidebar:
 | [`is_array()`](./type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_double()`](./type/is_double.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_float()`](./type/is_float.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_int()`](./type/is_int.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_integer()`](./type/is_integer.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_iterable()`](./type/is_iterable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_long()`](./type/is_long.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_null()`](./type/is_null.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_numeric()`](./type/is_numeric.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_object()`](./type/is_object.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_real()`](./type/is_real.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_resource()`](./type/is_resource.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_scalar()`](./type/is_scalar.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_string()`](./type/is_string.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`settype()`](./type/settype.md) | `(mixed $var, string $type): bool` | `bool` | ✓ | ✓ |
+| [`strval()`](./type/strval.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

@@ -115,6 +115,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls in this source module.
+    pub builtin_call_types: &'m HashMap<Span, PhpType>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -182,6 +184,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+        builtin_call_types: &'m HashMap<Span, PhpType>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
         current_class: Option<String>,
@@ -211,6 +214,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             interfaces,
             packed_classes,
             throw_access_sites,
+            builtin_call_types,
             constants: constants.clone(),
             top_level_env,
             current_class,
@@ -1023,19 +1027,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
+        let transfer_catch_source_to_store = matches!(
+            self.builder.value_defining_op(value.value),
+            Some(Op::CatchBind)
+        ) && previous_kind != LocalKind::StaticLocal;
         let release_source_after_store =
             self.value_needs_release_after_retaining_store(value)
-                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp);
+                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp)
+                && !transfer_catch_source_to_store;
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
+        let transfer_source_to_store =
+            transfer_callable_source_to_store || transfer_catch_source_to_store;
         // Retain before cleanup because a borrowed result can alias the old slot.
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
+            && !transfer_source_to_store
             && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
+            && !transfer_source_to_store
         {
             // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
             // When the source is Mixed and the ref cell's previous type is Int,
@@ -1087,7 +1098,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store && !transfer_callable_source_to_store {
+            if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;
@@ -1116,7 +1127,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store && !transfer_callable_source_to_store && !ref_cell_narrowed_mixed_to_int {
+        if release_source_after_store
+            && !transfer_source_to_store
+            && !ref_cell_narrowed_mixed_to_int
+        {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -1567,6 +1581,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_index_read_temp(value) {
             return true;
         }
+        if self.value_is_borrowed_user_call_result(value.value) {
+            return false;
+        }
         if matches!(
             self.builder.value_defining_op(value.value),
             Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
@@ -1625,6 +1642,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    | Op::CatchBind
                     // `yield`/`yield from` return owned Mixed cells (the sent
                     // value from `__rt_gen_suspend`, the delegated return from
                     // `__rt_gen_delegate`); a discarded result must be released.
@@ -1653,6 +1671,85 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Returns whether a user-call result can alias a borrowed visible argument.
+    ///
+    /// User functions currently return refcounted parameter storage without
+    /// acquiring it for the caller. Such a result is borrowed when the matching
+    /// argument is borrowed, but remains an owning temporary when an owning
+    /// argument temporary transfers through the call.
+    fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(result) else {
+            return false;
+        };
+        if inst.op != Op::Call {
+            return false;
+        }
+        let Some(Immediate::Data(function_id)) = inst.immediate else {
+            return false;
+        };
+        let Some(function_name) = self.data.function_names.get(function_id.as_raw() as usize)
+        else {
+            return false;
+        };
+        let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
+            return false;
+        };
+        inst.operands
+            .iter()
+            .enumerate()
+            .any(|(parameter_index, argument)| {
+                if !return_alias.proven_aliases_parameter(parameter_index)
+                    || !self.call_result_may_alias_arg(*argument, result)
+                {
+                    return false;
+                }
+                let argument = LoweredValue {
+                    value: *argument,
+                    ir_type: self.builder.value_type(*argument),
+                };
+                !self.value_is_owning_temporary(argument)
+            })
+    }
+
+    /// Returns whether a call result can legally reuse one argument's refcounted payload.
+    pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
+        if matches!(
+            self.builder.value_defining_op(argument),
+            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        ) {
+            return false;
+        }
+        let argument_type = self.builder.value_php_type(argument).codegen_repr();
+        let result_type = self.builder.value_php_type(result).codegen_repr();
+        if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
+            || !Ownership::php_type_needs_lifetime_tracking(&result_type)
+        {
+            return false;
+        }
+        match (&argument_type, &result_type) {
+            (PhpType::Mixed | PhpType::Union(_), _)
+            | (_, PhpType::Mixed | PhpType::Union(_)) => true,
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(_), PhpType::Array(_)) => true,
+            (
+                PhpType::AssocArray { .. },
+                PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+            ) => true,
+            (
+                PhpType::Iterable,
+                PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
+            (PhpType::Str, PhpType::Str) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+            _ => argument_type == result_type,
+        }
+    }
+
     /// Returns whether the value is a read from a one-shot hidden expression temp.
     pub(crate) fn value_is_owned_temp_load(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
@@ -1674,7 +1771,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// provisional owners; builder finalization removes their emitted releases if the
     /// slot stays concrete. Callable loads use the eager answer because assignment has
     /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
-    fn value_is_owned_unboxed_local_load(&self, value: ValueId) -> bool {
+    ///
+    /// Callers that *publish* the pointer without consuming the local's ownership
+    /// (notably `throw $e`) must still retain: the slot remains an owner after the load.
+    pub(crate) fn value_is_owned_unboxed_local_load(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
@@ -1768,21 +1868,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
-    /// Returns true for builtin calls whose return value is newly allocated for the caller.
+    /// Returns true for typed builtin calls whose result is newly allocated for the caller.
     fn value_is_owning_builtin_temporary(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op != Op::BuiltinCall {
-            return false;
+        match inst.immediate {
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
+                matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                )
+            }
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
+            Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
+                .data
+                .function_names
+                .get(name_id.as_raw() as usize)
+                .is_some_and(|name| php_symbol_key(name.trim_start_matches('\\')) == "eval"),
+            _ => false,
         }
-        let Some(Immediate::Data(name_id)) = inst.immediate else {
-            return false;
-        };
-        let Some(name) = self.data.function_names.get(name_id.as_raw() as usize) else {
-            return false;
-        };
-        builtin_call_result_owns_storage_as_temporary(name)
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.
@@ -2099,6 +2204,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Emits a value-producing opcode whose result is an unconditional owned reference.
+    ///
+    /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears
+    /// the source runtime cell and hands its sole reference to the returned SSA value.
+    pub(crate) fn emit_owned_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let ir_type = value_ir_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op,
+                operands,
+                immediate,
+                ir_type,
+                php_type,
+                Ownership::Owned,
+                effects,
+                span,
+            )
+            .expect("owned value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if input.ir_type == IrType::I64 {
@@ -2115,6 +2250,60 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 }
 
+impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Returns PHP metadata already attached to an EIR operand.
+    fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.builder.value_php_type(value)
+    }
+
+    /// Emits a backend-neutral builtin operation through the ordinary EIR builder path.
+    fn emit_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let lowered = LoweringContext::emit_value(
+            self,
+            op,
+            operands,
+            immediate,
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+
+    /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.
+    fn emit_runtime_call(
+        &mut self,
+        target: crate::ir::RuntimeCallTarget,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let lowered = LoweringContext::emit_value(
+            self,
+            Op::RuntimeCall,
+            operands,
+            Some(Immediate::RuntimeCall(target)),
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+}
+
 /// Returns true for addressable local kinds whose `StoreLocal` overwrites owned storage.
 fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
     matches!(
@@ -2123,60 +2312,6 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
             | LocalKind::HiddenTemp
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
-    )
-}
-
-/// Returns true when a builtin result must be released after a retaining consumer.
-///
-/// The result of a `BuiltinCall` is only released as a temporary when the callee OWNS its
-/// storage — i.e. it returns a freshly allocated refcounted value (array/string) whose
-/// lifetime is independent of its arguments. Adding a builtin here must not include any
-/// BORROWING builtin (current/end/reset/next/prev/key/each and similar element-access
-/// helpers return a pointer into a live argument array); releasing such a result would
-/// free storage still owned by the caller and corrupt the heap.
-fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
-    let name = php_symbol_key(name.trim_start_matches('\\'));
-    if crate::builtins::registry::returns_fresh_storage(&name) {
-        return true;
-    }
-    matches!(
-        name.as_str(),
-        // Legacy classifications that have not yet migrated into BuiltinSpec metadata.
-        // Array/mixed-returning builtins that allocate fresh result storage.
-        "array_chunk"
-            | "array_column"
-            | "array_combine"
-            | "array_diff"
-            | "eval"
-            | "array_fill"
-            | "array_fill_keys"
-            | "array_intersect"
-            | "array_keys"
-            | "array_map"
-            | "array_merge"
-            | "array_pad"
-            | "array_pop"
-            | "array_replace"
-            | "array_replace_recursive"
-            | "array_reverse"
-            | "array_shift"
-            | "array_slice"
-            | "array_unique"
-            | "array_values"
-            | "explode"
-            | "iterator_to_array"
-            | "preg_split"
-            | "range"
-            | "str_split"
-            // String-returning builtins that allocate fresh owned string storage.
-            | "ptr_read_string"
-            | "strpos"
-            | "strrpos"
-            // zval bridge: `zval_unpack` rebuilds a fresh owned value (scalars box a
-            // new Mixed cell; strings persist an owned copy; arrays own-transfer the
-            // freshly rebuilt array into the cell with refcount 1), so its Mixed result
-            // is an owning temporary that must be released after a retaining insert.
-            | "zval_unpack"
     )
 }
 
@@ -2250,6 +2385,7 @@ fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::Array(Box::new(PhpType::Mixed)),
         "callable" => PhpType::Callable,
+        "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "object" => PhpType::Object(String::new()),
         _ => PhpType::Object(name.to_string()),

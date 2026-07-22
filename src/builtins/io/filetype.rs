@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `filetype` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `filetype` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(Str, Bool)` reflecting PHP behaviour where `filetype`
 //!   returns a string describing the file type on success or `false` on failure.
 //! - The registry pre-infers arguments before calling this hook.
-//! - `lower` is a thin wrapper over `io::lower_filetype` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [filename: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Filetype,
+    ),
     summary: "Gets file type.",
     php_manual: "function.filetype",
 }
@@ -34,9 +31,4 @@ builtin! {
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
-}
-
-/// Lowers a `filetype` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_filetype(ctx, inst)
 }

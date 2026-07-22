@@ -505,5 +505,6 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::ObjectClassName { object } => scan_expr(object, usage),
     }
 }

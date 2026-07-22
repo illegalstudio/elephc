@@ -2,7 +2,7 @@
 title: "str_starts_with()"
 description: "Checks if a string starts with a given substring."
 sidebar:
-  order: 394
+  order: 409
 ---
 
 ## str_starts_with()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `str_starts_with` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_starts_with.md).
-

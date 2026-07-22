@@ -16,7 +16,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_hash_unset` runtime helper.
 ///
@@ -320,7 +319,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_hash_unset_after_key");                        // nothing to release
     emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the key heap kind word
     emitter.instruction("shr r9, 32");                                          // isolate the high-word heap marker
-    emitter.instruction(&format!("cmp r9d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));   // elephc-owned key?
+    emitter.instruction(&format!("cmp r9d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // elephc-owned key?
     emitter.instruction("jne __rt_hash_unset_after_key");                       // skip foreign key pointers
     emitter.instruction("mov r9d, DWORD PTR [rax - 12]");                       // load the key refcount from the header
     emitter.instruction("sub r9d, 1");                                          // drop this table's ownership of the key

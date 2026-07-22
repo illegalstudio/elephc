@@ -2,7 +2,7 @@
 title: "ptr_get()"
 description: "Reads one machine word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 290
+  order: 305
 ---
 
 ## ptr_get()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_get` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_get.md).
-

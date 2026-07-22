@@ -253,6 +253,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             len: Box::new(prune_expr(*len)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(prune_expr(*object)),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }

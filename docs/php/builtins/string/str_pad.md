@@ -2,7 +2,7 @@
 title: "str_pad()"
 description: "Pads a string to a certain length with another string."
 sidebar:
-  order: 390
+  order: 405
 ---
 
 ## str_pad()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `str_pad` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_pad.md).
-

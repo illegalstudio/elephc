@@ -9,7 +9,7 @@
 //! - Promoted property lowering must keep constructor assignment order and member visibility metadata aligned.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{
     AttributeGroup, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr,
     Visibility,
@@ -41,7 +41,7 @@ type ParsedMethodParams = (
 /// - The caller is responsible for inserting the returned `promoted_assignments` statements
 ///   into the constructor body after parsing.
 pub(super) fn parse_method_params(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     method_name: &str,
@@ -91,7 +91,7 @@ pub(super) fn parse_method_params(
             None
         };
         let (is_ref, ref_span) = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
-            let ref_span = tokens[*pos].1;
+            let ref_span = tokens[*pos].1.span;
             *pos += 1;
             (true, Some(ref_span))
         } else {
@@ -120,7 +120,10 @@ pub(super) fn parse_method_params(
             continue;
         }
 
-        match tokens.get(*pos).map(|(t, s)| (t, *s)) {
+        match tokens
+            .get(*pos)
+            .map(|(token, metadata)| (token, metadata.span))
+        {
             Some((Token::Variable(n), param_span)) => {
                 let n = n.clone();
                 *pos += 1;
@@ -182,7 +185,7 @@ pub(super) fn parse_method_params(
 /// Returns `Ok(None)` if none are present. Rejects `static`/`abstract`/`final` with an
 /// error. Visibility defaults to `Public` if only `readonly` is present.
 fn parse_promoted_param_modifiers(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<(Visibility, bool, Span)>, CompileError> {
     let mut visibility = None;
@@ -190,7 +193,10 @@ fn parse_promoted_param_modifiers(
     let mut first_span = None;
 
     loop {
-        match tokens.get(*pos).map(|(t, s)| (t, *s)) {
+        match tokens
+            .get(*pos)
+            .map(|(token, metadata)| (token, metadata.span))
+        {
             Some((Token::Public, token_span)) => {
                 if visibility.is_some() {
                     return Err(CompileError::new(

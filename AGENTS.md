@@ -233,27 +233,33 @@ builtin at `src/builtins/<area>/<name>.rs`, declared with the `builtin!` macro a
 collected via `inventory`. From that single declaration the compiler derives the
 catalog name-set (`function_exists`, case-insensitive lookup, namespace fallback), the
 `FunctionSig` (named args, defaults, ref params, variadic, arity), the type-check
-entry, the EIR lowering dispatch (`spec.lower`), and the generated docs. Do **not**
+entry, backend-neutral semantic lowering, and the generated docs. Do **not**
 re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, per-area
 `check_builtin` arms) — they are superseded by the registry.
 
 Key invariants:
 
-- **One builtin per home file.** The `lower` hook is a thin wrapper over the real
-  emitter in `src/codegen/lower_inst/builtins/<area>/`; leaf emitter files hold
-  exactly one emitter function, and runtime data emission stays in
-  `src/codegen/runtime/data.rs`.
-- **`returns:`/`check` are checker-only.** The EIR backend derives return types
-  separately in `call_return_type` (`src/ir_lower/expr/mod.rs`); a `returns: Mixed` +
-  precise-`check` builtin also needs a matching EIR return-type arm, or the checker and
-  EIR disagree on the value's type.
-- **Fresh result ownership belongs in the registry.** Set
-  `returns_fresh_storage: true` only when every refcounted result variant is newly
-  allocated for the caller. Leave it unset for borrowed results that can alias argument
-  or runtime storage.
-- **Separate surfaces still need hand-wiring** when relevant: the EIR emitter/runtime
-  routine, optimizer effects (`src/optimize/effects/builtins.rs`), and the
-  runtime-callable wrapper exclusion (`src/codegen/callable_dispatch.rs`).
+- **One builtin per home file.** Its mandatory `semantics:` descriptor owns
+  validation, result typing, effects, ownership/aliasing, requirements, target
+  strategy/support, runtime-function inventory, argument lowering, callable policy,
+  and backend-neutral EIR lowering. Home files must not import `crate::codegen`.
+- **Use typed EIR targets.** Most builtins use
+  `runtime_fn_semantics(RuntimeFnId::...)`; reusable predicates use
+  `type_predicate_semantics(...)`; a genuinely compositional builtin may provide a
+  `BuiltinLowering::Eir` hook that emits EIR primitives/graphs through
+  `BuiltinLoweringContext`. PHP names never select backend emitters.
+- **Result types are shared contracts.** `BuiltinResultType::Declared`, `Checked`, or
+  `Shared` is authoritative for checker/EIR agreement. A `check` hook is embedded into
+  the descriptor automatically; use a shared result resolver when the backend storage
+  representation differs from the checker-facing PHP type.
+- **Ownership belongs in the semantic descriptor.** Choose `NonHeap`, `Fresh`,
+  `Borrowed`, `Independent`, `Aliases`, or `MayAliasArguments` according to the actual
+  returned storage. Cleanup, optimizer, and callable consumers read that same contract.
+- **Backend implementation stays typed and target-aware.** Add or extend a
+  `RuntimeFnId`/`RuntimeCallTarget` implementation under
+  `src/codegen/lower_inst/runtime_functions/` or `runtime_calls.rs`, plus any shared
+  `__rt_*` routine under `src/codegen_support/runtime/`. Every supported target must be
+  handled by that typed backend path.
 - `isset`/`unset`/`empty`/`exit`/`die` are language constructs that stay
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
   `buffer_new` is catalog-name-only (its call form is dedicated syntax); `buffer_len`

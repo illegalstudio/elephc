@@ -2,7 +2,7 @@
 title: "ptr_null()"
 description: "Returns a null raw pointer."
 sidebar:
-  order: 292
+  order: 307
 ---
 
 ## ptr_null()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_null` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_null.md).
-

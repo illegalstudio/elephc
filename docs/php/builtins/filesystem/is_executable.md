@@ -2,7 +2,7 @@
 title: "is_executable()"
 description: "Tells whether the filename is executable."
 sidebar:
-  order: 127
+  order: 129
 ---
 
 ## is_executable()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_executable` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/is_executable.md).
-

@@ -9,7 +9,7 @@
 //! - `__LINE__` is lowered at parse time while other magic constants remain AST nodes for later context passes.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
@@ -27,15 +27,18 @@ use super::{parse_args, parse_expr};
 /// Advances `pos` past all tokens consumed by the prefix; the caller continues with the
 /// remaining token stream. Returns an error on unexpected end of input or unrecognized tokens.
 pub(super) fn parse_prefix(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Expr, CompileError> {
     if *pos >= tokens.len() {
-        let span = tokens.last().map(|(_, span)| *span).unwrap_or(Span::dummy());
+        let span = tokens
+            .last()
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(Span::dummy());
         return Err(CompileError::new(span, "Unexpected end of input"));
     }
 
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
 
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
@@ -207,7 +210,9 @@ pub(super) fn parse_prefix(
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
-        Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
+        Token::Identifier(_) | Token::Enum | Token::Backslash => {
+            parse_named_expr(tokens, pos, span)
+        }
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")
@@ -248,7 +253,7 @@ pub(super) fn parse_prefix(
 /// parses a following expression or key => value pair. Returns a `Yield` or `YieldFrom` node
 /// using the given span. On end of input or a terminating token, returns bare `Yield { key: None, value: None }`.
 fn parse_yield(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -313,7 +318,7 @@ fn parse_yield(
 
 /// Advances `pos` by one and wraps the given `ExprKind` and `Span` in a new `Expr`.
 fn parse_simple(
-    _tokens: &[(Token, Span)],
+    _tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     kind: ExprKind,
@@ -327,7 +332,7 @@ fn parse_simple(
 /// enforce precedence. The `ctor` function constructs the target `ExprKind` variant
 /// (e.g., `Negate`, `Not`, `BitNot`). Returns the wrapped unary expression.
 fn parse_unary(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     ctor: fn(Box<Expr>) -> ExprKind,
@@ -342,7 +347,7 @@ fn parse_unary(
 /// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
 /// variable name. Returns an error if a variable does not follow the operator.
 fn parse_prefix_inc_dec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     increment: bool,
@@ -377,7 +382,7 @@ fn parse_prefix_inc_dec(
 /// Returns `Variable`, `PostIncrement`, `PostDecrement`, or `ClosureCall`. Advances `pos` past
 /// any consumed postfix tokens.
 fn parse_variable(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     name: String,
@@ -413,7 +418,7 @@ fn parse_variable(
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
 /// call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -436,7 +441,7 @@ fn parse_group_or_cast(
     }
     *pos += 1;
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        let call_span = tokens[*pos].1;
+        let call_span = tokens[*pos].1.span;
         *pos += 1;
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
@@ -458,7 +463,7 @@ fn parse_group_or_cast(
 /// Supports spread elements via `...`; spreads in keyed literals are parsed for
 /// source-order progress but remain limited by the associative-array representation.
 fn parse_array_literal(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -467,7 +472,7 @@ fn parse_array_literal(
 
 /// Parses the legacy `array(...)` literal form after its opening parenthesis.
 pub(super) fn parse_legacy_array_literal(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -476,7 +481,7 @@ pub(super) fn parse_legacy_array_literal(
 
 /// Parses an array literal body up to `closing`, starting at the opening token.
 fn parse_array_literal_with_terminator(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     closing: &Token,
@@ -493,7 +498,7 @@ fn parse_array_literal_with_terminator(
         if !first {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Expected ',' between array elements",
                 ));
             }
@@ -503,7 +508,7 @@ fn parse_array_literal_with_terminator(
             }
         }
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            let spread_span = tokens[*pos].1;
+            let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
             if !is_assoc {

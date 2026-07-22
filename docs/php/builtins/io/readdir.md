@@ -2,7 +2,7 @@
 title: "readdir()"
 description: "Read entry from directory handle."
 sidebar:
-  order: 190
+  order: 205
 ---
 
 ## readdir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `readdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/readdir.md).
-

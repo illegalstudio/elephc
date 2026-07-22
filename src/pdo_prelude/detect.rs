@@ -287,6 +287,7 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         }
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_pdo(receiver),
+        ExprKind::ObjectClassName { object } => expr_refs_pdo(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_pdo(receiver) || args.iter().any(expr_refs_pdo)
         }

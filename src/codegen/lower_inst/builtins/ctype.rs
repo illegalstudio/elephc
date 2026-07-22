@@ -2,7 +2,7 @@
 //! Lowers PHP `ctype_*` character-class builtins for the EIR backend.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - PHP ctype checks operate over bytes, reject empty strings, and return scalar booleans.

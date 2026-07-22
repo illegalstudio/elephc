@@ -550,7 +550,8 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
             }
         }
         ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => collect_refs_expr(object, out),
+        | ExprKind::NullsafePropertyAccess { object, .. }
+        | ExprKind::ObjectClassName { object } => collect_refs_expr(object, out),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             collect_refs_expr(object, out);

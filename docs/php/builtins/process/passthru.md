@@ -2,7 +2,7 @@
 title: "passthru()"
 description: "Executes an external program and passes its output directly."
 sidebar:
-  order: 311
+  order: 326
 ---
 
 ## passthru()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `passthru` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/passthru.md).
-

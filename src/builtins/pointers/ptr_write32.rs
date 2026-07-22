@@ -1,19 +1,14 @@
 //! Purpose:
-//! Home of the PHP `ptr_write32` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `ptr_write32` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates pointer and integer value arguments and returns `PhpType::Void`.
-//! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_write32` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -22,7 +17,9 @@ builtin! {
     params: [pointer: Mixed, value: Mixed],
     returns: Void,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::PtrWrite32,
+    ),
     summary: "Writes one 32-bit word through a raw pointer.",
     extension: true,
 }
@@ -42,9 +39,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Void)
-}
-
-/// Lowers a `ptr_write32` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_ptr_write32(ctx, inst)
 }

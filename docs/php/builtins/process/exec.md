@@ -2,7 +2,7 @@
 title: "exec()"
 description: "Executes an external program and returns the last line of output."
 sidebar:
-  order: 309
+  order: 324
 ---
 
 ## exec()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `exec` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/exec.md).
-

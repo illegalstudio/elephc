@@ -2,7 +2,7 @@
 title: "stream_context_set_option()"
 description: "Sets an option on the specified context."
 sidebar:
-  order: 200
+  order: 215
 ---
 
 ## stream_context_set_option()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_context_set_option` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_context_set_option.md).
-

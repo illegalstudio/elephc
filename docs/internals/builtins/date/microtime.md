@@ -2,7 +2,7 @@
 title: "microtime() — internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 100
 ---
 
 ## `microtime()` — internals
@@ -10,27 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/microtime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
-- **Function symbol**: `lower_microtime()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `microtime()` / `microtime(true)` / `microtime(false)` / `microtime($flag)`.
-- Dispatch is driven by the arg-aware result type set in `ir_lower` (see
-- `call_return_type_for_args` and the `microtime` fallback in `call_return_type`):
-- `Float` (literal `true`) calls the existing `__rt_microtime` float helper; `Str`
-- (omitted / literal `false`) calls `__rt_microtime_str`, which builds the
-- "0.NNNNNNNN sec" string on the stack and persists it; `Mixed` (non-literal flag)
-- marshals the flag and calls `__rt_microtime_mixed`, which branches at runtime and
-- boxes either the string or the float.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.microtime` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_microtime`
-- `__rt_microtime_mixed`
-- `__rt_microtime_str`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.microtime`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

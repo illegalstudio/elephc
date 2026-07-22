@@ -2,7 +2,7 @@
 title: "php_uname()"
 description: "Returns information about the operating system PHP is running on."
 sidebar:
-  order: 282
+  order: 297
 ---
 
 ## php_uname()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `php_uname` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/php_uname.md).
-

@@ -16,6 +16,14 @@ fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
         || user_asm.contains(&eir_method)
 }
 
+/// Counts globally emitted callable artifacts whose assembly labels contain `kind`.
+fn global_callable_artifact_count(user_asm: &str, kind: &str) -> usize {
+    user_asm
+        .lines()
+        .filter(|line| line.starts_with(".globl ") && line.contains(kind))
+        .count()
+}
+
 /// Verifies that expr call returns string.
 #[test]
 fn test_expr_call_returns_string() {
@@ -391,6 +399,63 @@ echo ($callback)("ready");
 "#,
     );
     assert_eq!(out, "READY");
+}
+
+/// Verifies literal callback sites exclude unreachable builtins and share compatible ABI invokers.
+#[test]
+fn test_dynamic_string_callable_literal_targets_are_reachability_limited() {
+    let source = r#"<?php
+function map_upper(string $value): string {
+    return strtoupper($value);
+}
+function map_lower(string $value): string {
+    return strtolower($value);
+}
+$items = ["MiXeD"];
+$upper = array_map("map_upper", $items);
+$lower = array_map("map_lower", $items);
+echo $upper[0] . ":" . $lower[0];
+"#;
+    assert_eq!(compile_and_run(source), "MIXED:mixed");
+
+    let dir = make_cli_test_dir("elephc_callable_reachable_builtin_set");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert_eq!(
+        global_callable_artifact_count(&user_asm, "callable_builtin"),
+        0,
+        "known user callbacks must not materialize unrelated builtin wrappers:\n{}",
+        user_asm
+    );
+    assert_eq!(
+        global_callable_artifact_count(&user_asm, "callable_invoker"),
+        1,
+        "signature-compatible user descriptors should share one invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies an unconstrained string parameter retains the complete runtime builtin fallback.
+#[test]
+fn test_dynamic_string_callable_unknown_input_keeps_open_builtin_fallback() {
+    let source = r#"<?php
+function invoke_named(string $callback): mixed {
+    return $callback("MiXeD");
+}
+echo invoke_named("strtoupper");
+"#;
+    assert_eq!(compile_and_run(source), "MIXED");
+
+    let dir = make_cli_test_dir("elephc_callable_open_builtin_set");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        global_callable_artifact_count(&user_asm, "callable_builtin") > 2,
+        "an open runtime string must preserve the broad builtin fallback:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
 }
 
 /// Verifies direct string-variable calls can resolve public static method callback names.
@@ -1450,6 +1515,116 @@ echo $cb();
 "#,
     );
     assert_eq!(out, "B");
+}
+
+/// Regression for #487: a value the register allocator parks in a callee-saved register
+/// across an indirect callable invoke (here the loaded LHS of `$acc += $f()`) must survive
+/// the call. The generated descriptor-invoker trampoline used callee-saved registers as
+/// scratch without saving them, so the accumulator read back as the trampoline's leftover
+/// (the empty args-array length, 0) and only the last call's value survived.
+#[test]
+fn test_compound_assign_closure_call_rhs_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (): int { return 4; };
+$acc = 0;
+for ($n = 0; $n < 20; $n++) { $acc += $f(); }
+echo $acc;
+"#,
+    );
+    assert_eq!(out, "80");
+}
+
+/// Regression for #487: same defect through a callable string and a first-class callable,
+/// with subtraction and multiplication (any operator whose LHS lives across the invoke).
+#[test]
+fn test_compound_assign_indirect_call_rhs_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function four(): int { return 4; }
+$byName = 'four';
+$fcc = four(...);
+$a = 100;
+for ($n = 0; $n < 20; $n++) { $a -= $byName(); }
+$m = 1;
+for ($n = 0; $n < 5; $n++) { $m *= $fcc(); }
+echo $a, "|", $m;
+"#,
+    );
+    assert_eq!(out, "20|1024");
+}
+
+/// Regression for #487: the non-compound spelling and a property target exercise the same
+/// live-across-invoke registers.
+#[test]
+fn test_value_live_across_closure_invoke_survives() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $p = 0; }
+$f = function (): int { return 4; };
+$acc = 0;
+$b = new Box();
+for ($n = 0; $n < 20; $n++) {
+    $acc = $acc + $f();
+    $b->p += $f();
+}
+echo $acc, "|", $b->p;
+"#,
+    );
+    assert_eq!(out, "80|80");
+}
+
+/// Verifies that indirect calls with float overflow arguments use only volatile FP scratch state.
+#[test]
+fn test_indirect_float_overflow_uses_volatile_scratch() {
+    let dir = make_cli_test_dir("elephc_indirect_float_overflow_volatile_scratch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$sum = function(
+    float $a, float $b, float $c, float $d, float $e,
+    float $f, float $g, float $h, float $i
+): float {
+    return $a + $b + $c + $d + $e + $f + $g + $h + $i;
+};
+echo $sum(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    match target().arch {
+        Arch::AArch64 => {
+            assert!(
+                user_asm.contains("d31"),
+                "AArch64 float overflow should exercise d31 staging:\n{}",
+                user_asm
+            );
+            assert!(
+                !user_asm.contains("d15"),
+                "AArch64 call lowering must preserve callee-saved d15:\n{}",
+                user_asm
+            );
+        }
+        Arch::X86_64 => assert!(
+            user_asm.contains("xmm15"),
+            "x86_64 float overflow should exercise xmm15 staging:\n{}",
+            user_asm
+        ),
+    }
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "45");
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies that `call_user_func` dispatches a boxed-Mixed callback by runtime tag.

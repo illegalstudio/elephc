@@ -2,7 +2,7 @@
 title: "vfprintf()"
 description: "Write a formatted string to a stream."
 sidebar:
-  order: 233
+  order: 248
 ---
 
 ## vfprintf()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `vfprintf` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/vfprintf.md).
-

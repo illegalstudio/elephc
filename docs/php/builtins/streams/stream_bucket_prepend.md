@@ -2,7 +2,7 @@
 title: "stream_bucket_prepend()"
 description: "Prepends a bucket to the brigade."
 sidebar:
-  order: 340
+  order: 355
 ---
 
 ## stream_bucket_prepend()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_bucket_prepend` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_bucket_prepend.md).
-

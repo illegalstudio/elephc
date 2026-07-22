@@ -1,10 +1,9 @@
 //! Purpose:
-//! Routes PHP buffer builtins emitted as EIR `BuiltinCall` instructions.
-//! Keeps builtin-name dispatch separate from direct buffer opcodes like `BufferNew`.
+//! Implements typed `RuntimeFnId` buffer operations using the direct buffer opcode helpers.
+//! Keeps registry semantics separate from physical buffer layout and runtime symbols.
 //!
 //! Called from:
-//! - The `buffer_len`/`buffer_free` registry lowering hooks
-//!   (`src/builtins/pointers/buffer_len.rs`, `src/builtins/pointers/buffer_free.rs`).
+//! - `crate::codegen::lower_inst::runtime_functions` for `BufferLen` and `BufferFree`.
 //!
 //! Key details:
 //! - Buffer helpers use shared runtime symbols so fatal behavior and buffer

@@ -10,7 +10,7 @@
 
 use super::{compound, postfix};
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -35,7 +35,7 @@ use super::super::expect_semicolon;
 /// # Panics
 /// Unreachable if the first token is not `Token::Variable`.
 pub(in crate::parser::stmt) fn parse_variable_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {

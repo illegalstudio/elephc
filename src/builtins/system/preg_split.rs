@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `preg_split` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `preg_split` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - Return element type is `Mixed` when `flags` is supplied (4 args), `Str` otherwise.
@@ -11,13 +10,13 @@
 //!   2 and 4 arguments" (the registry default for min=2/max=4 produces "2 to 4 arguments").
 //! - The registry pre-infers arguments before calling the hook; the hook must not
 //!   call `infer_type` again.
-//! - `lower` is a thin wrapper over `regex::lower_preg_split` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinResultType,
+    BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,8 +26,23 @@ builtin! {
     arity_error: "preg_split() takes between 2 and 4 arguments",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: preg_split_semantics(),
     summary: "Splits a string by a regular expression.",
+}
+
+/// Builds regex-split semantics with the boxed-Mixed EIR array layout expected by the runtime.
+const fn preg_split_semantics() -> BuiltinSemantics {
+    let mut semantics = with_argument_lowering(
+        runtime_fn_semantics(crate::ir::RuntimeFnId::PregSplit),
+        BuiltinArgumentLowering::PositionalRegex,
+    );
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the conservative EIR container type used by the regex split runtime ABI.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Array(Box::new(PhpType::Mixed))
 }
 
 /// Returns the split result array type, refining the element type based on argument count.
@@ -39,9 +53,4 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let elem = if cx.args.len() >= 4 { PhpType::Mixed } else { PhpType::Str };
     Ok(PhpType::Array(Box::new(elem)))
-}
-
-/// Lowers a `preg_split` call by dispatching to the shared regex emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::regex::lower_preg_split(ctx, inst)
 }

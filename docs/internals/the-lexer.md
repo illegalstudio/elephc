@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-**Source:** `src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs`
+**Source:** `src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs` (with the `literals/` submodules `identifiers.rs`, `numbers.rs`, `strings.rs`)
 
 The lexer (also called tokenizer or scanner) is the first phase of compilation. It takes raw source text and breaks it into **tokens** — the smallest meaningful units of the language.
 
@@ -53,7 +53,7 @@ It provides three essential operations:
 | `advance()` | Move to the next character, return the one we just passed |
 | `remaining()` | Get the rest of the source as a string slice |
 
-The cursor automatically tracks line and column — when it sees a `\n`, it increments `line` and resets `col` to 1. This information is stored in a `Span` and attached to every token, so error messages can say "error at line 5, column 12".
+The cursor automatically tracks line and column — when it sees a `\n`, it increments `line` and resets `col` to 1. This information is stored in a `Span` and attached to every token, so error messages can say "error at line 5, column 12". A `Span` (`src/span.rs`) carries both the start position (`line`, `col`) and an *exclusive* end position (`end_line`, `end_col`); the scanner fills in the end position from the cursor position after the token is consumed.
 
 ## The Scanner
 
@@ -62,7 +62,7 @@ The cursor automatically tracks line and column — when it sees a `\n`, it incr
 The scanner is the main loop. It uses the cursor to read characters and decides what token each sequence represents:
 
 ```rust
-pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
+pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     // 1. Skip whitespace
     // 2. Must start with <?php
     // 3. Loop: skip whitespace, look at next char, produce a token
@@ -70,7 +70,9 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
 }
 ```
 
-The public lexer entry point used by the rest of the compiler is `tokenize()` in `src/lexer/mod.rs`, which wraps `scan_tokens()` and returns the final `Vec<(Token, Span)>`.
+`SpannedToken` (defined in `src/lexer/token.rs`) is `(Token, TokenMetadata)` — every token is paired with metadata that carries its `Span` and, for word-like tokens, an optionally retained source spelling (see [Token metadata](#token-metadata) below).
+
+The public lexer entry point used by the rest of the compiler is `tokenize()` in `src/lexer/mod.rs`, which wraps `scan_tokens()` and returns the final `Vec<SpannedToken>`.
 
 ### The scanning algorithm
 
@@ -96,6 +98,7 @@ Before each token, the scanner skips:
 
 - **Whitespace**: spaces, tabs, newlines
 - **Line comments**: `//` through end of line
+- **Hash comments**: `#` through end of line — except `#[`, which opens an attribute group
 - **Block comments**: `/*` through `*/`
 
 These are discarded entirely — they don't produce tokens.
@@ -117,18 +120,23 @@ Extends  Implements  Interface  Abstract  Final  Inf  Nan  PhpIntMax
 PhpIntMin  PhpFloatMax  MPi  ME  MSqrt2  MPi2  MPi4  MLog2e
 MLog10e  PhpFloatMin  PhpFloatEpsilon  Print  Switch  Case  Default  Match
 Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
-Use  Namespace  Const  Global  Static  Self_  Trait  Parent
-InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
-DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class  Enum  New  Public
-Protected  Private  ReadOnly  This  Extern  Packed  Yield  AttrOpen  Assign  DoubleArrow
-Plus  Minus  Star  StarStar  Slash  Percent  Dot  Comma
-Backslash  LBracket  RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign
-StarStarAssign  SlashAssign  DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign
-GreaterGreaterAssign  PlusPlus  MinusMinus  AndAnd  OrOr  And  Or  Xor
-Bang  EqualEqual  EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual
-GreaterEqual  Spaceship  Ampersand  Pipe  Caret  Tilde  At  LessLess  GreaterGreater
-Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  PipeArrow  Ellipsis  Eof
+Use  Namespace  Const  Global  Declare  EndDeclare  Static  Self_
+Trait  Parent  InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir
+DunderFile  DunderLine  DunderFunction  DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class
+Enum  New  Clone  Public  Protected  Private  ReadOnly  This
+Extern  Packed  Yield  AttrOpen  Assign  DoubleArrow  Plus  Minus
+Star  StarStar  Slash  Percent  Dot  Comma  Backslash  LBracket
+RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign  StarStarAssign  SlashAssign
+DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign  GreaterGreaterAssign  PlusPlus
+MinusMinus  AndAnd  OrOr  And  Or  Xor  Bang  EqualEqual
+EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual  GreaterEqual  Spaceship
+Ampersand  Pipe  Caret  Tilde  At  LessLess  GreaterGreater  Arrow
+QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  PipeArrow  Ellipsis  Eof
 ```
+
+### Token metadata
+
+Every token in the stream is a `SpannedToken = (Token, TokenMetadata)`. `TokenMetadata` always carries the token's `Span`; for word-like tokens it can also retain the exact source spelling. Keywords are lexed case-insensitively (`Function`, `WHILE`, and `while` all produce the same token kind), so when a keyword's source casing differs from its canonical lowercase spelling, the scanner stores the original lexeme in the metadata via `TokenMetadata::with_source_spelling()`. `Token::word_spelling()` then reconstructs the exact source word — canonical spellings need no allocation, while overrides preserve source casing. The parser uses this for PHP's semi-reserved names, so a method, constant, property, or named-argument label spelled like a keyword (e.g. a method named `List` or `Match`) keeps its original spelling in the AST.
 
 ### Literals
 
@@ -158,11 +166,11 @@ echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  try  catch  finally  throw  yield  fn  use  namespace  ifdef  extern  const
-global  static  self  class  abstract  final  interface  trait  extends  implements  new
+global  static  declare  enddeclare  self  class  abstract  final  interface  trait  extends  implements  new  clone
 public  protected  private  readonly  parent  insteadof  instanceof  enum  packed
 ```
 
-Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly`.
+Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly` and `enddeclare` is `Token::EndDeclare`. `declare` / `enddeclare` drive the `declare(directive=literal)` statement and its alternative `declare(...): ... enddeclare;` block form. Keywords are matched case-insensitively; non-canonical casing is preserved in `TokenMetadata` (see [Token metadata](#token-metadata)).
 
 ### Constants (keyword tokens)
 
@@ -173,7 +181,7 @@ PHP_EOL  PHP_OS  DIRECTORY_SEPARATOR
 STDIN  STDOUT  STDERR
 ```
 
-These are recognized as distinct tokens by the lexer, not as identifiers. Their variants include forms such as `Token::Inf`, `Token::Nan`, `Token::PhpIntMax`, `Token::PhpFloatEpsilon`, and `Token::DirectorySeparator`.
+These are recognized as distinct tokens by the lexer, not as identifiers. Their variants include forms such as `Token::Inf`, `Token::Nan`, `Token::PhpIntMax`, `Token::PhpFloatEpsilon`, and `Token::DirectorySeparator`. Unlike keywords, these constant names are matched case-sensitively — `php_int_max` is just an ordinary identifier.
 
 ### Magic constants
 
@@ -259,7 +267,7 @@ Single-quoted strings only support `\\` and `\'` — everything else is literal.
 
 ## Heredoc and nowdoc
 
-**File:** `src/lexer/literals.rs` — `scan_heredoc()`
+**File:** `src/lexer/literals/strings.rs` — `scan_heredoc()`
 
 Heredoc and nowdoc are multi-line string syntaxes from PHP. The lexer recognizes `<<<` followed by a label:
 
@@ -286,8 +294,8 @@ If the scanner encounters something it can't tokenize — like an unterminated s
 
 ## How it connects
 
-The lexer's output — `Vec<(Token, Span)>` — is the input to the [parser](the-parser.md). Every token carries its position in the source, so later phases can point errors back to the exact line and column.
+The lexer's output — `Vec<SpannedToken>`, i.e. `Vec<(Token, TokenMetadata)>` — is the input to the [parser](the-parser.md). Every token carries its position in the source (start and exclusive end), so later phases can point errors back to the exact line and column.
 
 ```
-Source text → Lexer → [(Token, Span), (Token, Span), ...] → Parser
+Source text → Lexer → [(Token, TokenMetadata), (Token, TokenMetadata), ...] → Parser
 ```

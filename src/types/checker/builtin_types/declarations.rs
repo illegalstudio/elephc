@@ -21,7 +21,8 @@ use super::exception::{
     builtin_exception_get_line_method, builtin_exception_get_message_method,
     builtin_exception_get_previous_method, builtin_exception_get_trace_as_string_method,
     builtin_exception_get_trace_method, builtin_exception_message_property,
-    builtin_exception_to_string_method, builtin_throwable_methods,
+    builtin_exception_previous_property, builtin_exception_to_string_method,
+    builtin_throwable_methods,
 };
 use super::fiber::builtin_fiber_methods;
 
@@ -118,6 +119,7 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_previous_property(),
             ],
             methods: vec![
                 builtin_exception_constructor_method(),
@@ -149,6 +151,7 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_previous_property(),
             ],
             methods: vec![
                 builtin_exception_constructor_method(),

@@ -29,6 +29,16 @@ echo "ID: " . make_id() . "\n";
 echo "ID: " . make_id() . "\n";
 echo "ID: " . make_id() . "\n";
 
+// A static declared without an initializer starts as null, like `static $x = null;`
+function uninitialized_static() {
+    static $seen;
+    if ($seen === null) {
+        echo "static without initializer starts as null\n";
+    }
+}
+
+uninitialized_static();
+
 // --- Pass by reference ---
 // Modify the caller's variables directly
 

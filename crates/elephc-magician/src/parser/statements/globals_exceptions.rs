@@ -28,7 +28,8 @@ impl Parser {
         Ok(vec![EvalStmt::Global { vars }])
     }
 
-    /// Parses `static $name = expr;` declarations in eval fragments.
+    /// Parses `static $name = expr;` or `static $name;` declarations in eval fragments.
+    /// A missing initializer desugars to `= null`, matching PHP semantics.
     pub(in crate::parser) fn parse_static_var_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::DollarIdent(name) = self.current() else {
@@ -36,8 +37,11 @@ impl Parser {
         };
         let name = name.clone();
         self.advance();
-        self.expect(TokenKind::Equal)?;
-        let init = self.parse_expr()?;
+        let init = if self.consume(TokenKind::Equal) {
+            self.parse_expr()?
+        } else {
+            EvalExpr::Const(EvalConst::Null)
+        };
         self.expect_semicolon()?;
         Ok(vec![EvalStmt::StaticVar { name, init }])
     }

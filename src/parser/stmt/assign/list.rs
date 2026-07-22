@@ -9,7 +9,7 @@
 //! - Pattern validation rejects malformed destructuring before lowerers synthesize temporary access expressions.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind, Stmt};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -24,7 +24,7 @@ use lower::lower_list_unpack;
 /// Consumes the opening `[`, parses the bracket-enclosed pattern, expects `=`, parses the
 /// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
 pub(in crate::parser::stmt) fn parse_list_unpack(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -47,7 +47,7 @@ pub(in crate::parser::stmt) fn parse_list_unpack(
 /// Consumes the `list` keyword, parses the parenthesized pattern, expects `=`, parses the
 /// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
 pub(in crate::parser::stmt) fn parse_list_construct_unpack(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -93,7 +93,7 @@ enum ListTarget {
 /// Parses a bracket-enclosed list pattern (`[...]`). Delegates to `parse_delimited_list_pattern`
 /// with `[` and `]` tokens.
 fn parse_bracket_list_pattern(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<ListPattern, CompileError> {
@@ -103,7 +103,7 @@ fn parse_bracket_list_pattern(
 /// Parses a `list(...)` construct pattern (parenthesized `list` keyword). Consumes `list`,
 /// then delegates to `parse_delimited_list_pattern` with `(` and `)` tokens.
 fn parse_list_construct_pattern(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<ListPattern, CompileError> {
@@ -115,7 +115,7 @@ fn parse_list_construct_pattern(
 /// delimiter at `*pos`, finds the matching close, slices the interior tokens, and calls
 /// `parse_list_pattern_content`. Advances `*pos` past the closing delimiter.
 fn parse_delimited_list_pattern(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     open: Token,
@@ -143,7 +143,7 @@ fn parse_delimited_list_pattern(
 /// converts each segment to a `ListEntry`, and validates the resulting pattern.
 /// Returns a `ListPattern` or an error if the pattern is malformed.
 fn parse_list_pattern_content(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     span: Span,
 ) -> Result<ListPattern, CompileError> {
     let mut entries = Vec::new();
@@ -187,7 +187,7 @@ fn parse_list_pattern_content(
 /// Converts a single comma-separated segment of a list pattern into a `ListEntry`.
 /// Empty segment → `Skip`. Top-level `=>` present → keyed `Target`. Otherwise → unkeyed `Target`.
 fn parse_list_pattern_segment(
-    segment: &[(Token, Span)],
+    segment: &[SpannedToken],
     span: Span,
 ) -> Result<ListEntry, CompileError> {
     if segment.is_empty() {
@@ -219,7 +219,7 @@ fn parse_list_pattern_segment(
 /// Handles nested `list()` constructs, bracket-wrapped nested patterns, append targets (`$x[]`),
 /// and ordinary destructuring targets (variable, property, static property, or array access).
 fn parse_list_target_from_slice(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     span: Span,
 ) -> Result<ListTarget, CompileError> {
     if tokens.is_empty() {
@@ -260,7 +260,7 @@ fn parse_list_target_from_slice(
 
 /// Convenience wrapper around `parse_expr` that parses a full token slice and verifies all tokens
 /// were consumed. Returns the parsed `Expr` or an error if parsing fails or tokens remain.
-fn parse_expr_from_slice(tokens: &[(Token, Span)], span: Span) -> Result<Expr, CompileError> {
+fn parse_expr_from_slice(tokens: &[SpannedToken], span: Span) -> Result<Expr, CompileError> {
     let mut pos = 0usize;
     let expr = parse_expr(tokens, &mut pos)?;
     if pos != tokens.len() {
@@ -315,7 +315,7 @@ fn list_pattern_target_count(pattern: &ListPattern) -> usize {
 
 /// Scans tokens for the top-level `=>` (double arrow) that is not inside brackets, parentheses,
 /// or braces. Returns the token index of the arrow, or `None` if no top-level arrow exists.
-fn find_top_level_double_arrow(tokens: &[(Token, Span)]) -> Option<usize> {
+fn find_top_level_double_arrow(tokens: &[SpannedToken]) -> Option<usize> {
     let mut bracket_depth = 0usize;
     let mut paren_depth = 0usize;
     let mut brace_depth = 0usize;
@@ -339,7 +339,7 @@ fn find_top_level_double_arrow(tokens: &[(Token, Span)]) -> Option<usize> {
 /// Scans tokens starting at `open_pos` for the matching close delimiter, tracking nesting depth.
 /// Returns the index of the matching close token, or `None` if no match is found.
 fn find_matching_delimiter(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     open_pos: usize,
     open: &Token,
     close: &Token,
@@ -361,7 +361,7 @@ fn find_matching_delimiter(
 /// Returns `true` if the token slice starting at `open_pos` opens with the given `open` token
 /// and closes with the matching `close` token, with no inner tokens consuming the wrapper.
 /// Uses `find_matching_delimiter` to verify the slice is a single balanced pair.
-fn is_wrapped_by(tokens: &[(Token, Span)], open_pos: usize, open: Token, close: Token) -> bool {
+fn is_wrapped_by(tokens: &[SpannedToken], open_pos: usize, open: Token, close: Token) -> bool {
     if tokens.get(open_pos).map(|(token, _)| token) != Some(&open) {
         return false;
     }
@@ -371,7 +371,7 @@ fn is_wrapped_by(tokens: &[(Token, Span)], open_pos: usize, open: Token, close: 
 /// Returns `true` if the token slice begins with a case-insensitive `list` identifier followed
 /// by a parenthesized expression (i.e., `list(...)`). Checks the first token is `Identifier("list")`
 /// and the second is `LParen`; the wrapper check `is_wrapped_by` validates balanced parens.
-fn is_list_construct_slice(tokens: &[(Token, Span)]) -> bool {
+fn is_list_construct_slice(tokens: &[SpannedToken]) -> bool {
     matches!(
         tokens,
         [(Token::Identifier(name), _), (Token::LParen, _), ..]

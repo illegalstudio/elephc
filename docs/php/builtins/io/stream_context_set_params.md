@@ -2,7 +2,7 @@
 title: "stream_context_set_params()"
 description: "Sets parameters on the specified context."
 sidebar:
-  order: 201
+  order: 216
 ---
 
 ## stream_context_set_params()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_context_set_params` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_context_set_params.md).
-

@@ -2,7 +2,7 @@
 title: "header()"
 description: "Sends a raw HTTP header."
 sidebar:
-  order: 279
+  order: 294
 ---
 
 ## header()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `header` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/header.md).
-

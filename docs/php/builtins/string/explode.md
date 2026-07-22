@@ -2,7 +2,7 @@
 title: "explode()"
 description: "Splits a string by a separator into an array of substrings."
 sidebar:
-  order: 350
+  order: 365
 ---
 
 ## explode()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `explode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/explode.md).
-

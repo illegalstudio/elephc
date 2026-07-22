@@ -2,7 +2,7 @@
 title: "intval()"
 description: "Returns the integer value of a variable."
 sidebar:
-  order: 424
+  order: 439
 ---
 
 ## intval()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `intval` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/intval.md).
-

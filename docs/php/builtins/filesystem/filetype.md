@@ -2,7 +2,7 @@
 title: "filetype()"
 description: "Gets file type."
 sidebar:
-  order: 121
+  order: 123
 ---
 
 ## filetype()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `filetype` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/filetype.md).
-

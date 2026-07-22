@@ -2,7 +2,7 @@
 title: "printf()"
 description: "Outputs a formatted string."
 sidebar:
-  order: 380
+  order: 395
 ---
 
 ## printf()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `printf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/printf.md).
-

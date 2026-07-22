@@ -2,7 +2,7 @@
 title: "json_last_error_msg()"
 description: "Returns the error string of the last json_encode() or json_decode() call."
 sidebar:
-  order: 237
+  order: 252
 ---
 
 ## json_last_error_msg()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `json_last_error_msg` is implemented in the compiler, see [the internals page](../../../internals/builtins/json/json_last_error_msg.md).
-

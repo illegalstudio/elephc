@@ -2,7 +2,7 @@
 title: "fscanf()"
 description: "Parses input from a file according to a format."
 sidebar:
-  order: 174
+  order: 176
 ---
 
 ## fscanf()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fscanf` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fscanf.md).
-

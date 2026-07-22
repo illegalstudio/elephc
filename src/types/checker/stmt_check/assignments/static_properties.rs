@@ -346,15 +346,42 @@ fn update_static_property_type(
 
 /// Refines the type of a static property based on an assigned value.
 ///
-/// If the property currently holds `Int` or `Void` (uninitialized), it is set to `val_ty`.
-/// Otherwise `specialize_generic_array_hint` is used to merge the value type into the
-/// existing array element type. Only updates when the refined type differs from the current.
+/// Delegates the type decision to `refined_untyped_property_assignment_type` (shared with
+/// instance properties), which stores scalar/array writes to untyped null-defaulted slots
+/// as nullable unions so the null default stays observable. Only updates when the refined
+/// type differs from the current.
 fn refine_static_property_assignment_type(
     checker: &mut Checker,
     property: &str,
     declaring_class: &str,
     val_ty: &PhpType,
 ) {
+    let refined_ty = {
+        let current = checker.classes.values().find_map(|class_info| {
+            if class_info
+                .static_property_declaring_classes
+                .get(property)
+                .map(String::as_str)
+                != Some(declaring_class)
+            {
+                return None;
+            }
+            class_info
+                .static_properties
+                .iter()
+                .find(|(name, _)| name == property)
+                .map(|(_, ty)| ty.clone())
+        });
+        let Some(current) = current else {
+            return;
+        };
+        let Some(refined_ty) = super::properties::refined_untyped_property_assignment_type(
+            checker, &current, val_ty, false,
+        ) else {
+            return;
+        };
+        refined_ty
+    };
     for class_info in checker.classes.values_mut() {
         if class_info
             .static_property_declaring_classes
@@ -369,14 +396,7 @@ fn refine_static_property_assignment_type(
             .iter_mut()
             .find(|(name, _)| name == property)
         {
-            if matches!(prop.1, PhpType::Int | PhpType::Void) && prop.1 != *val_ty {
-                prop.1 = val_ty.clone();
-            } else {
-                let refined_ty = Checker::specialize_generic_array_hint(&prop.1, val_ty);
-                if refined_ty != prop.1 {
-                    prop.1 = refined_ty;
-                }
-            }
+            prop.1 = refined_ty.clone();
         }
     }
 }

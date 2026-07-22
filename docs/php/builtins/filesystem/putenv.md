@@ -2,7 +2,7 @@
 title: "putenv()"
 description: "Sets an environment variable."
 sidebar:
-  order: 140
+  order: 142
 ---
 
 ## putenv()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `putenv` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/putenv.md).
-

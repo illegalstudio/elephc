@@ -272,6 +272,11 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
+    // Drain still-active output buffers before any teardown so user output
+    // handlers (including eval-registered ones) run while locals, statics, and
+    // the eval context are still alive. The exit-path flush in abi::emit_exit
+    // stays as the guard for exit()/die() and fatal terminations.
+    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);

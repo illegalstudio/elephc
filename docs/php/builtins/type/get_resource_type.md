@@ -2,7 +2,7 @@
 title: "get_resource_type()"
 description: "Returns the type of a resource."
 sidebar:
-  order: 422
+  order: 437
 ---
 
 ## get_resource_type()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `get_resource_type` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/get_resource_type.md).
-

@@ -58,6 +58,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
         inst: InstId,
         expected: Effects,
@@ -328,6 +329,9 @@ fn validate_instruction_immediate(
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
+        TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
+            matches!(imm, Imm::TypePredicate(_))
+        }),
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())
@@ -530,7 +534,80 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
+    }
+}
+
+/// Validates operand and result storage types for typed runtime calls.
+fn validate_typed_runtime_call(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
+        return Ok(());
+    };
+    let signature = target
+        .signature()
+        .ok_or(ValidationError::UnknownRuntimeCallSignature(inst_id))?;
+    match signature {
+        crate::ir::RuntimeCallSignature::Fixed { parameters, result } => {
+            if inst.operands.len() != parameters.len() {
+                return Err(ValidationError::OperandCountMismatch {
+                    inst: inst_id,
+                    expected: "typed runtime signature",
+                    actual: inst.operands.len(),
+                });
+            }
+            for (index, expected) in parameters.iter().copied().enumerate() {
+                check_operand_type(
+                    function,
+                    inst_id,
+                    inst,
+                    index,
+                    expected,
+                    ir_type_label(expected),
+                )?;
+            }
+            if inst.result_type != result {
+                return Err(ValidationError::ResultTypeMismatch(
+                    inst.result.expect("typed runtime call must have a result"),
+                ));
+            }
+        }
+        crate::ir::RuntimeCallSignature::Polymorphic {
+            min_operands,
+            max_operands,
+        } => {
+            let actual = inst.operands.len();
+            if actual < min_operands || max_operands.is_some_and(|maximum| actual > maximum) {
+                return Err(ValidationError::OperandCountMismatch {
+                    inst: inst_id,
+                    expected: "registry runtime signature",
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the static diagnostic spelling for one EIR storage type.
+fn ir_type_label(ir_type: IrType) -> &'static str {
+    match ir_type {
+        IrType::I64 => "I64",
+        IrType::F64 => "F64",
+        IrType::Str => "Str",
+        IrType::TaggedScalar => "TaggedScalar",
+        IrType::Heap(IrHeapKind::Array) => "Heap(Array)",
+        IrType::Heap(IrHeapKind::Hash) => "Heap(Hash)",
+        IrType::Heap(IrHeapKind::Object) => "Heap(Object)",
+        IrType::Heap(IrHeapKind::Mixed) => "Heap(Mixed)",
+        IrType::Heap(IrHeapKind::Iterable) => "Heap(Iterable)",
+        IrType::Heap(IrHeapKind::Union) => "Heap(Union)",
+        IrType::Heap(IrHeapKind::Buffer) => "Heap(Buffer)",
+        IrType::Void => "Void",
     }
 }
 

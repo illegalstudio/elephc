@@ -35,76 +35,17 @@ AREAS: list[str] = [
 ]
 
 
-# Sub-area mapping: file path under src/codegen/lower_inst/builtins/ or
-# src/types/checker/builtins/ → (area, sub_area). When multiple files match
-# the same key, the first one wins.
-AREA_BY_FILE: Dict[str, Optional[Tuple[str, str]]] = {
-    "strings.rs": ("String", "String"),
-    "arrays.rs": ("Array", "Array"),
-    "arrays/column.rs": ("Array", "Array"),
-    "arrays/key_exists.rs": ("Array", "Array"),
-    "arrays/keys.rs": ("Array", "Array"),
-    "arrays/search.rs": ("Array", "Array"),
-    "arrays/shift.rs": ("Array", "Array"),
-    "arrays/unshift.rs": ("Array", "Array"),
-    "arrays/values.rs": ("Array", "Array"),
-    "math.rs": ("Math", "Math"),
-    "math/binary.rs": ("Math", "Math"),
-    "math/libm.rs": ("Math", "Math"),
-    "math/random.rs": ("Math", "Math"),
-    "ctype.rs": ("Type", "Ctype"),
-    "is_numeric.rs": ("Type", "Type"),
-    "types.rs": ("Type", "Type"),
-    "attributes.rs": ("Class", "Attributes"),
-    "class_relations.rs": ("Class", "Class"),
-    "json.rs": ("JSON", "JSON"),
-    "regex.rs": ("Regex", "Regex"),
-    "io.rs": ("IO", "IO"),
-    "debug.rs": ("IO", "IO"),
-    "system.rs": ("Misc", "System"),
-    "pointers.rs": ("Pointer", "Pointer"),
-    "buffers.rs": ("Buffer", "Buffer"),
-    "spl.rs": ("SPL", "SPL"),
-    "isset.rs": ("Misc", "Variable"),
-    # builtins/builtins.rs is the *root* dispatcher; area comes from the dispatch arm, not the file.
-    "builtins.rs": None,  # sentinel — caller falls back to AREA_BY_LOWERING_FN / AREA_BY_MODULE
-}
-
-
-# Map the submodule prefix in a dispatch arm (e.g. "math" from "math::lower_abs")
-# to an area. Used for builtins lowered inline in builtins.rs that have no
-# dedicated submodule file to infer the area from.
-AREA_BY_MODULE: Dict[str, Tuple[str, str]] = {
+# Default documentation areas derived from the backend-neutral registry Area.
+REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
+    "string": ("String", "String"),
+    "array": ("Array", "Array"),
     "math": ("Math", "Math"),
-    "strings": ("String", "String"),
-    "arrays": ("Array", "Array"),
-    "json": ("JSON", "JSON"),
-    "regex": ("Regex", "Regex"),
-    "ctype": ("Type", "Ctype"),
-    "is_numeric": ("Type", "Type"),
-    "types": ("Type", "Type"),
-    "pointers": ("Pointer", "Pointer"),
-    "buffers": ("Buffer", "Buffer"),
-    "system": ("Misc", "System"),
     "io": ("IO", "IO"),
-    "debug": ("IO", "IO"),
-    "spl": ("SPL", "SPL"),
+    "system": ("Misc", "System"),
+    "types": ("Type", "Type"),
     "callables": ("Misc", "Callables"),
-    "isset": ("Misc", "Variable"),
-    "attributes": ("Class", "Attributes"),
-    "class_relations": ("Class", "Class"),
-    "scoped_constants": ("Misc", "Constants"),
-    "static_locals": ("Misc", "Statics"),
-    "static_properties": ("Misc", "Statics"),
-}
-
-
-# Hand-curated overrides for the few lowering functions defined inline in
-# builtins.rs whose area is not obvious from the function name.
-AREA_BY_LOWERING_FN: Dict[str, Tuple[str, str]] = {
-    # Generic libm dispatcher in builtins.rs catches sin/cos/tan/asin/acos/atan/
-    # sinh/cosh/tanh/log2/log10/exp — they all live in Math.
-    "lower_unary_libm": ("Math", "Math"),
+    "spl": ("SPL", "SPL"),
+    "pointers": ("Pointer", "Pointer"),
 }
 
 
@@ -308,6 +249,40 @@ AREA_BY_NAME: Dict[str, Tuple[str, str]] = {
     "stream_bucket_prepend": ("Streams", "Streams"),
     "stream_filter_append": ("Streams", "Streams"),
     "stream_filter_prepend": ("Streams", "Streams"),
+}
+
+
+# Registry areas deliberately stay coarse. These names retain the established
+# user-facing documentation category where one registry area spans multiple
+# PHP extension families.
+REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
+    "buffer_free": ("Buffer", "Buffer"),
+    "buffer_len": ("Buffer", "Buffer"),
+    "call_user_func": ("Array", "Array"),
+    "call_user_func_array": ("Array", "Array"),
+    "class_attribute_args": ("Class", "Attributes"),
+    "class_attribute_names": ("Class", "Attributes"),
+    "class_get_attributes": ("Class", "Attributes"),
+    "ctype_alnum": ("Type", "Ctype"),
+    "ctype_alpha": ("Type", "Ctype"),
+    "ctype_digit": ("Type", "Ctype"),
+    "ctype_space": ("Type", "Ctype"),
+    "is_finite": ("Math", "Math"),
+    "is_infinite": ("Math", "Math"),
+    "is_nan": ("Math", "Math"),
+    "json_decode": ("JSON", "JSON"),
+    "json_encode": ("JSON", "JSON"),
+    "json_last_error": ("JSON", "JSON"),
+    "json_last_error_msg": ("JSON", "JSON"),
+    "json_validate": ("JSON", "JSON"),
+    "mb_ereg_match": ("Regex", "Regex"),
+    "method_exists": ("Class", "Class"),
+    "preg_match": ("Regex", "Regex"),
+    "preg_match_all": ("Regex", "Regex"),
+    "preg_replace": ("Regex", "Regex"),
+    "preg_replace_callback": ("Regex", "Regex"),
+    "preg_split": ("Regex", "Regex"),
+    "property_exists": ("Class", "Class"),
 }
 
 
@@ -1209,6 +1184,8 @@ class Builtin:
     # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
     # class_attribute_*); `--strict-php` hides them from user programs.
     is_extension: bool = False
+    # Backend-neutral compiler semantics exported directly by `gen_builtins`.
+    semantics: Optional[dict] = None
 
 
 def slug(name: str) -> str:

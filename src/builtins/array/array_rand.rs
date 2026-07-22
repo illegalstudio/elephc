@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `array_rand` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_rand` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates the argument is an array and returns `Int` (the randomly
 //!   selected integer index). The declared `returns: Mixed` is the FCC type.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_rand` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [array: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayRand,
+    ),
     summary: "Pick one or more random keys out of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-rand.php",
 }
@@ -41,9 +38,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers an `array_rand` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_rand(ctx, inst)
 }

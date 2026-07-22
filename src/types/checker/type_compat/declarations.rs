@@ -9,7 +9,7 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
@@ -60,7 +60,48 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
+        if type_expr.contains_late_static() {
+            if let Some(current_class) = self.current_class.as_deref() {
+                let parent = self
+                    .classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.as_deref());
+                let resolved =
+                    type_expr.substitute_relative_class_types(current_class, parent);
+                return self.resolve_type_expr(&resolved, span);
+            }
+        }
         self.resolve_type_expr(type_expr, span)
+    }
+
+    /// Resolves a method return contract to its declaring type for schema and ABI metadata.
+    ///
+    /// The parsed `static` marker remains on the method declaration for call-site refinement;
+    /// this nominal type is the concrete declaring class or interface used for compatibility.
+    pub(crate) fn resolve_method_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        declaring_type: &str,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let nominal = type_expr.substitute_relative_class_types(declaring_type, None);
+        self.resolve_declared_return_type_hint(&nominal, span, context)
+    }
+
+    /// Resolves preserved late-static return syntax against a concrete call-site receiver.
+    pub(crate) fn resolve_late_static_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        receiver_type: &str,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        let parent = self
+            .classes
+            .get(receiver_type)
+            .and_then(|class_info| class_info.parent.as_deref());
+        let bound = type_expr.substitute_relative_class_types(receiver_type, parent);
+        self.resolve_declared_return_type_hint(&bound, span, "Late-static method return")
     }
 
     /// Resolves a local variable type hint from a `TypeExpr` to a `PhpType`, rejecting
@@ -82,7 +123,7 @@ impl Checker {
     }
 
     /// Resolves a property type hint from a `TypeExpr` to a `PhpType`, rejecting
-    /// `void`, `never`, and `callable`.
+    /// `void`, `never`, and the `callable` pseudo-type while allowing the `Closure` class.
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -102,7 +143,7 @@ impl Checker {
                 &format!("{} cannot use type never", context),
             ));
         }
-        if Self::type_contains_callable(&ty) {
+        if Self::type_expr_contains_callable_pseudo_type(type_expr) {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type callable", context),
@@ -111,15 +152,18 @@ impl Checker {
         Ok(ty)
     }
 
-    /// Returns true if `ty` is or contains a `PhpType::Callable` anywhere in its structure.
-    fn type_contains_callable(ty: &PhpType) -> bool {
-        match ty {
-            PhpType::Callable => true,
-            PhpType::Union(members) => members.iter().any(Self::type_contains_callable),
-            PhpType::Array(inner) | PhpType::Buffer(inner) => Self::type_contains_callable(inner),
-            PhpType::AssocArray { key, value } => {
-                Self::type_contains_callable(key) || Self::type_contains_callable(value)
+    /// Returns true if `type_expr` contains PHP's forbidden property pseudo-type `callable`.
+    /// The `Closure` class resolves to the same internal callable representation but remains a
+    /// valid property declaration, including inside nullable and union types.
+    fn type_expr_contains_callable_pseudo_type(type_expr: &TypeExpr) -> bool {
+        match type_expr {
+            TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("callable"),
+            TypeExpr::Array(inner) | TypeExpr::Nullable(inner) | TypeExpr::Buffer(inner) => {
+                Self::type_expr_contains_callable_pseudo_type(inner)
             }
+            TypeExpr::Union(members) | TypeExpr::Intersection(members) => members
+                .iter()
+                .any(Self::type_expr_contains_callable_pseudo_type),
             _ => false,
         }
     }
@@ -190,6 +234,28 @@ impl Checker {
         Ok(())
     }
 
+    /// Semantically resolves a declaration default when it is a scoped constant access, then
+    /// validates the resolved type against the declared type. Other defaults keep the syntactic
+    /// validation used by declarations that do not depend on completed class-like metadata.
+    pub(crate) fn validate_resolved_declared_default_type(
+        &mut self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        let Some(default_expr) = default_expr else {
+            return Ok(());
+        };
+        let default_ty = match &default_expr.kind {
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                self.infer_scoped_constant_access(receiver, name, default_expr)?
+            }
+            _ => infer_expr_type_syntactic(default_expr),
+        };
+        self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
+    }
+
     /// Validates a declaration default while class-like schema metadata is still being built.
     /// Object-to-object checks are deferred because inheritance and interface relationships are
     /// incomplete during this phase; every other type pair is validated immediately.
@@ -210,11 +276,29 @@ impl Checker {
         self.validate_declared_default_type(expected_ty, default_expr, span, context)
     }
 
+    /// Validates a method parameter default while class-like schemas are being built.
+    /// Direct scoped constant accesses are deferred until enum cases and class/interface
+    /// constants are available; other defaults use the existing schema-time validation.
+    pub(crate) fn validate_schema_parameter_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if default_expr.is_some_and(|default| {
+            matches!(default.kind, ExprKind::ScopedConstantAccess { .. })
+        }) {
+            return Ok(());
+        }
+        self.validate_schema_declared_default_type(expected_ty, default_expr, span, context)
+    }
+
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
     /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
     /// array type, using the declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
-        &self,
+        &mut self,
         name: &str,
         decl: &FnDecl,
     ) -> Result<Vec<(String, PhpType)>, CompileError> {
@@ -226,7 +310,7 @@ impl Checker {
                     decl.span,
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
-                self.validate_declared_default_type(
+                self.validate_resolved_declared_default_type(
                     &declared_ty,
                     decl.defaults.get(idx).and_then(|d| d.as_ref()),
                     decl.span,

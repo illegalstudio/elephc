@@ -2,7 +2,7 @@
 title: "serialize()"
 description: "Generates a storable representation of a value."
 sidebar:
-  order: 285
+  order: 300
 ---
 
 ## serialize()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `serialize` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/serialize.md).
-

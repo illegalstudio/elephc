@@ -2,7 +2,7 @@
 title: "unset() — internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 302
 ---
 
 ## `unset()` — internals
@@ -18,9 +18,13 @@ sidebar:
 
 - Rejects `unset()` calls that were not converted into direct EIR unbind operations.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
+
+## EIR and runtime boundary
+
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 

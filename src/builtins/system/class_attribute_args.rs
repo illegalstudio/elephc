@@ -1,24 +1,21 @@
 //! Purpose:
-//! Home of the PHP `class_attribute_args` builtin: its declaration, type-check hook,
-//! and lowering.
+//! Home of the PHP `class_attribute_args` builtin: its declaration, type-check hook, and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that both arguments are string literals, resolves the class at
 //!   compile time, verifies the attribute is supported by the flat helper, and returns
 //!   `Array(Mixed)`.
 //! - Dynamic class or attribute names are not yet supported; only string literals are accepted.
-//! - `lower` delegates to `attributes::lower_class_attribute_args` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::system::attr_support::{class_attribute_args_unsupported, resolve_class_name};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -28,9 +25,24 @@ builtin! {
     params: [class_name: Str, attribute_name: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: class_attribute_args_semantics(),
     summary: "Returns the constructor arguments of a named attribute applied to a class.",
     extension: true,
+}
+
+/// Builds semantics with the associative Mixed container layout emitted by the backend.
+const fn class_attribute_args_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ClassAttributeArgs);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the representation-safe EIR type for positional and named attribute keys.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
 }
 
 /// Validates both arguments are string literals, resolves the class and attribute,
@@ -86,9 +98,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
-}
-
-/// Lowers a `class_attribute_args` call by delegating to the shared attributes emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::attributes::lower_class_attribute_args(ctx, inst)
 }

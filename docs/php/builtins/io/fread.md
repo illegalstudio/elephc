@@ -2,7 +2,7 @@
 title: "fread()"
 description: "Binary-safe file read."
 sidebar:
-  order: 173
+  order: 175
 ---
 
 ## fread()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fread` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fread.md).
-

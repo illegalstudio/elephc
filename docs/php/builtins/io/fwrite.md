@@ -2,7 +2,7 @@
 title: "fwrite()"
 description: "Binary-safe file write."
 sidebar:
-  order: 180
+  order: 182
 ---
 
 ## fwrite()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fwrite` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fwrite.md).
-

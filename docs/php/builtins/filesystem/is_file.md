@@ -2,7 +2,7 @@
 title: "is_file()"
 description: "Tells whether the filename is a regular file."
 sidebar:
-  order: 128
+  order: 130
 ---
 
 ## is_file()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_file` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/is_file.md).
-

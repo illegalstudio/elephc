@@ -1,19 +1,14 @@
 //! Purpose:
-//! Home of the PHP `zval_free` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `zval_free` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the argument is a pointer and returns `PhpType::Void`.
-//! - `lower` releases the zval allocation and any zval-owned children.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -22,7 +17,9 @@ builtin! {
     params: [zval: Mixed],
     returns: Void,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ZvalFree,
+    ),
     summary: "Frees a PHP zval pointer allocated by `zval_pack`.",
     extension: true,
 }
@@ -32,9 +29,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, "zval_free()")?;
     Ok(PhpType::Void)
-}
-
-/// Lowers a `zval_free` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_zval_free(ctx, inst)
 }

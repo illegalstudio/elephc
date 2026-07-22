@@ -2,7 +2,7 @@
 title: "stream_filter_remove()"
 description: "Removes a filter from a stream."
 sidebar:
-  order: 204
+  order: 219
 ---
 
 ## stream_filter_remove()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_filter_remove` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_filter_remove.md).
-

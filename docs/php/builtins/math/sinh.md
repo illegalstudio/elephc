@@ -2,7 +2,7 @@
 title: "sinh()"
 description: "Returns the hyperbolic sine of a number."
 sidebar:
-  order: 271
+  order: 286
 ---
 
 ## sinh()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `sinh` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/sinh.md).
-

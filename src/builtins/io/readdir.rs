@@ -1,22 +1,17 @@
 //! Purpose:
-//! Home of the PHP `readdir` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `readdir` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates the `dir_handle` argument is a stream resource and returns
 //!   `Union(Str, Bool)` to reflect PHP's false-on-failure pattern.
 //! - `returns: Mixed` is used because the union cannot be expressed through the scalar
 //!   `returns:` field. Arguments are pre-inferred by the registry before the hook runs.
-//! - `lower` is a thin wrapper over `io::lower_readdir` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -25,7 +20,9 @@ builtin! {
     params: [dir_handle: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Readdir,
+    ),
     summary: "Read entry from directory handle.",
     php_manual: "function.readdir",
 }
@@ -42,9 +39,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::Str,
         PhpType::Bool,
     ]))
-}
-
-/// Lowers a `readdir` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_readdir(ctx, inst)
 }

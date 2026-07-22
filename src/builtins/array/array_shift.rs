@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_shift` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_shift` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
@@ -11,13 +10,12 @@
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
 //! - `check` reproduces the legacy rule: `Array(elem)` yields the element type,
 //!   `AssocArray { value, .. }` yields the value type, any other type is an error.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_shift` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,9 +24,21 @@ builtin! {
     params: [ref array: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: array_shift_semantics(),
     summary: "Shifts an element off the beginning of array.",
     php_manual: "https://www.php.net/manual/en/function.array-shift.php",
+}
+
+/// Builds semantics whose EIR result preserves the builtin's nullable boxed payload.
+const fn array_shift_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayShift);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns Mixed because an empty array produces null regardless of its element type.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Returns the element type for an `array_shift` call.
@@ -43,9 +53,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::AssocArray { value, .. } => Ok(*value),
         _ => Err(CompileError::new(cx.span, "array_shift() argument must be array")),
     }
-}
-
-/// Lowers an `array_shift` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_shift(ctx, inst)
 }

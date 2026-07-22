@@ -2,7 +2,7 @@
 title: "gmdate()"
 description: "Formats a GMT/UTC date and time."
 sidebar:
-  order: 94
+  order: 96
 ---
 
 ## gmdate()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `gmdate` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/gmdate.md).
-

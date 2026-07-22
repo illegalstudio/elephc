@@ -2,7 +2,7 @@
 title: "sprintf()"
 description: "Returns a formatted string."
 sidebar:
-  order: 385
+  order: 400
 ---
 
 ## sprintf()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `sprintf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/sprintf.md).
-

@@ -2,7 +2,7 @@
 title: "hash_hmac() — internals"
 description: "Compiler internals for hash_hmac(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 361
+  order: 376
 ---
 
 ## `hash_hmac()` — internals
@@ -10,19 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_hmac.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_hmac.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:246](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L246) (`lower_hash_hmac`)
-- **Function symbol**: `lower_hash_hmac()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.hash_hmac` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_hash_equals`
-- `__rt_hash_hmac`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (1 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.hash_hmac`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

@@ -2,7 +2,7 @@
 title: "pow()"
 description: "Exponential expression."
 sidebar:
-  order: 265
+  order: 280
 ---
 
 ## pow()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `pow` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/pow.md).
-

@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `buffer_free` is implemented in the compiler, see [the internals page](../../../internals/builtins/buffer/buffer_free.md).
-

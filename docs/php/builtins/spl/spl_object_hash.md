@@ -2,7 +2,7 @@
 title: "spl_object_hash()"
 description: "Return hash id for given object."
 sidebar:
-  order: 335
+  order: 350
 ---
 
 ## spl_object_hash()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `spl_object_hash` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/spl_object_hash.md).
-

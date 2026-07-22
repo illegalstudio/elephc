@@ -2,7 +2,7 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 440
 ---
 
 ## `is_array()` — internals
@@ -10,19 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_array.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1617](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1617) (`lower_is_array`)
-- **Function symbol**: `lower_is_array()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
-- whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
-- not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

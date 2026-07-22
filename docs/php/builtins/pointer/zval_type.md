@@ -2,7 +2,7 @@
 title: "zval_type()"
 description: "Returns the PHP zval type byte for a zval pointer."
 sidebar:
-  order: 306
+  order: 321
 ---
 
 ## zval_type()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `zval_type` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/zval_type.md).
-

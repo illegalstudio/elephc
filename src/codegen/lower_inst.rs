@@ -35,6 +35,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
+mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
 mod comparisons;
@@ -49,6 +50,8 @@ mod objects;
 mod ownership;
 mod pointers;
 mod predicates;
+mod property_values;
+mod runtime_calls;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -118,6 +121,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LooseNotEq => comparisons::lower_loose_eq(ctx, &inst, false),
         Op::IsNull => predicates::lower_is_null(ctx, &inst),
         Op::IsTruthy => predicates::lower_is_truthy(ctx, &inst),
+        Op::TypePredicate => builtins::lower_type_predicate(ctx, &inst),
         Op::IToF => floats::lower_int_to_float(ctx, &inst),
         Op::FToI => floats::lower_float_to_int(ctx, &inst),
         Op::IToStr => strings::lower_int_like_to_string(ctx, &inst),
@@ -204,6 +208,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             static_properties::lower_store_reflection_static_property(ctx, &inst)
         }
         Op::Call => lower_direct_call(ctx, &inst),
+        Op::ClosureBind => builtins::lower_closure_bind(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
@@ -215,7 +220,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
-        Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
         Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
         Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
@@ -1395,10 +1400,7 @@ fn store_descriptor_entry_incoming_arg(
                     emitter,
                     stack_offset.expect("stack offset"),
                 );
-                let spill_reg = match emitter.target.arch {
-                    Arch::AArch64 => "d15",
-                    Arch::X86_64 => "xmm15",
-                };
+                let spill_reg = abi::float_spill_scratch_reg(emitter.target);
                 abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
                 spill_reg
             };
@@ -1473,10 +1475,7 @@ fn load_descriptor_entry_actual_arg(
             let reg = if assignment.in_register() {
                 abi::float_arg_reg_name(emitter.target, assignment.start_reg)
             } else {
-                match emitter.target.arch {
-                    Arch::AArch64 => "d15",
-                    Arch::X86_64 => "xmm15",
-                }
+                abi::float_spill_scratch_reg(emitter.target)
             };
             abi::load_at_offset(emitter, reg, offset);
             if let Some(out_offset) = stack_offset {
@@ -1541,6 +1540,9 @@ fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+        return label;
+    }
     let label = ctx.next_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::runtime_callable_invoker::RuntimeCallableInvoker {
@@ -1551,10 +1553,12 @@ fn emit_runtime_callable_invoker_inline(
     abi::emit_jump(ctx.emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
     ctx.emitter.label(&done_label);
+    ctx.shared
+        .cache_runtime_callable_invoker(sig, captures, &label);
     label
 }
 
-/// Emits a legacy builtin wrapper inline so EIR descriptors can point at PHP-ABI code.
+/// Emits a synthetic EIR builtin wrapper so callable descriptors can use the PHP ABI.
 pub(super) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
@@ -1563,48 +1567,17 @@ pub(super) fn emit_runtime_builtin_wrapper_inline(
     emit_runtime_call_wrapper_inline(ctx, name, sig, RuntimeCallWrapperKind::Builtin)
 }
 
-/// Returns the concrete EIR ABI signature used by runtime builtin descriptors.
+/// Returns the registry/runtime-descriptor ABI used by builtin callable wrappers.
 pub(super) fn runtime_builtin_wrapper_sig(name: &str, sig: &FunctionSig) -> FunctionSig {
     let mut sig = sig.clone();
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "count" => truncate_wrapper_params(&mut sig, 1),
-        "array_sum" | "array_product" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Array(Box::new(PhpType::Int)))
+    if let Some(def) = crate::builtins::registry::lookup(name) {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
+            def.spec.semantics.runtime_functions
+        {
+            runtime_fn.refine_runtime_callable_wrapper_sig(&mut sig);
         }
-        "clamp" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Int);
-            set_wrapper_param_type(&mut sig, 1, PhpType::Int);
-            set_wrapper_param_type(&mut sig, 2, PhpType::Int);
-            sig.return_type = PhpType::Int;
-        }
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Array(Box::new(PhpType::Int)))
-        }
-        _ => {}
     }
     sig
-}
-
-/// Truncates wrapper parameters to the runtime-supported visible arity.
-fn truncate_wrapper_params(sig: &mut FunctionSig, count: usize) {
-    sig.params.truncate(count);
-    sig.defaults.truncate(count);
-    sig.ref_params.truncate(count);
-    sig.declared_params.truncate(count);
-    if sig
-        .variadic
-        .as_deref()
-        .is_some_and(|name| !sig.params.iter().any(|(param_name, _)| param_name == name))
-    {
-        sig.variadic = None;
-    }
-}
-
-/// Replaces one wrapper parameter type when the parameter exists.
-fn set_wrapper_param_type(sig: &mut FunctionSig, index: usize, php_type: PhpType) {
-    if let Some((_, param_ty)) = sig.params.get_mut(index) {
-        *param_ty = php_type;
-    }
 }
 
 /// Emits an EIR extern wrapper inline so descriptors can point at PHP-ABI code.
@@ -1630,6 +1603,13 @@ fn emit_runtime_call_wrapper_inline(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<String> {
+    let cached = match kind {
+        RuntimeCallWrapperKind::Builtin => ctx.shared.runtime_builtin_wrapper(name, sig),
+        RuntimeCallWrapperKind::Extern => ctx.shared.runtime_extern_wrapper(name, sig),
+    };
+    if let Some(label) = cached {
+        return Ok(label);
+    }
     let label_prefix = match kind {
         RuntimeCallWrapperKind::Builtin => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
@@ -1637,7 +1617,7 @@ fn emit_runtime_call_wrapper_inline(
     let label = ctx.next_label(label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     let mut wrapper_module = ctx.module.clone();
-    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind);
+    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     abi::emit_jump(ctx.emitter, &done_label);
     super::block_emit::emit_synthetic_function_with_label(
         &wrapper_module,
@@ -1649,6 +1629,14 @@ fn emit_runtime_call_wrapper_inline(
         false,
     )?;
     ctx.emitter.label(&done_label);
+    match kind {
+        RuntimeCallWrapperKind::Builtin => {
+            ctx.shared.cache_runtime_builtin_wrapper(name, sig, &label)
+        }
+        RuntimeCallWrapperKind::Extern => {
+            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
+        }
+    }
     Ok(label)
 }
 
@@ -1659,7 +1647,7 @@ fn build_runtime_call_wrapper_function(
     name: &str,
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
-) -> Function {
+) -> Result<Function> {
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),
@@ -1684,20 +1672,102 @@ fn build_runtime_call_wrapper_function(
     builder.set_entry(entry);
     builder.position_at_end(entry);
     let operands = wrapper_param_operands(&mut builder, sig);
-    let op = match kind {
-        RuntimeCallWrapperKind::Builtin => Op::BuiltinCall,
-        RuntimeCallWrapperKind::Extern => Op::ExternCall,
+    let result = match kind {
+        RuntimeCallWrapperKind::Builtin => {
+            let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
+                CodegenIrError::invalid_module(format!(
+                    "callable wrapper {} is not registry-backed",
+                    name,
+                ))
+            })?;
+            let mut lowering = WrapperBuiltinLoweringContext {
+                builder: &mut builder,
+            };
+            Some(crate::builtins::semantics::lower_registry_call(
+                &mut lowering,
+                def,
+                &operands,
+                &return_php_type,
+                crate::span::Span::dummy(),
+            )
+            .map_err(|error| {
+                CodegenIrError::invalid_module(format!(
+                    "callable wrapper lowering for {} failed: {}",
+                    name, error,
+                ))
+            })?
+            .value)
+        }
+        RuntimeCallWrapperKind::Extern => builder.emit(
+            Op::ExternCall,
+            operands,
+            Some(Immediate::Data(data)),
+            wrapper_return_ir_type(&return_php_type),
+            return_php_type.clone(),
+            Ownership::for_php_type(&return_php_type),
+        ),
     };
-    let result = builder.emit(
-        op,
-        operands,
-        Some(Immediate::Data(data)),
-        wrapper_return_ir_type(&return_php_type),
-        return_php_type.clone(),
-        Ownership::for_php_type(&return_php_type),
-    );
     builder.terminate(Terminator::Return { value: result });
-    function
+    Ok(function)
+}
+
+/// EIR construction adapter used by synthetic builtin callable wrappers.
+struct WrapperBuiltinLoweringContext<'a, 'f> {
+    builder: &'a mut Builder<'f>,
+}
+
+impl crate::builtins::semantics::BuiltinLoweringContext
+    for WrapperBuiltinLoweringContext<'_, '_>
+{
+    /// Returns PHP metadata attached to one synthetic-wrapper operand.
+    fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.builder.value_php_type(value)
+    }
+
+    /// Emits one backend-neutral operation into the synthetic wrapper body.
+    fn emit_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let value = self
+            .builder
+            .emit_with_effects(
+                op,
+                operands,
+                immediate,
+                wrapper_value_ir_type(&php_type),
+                php_type.clone(),
+                Ownership::for_php_type(&php_type),
+                effects,
+                span,
+            )
+            .expect("builtin wrapper operation produces a value");
+        crate::builtins::semantics::LoweredBuiltinValue { value }
+    }
+
+    /// Emits one typed runtime operation into the synthetic wrapper body.
+    fn emit_runtime_call(
+        &mut self,
+        target: crate::ir::RuntimeCallTarget,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        self.emit_value(
+            Op::RuntimeCall,
+            operands,
+            Some(Immediate::RuntimeCall(target)),
+            php_type,
+            effects,
+            span,
+        )
+    }
 }
 
 /// Converts callable signature params into EIR function params with matching ABI/local slots.
@@ -1971,6 +2041,9 @@ fn callable_target_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers high-level runtime fallback casts that Phase 04 can identify by type.
 fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(Immediate::RuntimeCall(target)) = inst.immediate {
+        return runtime_calls::lower(ctx, inst, target);
+    }
     if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
         return lower_property_array_runtime_set(ctx, inst);
     }
@@ -2771,6 +2844,14 @@ fn cast_loaded_mixed_pointer_to_result(
         PhpType::Int => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Iterable
+        | PhpType::Object(_) => {
+            emit_unbox_mixed_to_owned_refcounted_result(ctx, target_ty);
+            return Ok(());
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "runtime mixed result cast to PHP type {:?}",
@@ -2876,37 +2957,16 @@ fn lower_catch_current(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     store_if_result(ctx, inst)
 }
 
-/// Binds the active exception to an optional catch variable and clears the runtime slot.
+/// Takes the active exception into an owned SSA result and clears the runtime slot.
 fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
-        let storage_ty = ctx.local_php_type(slot)?;
-        let target_ty = if inst.result_php_type.codegen_repr() == PhpType::Void {
-            storage_ty.clone()
-        } else {
-            inst.result_php_type.codegen_repr()
-        };
-        let offset = ctx.local_offset(slot)?;
-        abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &target_ty);
-        let store_ty = catch_bind_store_type(ctx, &target_ty, &storage_ty);
-        abi::emit_store(ctx.emitter, &store_ty, offset);
-    }
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("catch_bind missing owned result"))?;
+    let result_ty = ctx.value_php_type(result)?;
+    abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &result_ty);
+    ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
     Ok(())
-}
-
-/// Returns the local-storage representation used after loading the raw exception object.
-fn catch_bind_store_type(
-    ctx: &mut FunctionContext<'_>,
-    target_ty: &PhpType,
-    storage_ty: &PhpType,
-) -> PhpType {
-    let storage_ty = storage_ty.codegen_repr();
-    let target_ty = target_ty.codegen_repr();
-    if storage_ty == PhpType::Mixed && target_ty != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &target_ty);
-        return PhpType::Mixed;
-    }
-    target_ty
 }
 
 /// Lowers a direct instance-method call on a statically known object receiver.
@@ -3219,6 +3279,13 @@ fn lower_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    // Builtin Throwable methods are compact-payload intrinsics. Their interface vtable
+    // slots stay zero because no synthetic method bodies are emitted, so dispatch here
+    // would `blr` to null. Use the same intrinsic path as a concrete Throwable receiver.
+    if is_throwable_standard_method_call(ctx, interface_name, method_name) {
+        let object = expect_operand(inst, 0)?;
+        return lower_throwable_standard_method(ctx, inst, object, method_name);
+    }
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -3347,6 +3414,22 @@ fn lower_nullable_receiver_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    // Same compact-payload intrinsic path as `lower_interface_method_call`: Throwable's
+    // interface vtable slots are empty, so nullable `?Throwable` must not dispatch through them.
+    if is_throwable_standard_method_call(ctx, interface_name, method_name) {
+        let null_label = ctx.next_label("method_receiver_null");
+        let done_label = ctx.next_label("method_receiver_done");
+        let receiver_reg = abi::nested_call_reg(ctx.emitter);
+        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+        // Re-materialize the unboxed object into the SSA operand's result register so the
+        // shared Throwable intrinsic lowerer can `load_value_to_reg` the receiver.
+        lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        emit_method_call_on_null_fatal(ctx, method_name);
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
     let normalized = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
     let callee_sig = ctx
@@ -3562,9 +3645,14 @@ fn lower_static_runtime_intrinsic(
         let return_ty = return_ty.codegen_repr();
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
             emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+        } else if return_ty == PhpType::Mixed
+            && !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            cast_loaded_mixed_pointer_to_result(ctx, &result_ty)?;
         }
         ctx.store_result_value(result)?;
     }
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -3839,13 +3927,43 @@ fn lower_throwable_standard_method(
     }
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, object_reg)?;
+    lower_throwable_standard_method_loaded(ctx, inst, object_reg, method_name)
+}
+
+/// Lowers a compact Throwable method when the receiver object pointer is already in `object_reg`.
+///
+/// Used by nullable `?Throwable` / Mixed-unbox paths that have already extracted the object
+/// payload and must not reload the original SSA value (which may still be a Mixed cell).
+fn lower_throwable_standard_method_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object_reg: &str,
+    method_name: &str,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "Throwable::{} with {} EIR operands",
+            method_name,
+            inst.operands.len()
+        )));
+    }
+    lower_throwable_standard_method_loaded(ctx, inst, object_reg, method_name)
+}
+
+/// Shared compact-payload Throwable method body after the receiver object is in `object_reg`.
+fn lower_throwable_standard_method_loaded(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object_reg: &str,
+    method_name: &str,
+) -> Result<()> {
     let return_ty = match php_symbol_key(method_name).as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
         "getfile" | "gettraceasstring" => lower_throwable_empty_string(ctx),
         "getline" => lower_throwable_zero_int(ctx),
         "gettrace" => lower_throwable_empty_trace_array(ctx),
-        "getprevious" => lower_throwable_null_previous(ctx, inst),
+        "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
         "__tostring" => lower_throwable_get_message(ctx, object_reg),
         _ => Err(CodegenIrError::unsupported(format!(
             "Throwable intrinsic method {}",
@@ -3913,18 +4031,83 @@ fn lower_throwable_empty_trace_array(ctx: &mut FunctionContext<'_>) -> Result<Ph
     Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
-/// Materializes the synthetic null result used by `Throwable::getPrevious()`.
-fn lower_throwable_null_previous(
+/// Loads `Throwable::getPrevious()` from payload offset 40, retaining a non-null previous.
+///
+/// When the EIR result is `Mixed` (`?Throwable`), both the object and null arms box here and
+/// return `Mixed` so the shared intrinsic post-box path does not retag a live object as null
+/// (`PhpType::Void` → runtime tag 8).
+fn lower_throwable_get_previous(
     ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
     inst: &Instruction,
 ) -> Result<PhpType> {
-    let payload = if inst.result_php_type.codegen_repr() == PhpType::Mixed {
-        0
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("throwable_previous_null");
+    let done_label = ctx.next_label("throwable_previous_done");
+    let result_is_mixed = matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed);
+    let object_ty = PhpType::Object("Throwable".to_string());
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, 40);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing previous → null
+            // `__rt_incref` expects the object in x0.
+            if result_reg != "x0" {
+                ctx.emitter
+                    .instruction(&format!("mov x0, {}", result_reg)); // move previous into incref arg
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if result_reg != "x0" {
+                ctx.emitter
+                    .instruction(&format!("mov {}, x0", result_reg)); // restore result register
+            }
+            if result_is_mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            }
+            ctx.emitter
+                .instruction(&format!("b {}", done_label)); // skip null materialization
+            ctx.emitter.label(&null_label);
+            if result_is_mixed {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+            }
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // missing previous → null
+            ctx.emitter
+                .instruction(&format!("jz {}", null_label));
+            if result_reg != "rax" {
+                ctx.emitter
+                    .instruction(&format!("mov rax, {}", result_reg)); // move previous into incref arg
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_incref"); // caller owns the returned previous
+            if result_reg != "rax" {
+                ctx.emitter
+                    .instruction(&format!("mov {}, rax", result_reg)); // restore result register
+            }
+            if result_is_mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+            }
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label)); // skip null materialization
+            ctx.emitter.label(&null_label);
+            if result_is_mixed {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+            }
+            ctx.emitter.label(&done_label);
+        }
+    }
+    if result_is_mixed {
+        Ok(PhpType::Mixed)
     } else {
-        0x7fff_ffff_ffff_fffe
-    };
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
-    Ok(PhpType::Void)
+        Ok(object_ty)
+    }
 }
 
 /// Lowers `Fiber::start(...)` by copying boxed start arguments into the Fiber object.
@@ -4758,16 +4941,8 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    if let Some(result) = inst.result {
-        if ctx.value_php_type(result)? == PhpType::Void {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-        }
-        ctx.store_result_value(result)?;
-    }
+    store_call_result(ctx, inst, &callee_sig.return_type)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
@@ -5195,6 +5370,11 @@ fn materialize_static_method_call_args_with_refs(
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
     emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
+    }
     let visible_abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let mut abi_param_types = Vec::with_capacity(visible_abi_param_types.len() + 1);
     abi_param_types.push(PhpType::Int);
@@ -5213,13 +5393,19 @@ fn materialize_static_method_call_args_with_refs(
                 param_ty,
                 arg_temp_bytes,
                 &ref_writebacks,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&visible_abi_param_types[index]);
@@ -5227,8 +5413,8 @@ fn materialize_static_method_call_args_with_refs(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }

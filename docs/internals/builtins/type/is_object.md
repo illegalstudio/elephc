@@ -2,7 +2,7 @@
 title: "is_object() — internals"
 description: "Compiler internals for is_object(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 451
 ---
 
 ## `is_object()` — internals
@@ -10,18 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_object.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_object.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1632](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1632) (`lower_is_object`)
-- **Function symbol**: `lower_is_object()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
-- runtime tag is an object (6).
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `shared`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

@@ -237,6 +237,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_has_includes(object)
         }
+        ExprKind::ObjectClassName { object } => expr_has_includes(object),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

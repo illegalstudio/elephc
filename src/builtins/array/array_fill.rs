@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `array_fill` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_fill` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` computes the actual return type based on the `start_index` argument:
 //!   a literal-zero start produces an indexed array; any other start produces an
 //!   associative array with Int keys and Mixed values.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_fill` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [start_index: Mixed, count: Mixed, value: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayFill,
+    ),
     summary: "Fill an array with values.",
     php_manual: "https://www.php.net/manual/en/function.array-fill.php",
 }
@@ -39,6 +36,15 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
     let val_ty = cx.checker.infer_type(&cx.args[2], cx.env)?;
+    // `Void` is also the storage marker used for an empty indexed-array element,
+    // so an `array<void>` result would let a later append replace the null element
+    // type instead of widening the existing payload. Null fills therefore use
+    // boxed Mixed slots, which preserve the stored null across later writes.
+    let val_ty = if val_ty.codegen_repr() == PhpType::Void {
+        PhpType::Mixed
+    } else {
+        val_ty
+    };
     let start_is_literal_zero =
         matches!(cx.args[0].kind, crate::parser::ast::ExprKind::IntLiteral(0));
     if !start_is_literal_zero {
@@ -49,9 +55,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     } else {
         Ok(PhpType::Array(Box::new(val_ty)))
     }
-}
-
-/// Lowers an `array_fill` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_fill(ctx, inst)
 }

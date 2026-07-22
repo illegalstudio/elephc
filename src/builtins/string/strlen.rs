@@ -1,22 +1,22 @@
 //! Purpose:
-//! Home of the PHP `strlen` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `strlen` builtin: declaration and backend-neutral EIR semantics.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - The builtin registry, checker, optimizer, and AST-to-EIR builtin lowering path.
 //!
 //! Key details:
-//! - `lazy_check: true` so the check hook infers the argument itself (once), matching
-//!   legacy exactly-once inference without duplicate pre-inference by the common path.
-//! - `check` accepts `Str`, `Mixed`, and `Union` types (PHP coerces the argument to a
+//! - Shared validation accepts `Str`, `Mixed`, and `Union` types (PHP coerces the argument to a
 //!   string per standard type-juggling rules); other types are rejected.
-//! - `lower` is a thin wrapper over the shared strlen emitter.
+//! - Lowering emits `StrLen` directly or `Cast(Str) -> StrLen` for dynamic operands.
 
-use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
+    BuiltinResultOwnership, BuiltinResultType, BuiltinRuntimeFunctions, BuiltinSemanticInput,
+    BuiltinSemantics, BuiltinRequirements, BuiltinTargetStrategy, BuiltinTargetSupport,
+    BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
+use crate::ir::{Immediate, IrType, Op};
 use crate::types::PhpType;
 
 builtin! {
@@ -24,29 +24,86 @@ builtin! {
     area: String,
     params: [string: Str],
     returns: Int,
-    check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: BuiltinSemantics {
+        validation: BuiltinValidation::Shared(validate),
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Shared(effects),
+        result_ownership: BuiltinResultOwnership::NonHeap,
+        requirements: BuiltinRequirements::Static(&[]),
+        target_strategy: BuiltinTargetStrategy::EirGraph,
+        target_support: BuiltinTargetSupport::All,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
+        callable: BuiltinCallablePolicy::Dynamic(
+            crate::builtins::semantics::callable_accepts_strlen_source,
+        ),
+        lowering: BuiltinLowering::Eir(lower),
+    },
     summary: "Returns the length of a string.",
     php_manual: "function.strlen",
 }
 
-/// Validates the `strlen` argument and returns `Int` for accepted string-like types.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+/// Validates the inferred `strlen` argument without depending on checker internals.
+fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    let Some(ty) = input.arg_types.first() else {
+        return Err(CompileError::new(
+            input.span,
+            "strlen() takes exactly 1 argument",
+        ));
+    };
     // Accept Str, Mixed, and Union types — PHP's strlen() coerces its
     // argument to a string per the standard PHP type juggling rules
     // (numbers become their decimal representation, true → "1",
-    // false/null → ""). Mixed inputs flow through __rt_mixed_strlen
-    // at codegen time which reads the cell tag and returns the
-    // length of the coerced representation.
+    // false/null → ""). Dynamic inputs first use the ordinary EIR
+    // string-cast operation, then the same string-length operation.
     if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CompileError::new(cx.span, "strlen() argument must be string"));
+        return Err(CompileError::new(
+            input.span,
+            "strlen() argument must be string",
+        ));
     }
-    Ok(PhpType::Int)
+    Ok(())
 }
 
-/// Lowers a `strlen` call by dispatching to the shared strlen emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_strlen(ctx, inst)
+/// Resolves observable effects for concrete strings versus dynamic string coercion.
+fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    match input.arg_types.first().map(PhpType::codegen_repr) {
+        Some(PhpType::Str) => Op::StrLen.default_effects(),
+        _ => Op::Cast.default_effects() | Op::StrLen.default_effects(),
+    }
+}
+
+/// Lowers `strlen` to reusable EIR operations with no assembly or ABI knowledge.
+fn lower(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+) -> Result<LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    let value = call.operand(0)?;
+    let string = match ctx.value_php_type(value).codegen_repr() {
+        PhpType::Str => value,
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.emit_value(
+                Op::Cast,
+                vec![value],
+                Some(Immediate::CastTarget(IrType::Str)),
+                PhpType::Str,
+                Op::Cast.default_effects(),
+                Some(call.span),
+            )
+            .value
+        }
+        other => {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new(
+                format!("strlen cannot lower checked operand type {:?}", other),
+            ));
+        }
+    };
+    Ok(ctx.emit_value(
+        Op::StrLen,
+        vec![string],
+        None,
+        call.result_type.clone(),
+        Op::StrLen.default_effects(),
+        Some(call.span),
+    ))
 }

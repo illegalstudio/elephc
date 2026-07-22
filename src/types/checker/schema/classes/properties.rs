@@ -44,7 +44,8 @@ pub(super) fn apply_properties(
 /// Validates a static property declaration against PHP inheritance rules and
 /// records it in `state`. Rejects by-reference static properties, final private
 /// combinations, and property type/redeclare conflicts. Computes the property
-/// type from the declared hint, the default value, or defaults to `PhpType::Int`.
+/// type from the declared hint, the default value, or defaults to `PhpType::Void`
+/// (an untyped property with no default implicitly holds null).
 /// Updates `state.static_prop_types`, `state.static_property_declaring_classes`,
 /// `state.final_static_properties`, and attribute maps.
 fn apply_static_property(
@@ -108,7 +109,7 @@ fn apply_static_property(
         infer_untyped_property_default_type(default)
     } else {
         state.declared_static_properties.remove(&prop.name);
-        PhpType::Int
+        PhpType::Void
     };
 
     if let Some(slot) = state
@@ -117,10 +118,10 @@ fn apply_static_property(
         .position(|(name, _)| name == &prop.name)
     {
         state.static_prop_types[slot] = (prop.name.clone(), ty);
-        state.static_defaults[slot] = prop.default.clone();
+        state.static_defaults[slot] = untyped_property_schema_default(prop);
     } else {
         state.static_prop_types.push((prop.name.clone(), ty));
-        state.static_defaults.push(prop.default.clone());
+        state.static_defaults.push(untyped_property_schema_default(prop));
     }
     state
         .static_property_declaring_classes
@@ -262,7 +263,7 @@ fn apply_instance_property(
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
     } else {
-        PhpType::Int
+        PhpType::Void
     };
 
     let slot_index = state.prop_types.len();
@@ -281,7 +282,7 @@ fn apply_instance_property(
     state
         .property_attribute_args
         .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
-    state.defaults.push(prop.default.clone());
+    state.defaults.push(untyped_property_schema_default(prop));
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
@@ -371,12 +372,12 @@ fn apply_instance_property_redeclaration(
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
     } else {
-        PhpType::Int
+        PhpType::Void
     };
 
     let slot = find_instance_property_slot(state, &prop.name);
     state.prop_types[slot] = (prop.name.clone(), ty);
-    state.defaults[slot] = prop.default.clone();
+    state.defaults[slot] = untyped_property_schema_default(prop);
     if let Some(slot_declared) = state.property_declared_slots.get_mut(slot) {
         *slot_declared = is_declared_slot;
     }
@@ -452,7 +453,7 @@ fn apply_private_parent_property_shadowing(
         infer_expr_type_syntactic(default)
     } else {
         state.declared_properties.remove(&prop.name);
-        PhpType::Int
+        PhpType::Void
     };
 
     let slot_index = state.prop_types.len();
@@ -460,7 +461,7 @@ fn apply_private_parent_property_shadowing(
     state
         .property_offsets
         .insert(prop.name.clone(), 8 + slot_index * 16);
-    state.defaults.push(prop.default.clone());
+    state.defaults.push(untyped_property_schema_default(prop));
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
     state
@@ -810,6 +811,27 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// writes; explicit `false` property declarations retain their narrower contract.
 fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
     widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+}
+
+/// PHP treats a plain untyped property with no explicit default as `= null`: the slot
+/// implicitly holds null until first written, and `ReflectionProperty` reports a null
+/// default. Synthesizes that implicit `= null` so propinit, inline construction, and
+/// reflection emit the same default an explicit `= null` would. Promoted, abstract,
+/// by-ref, and hooked properties keep their parsed (absent) default: their
+/// initialization flows through constructors or accessors instead of propinit.
+fn untyped_property_schema_default(prop: &ClassProperty) -> Option<Expr> {
+    if prop.type_expr.is_none()
+        && prop.default.is_none()
+        && !prop.is_promoted
+        && !prop.is_abstract
+        && !prop.by_ref
+        && !prop.hooks.get
+        && !prop.hooks.set
+    {
+        Some(Expr::new(ExprKind::Null, prop.span))
+    } else {
+        prop.default.clone()
+    }
 }
 
 /// Recursively widens literal `false` members to `bool` for mutable property storage shapes.

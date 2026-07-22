@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `rand` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `rand` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `min_args: 0` allows 0-arg calls (returns a raw random u32) in addition to
@@ -11,10 +10,7 @@
 //! - A `check` hook rejects exactly 1 argument, matching PHP's "0 or 2 arguments" rule.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +20,9 @@ builtin! {
     min_args: 0,
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Rand,
+    ),
     summary: "Generate a random integer.",
     php_manual: "https://www.php.net/manual/en/function.rand.php",
 }
@@ -35,9 +33,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Err(CompileError::new(cx.span, "rand() takes 0 or 2 arguments"));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers a `rand` call by dispatching to the shared random-integer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::math::lower_rand(ctx, inst, "rand")
 }

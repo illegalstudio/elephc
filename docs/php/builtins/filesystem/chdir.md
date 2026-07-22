@@ -2,7 +2,7 @@
 title: "chdir()"
 description: "Changes the current directory."
 sidebar:
-  order: 103
+  order: 105
 ---
 
 ## chdir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `chdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/chdir.md).
-

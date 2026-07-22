@@ -23,6 +23,8 @@ mod property_access;
 mod constructor_promotion;
 #[path = "objects/static_properties.rs"]
 mod static_properties;
+#[path = "objects/untyped_property_defaults.rs"]
+mod untyped_property_defaults;
 #[path = "objects/nested_arrays.rs"]
 mod nested_arrays;
 #[path = "objects/nullable_dispatch.rs"]

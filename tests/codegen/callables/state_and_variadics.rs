@@ -118,6 +118,58 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// Verifies that a static variable declared without an initializer defaults to null.
+#[test]
+fn test_static_without_initializer_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f() {
+    static $x;
+    var_dump($x);
+}
+f();
+f();
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}
+
+/// Verifies that `static $x;` behaves identically to the explicit `static $x = null;` form.
+#[test]
+fn test_static_without_initializer_matches_explicit_null_form() {
+    let implicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    let explicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n = null;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    assert_eq!(implicit, explicit);
+}
+
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
 fn test_closure_static_local_preserves_value_across_calls() {

@@ -2,7 +2,7 @@
 title: "file_get_contents()"
 description: "Reads an entire file into a string."
 sidebar:
-  order: 166
+  order: 168
 ---
 
 ## file_get_contents()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `file_get_contents` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/file_get_contents.md).
-

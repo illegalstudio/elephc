@@ -46,6 +46,35 @@ fn test_error_undefined_method() {
     );
 }
 
+/// Verifies an interface call keeps its declared ancestor return type.
+#[test]
+fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
+    expect_error(
+        r#"<?php
+interface Message { public function withHeader(): Message; }
+interface Request extends Message { public function requestOnly(): string; }
+class Plain implements Message { public function withHeader(): Message { return $this; } }
+class Req implements Request {
+    public function withHeader(): Message { return new Plain(); }
+    public function requestOnly(): string { return "req"; }
+}
+function read(Request $request): string {
+    return $request->withHeader()->requestOnly();
+}
+"#,
+        "Undefined method: Message::requestOnly",
+    );
+}
+
+/// Verifies `::class` rejects a receiver whose static type is not an object.
+#[test]
+fn test_error_object_class_name_requires_object() {
+    expect_error(
+        "<?php $value = 1; echo $value::class;",
+        "Cannot use \"::class\" on int",
+    );
+}
+
 /// Verifies that a method call on an object union (`A|B`) is rejected when the
 /// method is absent from one of the member classes: every object member must
 /// provide the method for the runtime class-id dispatch to be sound.
@@ -280,6 +309,20 @@ fn test_error_typed_property_rejects_callable_type() {
     // callable is not a valid property type.
     expect_error(
         "<?php class Box { public callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+}
+
+/// Verifies nullable and union spellings do not make PHP's forbidden `callable` property
+/// pseudo-type valid.
+#[test]
+fn test_error_typed_property_rejects_nested_callable_types() {
+    expect_error(
+        "<?php class Box { public ?callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+    expect_error(
+        "<?php class Box { public callable|null $callback; }",
         "Property Box::$callback cannot use type callable",
     );
 }
@@ -967,6 +1010,43 @@ fn test_error_const_named_class_is_rejected() {
     expect_error(
         "<?php class A { const class = 1; }",
         "Cannot use 'class' as a class constant name",
+    );
+}
+
+/// Verifies `class` remains reserved for class-name fetching and cannot name an enum case.
+#[test]
+fn test_error_enum_case_named_class_is_rejected() {
+    expect_error(
+        "<?php enum E { case class; }",
+        "Cannot use 'class' as an enum case name",
+    );
+}
+
+/// Verifies enum case lookup stays case-sensitive even when the declared name is a keyword.
+#[test]
+fn test_error_keyword_enum_case_access_with_wrong_case() {
+    expect_error(
+        "<?php enum E { case Default; } echo E::default;",
+        "Undefined enum case: E::default",
+    );
+}
+
+/// Verifies class constant lookup stays case-sensitive instead of compensating for keyword
+/// token folding with a case-insensitive semantic fallback.
+#[test]
+fn test_error_keyword_class_constant_access_with_wrong_case() {
+    expect_error(
+        "<?php class C { const Match = 1; } echo C::match;",
+        "Undefined class constant: C::match",
+    );
+}
+
+/// Verifies builtin keyword-named constants also require their exact declared spelling.
+#[test]
+fn test_error_builtin_keyword_constant_access_with_wrong_case() {
+    expect_error(
+        "<?php echo RegexIterator::match;",
+        "Undefined class constant: RegexIterator::match",
     );
 }
 

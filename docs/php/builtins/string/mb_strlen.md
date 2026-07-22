@@ -2,7 +2,7 @@
 title: "mb_strlen()"
 description: "Returns the character count of a string in the requested encoding."
 sidebar:
-  order: 375
+  order: 390
 ---
 
 ## mb_strlen()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `mb_strlen` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/mb_strlen.md).
-

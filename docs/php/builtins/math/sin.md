@@ -2,7 +2,7 @@
 title: "sin()"
 description: "Returns the sine of a number (radians)."
 sidebar:
-  order: 270
+  order: 285
 ---
 
 ## sin()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `sin` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/sin.md).
-

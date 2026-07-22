@@ -2,7 +2,7 @@
 title: "wordwrap()"
 description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 414
+  order: 429
 ---
 
 ## wordwrap()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `wordwrap` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/wordwrap.md).
-

@@ -2,7 +2,7 @@
 title: "zval_pack() — internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 320
 ---
 
 ## `zval_pack()` — internals
@@ -10,27 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_pack.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:533](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L533) (`lower_zval_pack`)
-- **Function symbol**: `lower_zval_pack()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `zval_pack(value)` by boxing the operand as a Mixed cell and invoking
-- `__rt_zval_pack`, which returns a pointer to a freshly allocated 16-byte zval.
-- `__rt_zval_pack` only reads the `(tag, lo, hi)` triple out of the boxed Mixed
-- cell; it never retains or frees that cell. When the operand was not already
-- Mixed/Union, `emit_box_current_value_as_mixed` allocated a fresh owned box
-- (persisting strings, increfing array/object/mixed children), so that box is a
-- throwaway temporary that must be deep-released after the pack call or it leaks
-- one Mixed cell per call. When the operand is already Mixed/Union no box was
-- created, so the operand's own live cell must not be freed here.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.zval_pack` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_mixed_free_deep`
-- `__rt_zval_pack`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.zval_pack`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

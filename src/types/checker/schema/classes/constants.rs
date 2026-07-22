@@ -303,6 +303,9 @@ fn rewrite_expr(
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
             receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
         },
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(rewrite_expr(object, class_name, parent_name)?),
+        },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess {
                 receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,

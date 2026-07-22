@@ -250,6 +250,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_listid(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::ObjectClassName { object } => expr_refs_listid(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_listid),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_listid)

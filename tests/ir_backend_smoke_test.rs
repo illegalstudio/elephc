@@ -764,7 +764,7 @@ try {
     );
 }
 
-/// Verifies Fiber::throw delivers exceptions into suspended EIR fibers.
+/// Verifies Fiber::throw retains caught exceptions while delivering them into suspended EIR fibers.
 #[test]
 fn ir_backend_throws_into_suspended_fibers() {
     let source = r#"<?php

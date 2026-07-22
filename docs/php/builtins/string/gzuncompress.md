@@ -2,7 +2,7 @@
 title: "gzuncompress()"
 description: "Uncompress a compressed string."
 sidebar:
-  order: 355
+  order: 370
 ---
 
 ## gzuncompress()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `gzuncompress` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/gzuncompress.md).
-

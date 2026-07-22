@@ -25,6 +25,11 @@ This page explains where every value lives in memory at runtime.
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
+│   Output capture buffers     │  _print_r_buf: 64KB return-mode capture,
+│  (print_r return mode, ob_*  │  _ob_ptrs/_lens/_caps + handler tables:
+│   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
+│                              │  are heap-allocated)
+├─────────────────────────────┤
 │     I/O and stream buffers   │  _cstr_buf/_cstr_buf2, _eof_flags,
 │  (C strings, streams, TLS,   │  _stream_*, _http_*, _ftp_*, wrapper/filter
 │   wrappers, filters)         │  tables, protocol/service/principal lookup buffers
@@ -41,8 +46,12 @@ This page explains where every value lives in memory at runtime.
 │                              │  _json_decode_assoc, _json_error_*,
 │                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _generator_class_id,
+│                              │  _print_r_mode/_print_r_off,
+│                              │  _ob_level/_ob_in_handler/_ob_flushing,
+│                              │  elephc_web_capture,
 │                              │  _include_once_*, _fn_variant_active_*,
-│                              │  _elephc_crypto_*_fn, _elephc_tls_*_fn, ...
+│                              │  _elephc_crypto_*_fn, _elephc_tls_*_fn,
+│                              │  _elephc_eval_*_fn, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │
@@ -241,7 +250,9 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. Compact runtime-thrown Throwable payloads (exception/error objects allocated by throw paths) are stamped kind `6=throwable`; the uniform release dispatchers (`__rt_decref_any`, `__rt_object_free_deep`) accept kind `6` and release it through the object path. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout.
+
+On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes `"ELPH"` in its high 32 bits. Every x86_64 heap stamp goes through the shared `codegen_support::sentinels` helpers — `x86_64_heap_kind_word(low_bits)` builds the full word (magic + packed kind/COW/value_type low bits) and checkers compare against `X86_64_HEAP_MAGIC_HI32` — instead of hand-typed immediates. Refcount and free helpers ignore pointers whose header does not carry the marker, so foreign or static pointers silently opt out of refcounting. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
 The runtime routine `__rt_heap_alloc`:
 
@@ -493,7 +504,7 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 
 These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
 
-The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen/runtime/data/`. Together they emit these static data tables:
+The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen_support/runtime/data/`. Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
@@ -579,6 +590,10 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Resets each statement — effectively unlimited |
+| print_r capture | `_print_r_buf` = 64KB; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer; oversized captures truncate at 64KB instead of overflowing adjacent data |
+| Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
+| Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
+| Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
@@ -632,13 +647,13 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
 - **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
 - **Kind-0 resources** (generic/unknown resource kind, including synthetic user-wrapper handles `>= 0x40000000`) are not auto-freed by the Mixed deep-free path — their lifecycle remains managed by the wrapper layer or the user's explicit `close()` call. Kinds 1–4 (native stream fd, HashContext, `popen` pipe, `opendir` stream) are auto-released at scope exit
-- **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (documented in `src/codegen/runtime/strings/hash_context.rs`)
+- **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (documented in `src/codegen_support/runtime/strings/hash_context.rs`)
 
 ### Targeted cycle collection
 
 The runtime now includes a targeted collector for heap-backed `array`, associative-array/hash, and `object` graphs:
 
-- the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`)
+- the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`, `throwable`)
 - indexed arrays pack their runtime `value_type` into the same kind word so the collector knows whether their elements can contain nested heap pointers
 - objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal; Generator frames are object-kind blocks with a custom deep-free branch keyed by `_generator_class_id`
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher

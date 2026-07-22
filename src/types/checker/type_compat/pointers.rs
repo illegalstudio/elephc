@@ -117,6 +117,7 @@ impl Checker {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
                     "callable" => Ok(PhpType::Callable),
+                    "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),

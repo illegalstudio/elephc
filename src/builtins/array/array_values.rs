@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_values` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_values` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` reproduces the legacy return-type rule: the result is an indexed
@@ -12,13 +11,9 @@
 //!   is required because the return type depends on the inferred argument type.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_values` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,7 +22,9 @@ builtin! {
     params: [array: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayValues,
+    ),
     summary: "Returns all the values of an array, re-indexed numerically.",
     php_manual: "https://www.php.net/manual/en/function.array-values.php",
 }
@@ -47,9 +44,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_values() argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_values` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_values(ctx, inst)
 }

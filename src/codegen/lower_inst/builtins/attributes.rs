@@ -3,7 +3,7 @@
 //! Materializes attribute name and literal argument arrays from EIR class metadata.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Class and attribute lookup follows PHP's case-insensitive symbol rules.
@@ -18,7 +18,6 @@ use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_CLASS: i64 = 1;
 pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_FUNCTION: i64 = 2;
 pub(in crate::codegen::lower_inst) const REFLECTION_ATTRIBUTE_TARGET_METHOD: i64 = 4;
@@ -256,7 +255,7 @@ fn emit_reflection_attribute_object(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
-                (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             ));                                                                 // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
             ctx.emitter

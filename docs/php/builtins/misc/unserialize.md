@@ -2,7 +2,7 @@
 title: "unserialize()"
 description: "Creates a PHP value from a stored representation."
 sidebar:
-  order: 286
+  order: 301
 ---
 
 ## unserialize()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `unserialize` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/unserialize.md).
-

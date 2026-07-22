@@ -2,7 +2,7 @@
 title: "ip2long()"
 description: "Converts a string containing an IPv4 address into a long integer."
 sidebar:
-  order: 371
+  order: 386
 ---
 
 ## ip2long()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ip2long` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/ip2long.md).
-

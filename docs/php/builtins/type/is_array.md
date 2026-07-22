@@ -2,7 +2,7 @@
 title: "is_array()"
 description: "Checks whether a variable is an array."
 sidebar:
-  order: 425
+  order: 440
 ---
 
 ## is_array()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_array` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_array.md).
-

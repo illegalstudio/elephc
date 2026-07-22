@@ -2,7 +2,7 @@
 title: "min()"
 description: "Find lowest value."
 sidebar:
-  order: 262
+  order: 277
 ---
 
 ## min()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `min` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/min.md).
-

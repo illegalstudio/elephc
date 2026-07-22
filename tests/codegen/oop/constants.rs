@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Verifies keyword-named class and interface constants preserve PHP's case-sensitive identity,
+/// including declarations whose spellings differ only by case.
+#[test]
+fn test_keyword_named_class_and_interface_constants_preserve_case() {
+    let out = compile_and_run(
+        "<?php
+        class KeywordConstants {
+            const Match = 1;
+            const MATCH = 2;
+            const Default = 3;
+        }
+        interface KeywordInterface {
+            const Print = 4;
+            const PRINT = 5;
+        }
+        echo KeywordConstants::Match, KeywordConstants::MATCH,
+             KeywordConstants::Default, KeywordInterface::Print, KeywordInterface::PRINT;
+        ",
+    );
+    assert_eq!(out, "12345");
+}
+
 /// Verifies class constant int.
 #[test]
 fn test_class_constant_int() {

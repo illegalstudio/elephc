@@ -2,7 +2,7 @@
 title: "stream_context_create()"
 description: "Creates a stream context."
 sidebar:
-  order: 195
+  order: 210
 ---
 
 ## stream_context_create()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_context_create` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_context_create.md).
-

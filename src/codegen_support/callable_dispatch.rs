@@ -48,95 +48,18 @@ pub(crate) fn runtime_builtin_wrapper_supported(
     source_arg_ty: Option<&PhpType>,
 ) -> bool {
     let name = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-    if !runtime_builtin_name_supported(&name) {
+    let Some(def) = crate::builtins::registry::lookup(&name) else {
         return false;
+    };
+    match def.spec.semantics.callable {
+        crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(accepts) => {
+            accepts(source_arg_ty)
+        }
+        crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
+            target.callable_accepts(source_arg_ty)
+        }
+        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
     }
-    let source_arg_ty = source_arg_ty.map(PhpType::codegen_repr);
-    match name.as_str() {
-        "abs" => source_arg_ty.is_none_or(|source_arg_ty| {
-            matches!(
-                source_arg_ty,
-                PhpType::Bool
-                    | PhpType::Float
-                    | PhpType::Int
-                    | PhpType::Mixed
-                    | PhpType::Never
-                    | PhpType::TaggedScalar
-                    | PhpType::Union(_)
-                    | PhpType::Void
-            )
-        }),
-        "boolval" => source_arg_ty.is_some_and(|source_arg_ty| {
-            matches!(
-                source_arg_ty,
-                PhpType::AssocArray { .. }
-                    | PhpType::Array(_)
-                    | PhpType::Bool
-                    | PhpType::Float
-                    | PhpType::Int
-                    | PhpType::Iterable
-                    | PhpType::Never
-                    | PhpType::Str
-                    | PhpType::Void
-            )
-        }),
-        "floatval" => source_arg_ty.is_some_and(|source_arg_ty| {
-            matches!(
-                source_arg_ty,
-                PhpType::Bool
-                    | PhpType::Float
-                    | PhpType::Int
-                    | PhpType::Never
-                    | PhpType::Str
-                    | PhpType::Void
-            )
-        }),
-        "intval" => source_arg_ty.is_none_or(|source_arg_ty| {
-            matches!(
-                source_arg_ty,
-                PhpType::Bool
-                    | PhpType::Float
-                    | PhpType::Int
-                    | PhpType::Mixed
-                    | PhpType::Never
-                    | PhpType::Str
-                    | PhpType::Union(_)
-                    | PhpType::Void
-            )
-        }),
-        "strlen" => source_arg_ty.is_none_or(|source_arg_ty| {
-            matches!(
-                source_arg_ty,
-                PhpType::Mixed | PhpType::Str | PhpType::Union(_)
-            )
-        }),
-        "strtolower" | "strtoupper" | "trim" => source_arg_ty.is_none_or(|source_arg_ty| {
-            matches!(source_arg_ty, PhpType::Str)
-        }),
-        // Type predicates take a Mixed wrapper param; concrete source types
-        // fold to a static boolean in the predicate lowering.
-        "is_array" | "is_integer" => true,
-        "gettype" => true,
-        _ => false,
-    }
-}
-
-/// Returns true when a builtin has a generic runtime wrapper implementation.
-fn runtime_builtin_name_supported(name: &str) -> bool {
-    matches!(
-        name,
-        "abs"
-            | "boolval"
-            | "floatval"
-            | "gettype"
-            | "intval"
-            | "is_array"
-            | "is_integer"
-            | "strlen"
-            | "strtolower"
-            | "strtoupper"
-            | "trim"
-    )
 }
 
 /// Builds a static-method runtime wrapper signature that can receive keyed variadic tails.

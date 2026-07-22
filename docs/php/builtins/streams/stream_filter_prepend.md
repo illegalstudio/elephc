@@ -2,7 +2,7 @@
 title: "stream_filter_prepend()"
 description: "Attaches a filter to a stream (prepend)."
 sidebar:
-  order: 342
+  order: 357
 ---
 
 ## stream_filter_prepend()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_filter_prepend` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_filter_prepend.md).
-

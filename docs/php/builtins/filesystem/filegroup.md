@@ -2,7 +2,7 @@
 title: "filegroup()"
 description: "Gets file group."
 sidebar:
-  order: 115
+  order: 117
 ---
 
 ## filegroup()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `filegroup` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/filegroup.md).
-

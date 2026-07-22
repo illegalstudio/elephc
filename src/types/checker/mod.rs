@@ -24,6 +24,7 @@ mod driver;
 mod extern_decl;
 mod functions;
 mod inference;
+mod loop_widening;
 mod method_pass;
 mod schema;
 mod stmt_check;
@@ -46,6 +47,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use loop_widening::loop_grown_mixed_array_pushes;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
@@ -182,6 +184,9 @@ pub(crate) struct Checker {
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// Authoritative result type of each checked builtin call, keyed by call span.
+    /// EIR lowering consumes this instead of reimplementing builtin return inference.
+    pub builtin_call_types: HashMap<Span, PhpType>,
 }
 
 #[derive(Clone)]
@@ -258,6 +263,7 @@ pub fn check_types(
         required_libraries: checker.required_libraries,
         warnings,
         throw_access_sites: checker.throw_access_sites,
+        builtin_call_types: checker.builtin_call_types,
     })
 }
 

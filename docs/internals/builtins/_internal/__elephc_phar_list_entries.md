@@ -2,7 +2,7 @@
 title: "__elephc_phar_list_entries() — internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 468
 ---
 
 ## `__elephc_phar_list_entries()` — internals
@@ -10,18 +10,33 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_list_entries.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_list_entries.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4277](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4277) (`lower_elephc_phar_list_entries`)
-- **Function symbol**: `lower_elephc_phar_list_entries()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
 - Internal helper used by the built-in Phar / PharData support to enumerate archive entries.
 - Calls the native PHAR listing bridge and returns the entries as an array.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.__elephc_phar_list_entries` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (1 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.__elephc_phar_list_entries`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

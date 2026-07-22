@@ -2,7 +2,7 @@
 title: "pfsockopen()"
 description: "Open persistent Internet or Unix domain socket connection."
 sidebar:
-  order: 338
+  order: 353
 ---
 
 ## pfsockopen()
@@ -38,4 +38,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `pfsockopen` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/pfsockopen.md).
-

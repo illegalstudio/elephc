@@ -1,35 +1,24 @@
 //! Purpose:
-//! Home of the PHP `lcfirst` builtin: its declaration and lowering.
+//! Home of the PHP `lcfirst` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No `check` hook is needed: `lcfirst` is a pure-data builtin whose return
 //!   type (`Str`) is fully determined by its declaration. The registry derives the
 //!   return type from the `returns:` field without calling a check hook.
-//! - `lower` is a thin wrapper over the dedicated `lower_lcfirst` emitter in the
-//!   strings lowering module.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "lcfirst",
     area: String,
     params: [string: Str],
     returns: Str,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Lcfirst,
+    ),
     summary: "Lowercases the first character of a string.",
     php_manual: "https://www.php.net/manual/en/function.lcfirst.php",
-}
-
-/// Lowers a `lcfirst` call by dispatching to the dedicated per-arch emitter.
-fn lower(
-    ctx: &mut FunctionContext,
-    inst: &Instruction,
-) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_lcfirst(ctx, inst)
 }

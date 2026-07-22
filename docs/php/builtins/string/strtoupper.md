@@ -2,7 +2,7 @@
 title: "strtoupper()"
 description: "Converts a string to uppercase."
 sidebar:
-  order: 404
+  order: 419
 ---
 
 ## strtoupper()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strtoupper` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strtoupper.md).
-

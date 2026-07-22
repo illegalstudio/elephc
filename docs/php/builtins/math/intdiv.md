@@ -2,7 +2,7 @@
 title: "intdiv()"
 description: "Integer division."
 sidebar:
-  order: 254
+  order: 269
 ---
 
 ## intdiv()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `intdiv` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/intdiv.md).
-

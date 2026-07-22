@@ -2,7 +2,7 @@
 title: "mkdir() — internals"
 description: "Compiler internals for mkdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 138
+  order: 140
 ---
 
 ## `mkdir()` — internals
@@ -10,22 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/mkdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4428](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4428) (`lower_mkdir`)
-- **Function symbol**: `lower_mkdir()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `mkdir(path)` through the target-aware runtime helper.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.mkdir` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_chdir`
-- `__rt_copy`
-- `__rt_mkdir`
-- `__rt_rmdir`
-- `__rt_tempnam`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.mkdir`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

@@ -11,7 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// mixed_from_value: retain/persist a runtime value and box it into a mixed cell.
 /// Input:  x0=value_tag, x1=value_lo, x2=value_hi
@@ -115,7 +114,7 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_from_value_alloc");
     emitter.instruction("mov rax, 24");                                         // mixed cells store tag plus two payload words in the owned heap allocation
     emitter.instruction("call __rt_heap_alloc");                                // allocate the mixed cell storage through the x86_64 heap wrapper
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the mixed-cell heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the mixed-cell heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a mixed cell in the uniform heap header
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved runtime value tag after helper-driven ownership normalization
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the runtime value tag at mixed[0]

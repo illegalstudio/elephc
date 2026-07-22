@@ -3,7 +3,7 @@
 //! Reuses the shared runtime stat helpers instead of duplicating platform logic.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Path operands are already evaluated by EIR and are materialized into the
@@ -18,7 +18,6 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const STREAM_METADATA_SLOT: usize = 14;
 const STREAM_WRAPPER_UNLINK_SLOT: usize = 15;
 const STREAM_WRAPPER_MKDIR_SLOT: usize = 17;
@@ -314,8 +313,7 @@ pub(crate) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         load_string_to_result(ctx, prompt, "readline prompt")?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("mov x0, #1");                          // pass stdout as the destination fd for the readline prompt
-                ctx.emitter.syscall(4);                                         // write the prompt before blocking on stdin
+                ctx.emitter.instruction("bl __rt_vd_write");                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction("mov rsi, rax");                        // pass the prompt pointer as write()'s buffer argument
@@ -3063,8 +3061,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("ldr x9, [sp, #8]");                        // load the current copied byte total
             ctx.emitter.instruction("add x9, x9, x2");                          // add this chunk's byte length
             ctx.emitter.instruction("str x9, [sp, #8]");                        // store the updated copied byte total
-            ctx.emitter.instruction("mov x0, #1");                              // write wrapper bytes to stdout
-            ctx.emitter.syscall(4);
+            ctx.emitter.instruction("bl __rt_vd_write");                        // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the owned chunk pointer
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
             ctx.emitter.instruction(&format!("b {}", loop_label));              // continue draining the wrapper stream
@@ -3102,8 +3099,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("add r8, rdx");                             // add this chunk's byte length
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r8");             // store the updated copied byte total
             ctx.emitter.instruction("mov rsi, rax");                            // pass the chunk pointer to write()
-            ctx.emitter.instruction("mov edi, 1");                              // write wrapper bytes to stdout
-            abi::emit_call_label(ctx.emitter, "write");
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the owned chunk pointer
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
             ctx.emitter.instruction(&format!("jmp {}", loop_label));            // continue draining the wrapper stream
@@ -8664,7 +8660,7 @@ pub(super) fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, la
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov r10, 1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the string tag in the Mixed cell
@@ -8778,7 +8774,7 @@ fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");
@@ -8856,7 +8852,7 @@ fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");

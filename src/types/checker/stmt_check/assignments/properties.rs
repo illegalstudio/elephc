@@ -346,40 +346,122 @@ fn is_empty_array_placeholder(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
 }
 
+/// Returns true when a value type's native property slot cannot also represent null,
+/// so an untyped null-defaulted property storing it must use nullable-union storage.
+/// Arrays are deliberately excluded: their pointer slots read a null pointer as PHP
+/// null (var_dump and the null-container read paths recognize it), and keeping the
+/// plain rebind preserves the GC-observable allocation profile — union storage would
+/// box every stored array in a Mixed cell.
+fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
+    matches!(
+        val_ty,
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+    )
+}
+
+/// Computes the refined stored type for an untyped property after a write, shared by the
+/// instance and static property refinement paths. Returns `None` when the type is unchanged.
+///
+/// Untyped properties start as `Void` (their default is null, implicit or explicit), so a
+/// scalar/array value — whose native slot cannot also represent null — is stored as the
+/// nullable `Union([Void, T])`, the same layout as a typed `?T` property, keeping the null
+/// default observable. Object/Mixed and other pointer-shaped values keep the plain rebind:
+/// their slots already encode null. A later write outside an existing nullable union widens
+/// to `Mixed` (PHP untyped properties accept anything). Untyped non-null defaults keep the
+/// historical rebind, and array-typed slots keep `[]`-placeholder adoption and generic-array
+/// element specialization.
+pub(super) fn refined_untyped_property_assignment_type(
+    checker: &Checker,
+    current: &PhpType,
+    val_ty: &PhpType,
+    definitely_initialized: bool,
+) -> Option<PhpType> {
+    match current {
+        PhpType::Void => {
+            if *val_ty == PhpType::Void {
+                None
+            } else if definitely_initialized {
+                // Assignments inside the object's own constructor initialize the slot
+                // before any observable read, so the historical precise rebind stays
+                // (matching `propagate_constructor_arg_type` for promoted params).
+                Some(val_ty.clone())
+            } else if untyped_property_value_needs_nullable_storage(val_ty) {
+                let stored = if matches!(val_ty, PhpType::False) {
+                    PhpType::Bool
+                } else {
+                    val_ty.clone()
+                };
+                Some(PhpType::Union(vec![PhpType::Void, stored]))
+            } else {
+                Some(val_ty.clone())
+            }
+        }
+        PhpType::Union(members)
+            if members.len() == 2 && members[0] == PhpType::Void =>
+        {
+            if checker.type_accepts(current, val_ty) {
+                None
+            } else {
+                Some(PhpType::Mixed)
+            }
+        }
+        PhpType::Int if current != val_ty => Some(val_ty.clone()),
+        _ => {
+            if is_empty_array_placeholder(current)
+                && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
+                // An `[]` initializer types the property as `Array(Never)`; the
+                // first concrete array assignment fixes the element type, exactly
+                // as a plain local reassignment overwrites its type. Without this,
+                // the element type stays `Never` and codegen mis-emits later reads.
+                return Some(val_ty.clone());
+            }
+            let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
+            (refined_ty != *current).then_some(refined_ty)
+        }
+    }
+}
+
 /// Refines the inferred type of an object property after a write, for properties without declared types.
 ///
-/// For untyped `Int` or `Void` properties, replaces the type with the assigned value's type.
-/// For an `[]`-initialized property (`Array(Never)`), adopts the first concrete array assigned.
-/// For generic arrays, calls `Checker::specialize_generic_array_hint` to narrow the element type
-/// based on the assigned value. Only updates when the refined type differs from the current type.
+/// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
+/// documentation for the nullable-union storage rules. Only updates when the refined
+/// type differs from the current type.
 fn refine_object_property_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
     val_ty: &PhpType,
 ) {
+    // A write inside the written class's own constructor (or a subclass constructor)
+    // definitely initializes the slot before any observable read.
+    let definitely_initialized = checker.current_method.as_deref() == Some("__construct")
+        && checker.current_class.as_deref().is_some_and(|current| {
+            current == class_name || checker.is_subclass_of(current, class_name)
+        });
+    let refined_ty = {
+        let Some(class_info) = checker.classes.get(class_name) else {
+            return;
+        };
+        if class_info.visible_property_is_declared(property) {
+            return;
+        }
+        let Some(slot) = class_info.visible_property_index(property) else {
+            return;
+        };
+        let Some(refined_ty) = refined_untyped_property_assignment_type(
+            checker,
+            &class_info.properties[slot].1,
+            val_ty,
+            definitely_initialized,
+        ) else {
+            return;
+        };
+        refined_ty
+    };
     if let Some(class_info) = checker.classes.get_mut(class_name) {
-        let property_has_declared_type = class_info.visible_property_is_declared(property);
         if let Some(slot) = class_info.visible_property_index(property) {
-            let prop = &mut class_info.properties[slot];
-            if !property_has_declared_type {
-                if matches!(prop.1, PhpType::Int | PhpType::Void) && prop.1 != *val_ty {
-                    prop.1 = val_ty.clone();
-                } else if is_empty_array_placeholder(&prop.1)
-                    && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-                {
-                    // An `[]` initializer types the property as `Array(Never)`; the
-                    // first concrete array assignment fixes the element type, exactly
-                    // as a plain local reassignment overwrites its type. Without this,
-                    // the element type stays `Never` and codegen mis-emits later reads.
-                    prop.1 = val_ty.clone();
-                } else {
-                    let refined_ty = Checker::specialize_generic_array_hint(&prop.1, val_ty);
-                    if refined_ty != prop.1 {
-                        prop.1 = refined_ty;
-                    }
-                }
-            }
+            class_info.properties[slot].1 = refined_ty;
         }
     }
 }

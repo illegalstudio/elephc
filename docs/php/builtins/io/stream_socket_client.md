@@ -2,7 +2,7 @@
 title: "stream_socket_client()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 221
+  order: 236
 ---
 
 ## stream_socket_client()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_socket_client` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_socket_client.md).
-

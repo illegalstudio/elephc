@@ -2,7 +2,7 @@
 title: "symlink()"
 description: "Creates a symbolic link."
 sidebar:
-  order: 150
+  order: 152
 ---
 
 ## symlink()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `symlink` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/symlink.md).
-

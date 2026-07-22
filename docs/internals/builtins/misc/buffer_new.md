@@ -2,7 +2,7 @@
 title: "buffer_new() — internals"
 description: "Compiler internals for buffer_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 275
+  order: 290
 ---
 
 ## `buffer_new()` — internals
@@ -14,9 +14,13 @@ sidebar:
 - **Function symbol**: `(none — type-checker only)()`
 
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
+
+## EIR and runtime boundary
+
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 

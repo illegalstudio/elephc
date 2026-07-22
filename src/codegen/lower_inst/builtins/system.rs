@@ -3,7 +3,7 @@
 //! Marshals already-evaluated EIR operands into the shared runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Time builtins are effectful and must reuse the target-aware runtime
@@ -763,10 +763,16 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
+            ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
+            ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
             ctx.emitter.syscall(1);
         }
         (Platform::Linux, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rdi, rax");                            // move the computed exit code into the SysV first-argument register
+            ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
+            ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
+            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register
             ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
             ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI
         }

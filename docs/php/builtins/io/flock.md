@@ -2,7 +2,7 @@
 title: "flock()"
 description: "Portable advisory file locking."
 sidebar:
-  order: 168
+  order: 170
 ---
 
 ## flock()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `flock` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/flock.md).
-

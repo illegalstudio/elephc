@@ -2,7 +2,7 @@
 title: "stream_set_blocking()"
 description: "Sets blocking/non-blocking mode on a stream."
 sidebar:
-  order: 215
+  order: 230
 ---
 
 ## stream_set_blocking()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_set_blocking` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_set_blocking.md).
-

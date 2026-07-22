@@ -18,7 +18,7 @@ pub(crate) mod params;
 mod simple;
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{AttributeGroup, ExprKind, Stmt, StmtKind};
 use crate::parser::control;
@@ -31,17 +31,20 @@ pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
-pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {
+pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
     // PHP attribute groups (`#[...]`) may decorate any statement-level
     // declaration. We capture them here and attach the result to the parsed
     // statement; non-declaration kinds reject non-empty attribute lists below.
     let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
 
     if *pos >= tokens.len() {
-        let span = tokens.last().map(|(_, s)| *s).unwrap_or(Span::dummy());
+        let span = tokens
+            .last()
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(Span::dummy());
         return Err(CompileError::new(span, "Unexpected end of input after attributes"));
     }
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
 
     let stmt = parse_stmt_dispatch(tokens, pos, span)?;
     attach_attributes_to_stmt(stmt, attributes, span)
@@ -93,7 +96,7 @@ fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
 /// including declarations, expressions, control flow, includes, and assignments.
 /// Recovery errors within this function stop at PHP statement boundaries to preserve follow-up diagnostics.
 fn parse_stmt_dispatch(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -105,7 +108,13 @@ fn parse_stmt_dispatch(
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
-        Token::Enum => oop::parse_enum_decl(tokens, pos, span),
+        Token::Enum
+            if tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
+                name_part_from_token(token, metadata).is_some()
+            }) =>
+        {
+            oop::parse_enum_decl(tokens, pos, span)
+        }
         Token::ReadOnly => oop::parse_readonly_decl(tokens, pos, span),
         Token::Packed => oop::parse_packed_decl(tokens, pos, span),
         Token::Interface => oop::parse_interface_decl(tokens, pos, span),
@@ -148,6 +157,7 @@ fn parse_stmt_dispatch(
         }
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
         Token::Identifier(_)
+        | Token::Enum
         | Token::Self_
         | Token::Parent
         | Token::Backslash
@@ -215,7 +225,7 @@ fn parse_stmt_dispatch(
 /// or exceeds `usize` range.
 fn parse_loop_exit_level(
     keyword: &str,
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<usize, CompileError> {
     if tokens[*pos].0 == Token::Semicolon {
@@ -246,7 +256,7 @@ fn parse_loop_exit_level(
 /// Used to disambiguate scoped property accesses (e.g., `Foo::$bar`) from comparison operators
 /// in expression statements. Stops scanning when it encounters an assignment operator at depth 0,
 /// returning false in that case.
-fn statement_lhs_contains_double_colon(tokens: &[(Token, Span)], start: usize) -> bool {
+fn statement_lhs_contains_double_colon(tokens: &[SpannedToken], start: usize) -> bool {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     for (token, _) in tokens.iter().skip(start) {
@@ -287,7 +297,7 @@ fn statement_lhs_contains_double_colon(tokens: &[(Token, Span)], start: usize) -
 /// when depth is zero. Also stops when a statement-starting keyword is encountered (after the
 /// first token), allowing recovery to continue from the next statement without consuming it.
 /// If already at a boundary token, advances by one to avoid infinite loops.
-pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut usize) {
+pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut usize) {
     let start = *pos;
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -381,9 +391,9 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut 
 }
 
 /// Parses a braced block `{ stmts }`, returning statements or errors.
-pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
+pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
     let span = if *pos < tokens.len() {
-        tokens[*pos].1
+        tokens[*pos].1.span
     } else {
         Span::dummy()
     };
@@ -415,7 +425,7 @@ pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt
 }
 
 /// Parse either a braced block `{ ... }` or a single statement (for braceless if/while/for/foreach).
-pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
+pub fn parse_body(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         parse_block(tokens, pos)
     } else {
@@ -429,7 +439,7 @@ pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>
 /// Used to terminate expression statements, return statements, throw statements, and similar
 /// constructs that require explicit semicolons in PHP.
 pub(crate) fn expect_semicolon(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<(), CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
@@ -437,7 +447,7 @@ pub(crate) fn expect_semicolon(
         Ok(())
     } else {
         let span = if *pos < tokens.len() {
-            tokens[*pos].1
+            tokens[*pos].1.span
         } else {
             Span::dummy()
         };
@@ -450,7 +460,7 @@ pub(crate) fn expect_semicolon(
 /// Used for mandatory syntax elements like `{` in blocks or specific keywords where absence
 /// indicates a syntax error.
 pub(crate) fn expect_token(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     expected: &Token,
     msg: &str,
@@ -460,7 +470,7 @@ pub(crate) fn expect_token(
         Ok(())
     } else {
         let span = if *pos < tokens.len() {
-            tokens[*pos].1
+            tokens[*pos].1.span
         } else {
             Span::dummy()
         };
@@ -468,14 +478,49 @@ pub(crate) fn expect_token(
     }
 }
 
-/// Returns true if the token at `pos` is the start of a PHP name (identifier or backslash).
+/// Converts a token accepted as an ordinary PHP name segment to its source spelling.
 ///
-/// Used to distinguish name-based declarations from generic expression statements.
-pub(crate) fn name_starts_at(tokens: &[(Token, Span)], pos: usize) -> bool {
-    matches!(
-        tokens.get(pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Backslash)
-    )
+/// `enum` is a soft keyword in class-like name contexts; other reserved words remain
+/// excluded here even though PHP permits them in the broader member-name grammar.
+pub(crate) fn name_part_from_token(
+    token: &Token,
+    metadata: &crate::lexer::TokenMetadata,
+) -> Option<String> {
+    match token {
+        Token::Identifier(name) => Some(name.clone()),
+        Token::Enum => crate::parser::keyword_name::bareword_name_from_token(token, metadata),
+        _ => None,
+    }
+}
+
+/// Returns true if the token at `pos` starts a PHP class-like name.
+///
+/// Accepts identifiers, the soft keyword `enum`, and a leading namespace separator.
+pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
+    match tokens.get(pos) {
+        Some((Token::Backslash, _)) => true,
+        Some((token, metadata)) => name_part_from_token(token, metadata).is_some(),
+        None => false,
+    }
+}
+
+/// Parses one unqualified class-like declaration name.
+///
+/// This accepts the soft keyword `enum` alongside ordinary identifiers but never
+/// consumes namespace separators, which are invalid in declaration names.
+pub(crate) fn parse_unqualified_name(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    error: &str,
+) -> Result<String, CompileError> {
+    let Some((token, metadata)) = tokens.get(*pos) else {
+        return Err(CompileError::new(span, error));
+    };
+    let name = name_part_from_token(token, metadata)
+        .ok_or_else(|| CompileError::new(span, error))?;
+    *pos += 1;
+    Ok(name)
 }
 
 /// Parses a PHP qualified or unqualified name from the token stream.
@@ -485,7 +530,7 @@ pub(crate) fn name_starts_at(tokens: &[(Token, Span)], pos: usize) -> bool {
 /// tracks whether any intermediate backslashes appeared. Returns an error if no identifier
 /// is found or if a backslash appears at the end of the sequence.
 pub(crate) fn parse_name(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     first_error: &str,
@@ -498,12 +543,17 @@ pub(crate) fn parse_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                parts.push(name.clone());
+        match tokens.get(*pos) {
+            Some((token, metadata)) if name_part_from_token(token, metadata).is_some() => {
+                parts.push(
+                    name_part_from_token(token, metadata)
+                        .expect("name part was checked immediately above"),
+                );
                 *pos += 1;
             }
-            _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ if parts.is_empty() => {
+                return Err(CompileError::new(span, first_error))
+            }
             _ => {
                 return Err(CompileError::new(
                     span,

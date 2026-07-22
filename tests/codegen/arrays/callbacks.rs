@@ -845,6 +845,62 @@ foreach ($uasorted as $value) {
 
 // --- array_map over heterogeneous (Mixed-element) input arrays ---
 
+/// Verifies every value-callback checker keeps typed closure declarations over an
+/// `array`-hinted parameter instead of fabricating integer element arguments.
+#[test]
+fn test_typed_array_callbacks_over_unknown_element_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function is_false_value(false $value): bool { return true; }
+
+function exercise(array $values): void {
+    $mapped = array_map(static fn(false $value): false => $value, $values);
+    echo count($mapped), ":";
+
+    $filtered = array_filter($values, static fn(false $value): bool => true);
+    echo count($filtered), ":";
+
+    $walked = $values;
+    array_walk($walked, static function (false $value): void { echo "w"; });
+    echo ":";
+
+    $recursive = $values;
+    array_walk_recursive($recursive, static function (false $value): void { echo "r"; });
+    echo ":";
+
+    $reduced = array_reduce(
+        $values,
+        static fn(int $carry, false $value): int => $carry + 1,
+        0,
+    );
+    echo $reduced, ":";
+
+    $found = array_find($values, static fn(false $value): bool => true);
+    echo gettype($found), ":";
+    echo array_any($values, "is_false_value"), ":";
+    echo array_all($values, static fn(false $value): bool => true), ":";
+
+    $difference = array_udiff(
+        $values,
+        [false],
+        static fn(false $left, false $right): int => 0,
+    );
+    echo count($difference), ":";
+
+    $intersection = array_uintersect(
+        $values,
+        [false],
+        static fn(false $left, false $right): int => 0,
+    );
+    echo count($intersection);
+}
+
+exercise([false, false]);
+"#,
+    );
+    assert_eq!(out, "2:2:ww:rr:2:boolean:1:1:0:2");
+}
+
 /// Verifies the reported repro: array_map with an untyped closure over a heterogeneous
 /// array preserves each element (the string element must not coerce to integer 0).
 #[test]

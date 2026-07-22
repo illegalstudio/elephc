@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `ptr_offset` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `ptr_offset` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the first argument is a pointer and the second is an
 //!   integer-compatible offset, preserving the pointer's inner type annotation.
-//! - `lower` is a thin wrapper over the shared `pointers::lower_ptr_offset` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [pointer: Mixed, offset: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::PtrOffset,
+    ),
     summary: "Returns a new pointer offset from the given pointer by the given byte count.",
     extension: true,
 }
@@ -47,9 +44,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(ptr_ty)
-}
-
-/// Lowers a `ptr_offset` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_ptr_offset(ctx, inst)
 }

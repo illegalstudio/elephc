@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `call_user_func_array` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/call_user_func_array.md).
-

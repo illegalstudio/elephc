@@ -2,7 +2,7 @@
 title: "ord()"
 description: "Returns the ASCII value of the first character of a string."
 sidebar:
-  order: 379
+  order: 394
 ---
 
 ## ord()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ord` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/ord.md).
-

@@ -10,7 +10,6 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const PTR_READ_STRING_NEG_LEN_MSG_LEN: usize =
     "Fatal error: ptr_read_string() length must be non-negative\n".len();
 
@@ -107,7 +106,7 @@ fn emit_ptr_read_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the requested byte length across the heap allocation helper call
     emitter.instruction("mov rax, rdx");                                        // allocation size = requested raw byte length
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned string payload storage on the elephc heap
-    let kind_instr = format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1);
+    let kind_instr = format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1));
     emitter.instruction(&kind_instr);                                           // materialize the x86_64 owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation as a string while preserving allocator refcount
     emitter.instruction("mov r8, rax");                                         // initialize destination cursor to the owned string payload

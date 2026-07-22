@@ -2,7 +2,7 @@
 title: "strstr()"
 description: "Returns the portion of a string starting at the first occurrence of a substring."
 sidebar:
-  order: 402
+  order: 417
 ---
 
 ## strstr()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strstr` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strstr.md).
-

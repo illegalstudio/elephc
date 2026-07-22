@@ -2,7 +2,7 @@
 title: "hypot()"
 description: "Calculates the length of the hypotenuse of a right-angle triangle."
 sidebar:
-  order: 253
+  order: 268
 ---
 
 ## hypot()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hypot` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/hypot.md).
-

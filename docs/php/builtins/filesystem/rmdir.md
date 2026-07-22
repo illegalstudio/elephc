@@ -2,7 +2,7 @@
 title: "rmdir()"
 description: "Removes a directory."
 sidebar:
-  order: 147
+  order: 149
 ---
 
 ## rmdir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rmdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/rmdir.md).
-

@@ -1,8 +1,8 @@
 //! Purpose:
-//! Home of the PHP `mb_strlen` builtin: declaration and lowering.
+//! Home of the PHP `mb_strlen` builtin: declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook), both via
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
@@ -12,9 +12,7 @@
 
 use crate::{
     builtins::spec::{BuiltinCheckCtx, DefaultSpec},
-    codegen::{context::FunctionContext, CodegenIrError},
     errors::CompileError,
-    ir::Instruction,
     types::PhpType,
 };
 
@@ -25,14 +23,15 @@ builtin! {
     returns: Int,
     check: check,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::MbStrlen,
+    ),
     summary: "Returns the character count of a string in the requested encoding.",
     php_manual: "https://www.php.net/manual/en/function.mb-strlen.php",
 }
 
 /// Validates PHP's string plus nullable optional encoding parameter surface.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    cx.checker.require_macos_builtin_library("iconv");
     let string_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if string_ty != PhpType::Str {
         return Err(CompileError::new(
@@ -52,9 +51,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
 
     Ok(PhpType::Int)
-}
-
-/// Lowers an `mb_strlen` call by dispatching to the shared `lower_mb_strlen` emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(ctx, inst)
 }

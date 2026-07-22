@@ -2,7 +2,7 @@
 title: "spl_autoload_unregister()"
 description: "Unregister given function as __autoload() implementation."
 sidebar:
-  order: 333
+  order: 348
 ---
 
 ## spl_autoload_unregister()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `spl_autoload_unregister` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/spl_autoload_unregister.md).
-

@@ -2,7 +2,7 @@
 title: "stripslashes()"
 description: "Removes backslashes from a string previously escaped by addslashes."
 sidebar:
-  order: 397
+  order: 412
 ---
 
 ## stripslashes()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stripslashes` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/stripslashes.md).
-

@@ -128,6 +128,35 @@ fn test_parse_scoped_constant_named_like_keyword() {
     }
 }
 
+/// Parses keyword-spelled scoped names at three casings and verifies the AST keeps the source
+/// form instead of canonicalizing every `Token::Match` to one hard-coded spelling.
+#[test]
+fn test_parse_scoped_keyword_name_preserves_each_spelling() {
+    for (source_name, expected) in [("match", "match"), ("Match", "Match"), ("MATCH", "MATCH")] {
+        let stmts = parse_source(&format!("<?php echo Holder::{};", source_name));
+        let StmtKind::Echo(expr) = &stmts[0].kind else {
+            panic!("Expected Echo");
+        };
+        let ExprKind::ScopedConstantAccess { name, .. } = &expr.kind else {
+            panic!("Expected scoped constant access");
+        };
+        assert_eq!(name, expected);
+    }
+}
+
+/// Verifies keyword tokens used after object access preserve their exact spelling in the AST.
+#[test]
+fn test_parse_object_keyword_member_preserves_spelling() {
+    let stmts = parse_source("<?php echo $object->Match;");
+    let StmtKind::Echo(expr) = &stmts[0].kind else {
+        panic!("Expected Echo");
+    };
+    let ExprKind::PropertyAccess { property, .. } = &expr.kind else {
+        panic!("Expected PropertyAccess");
+    };
+    assert_eq!(property, "Match");
+}
+
 /// Parses `static::make(...)` and verifies `FirstClassCallable(StaticMethod)` AST
 /// with `Static` receiver (not named) and spread args.
 #[test]

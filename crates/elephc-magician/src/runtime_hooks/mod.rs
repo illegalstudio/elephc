@@ -98,3 +98,15 @@ pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
         __elephc_eval_install_dynamic_object_destructor_hook(callback);
     }
 }
+
+/// Installs the eval output-buffering handler callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a `fn(i64, *const u8, i64, i64) -> *mut RuntimeCell`
+/// with the eval ob-handler ABI; the runtime calls through it on buffer flushes.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_ob_handler_hook(callback: usize) {
+    unsafe {
+        externs::install_ob_handler_hook_raw(callback);
+    }
+}

@@ -201,6 +201,9 @@ pub(super) fn discover_expr(
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method { object, .. }) => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        ExprKind::ObjectClassName { object } => {
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

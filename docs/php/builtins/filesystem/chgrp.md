@@ -2,7 +2,7 @@
 title: "chgrp()"
 description: "Changes file group."
 sidebar:
-  order: 104
+  order: 106
 ---
 
 ## chgrp()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `chgrp` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/chgrp.md).
-

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `attributes.rs`, `ast/`, `mod.rs`
+**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `attributes.rs`, `keyword_name.rs`, `ast/`, `mod.rs`
 
 The parser takes the token stream from the [lexer](the-lexer.md) and builds an **Abstract Syntax Tree** (AST) — a tree structure that represents the program's meaning, not just its text.
 
@@ -73,7 +73,7 @@ Things that have a value:
 | `ShortTernary { value, default }` | `$a ?: $fallback` | PHP short ternary / Elvis form. Codegen evaluates `value` once, returns it if truthy, otherwise returns `default`. |
 | `ErrorSuppress(Expr)` | `@file_get_contents("missing.txt")` | PHP error-control prefix expression. Codegen wraps the operand in a runtime warning-suppression scope. |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, variadic_type, return_type, body, is_arrow, is_static, by_ref_return, captures, capture_refs }` | `function(int $x = 1) use ($y, &$z): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` - name, declared type, default, is_ref. `variadic` is an optional parameter name and `variadic_type` its optional declared element type (`int ...$xs`). `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` stores by-value captures and `capture_refs` stores `use (&$var)` captures. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => ...`); the type checker rejects any reference to `$this` inside a static closure. `by_ref_return` is set when the closure is declared `fn &()` / `function &()`, so it returns a reference (alias) to the returned lvalue rather than a copy. |
+| `Closure { params, variadic, variadic_by_ref, variadic_type, return_type, body, is_arrow, is_static, by_ref_return, captures, capture_refs }` | `function(int $x = 1) use ($y, &$z): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` - name, declared type, default, is_ref. `variadic` is an optional parameter name, `variadic_by_ref` marks a by-reference variadic (`&...$args`), and `variadic_type` its optional declared element type (`int ...$xs`). `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` stores by-value captures and `capture_refs` stores `use (&$var)` captures. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => ...`); the type checker rejects any reference to `$this` inside a static closure. `by_ref_return` is set when the closure is declared `fn &()` / `function &()`, so it returns a reference (alias) to the returned lvalue rather than a copy. |
 | `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. The parser preserves source order; later phases validate names against the declared parameter list and normalize known-signature calls for ABI lowering. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
@@ -84,13 +84,15 @@ Things that have a value:
 | `NewDynamic { name_expr, args }` | `new $cls(1, 2)` | Object instantiation where the class name comes from a runtime string expression. Resolved through the runtime class table at codegen time (`__rt_new_by_name`). |
 | `NewScopedObject { receiver, args }` | `new self()`, `new static()`, `new parent()` | Object instantiation against a static receiver. Distinct from `NewObject` (which carries a fixed `Name`) so codegen can honour late static binding for `static`. |
 | `NewDynamicObject { class_name, fallback_class, required_parent, args }` | (internal) | Synthetic factory used by compiler-provided methods that construct an object from a runtime class-string while constraining it to a known parent class. Not produced from source syntax. |
+| `Clone(Expr)` | `clone $obj` | PHP `clone` prefix expression. Parsed at unary precedence; produces a shallow copy (invoking `__clone` when defined). |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
-| `DynamicPropertyAccess { object, property }` | `$p->{$name}` | Dynamic property access where the property name is an expression. Dynamic method calls are intentionally rejected. |
+| `DynamicPropertyAccess { object, property }` | `$p->{$name}`, `$p->$name` | Dynamic property access where the property name is an expression. Dynamic method calls (`$obj->$m(...)`, `$obj->{$expr}(...)`) are supported by desugaring to `call_user_func([$obj, $m], ...args)`; named arguments are rejected in dynamic calls because the target signature is unknown at compile time. |
 | `NullsafePropertyAccess { object, property }` | `$p?->x` | Nullsafe property access via `?->` |
 | `NullsafeDynamicPropertyAccess { object, property }` | `$p?->{$name}` | Nullsafe dynamic property access. If the receiver is null, the property expression and the rest of the chain are skipped. |
 | `StaticPropertyAccess { receiver, property }` | `Point::$count`, `self::$count`, `parent::$count`, `static::$count` | Class-scoped property access via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `NullsafeMethodCall { object, method, args }` | `$p?->move(1, 2)` | Nullsafe instance method call; PHP rejects `?->method(...)` closure creation, so elephc reports `Cannot combine nullsafe operator with Closure creation` for that form |
+| `NullsafeDynamicMethodCall { object, method, args }` | `$p?->$m(1, 2)`, `$p?->{$expr}(1, 2)` | Nullsafe dynamic method call where the method name is a runtime expression. If the receiver is null, the method-name expression, arguments, and the rest of the chain are skipped. Dedicated node (unlike the non-nullsafe form, which desugars to `call_user_func`) so the null short-circuit is preserved. |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `FirstClassCallable(CallableTarget)` | `strlen(...)`, `Tools\fmt(...)`, `Math::twice(...)` | PHP-style first-class callable syntax; the target is preserved structurally instead of being parsed as a call |
 | `This` | `$this` | Reference to the current object inside a method |
@@ -98,6 +100,7 @@ Things that have a value:
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 | `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
 | `ClassConstant { receiver }` | `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` | The PHP `::class` reflection literal. Codegen lowers it to a string literal carrying the fully-qualified class name. `static::class` follows late static binding. |
+| `ObjectClassName { object }` | `$object::class`, `make_object()::class` | Runtime `::class` lookup for an object-valued expression. The object expression remains structural so later passes evaluate it once and read its concrete runtime class. |
 | `ScopedConstantAccess { receiver, name }` | `MyClass::LIMIT`, `self::DEFAULT_SIZE` | User-declared class constant access through `::`; later phases resolve the receiver and constant metadata. |
 
 ### Statements (`Stmt`)
@@ -121,7 +124,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
-| `FunctionDecl { name, params, variadic, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
+| `FunctionDecl { name, params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `param_attributes` stores the PHP 8 attribute groups attached to each parameter (aligned with `params`, plus the variadic when present). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_by_ref` is `true` for a by-reference variadic (`&...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
 | `FunctionVariantGroup { name, variants }` | Internal resolver metadata for include-loaded hidden function implementations behind one public name |
 | `FunctionVariantMark { name, variant }` | Internal include-body marker that activates the hidden function variant loaded at that runtime include point |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
@@ -137,12 +140,12 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |
 | `NamespaceDecl { name: Option<Name> }` | `namespace App\Core;`, `namespace;` |
 | `NamespaceBlock { name: Option<Name>, body }` | `namespace App\Core { ... }`, `namespace { ... }` |
-| `UseDecl { imports }` | `use App\Lib\Tool;`, `use function App\fn as helper;`, `use Vendor\Pkg\{Thing, Other as Alias};` |
+| `UseDecl { imports }` | `use App\Lib\Tool;`, `use function App\fn as helper;`, `use Vendor\Pkg\{Thing, Other as Alias};` — `use const` imports also accept predefined-constant names the lexer eagerly tokenizes (e.g. `use const PHP_INT_MAX;`), which never reach the parser as identifiers |
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` for simple local positional destructuring; skipped, keyed, nested, and non-local destructuring patterns lower to `Synthetic` assignment statements |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
-| `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
+| `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls. `static $count;` without an initializer is also accepted and desugars to `init = null`, matching PHP |
 | `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
-| `EnumDecl { name, backing_type, cases, implements, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
+| `EnumDecl { name, backing_type, cases, implements, trait_uses, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` — `trait_uses` holds `use Trait;` clauses inside the enum body, flattened into enum method metadata by the checker |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
 | `InterfaceDecl { name, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
 | `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
@@ -159,6 +162,8 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 
 Constructor property promotion is normalized during class-body parsing. A parameter such as `public int $id` in `__construct` becomes a `ClassProperty` plus a synthetic leading `PropertyAssign` statement equivalent to `$this->id = $id;`. Parameter defaults stay on the constructor signature rather than `ClassProperty.default`, matching PHP's distinction between promoted parameter defaults and property defaults. By-reference promoted parameters preserve a `by_ref` flag on the generated property so codegen can bind the property slot to the referenced argument or to a heap reference cell when a default value is used. Later passes otherwise see ordinary properties and ordinary constructor assignments.
 
+There is no `Declare` statement kind. `declare(directive=literal, ...)` is parsed by `src/parser/stmt/declare.rs` and lowered directly to `Synthetic`: the statement form `declare(strict_types=1);` becomes an empty `Synthetic(vec![])`, while the block form `declare(ticks=1) { ... }` (single statement, braced block, or alternative `: ... enddeclare;` syntax) becomes a `Synthetic` wrapping the body statements so they execute in the enclosing scope. Directive values must be literals; the parser enforces PHP's rules that `strict_types` takes only `0` or `1`, must be the very first statement in the script, and cannot use block mode. The directives themselves are compile-time syntax only, because elephc always uses strict typing.
+
 ### Statement dispatch
 
 At statement level, parsing is split between `parser/mod.rs` and the `stmt/` submodules:
@@ -169,22 +174,27 @@ At statement level, parsing is split between `parser/mod.rs` and the `stmt/` sub
 | Current token | Parse as |
 |---|---|
 | `Class` / `Abstract Class` / `Final Class` / `Readonly Class` / combined class modifiers | Class declaration |
-| `Enum` | Enum declaration |
+| `Enum` followed by a name | Enum declaration (`enum` is a soft keyword: without a following name it falls through to the expression-statement arm) |
 | `Packed` | Packed-class declaration |
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
 | `Namespace` | Namespace declaration |
 | `Use` | Namespace import declaration |
+| `Declare` | `declare(...)` directive; lowers to `Synthetic` (see above) |
 | `Return` | Return statement |
 | `Throw` | Throw statement |
 | `Echo` | Echo statement |
 | `Print` | Generic expression statement containing `Print(...)` |
+| `Yield` | Generic expression statement containing a `Yield` / `YieldFrom` expression |
+| `@` | Error-suppressed expression statement |
+| `++` / `--` | Increment/decrement expression statement |
 | `If` / `While` / `Do` / `For` / `Foreach` / `Switch` / `Try` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
-| `Variable` / `This` / `Identifier` / `Backslash` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
+| `[` | List destructuring (`[$a, $b] = expr;`) |
+| `Variable` / `This` / `Identifier` / `Backslash` / `Self_` / `Parent` / `Static::...` / `Question` / `New` / `LParen` / `Match` / soft-keyword `Enum` | Assignment, property write, call, typed assignment, or generic expression statement |
 
-This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `match`, `new`, `fn`, a literal, `(`, or a unary operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form.
+This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `fn`, a literal, or a unary `-` / `!` / `~` operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form. Statements starting with `match`, `new`, or `(` are accepted through the expression-statement arm.
 
 ## Error recovery
 
@@ -213,15 +223,18 @@ Parsed type annotations use `TypeExpr` before the checker resolves them into
 `PhpType` values:
 
 ```
-Int  Float  Bool  Str  Void  Never  Iterable
-Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
-Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)
+Int  Float  Bool  False  Str  Void  Never  Iterable
+Array(Box<TypeExpr>)  Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)  Intersection(Vec<TypeExpr>)
 ```
 
 `Iterable` represents PHP's `iterable` pseudo-type in parameter, return,
-property, and typed-local annotations. Nullable shorthand (`?T`) and explicit
-unions (`T|U`) are represented separately so the checker can reject invalid
-forms such as `?T|U` and normalize accepted declarations.
+property, and typed-local annotations. `False` is PHP's literal `false` type,
+kept distinct from `bool` for flow narrowing. `Array` carries the element
+type of a typed array annotation. Nullable shorthand (`?T`), explicit unions
+(`T|U`), and PHP 8.1 intersections (`A&B`, where every member must be a
+class/interface type) are represented separately so the checker can reject
+invalid forms such as `?T|U` and normalize accepted declarations.
 
 ### Class-related types
 
@@ -243,7 +256,7 @@ forms such as `?T|U` and normalize accepted declarations.
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
 
-Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
+Every AST node carries a `Span` from the source, so error messages in later phases can point to the right location. A `Span` stores the start position (`line`, `col`) plus an exclusive end position (`end_line`, `end_col`); the expression parser widens the end through the last consumed token (e.g. through a call's closing `)` or a binary expression's right operand) while keeping the start anchored, so diagnostics can underline the full expression extent.
 
 ## The Pratt parser
 
@@ -267,7 +280,7 @@ Operator          Left BP    Right BP    Associativity
 or                  1          2         left
 xor                 3          4         left
 and                 5          6         left
-assignment          7          6         RIGHT (variable targets)
+assignment          7          6         RIGHT (lvalue targets)
 ? : / ?:            7          7         right-ish ternary parse
 ??                  9          8         RIGHT (null coalescing)
 ||                 11         12         left
@@ -283,7 +296,7 @@ assignment          7          6         RIGHT (variable targets)
 + -                29         30         left
 * / %              31         32         left
 instanceof         35         special    left, named-or-dynamic RHS
-unary (- ! ~)          35                prefix
+unary (- ! ~ @ clone)  35                prefix
 **                 37         36         RIGHT (r < l)
 ```
 
@@ -376,6 +389,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `!` (not) | Parse inner expr at unary precedence (bp=35), return `Not` |
 | `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |
 | `@` (error control) | Parse inner expr at unary precedence (bp=35), return `ErrorSuppress` |
+| `clone` | Parse inner expr at unary precedence (bp=35), return `Clone` |
 | `++` / `--` | Return `PreIncrement` / `PreDecrement` |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |
@@ -387,10 +401,12 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
 | `static` + `function` / `fn` + `(` | Parse static closure → `Closure` (with `is_static = true`); the type checker rejects `$this` inside the body |
-| `new` + qualified name | Parse object instantiation → `NewObject` |
-| `new` + `$var` + `(` | Parse dynamic object instantiation → `NewDynamic` (class named by a runtime variable) |
-| `new` + `self` / `static` / `parent` + `(` | Parse scoped object instantiation → `NewScopedObject` |
+| `new` + qualified name | Parse object instantiation → `NewObject`; the argument list is optional, so parenthesis-free `new Foo;` produces `NewObject` with no arguments |
+| `new` + `class` / `new` + `readonly class` | Parse anonymous class — the body is hoisted to a synthetic top-level class declaration and the expression becomes an instantiation of that synthetic class |
+| `new` + `$var` | Parse dynamic object instantiation → `NewDynamic` (class named by a runtime variable); the argument list is optional |
+| `new` + `self` / `static` / `parent` | Parse scoped object instantiation → `NewScopedObject`; the argument list is optional |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
+| `<object-expression>::class` | Parse `$object::class`, `make_object()::class` → `ObjectClassName` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
@@ -406,6 +422,9 @@ After parsing a prefix, the parser checks for postfix operators:
 - `->` for property access or method call
 - `?->` for nullsafe property access or method call
 - `::` for enum-case lookup, static method call, or static-method first-class callable (when the prefix is a parsed name)
+- `::` on a dynamic (non-name) receiver: `$obj::class` / `expr::class` builds `ObjectClassName`, and `$cls::method(args)` / `$cls::$method(args)` desugar to `call_user_func([$cls, $method], ...args)`; any other dynamic `$class::X` access is rejected
+
+Member names after `->` / `?->` may be a plain identifier, a variable (`->$name`), a brace-enclosed expression (`->{$expr}`), or — per PHP 8's semi-reserved rule — any keyword (`->class`, `->print`, `->static`, ...), whose exact source spelling is preserved via the lexer's `TokenMetadata` and the shared bareword mapper in `src/parser/keyword_name.rs`. The same mapper serves named-argument labels, `::` scoped access, and method/constant declaration names.
 
 At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
 
@@ -432,8 +451,12 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Echo` | `Echo` statement — parse one or more comma-separated expressions, expect `;` |
 | `Print` | Expression statement — parse `Print(...)`, expect `;` |
 | `Throw` | `Throw` statement — parse one expression, expect `;` |
+| `Yield` | Expression statement — parse a `yield` / `yield from` expression, expect `;` |
+| `@` | Error-suppressed expression statement |
+| `++` / `--` | Increment/decrement expression statement |
 | `IfDef` | Build-time conditional statement |
 | `Variable` | Assignment, compound assignment, array assign/push, or expression statement |
+| `This` | Property write (`$this->x = ...;`), property array write/push, method call, or expression statement |
 | `If` | `If` with optional `elseif` chain and `else` |
 | `Try` | `Try` with one or more `catch` clauses and optional `finally` |
 | `While` | `While` loop |
@@ -443,7 +466,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
 | `Class` / `Abstract Class` / `Final Class` / `Readonly Class` / combined class modifiers | Class declaration with properties and methods |
-| `Enum` | Enum declaration |
+| `Enum` followed by a name | Enum declaration (soft keyword — a bare `enum` otherwise parses as an ordinary name in an expression statement) |
 | `Packed` | Packed class declaration |
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration with trait uses, properties, and methods |
@@ -455,10 +478,11 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Const` | Constant declaration (`const NAME = value;`) |
 | `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`) |
 | `Use` | Namespace import declaration (`use Foo\Bar;`, `use function Foo\bar as baz;`) |
+| `Declare` | `declare(...)` directive statement or block; lowers to `Synthetic` |
 | `Global` | Global variable declaration (`global $x, $y;`) |
-| `Static` | Static variable declaration (`static $count = 0;`) |
-| `[` | List destructuring (`[$a, , $c] = expr;`, `["id" => $id] = expr;`) |
-| `Identifier` + `(` | Expression statement (function call) |
+| `Static` | Static variable declaration (`static $count = 0;` or `static $count;`); `static ::`-scoped forms (`static::$prop = ...;`, `static::$prop++;`, `static::method();`) parse as scoped assignment, increment/decrement, or expression statements instead |
+| `[` | List destructuring (`[$a, , $c] = expr;`, `["id" => $id] = expr;`); the legacy `list($a, $b) = expr;` spelling is also accepted |
+| `Identifier` / `Self_` / `Parent` / `Backslash` / `Question` / `New` / `LParen` / `Match` | Typed assignment, scoped property write, postfix assignment, or expression statement (function call, `new`, `match`, parenthesized expression) |
 | Internal lowering, no source token | `Synthetic` statement sequence used for temporary-backed lowering of effectful compound assignment targets |
 
 ### Assignment parsing
@@ -505,5 +529,5 @@ Each `catch` becomes a `CatchClause { exception_types, variable, body }`. `excep
 The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into per-file magic-constant lowering, then elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), then into the dedicated name-resolution pass that canonicalizes namespace-aware names, and finally into the [type checker](the-type-checker.md):
 
 ```
-[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → MagicConstants → Conditional → Resolver → NameResolver → Type Checker
+[(Token, TokenMetadata), ...] → Parser → Program (Vec<Stmt>) → MagicConstants → Conditional → Resolver → NameResolver → Type Checker
 ```

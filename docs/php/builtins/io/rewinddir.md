@@ -2,7 +2,7 @@
 title: "rewinddir()"
 description: "Rewind directory handle."
 sidebar:
-  order: 192
+  order: 207
 ---
 
 ## rewinddir()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rewinddir` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/rewinddir.md).
-

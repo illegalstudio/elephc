@@ -1,25 +1,16 @@
 //! Purpose:
 //! Conversion helpers that bridge `BuiltinSpec` fields (`TypeSpec`, `DefaultSpec`)
-//! into the compiler's rich runtime types (`PhpType`, `Expr`) during the migration period.
+//! into the compiler's rich runtime types (`PhpType`, `Expr`).
 //!
 //! Called from:
-//! - `crate::builtins::registry` when populating the legacy dispatch tables.
+//! - `crate::builtins::registry` when deriving checker signatures from each definition.
 //!
 //! Key details:
-//! - `type_spec_to_php` must produce byte-for-byte equivalent `PhpType` values to the
-//!   legacy hand-coded type annotations in `src/types/signatures.rs` and the builtin
-//!   type-checker files.
-//! - `default_spec_to_expr` must produce `Expr` nodes with the same `ExprKind` and
-//!   `Span::dummy()` span as the legacy literal helpers (`null_lit`, `int_lit`, etc.)
-//!   in `src/types/signatures.rs`.
+//! - `type_spec_to_php` is the authoritative conversion from registry types to checker types.
+//! - `default_spec_to_expr` produces default argument expressions with `Span::dummy()`.
 //! - Only variants that exist in `TypeSpec`/`DefaultSpec` are handled; no speculative
 //!   mappings are added (YAGNI).
-//! - This module is intentionally private (`mod convert;` without `pub`) and will
-//!   shrink as each legacy dispatch point is replaced by direct registry queries.
-
-// Dead-code warnings are expected during the multi-task migration before the
-// registry wires these helpers into active dispatch paths.
-#![allow(dead_code)]
+//! - This module is intentionally private (`mod convert;` without `pub`).
 
 use crate::builtins::spec::{DefaultSpec, TypeSpec};
 use crate::parser::ast::{Expr, ExprKind};
@@ -28,11 +19,8 @@ use crate::types::PhpType;
 
 /// Converts a `TypeSpec` descriptor into the corresponding `PhpType`.
 ///
-/// The mapping is one-to-one for scalar variants. Compound variants (`ArrayOf`,
-/// `AssocOf`, `Union`) recurse so nested types are correctly translated.
-/// `Null` maps to `PhpType::Void` because `Void` is the null sentinel used by the
-/// runtime (stored as 8 bytes). `Void` maps to `PhpType::Void` for functions that
-/// do not return a value.
+/// The mapping is one-to-one for the registry's scalar variants. `Void` maps to
+/// `PhpType::Void` for functions that do not return a value.
 pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
     match ty {
         TypeSpec::Int => PhpType::Int,
@@ -40,16 +28,7 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
         TypeSpec::Mixed => PhpType::Mixed,
-        TypeSpec::Null => PhpType::Void,
         TypeSpec::Void => PhpType::Void,
-        TypeSpec::ArrayOf(elem) => PhpType::Array(Box::new(type_spec_to_php(elem))),
-        TypeSpec::AssocOf(val) => PhpType::AssocArray {
-            key: Box::new(PhpType::Str),
-            value: Box::new(type_spec_to_php(val)),
-        },
-        TypeSpec::Union(members) => {
-            PhpType::Union(members.iter().map(type_spec_to_php).collect())
-        }
     }
 }
 
@@ -68,7 +47,6 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Float(f) => Expr::new(ExprKind::FloatLiteral(*f), Span::dummy()),
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
-        DefaultSpec::IntMin => Expr::new(ExprKind::IntLiteral(i64::MIN), Span::dummy()),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
     }
 }
@@ -100,37 +78,6 @@ mod tests {
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
-        assert_eq!(type_spec_to_php(&TypeSpec::Null), PhpType::Void);
-    }
-
-    /// Verifies ArrayOf TypeSpec recurses correctly into PhpType::Array.
-    #[test]
-    fn array_of_type_spec_converts() {
-        assert_eq!(
-            type_spec_to_php(&TypeSpec::ArrayOf(&TypeSpec::Int)),
-            PhpType::Array(Box::new(PhpType::Int))
-        );
-    }
-
-    /// Verifies AssocOf TypeSpec maps to PhpType::AssocArray with Str key and converted value.
-    #[test]
-    fn assoc_of_type_spec_converts() {
-        assert_eq!(
-            type_spec_to_php(&TypeSpec::AssocOf(&TypeSpec::Str)),
-            PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Str),
-            }
-        );
-    }
-
-    /// Verifies Union TypeSpec maps to PhpType::Union with all members converted.
-    #[test]
-    fn union_type_spec_converts() {
-        assert_eq!(
-            type_spec_to_php(&TypeSpec::Union(&[TypeSpec::Int, TypeSpec::Bool])),
-            PhpType::Union(vec![PhpType::Int, PhpType::Bool])
-        );
     }
 
     /// Verifies integer DefaultSpec produces an IntLiteral expression matching int_lit().
@@ -166,13 +113,6 @@ mod tests {
     fn int_max_default_converts() {
         let e = default_spec_to_expr(&DefaultSpec::IntMax);
         assert!(matches!(e.kind, ExprKind::IntLiteral(i64::MAX)));
-    }
-
-    /// Verifies IntMin DefaultSpec produces IntLiteral(i64::MIN), matching the PHP_INT_MIN literal.
-    #[test]
-    fn int_min_default_converts() {
-        let e = default_spec_to_expr(&DefaultSpec::IntMin);
-        assert!(matches!(e.kind, ExprKind::IntLiteral(i64::MIN)));
     }
 
     /// Verifies EmptyArray DefaultSpec produces an empty ArrayLiteral expression.

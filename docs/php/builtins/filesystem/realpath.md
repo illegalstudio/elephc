@@ -2,7 +2,7 @@
 title: "realpath()"
 description: "Returns canonicalized absolute pathname."
 sidebar:
-  order: 143
+  order: 145
 ---
 
 ## realpath()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `realpath` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/realpath.md).
-

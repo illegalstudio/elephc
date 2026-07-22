@@ -10,22 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_is_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_is_list.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1150](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1150) (`lower_array_is_list`)
-- **Function symbol**: `lower_array_is_list()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `array_is_list()` to the `__rt_array_is_list` runtime predicate, returning a bool.
-- The runtime helper accepts any array kind (indexed, associative hash, or boxed mixed cell) and
-- reports `1` when the keys are the sequential integers `0..n-1` in insertion order, `0` otherwise.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.array_is_list` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_array_edge_key`
-- `__rt_array_is_list`
-- `__rt_mixed_from_value`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.array_is_list`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

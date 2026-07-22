@@ -236,10 +236,10 @@ pub struct ClassMethod {
 }
 
 impl ClassMethod {
-    /// Rewrites the relative class types `self`/`static`/`parent` in every type annotation this
-    /// method carries — regular parameters, the variadic parameter, and the return type — to
-    /// `self_class`/`parent`. Shared by class, interface, and enum schema processing so no caller
-    /// can forget one of the annotation positions.
+    /// Rewrites relative class types in every annotation while retaining late-bound return `static`.
+    ///
+    /// Parameter annotations resolve `self`/`static`/`parent` lexically. Return annotations keep
+    /// `static` symbolic so checker and EIR call sites can bind it to the receiver type.
     pub fn substitute_relative_class_types(&mut self, self_class: &str, parent: Option<&str>) {
         for (_, type_ann, _, _) in self.params.iter_mut() {
             if let Some(ty) = type_ann.as_mut() {
@@ -250,7 +250,7 @@ impl ClassMethod {
             *variadic_ty = variadic_ty.substitute_relative_class_types(self_class, parent);
         }
         if let Some(ret) = self.return_type.as_mut() {
-            *ret = ret.substitute_relative_class_types(self_class, parent);
+            *ret = ret.substitute_method_return_relative_types(self_class, parent);
         }
     }
 }

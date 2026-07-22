@@ -25,7 +25,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// - Null pointers → returns 0 immediately.
 /// - Pointers below the managed heap base → returns 0 (covers scalar integers and static data).
 /// - Pointers at or beyond the heap extent → returns 0.
-/// - On x86_64: validates the high-word ownership marker (`0x454c5048`) before returning the kind.
+/// - On x86_64: validates the high-word ownership marker (`X86_64_HEAP_MAGIC_HI32`) before returning the kind.
 ///   Foreign or freed pointers report kind 0.
 /// - On ARM64: validates the heap range via `_heap_buf` / `_heap_off` symbols, loads kind word,
 ///   and masks to low byte.
@@ -52,7 +52,7 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
         emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                    // load the stamped x86_64 heap kind word from the uniform header
         emitter.instruction("mov rdx, rcx");                                    // preserve the low-byte heap kind before validating the ownership marker
         emitter.instruction("shr rcx, 32");                                     // isolate the high-word heap marker from the packed heap metadata
-        emitter.instruction("cmp ecx, 0x454c5048");                             // verify that this pointer belongs to the elephc x86_64 heap runtime
+        emitter.instruction(&format!("cmp ecx, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this pointer belongs to the elephc x86_64 heap runtime
         emitter.instruction("jne __rt_heap_kind_zero");                         // foreign or freed pointers report heap kind 0
         emitter.instruction("and edx, 0xff");                                   // isolate the low-byte uniform heap kind tag from the packed kind word
         emitter.instruction("mov eax, edx");                                    // return the low-byte heap kind tag in the integer result register

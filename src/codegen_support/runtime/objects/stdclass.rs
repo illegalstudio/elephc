@@ -457,7 +457,7 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 16");                                         // payload size = class_id + hash_ptr
     emitter.instruction("call __rt_heap_alloc");                                // rax = obj pointer
-    emitter.instruction("mov r10, 0x454C504800000004");                         // x86_64 heap header word: ELPH marker | object kind 4
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // x86_64 heap header word: ELPH marker | object kind 4
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park the obj pointer in the local slot
 
@@ -496,7 +496,7 @@ fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 16");                                         // payload size = class_id + hash_ptr
     emitter.instruction("call __rt_heap_alloc");                                // rax = obj pointer
-    emitter.instruction("mov r10, 0x454C504800000004");                         // x86_64 heap header word: ELPH marker | object kind 4
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // x86_64 heap header word: ELPH marker | object kind 4
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id

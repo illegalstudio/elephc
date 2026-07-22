@@ -2,7 +2,7 @@
 title: "preg_replace_callback()"
 description: "Performs a regular expression search and replace using a callback."
 sidebar:
-  order: 323
+  order: 338
 ---
 
 ## preg_replace_callback()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `preg_replace_callback` is implemented in the compiler, see [the internals page](../../../internals/builtins/regex/preg_replace_callback.md).
-

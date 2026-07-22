@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_unique` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_unique` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` reproduces the legacy rule: de-duplication preserves the array shape,
@@ -11,13 +10,9 @@
 //!   required both to reject non-array arguments and to echo the input type back.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_unique` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,7 +21,9 @@ builtin! {
     params: [array: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayUnique,
+    ),
     summary: "Removes duplicate values from an array.",
     php_manual: "https://www.php.net/manual/en/function.array-unique.php",
 }
@@ -45,9 +42,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(ty)
-}
-
-/// Lowers an `array_unique` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_unique(ctx, inst)
 }

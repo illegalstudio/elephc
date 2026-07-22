@@ -2,7 +2,7 @@
 title: "atan()"
 description: "Returns the arctangent of a number in radians."
 sidebar:
-  order: 242
+  order: 257
 ---
 
 ## atan()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `atan` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/atan.md).
-

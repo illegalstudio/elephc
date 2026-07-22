@@ -2,7 +2,7 @@
 title: "stream_filter_append()"
 description: "Attaches a filter to a stream."
 sidebar:
-  order: 341
+  order: 356
 ---
 
 ## stream_filter_append()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_filter_append` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_filter_append.md).
-

@@ -29,7 +29,7 @@ case-insensitive PHP language-construct name.
 ```text
 eval($code)
   -> checker: exactly one argument, result Mixed, conservative barrier
-  -> EIR lowering: BuiltinCall or EvalLiteralCall
+  -> EIR lowering: LanguageConstructCall or EvalLiteralCall
   -> literal planner, when the source is statically known
        -> direct/native EIR
        -> EIR plus core eval-scope helpers
@@ -70,8 +70,10 @@ binary links Magician.
 ## EIR representation
 
 Literal calls use `EvalLiteralCall`, carrying the fragment in the module data
-pool. Dynamic calls remain ordinary builtin calls until the eval lowering path
-materializes the runtime code string.
+pool. Dynamic calls remain compiler-resident `LanguageConstructCall` operations
+until the eval lowering path materializes the runtime code string. Registry-backed
+builtins use typed `RuntimeCall` targets instead and never participate in eval-name
+dispatch.
 
 The eval-specific EIR operations are:
 

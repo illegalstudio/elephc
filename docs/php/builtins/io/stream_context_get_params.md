@@ -2,7 +2,7 @@
 title: "stream_context_get_params()"
 description: "Retrieves parameters from the specified stream context."
 sidebar:
-  order: 198
+  order: 213
 ---
 
 ## stream_context_get_params()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_context_get_params` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_context_get_params.md).
-

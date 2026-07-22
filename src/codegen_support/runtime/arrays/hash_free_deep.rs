@@ -11,7 +11,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Frees a hash table and all owned key/value payloads recursively.
 ///
@@ -182,7 +181,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_hash_free_deep_done");                         // null hashes need no release work
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_hash_free_deep_done");                        // only elephc-owned hash tables participate in x86_64 deep-free bookkeeping
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-free spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash pointer, capacity, and loop index
@@ -213,7 +212,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_hash_free_deep_value");                        // move on to the entry value cleanup when the key pointer is unexpectedly null
     emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the key heap kind word so foreign pointers are ignored safely
     emitter.instruction("shr r9, 32");                                          // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r9d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));   // only elephc-owned persisted keys participate in x86_64 key decref bookkeeping
+    emitter.instruction(&format!("cmp r9d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // only elephc-owned persisted keys participate in x86_64 key decref bookkeeping
     emitter.instruction("jne __rt_hash_free_deep_value");                       // skip foreign key pointers rather than trying to mutate a missing heap header
     emitter.instruction("mov r9d, DWORD PTR [rax - 12]");                       // load the persisted key refcount from the uniform heap header
     emitter.instruction("sub r9d, 1");                                          // decrement the key refcount because this hash table is releasing its ownership
@@ -249,7 +248,7 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_hash_free_deep_next");                         // nothing to release when the string payload pointer is unexpectedly null
     emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the string heap kind word so foreign pointers are ignored safely
     emitter.instruction("shr r9, 32");                                          // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r9d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));   // only elephc-owned persisted string payloads participate in x86_64 refcount teardown
+    emitter.instruction(&format!("cmp r9d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // only elephc-owned persisted string payloads participate in x86_64 refcount teardown
     emitter.instruction("jne __rt_hash_free_deep_next");                        // skip foreign string pointers rather than mutating a missing heap header
     emitter.instruction("mov r9d, DWORD PTR [rax - 12]");                       // load the persisted string refcount from the uniform heap header
     emitter.instruction("sub r9d, 1");                                          // decrement the string refcount because this hash table is releasing its ownership

@@ -39,3 +39,13 @@ try {
 } catch (AppThrowable $e) {
     echo "caught AppThrowable: " . $e->getMessage() . " #" . $e->getCode() . PHP_EOL;
 }
+
+try {
+    try {
+        throw new AppException("root cause", 10);
+    } catch (AppException $previous) {
+        throw new AppException("wrapped failure", 11, $previous);
+    }
+} catch (AppException $e) {
+    echo $e->getMessage() . " <- " . $e->getPrevious()?->getMessage() . PHP_EOL;
+}

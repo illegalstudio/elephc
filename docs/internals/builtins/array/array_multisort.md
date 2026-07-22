@@ -10,20 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_multisort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_multisort.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1719](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1719) (`lower_array_multisort`)
-- **Function symbol**: `lower_array_multisort()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `array_multisort()`: stable-sorts the first indexed array ascending and reorders the second
-- in tandem, both in place. Both arguments are by-reference, so each is copy-on-write split with
-- `ensure_unique_sort_source` and the (possibly relocated) pointer is written back to its local
-- before the runtime mutates the storage. Returns `true`. Supports 8-byte scalar indexed arrays.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.array_multisort` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.array_multisort`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

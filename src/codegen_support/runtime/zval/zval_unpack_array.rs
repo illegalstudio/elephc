@@ -223,7 +223,7 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     // (`0x454C5048` in the high 32 bits) that `__rt_array_new` stamped; without
     // it `__rt_heap_kind` reports kind 0 and foreach/heap_free treat the rebuilt
     // array as a non-heap value (arm64 has no such marker).
-    emitter.instruction("mov r10, 0x454C504800008702");                         // x86_64 heap marker | indexed(2) | value_type 7 | COW(0x8000)
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x8702))); // x86_64 heap marker | indexed(2) | value_type 7 | COW(0x8000)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the Mixed-element kind word in the heap header
 
     // -- set the length = nNumUsed so the array reports its occupied size --

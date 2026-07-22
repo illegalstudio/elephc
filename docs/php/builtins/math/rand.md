@@ -2,7 +2,7 @@
 title: "rand()"
 description: "Generate a random integer."
 sidebar:
-  order: 267
+  order: 282
 ---
 
 ## rand()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `rand` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/rand.md).
-
