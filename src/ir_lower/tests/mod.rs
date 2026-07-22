@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::codegen::platform::Target;
-use crate::ir::print_module;
+use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
@@ -86,6 +86,56 @@ while (time()) {
     assert!(text.contains("function main"), "missing lowered main: {text}");
     assert!(text.contains("array_new"), "missing array construction: {text}");
     assert!(text.contains("iter_start"), "missing foreach iterator: {text}");
+}
+
+/// Verifies dead `try.after` joins are terminated as unreachable for heap-returning functions,
+/// with and without a `finally` body.
+#[test]
+fn dead_try_after_joins_are_unreachable() {
+    let module = lower_source(
+        r#"<?php
+final class Conn { public function __construct(public string $dsn) {} }
+final class Factory {
+    public function create(string $dsn): Conn {
+        try { return new Conn($dsn); }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    }
+}
+final class ArrayFactory {
+    public function values(): array {
+        try { return [1, 2]; }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+        finally { $cleanup = true; }
+    }
+}
+echo (new Factory())->create('pg')->dsn;
+echo (new ArrayFactory())->values()[0];
+"#,
+    );
+
+    let create = module
+        .class_methods
+        .iter()
+        .find(|function| function.name == "Factory::create")
+        .expect("missing Factory::create EIR");
+    let create_after = create
+        .blocks
+        .iter()
+        .find(|block| block.name == "try.after")
+        .expect("missing Factory::create try.after block");
+    assert_eq!(create_after.terminator, Some(Terminator::Unreachable));
+
+    let values = module
+        .class_methods
+        .iter()
+        .find(|function| function.name == "ArrayFactory::values")
+        .expect("missing ArrayFactory::values EIR");
+    let values_after = values
+        .blocks
+        .iter()
+        .find(|block| block.name == "try.after")
+        .expect("missing ArrayFactory::values try.after block");
+    assert_eq!(values_after.terminator, Some(Terminator::Unreachable));
 }
 
 /// Verifies class method declarations are lowered into the class-method table.

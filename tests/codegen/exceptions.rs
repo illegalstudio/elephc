@@ -650,14 +650,10 @@ try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
     assert_eq!(out, "err");
 }
 
-/// An object-returning function whose only implicit fall-through is unreachable must still
-/// materialize a value of the object return type for the (unreachable) structural join. Here the
-/// `try` body returns a `Conn` and the `catch` throws, so the join is dead — yet the backend
-/// rejected its placeholder ("runtime_call with 0 operands returning PHP type Object(<x>)"). The
-/// implicit object return now lowers to the null-object sentinel via const_null rather than the
-/// un-lowerable 0-operand `Op::RuntimeCall`.
+/// An object-returning function whose `try` and every `catch` terminate must leave the dead
+/// `try.after` join unreachable instead of synthesizing a typed fall-through return.
 #[test]
-fn test_object_return_unreachable_fallthrough_placeholder() {
+fn test_object_return_dead_try_after_is_unreachable() {
     let out = compile_and_run(
         r#"<?php
 final class Conn { public function __construct(public string $dsn) {} }
@@ -671,6 +667,24 @@ echo (new Factory())->create('pg')->dsn;
 "#,
     );
     assert_eq!(out, "pg");
+}
+
+/// An array-returning function with `finally` must also mark `try.after` unreachable when neither
+/// the `try` nor any `catch` can fall through the finalizer into the join.
+#[test]
+fn test_array_return_dead_try_after_with_finally_is_unreachable() {
+    let out = compile_and_run(
+        r#"<?php
+function values(): array {
+    try { return [1, 2]; }
+    catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    finally { $cleanup = true; }
+}
+$values = values();
+echo $values[0] . ',' . $values[1];
+"#,
+    );
+    assert_eq!(out, "1,2");
 }
 
 /// The builtin exception constructors accept PHP's third `$previous` parameter (positional or
