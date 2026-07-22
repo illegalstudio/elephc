@@ -2,7 +2,7 @@
 title: "ltrim()"
 description: "Strips whitespace (or other characters) from the beginning of a string."
 sidebar:
-  order: 387
+  order: 389
 ---
 
 ## ltrim()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ltrim` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/ltrim.md).
-

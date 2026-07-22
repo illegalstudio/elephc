@@ -2,7 +2,7 @@
 title: "hash_init()"
 description: "Initialize an incremental hashing context."
 sidebar:
-  order: 375
+  order: 377
 ---
 
 ## hash_init()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_init` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_init.md).
-

@@ -2,7 +2,7 @@
 title: "shell_exec()"
 description: "Executes a command via the shell and returns the complete output as a string."
 sidebar:
-  order: 328
+  order: 330
 ---
 
 ## shell_exec()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `shell_exec` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/shell_exec.md).
-

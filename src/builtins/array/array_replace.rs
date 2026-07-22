@@ -1,25 +1,20 @@
 //! Purpose:
-//! Home of the PHP `array_replace` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_replace` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `fixed(&["array", "replacements"])` (two required
-//!   params, no variadic), matching the legacy `legacy_builtin_call_sig` arm. The
+//!   params, no variadic), matching the registry signature. The
 //!   param-derived bounds already require exactly 2 arguments, so no `min_args`/
-//!   `max_args` override is needed; `check_arity` reproduces the legacy CHECK arity.
-//! - `check` reproduces the legacy rule: both arguments must be associative arrays or
+//!   `max_args` override is needed; `check_arity` owns the arity contract.
+//! - `check` enforces that both arguments are associative arrays or
 //!   indexed arrays of scalars, and the result is the two-input hash result type. A
 //!   check hook is required because the return type depends on the inferred arguments.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_replace` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +23,9 @@ builtin! {
     params: [array: Mixed, replacements: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayReplace,
+    ),
     summary: "Replaces elements from passed arrays into the first array.",
     php_manual: "https://www.php.net/manual/en/function.array-replace.php",
 }
@@ -55,9 +52,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::two_input_hash_result(&ty1, &ty2))
-}
-
-/// Lowers an `array_replace` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_replace(ctx, inst)
 }

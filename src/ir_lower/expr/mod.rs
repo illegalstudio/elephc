@@ -27,9 +27,8 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
-    array_key_type_from_value_type, checker::infer_expr_type_syntactic,
-    merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
-    ReturnArgAlias, ThrowAccessKind,
+    checker::infer_expr_type_syntactic, merge_array_key_types, normalized_array_key_type,
+    ExternFunctionSig, FunctionSig, PhpType, ReturnArgAlias, ThrowAccessKind,
 };
 use std::collections::HashSet;
 
@@ -1877,7 +1876,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
         return value;
     }
-    let sig = call_signature(ctx, canonical, args);
+    let sig = call_signature(ctx, canonical);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
     let operands = if is_extern || is_user_function {
@@ -1887,9 +1886,12 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     };
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
+    } else if let Some(php_type) =
+        registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)
+    {
+        php_type
     } else {
-        call_return_type_for_args(ctx, canonical, args, &operands)
-            .unwrap_or_else(|| call_return_type(ctx, canonical, &operands))
+        call_return_type(ctx, canonical, &operands)
     };
     if is_extern {
         let data = ctx.intern_function_name(canonical);
@@ -1968,6 +1970,52 @@ fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    if eval_literal.is_none() {
+        if let Some(def) = crate::builtins::registry::lookup(name) {
+            let lowered = crate::builtins::semantics::lower_registry_call(
+                ctx,
+                def,
+                &operands,
+                &php_type,
+                span,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                    def.name,
+                    span.line,
+                    span.col,
+                    error,
+                )
+            });
+            let call = LoweredValue {
+                value: lowered.value,
+                ir_type: ctx.builder.value_type(lowered.value),
+            };
+            let return_alias = match def.spec.semantics.result_ownership {
+                crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
+                    ReturnArgAlias::None
+                }
+                crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
+                    ReturnArgAlias::Parameters(indexes.iter().copied().collect())
+                }
+                crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
+                    ReturnArgAlias::Unknown
+                }
+            };
+            release_owned_call_arg_temporaries(
+                ctx,
+                &operands,
+                Some(call.value),
+                &return_alias,
+                span,
+            );
+            return call;
+        }
+    }
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
@@ -1976,9 +2024,9 @@ fn emit_builtin_call_value(
         )
     } else {
         (
-            Op::BuiltinCall,
+            Op::LanguageConstructCall,
             Some(Immediate::Data(ctx.intern_function_name(name))),
-            effects_lookup::builtin_effects(name),
+            effects_lookup::language_construct_effects(name),
         )
     };
     let call = ctx.emit_value(
@@ -1989,16 +2037,11 @@ fn emit_builtin_call_value(
         effects,
         Some(span),
     );
-    let return_alias = if crate::builtins::registry::returns_independent_storage(name) {
-        ReturnArgAlias::None
-    } else {
-        ReturnArgAlias::Unknown
-    };
     release_owned_call_arg_temporaries(
         ctx,
         &operands,
         Some(call.value),
-        &return_alias,
+        &ReturnArgAlias::Unknown,
         span,
     );
     let eval_needs_barrier = match eval_literal {
@@ -2026,6 +2069,50 @@ fn emit_builtin_call_value(
         }
     }
     call
+}
+
+/// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
+fn registry_builtin_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+    span: Span,
+) -> Option<PhpType> {
+    let def = crate::builtins::registry::lookup(name)?;
+    let arg_types = operands
+        .iter()
+        .map(|operand| ctx.builder.value_php_type(*operand))
+        .collect::<Vec<_>>();
+    let input = crate::builtins::semantics::BuiltinSemanticInput {
+        name: def.name,
+        args,
+        arg_types: &arg_types,
+        span,
+    };
+    let resolved = match def.spec.semantics.result_type {
+        crate::builtins::semantics::BuiltinResultType::Checked => {
+            // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
+            // span, so the checker map cannot identify an individual call there.
+            // Use the typed runtime target's representation-safe fallback instead
+            // of accepting whichever synthetic call last occupied that key.
+            if span.line != 0 {
+                if let Some(checked) = ctx.builtin_call_types.get(&span) {
+                    return Some(normalize_value_php_type(checked.clone()));
+                }
+            }
+            let crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(target),
+            ) = def.spec.semantics.lowering
+            else {
+                return None;
+            };
+            target.fallback_result_type(&arg_types, &def.return_type)
+        }
+        crate::builtins::semantics::BuiltinResultType::Declared => def.return_type.clone(),
+        crate::builtins::semantics::BuiltinResultType::Shared(resolve) => resolve(&input),
+    };
+    Some(normalize_value_php_type(resolved))
 }
 
 /// Returns true when a literal `eval` call may still need runtime scope/interpreter state.
@@ -2784,11 +2871,11 @@ fn lower_lazy_empty(
     let get_value = lower_expr(ctx, &get_call);
     let empty_name = ctx.intern_function_name(name);
     let empty_value = ctx.emit_value(
-        Op::BuiltinCall,
+        Op::LanguageConstructCall,
         vec![get_value.value],
         Some(Immediate::Data(empty_name)),
         PhpType::Bool,
-        effects_lookup::builtin_effects(name),
+        effects_lookup::language_construct_effects(name),
         Some(expr.span),
     );
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
@@ -4592,7 +4679,7 @@ fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
-            let sig = call_signature(ctx, &function_name, callback_args);
+            let sig = call_signature(ctx, &function_name);
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             Some(emit_builtin_call_value(
@@ -4919,7 +5006,6 @@ where
 fn call_signature(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
-    args: &[Expr],
 ) -> Option<FunctionSig> {
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
@@ -4927,10 +5013,7 @@ fn call_signature(
     if let Some(sig) = ctx.extern_functions.get(name) {
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
-    if crate::types::call_args::has_named_args(args) {
-        return builtin_call_signature(name);
-    }
-    None
+    builtin_call_signature(name)
 }
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
@@ -5311,31 +5394,73 @@ fn lower_builtin_call_args(
     if is_empty_static_indexed_spread_arg(args) && zero_arity_call_signature(name, sig) {
         return Vec::new();
     }
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "count" => lower_count_args(ctx, sig, args),
-        "date" => lower_date_args(ctx, sig, args),
-        "eval" => lower_eval_args(ctx, sig, args),
-        "json_decode" => lower_json_decode_args(ctx, sig, args),
-        "preg_replace_callback"
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    if canonical == "eval" {
+        return lower_eval_args(ctx, sig, args);
+    }
+    let argument_lowering = crate::builtins::registry::lookup(&canonical)
+        .map(|def| def.spec.semantics.argument_lowering)
+        .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
+    match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::Count => {
+            lower_count_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::Date => {
+            lower_date_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
+            lower_json_decode_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_preg_replace_callback_args(ctx, sig, args)
         }
-        "preg_match" | "preg_split"
+        crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_args(ctx, args)
         }
-        "usort" | "uasort"
+        crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        _ if !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg) =>
+        {
+            lower_positional_builtin_args_with_signature(ctx, sig, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.
+///
+/// Runtime helpers consume the caller-provided arity, while the registry signature still supplies
+/// by-reference handling and scalar storage coercions for every visible regular parameter.
+fn lower_positional_builtin_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index < regular_param_count {
+                lower_arg_with_signature(ctx, sig, index, arg)
+            } else {
+                lower_expr(ctx, arg).value
+            }
+        })
+        .collect()
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.
@@ -5524,7 +5649,7 @@ fn lower_static_settype(
         return None;
     };
     let target_ty = static_settype_target_type(&type_arg)?;
-    let sig = call_signature(ctx, name, args);
+    let sig = call_signature(ctx, name);
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);
     ctx.set_local_type(local_name, target_ty);
@@ -5543,7 +5668,7 @@ fn static_settype_arg_exprs(
     if !crate::types::call_args::has_named_args(args) {
         return Some((args[0].clone(), args[1].clone()));
     }
-    let sig = call_signature(ctx, name, args)?;
+    let sig = call_signature(ctx, name)?;
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -7180,26 +7305,12 @@ fn expand_static_indexed_spread_args(args: &[Expr]) -> Vec<Expr> {
 pub(super) fn call_return_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
-    operands: &[crate::ir::ValueId],
+    _operands: &[crate::ir::ValueId],
 ) -> PhpType {
     let php_type = if let Some(sig) = ctx.functions.get(name) {
         eir_user_function_return_type(sig)
     } else if let Some(sig) = ctx.extern_functions.get(name) {
         sig.return_type.clone()
-    } else if let Some(php_type) = builtin_return_type_override(name) {
-        php_type
-    } else if let Some(php_type) = pointer_builtin_return_type(ctx, name, operands) {
-        php_type
-    } else if let Some(php_type) = numeric_builtin_return_type(ctx, name, operands) {
-        php_type
-    } else if let Some(php_type) = pathinfo_builtin_return_type(name, operands) {
-        php_type
-    } else if let Some(php_type) = regex_builtin_return_type(name) {
-        php_type
-    } else if let Some(php_type) = array_builtin_return_type(ctx, name, operands) {
-        php_type
-    } else if let Some(sig) = first_class_builtin_signature(name) {
-        sig.return_type
     } else if let Some(sig) = builtin_call_signature(name) {
         sig.return_type
     } else {
@@ -7241,664 +7352,6 @@ fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
                 .collect(),
         ),
         other => other,
-    }
-}
-
-/// Returns argument-sensitive builtin result metadata when AST operands are still available.
-fn call_return_type_for_args(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "array_fill" => array_fill_builtin_return_type_for_args(ctx, args, operands),
-        "array_map" => array_map_builtin_return_type(ctx, args, operands),
-        "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
-        "microtime" => microtime_builtin_return_type_for_args(args),
-        "print_r" => print_r_builtin_return_type_for_args(args),
-        _ => None,
-    }
-}
-
-/// Returns `microtime()` metadata when the literal `as_float` flag is still available.
-///
-/// `microtime(true)` is a float; `microtime()` / `microtime(false)` is the "0.NNNNNNNN sec"
-/// string; a non-literal flag returns `None` so the result type falls back to the `string|float`
-/// union (boxed `Mixed`) declared in `call_return_type`. This must match the checker
-/// (`src/types/checker/builtins/system.rs`) and the EIR backend dispatch in `lower_microtime`.
-fn microtime_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
-    match args.first() {
-        Some(arg) => match &arg.kind {
-            ExprKind::BoolLiteral(true) => Some(PhpType::Float),
-            ExprKind::BoolLiteral(false) => Some(PhpType::Str),
-            _ => None,
-        },
-        None => Some(PhpType::Str),
-    }
-}
-
-/// Returns `print_r()` metadata when the literal `$return` flag is still available.
-///
-/// `print_r($v, true)` returns a `Str` (the rendered output); `print_r($v)` /
-/// `print_r($v, false)` echoes and returns `Bool` (true). A non-literal flag returns
-/// `None` so the result type falls back to the `Mixed` declared in `call_return_type`
-/// (`string|bool`, boxed — the mode is selected at run time). This must match the
-/// checker hook (`src/builtins/io/print_r.rs`) and the EIR backend dispatch in
-/// `lower_print_r`, which switches on this result type.
-fn print_r_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
-    match args.get(1) {
-        Some(arg) => match &arg.kind {
-            ExprKind::BoolLiteral(true) => Some(PhpType::Str),
-            ExprKind::BoolLiteral(false) => Some(PhpType::Bool),
-            _ => None,
-        },
-        None => Some(PhpType::Bool),
-    }
-}
-
-/// Returns `array_fill()` metadata when the literal start expression is still available.
-fn array_fill_builtin_return_type_for_args(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    if args.len() != 3 {
-        return None;
-    }
-    let value = operands.get(2)?;
-    let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
-    let start_is_literal_zero = matches!(args[0].kind, ExprKind::IntLiteral(0));
-    // A non-literal-zero start builds a keyed Mixed-valued hash (`__rt_array_fill_assoc`,
-    // keys start..start+count-1). A literal-zero start builds the 0-indexed path: string
-    // values use the dedicated 16-byte-slot `__rt_array_fill_str` helper, scalars use the
-    // single-word `__rt_array_fill` / `__rt_array_fill_refcounted` helpers. This must match
-    // the checker (`src/types/checker/builtins/arrays.rs`) and `infer_local_type`.
-    if !start_is_literal_zero {
-        return Some(PhpType::AssocArray {
-            key: Box::new(PhpType::Int),
-            value: Box::new(PhpType::Mixed),
-        });
-    }
-    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
-}
-
-/// Returns the EIR result metadata for `array_map()` when a callable param signature is known.
-fn array_map_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    if args.len() != 2 {
-        return None;
-    }
-    let callback_sig = callable_expr_signature(ctx, &args[0])?;
-    let return_ty = normalize_value_php_type(callback_sig.return_type.codegen_repr());
-    if return_ty == PhpType::Mixed {
-        return None;
-    }
-    let array = operands.get(1)?;
-    match ctx.builder.value_php_type(*array).codegen_repr() {
-        PhpType::Array(_) => Some(PhpType::Array(Box::new(return_ty))),
-        _ => None,
-    }
-}
-
-/// Returns the EIR result metadata for `iterator_to_array()` when preserve_keys is static.
-fn iterator_to_array_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let source = operands.first()?;
-    let preserve_keys = match args.get(1) {
-        Some(arg) => static_preserve_keys_expr(arg),
-        None => Some(true),
-    };
-    preserve_keys
-        .map(|value| {
-            iterator_to_array_static_return_type(
-                &ctx.builder.value_php_type(*source).codegen_repr(),
-                value,
-            )
-        })
-        .or(Some(PhpType::Mixed))
-}
-
-/// Computes the concrete `iterator_to_array()` container type for one preserve_keys value.
-fn iterator_to_array_static_return_type(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
-    match source_ty.codegen_repr() {
-        PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
-        PhpType::AssocArray { key, value } if preserve_keys => PhpType::AssocArray { key, value },
-        PhpType::AssocArray { value, .. } => PhpType::Array(value),
-        _ if preserve_keys => PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(PhpType::Mixed),
-        },
-        _ => PhpType::Array(Box::new(PhpType::Mixed)),
-    }
-}
-
-/// Evaluates literal PHP truthiness used by static `iterator_to_array()` preserve_keys.
-fn static_preserve_keys_expr(expr: &Expr) -> Option<bool> {
-    match &expr.kind {
-        ExprKind::BoolLiteral(value) => Some(*value),
-        ExprKind::IntLiteral(value) => Some(*value != 0),
-        ExprKind::FloatLiteral(value) => Some(*value != 0.0),
-        ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
-        ExprKind::Null => Some(false),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => Some(*value != 0),
-            ExprKind::FloatLiteral(value) => Some(*value != 0.0),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Resolves callable expression metadata tracked during type checking and lowering.
-fn callable_expr_signature<'a>(
-    ctx: &'a LoweringContext<'_, '_>,
-    callback: &Expr,
-) -> Option<&'a FunctionSig> {
-    match &callback.kind {
-        ExprKind::Variable(name) => ctx.callable_param_signature(name),
-        _ => None,
-    }
-}
-
-/// Returns precise return metadata for pointer-extension builtins.
-fn pointer_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "ptr" => Some(PhpType::Pointer(None)),
-        "ptr_null" => Some(PhpType::Pointer(None)),
-        "ptr_is_null" => Some(PhpType::Bool),
-        "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" | "ptr_sizeof" => {
-            Some(PhpType::Int)
-        }
-        "ptr_read_string" => Some(PhpType::Str),
-        "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => Some(PhpType::Void),
-        "ptr_write_string" => Some(PhpType::Int),
-        "ptr_offset" => {
-            let pointer = operands.first()?;
-            match ctx.builder.value_php_type(*pointer).codegen_repr() {
-                PhpType::Pointer(tag) => Some(PhpType::Pointer(tag)),
-                _ => Some(PhpType::Pointer(None)),
-            }
-        }
-        "zval_pack" => Some(PhpType::Pointer(None)),
-        "zval_unpack" => Some(PhpType::Mixed),
-        "zval_type" => Some(PhpType::Int),
-        "zval_free" => Some(PhpType::Void),
-        _ => None,
-    }
-}
-
-/// Returns precise return metadata for numeric builtins whose result depends on operands.
-fn numeric_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "abs" => {
-            let value = operands.first()?;
-            let ty = ctx.builder.value_php_type(*value).codegen_repr();
-            Some(abs_builtin_return_type(&ty))
-        }
-        "min" | "max" => {
-            let mut saw_float = false;
-            for value in operands {
-                match ctx.builder.value_php_type(*value).codegen_repr() {
-                    PhpType::Float => saw_float = true,
-                    PhpType::Int | PhpType::Bool => {}
-                    _ => return Some(PhpType::Mixed),
-                }
-            }
-            Some(if saw_float {
-                PhpType::Float
-            } else {
-                PhpType::Int
-            })
-        }
-        "clamp" => {
-            let mut saw_float = false;
-            let mut all_int = operands.len() == 3;
-            let mut all_string = operands.len() == 3;
-            let mut all_numeric = operands.len() == 3;
-            for value in operands.iter().take(3) {
-                match ctx.builder.value_php_type(*value).codegen_repr() {
-                    PhpType::Int => {
-                        all_string = false;
-                    }
-                    PhpType::Float => {
-                        saw_float = true;
-                        all_int = false;
-                        all_string = false;
-                    }
-                    PhpType::Str => {
-                        all_int = false;
-                        all_numeric = false;
-                    }
-                    _ => {
-                        all_int = false;
-                        all_string = false;
-                        all_numeric = false;
-                    }
-                }
-            }
-            if all_string {
-                Some(PhpType::Str)
-            } else if all_int {
-                Some(PhpType::Int)
-            } else if all_numeric {
-                Some(if saw_float {
-                    PhpType::Float
-                } else {
-                    PhpType::Int
-                })
-            } else {
-                Some(PhpType::Mixed)
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Returns the EIR storage type for `abs()` after operand-sensitive narrowing.
-fn abs_builtin_return_type(ty: &PhpType) -> PhpType {
-    match ty {
-        PhpType::Float => PhpType::Float,
-        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-        _ => PhpType::Int,
-    }
-}
-
-/// Returns EIR result metadata for `pathinfo()` based on argument shape.
-fn pathinfo_builtin_return_type(name: &str, operands: &[crate::ir::ValueId]) -> Option<PhpType> {
-    if php_symbol_key(name.trim_start_matches('\\')).as_str() != "pathinfo" {
-        return None;
-    }
-    if operands.len() == 1 {
-        return Some(PhpType::AssocArray {
-            key: Box::new(PhpType::Str),
-            value: Box::new(PhpType::Str),
-        });
-    }
-    Some(PhpType::Mixed)
-}
-
-/// Returns precise EIR result metadata for regex builtins lowered by `codegen`.
-fn regex_builtin_return_type(name: &str) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "preg_match" | "preg_match_all" => Some(PhpType::Int),
-        "preg_replace" => Some(PhpType::Str),
-        "preg_split" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
-        _ => None,
-    }
-}
-
-/// Returns precise return metadata for array builtins that preserve operand element type.
-fn array_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "array_combine" => array_combine_builtin_return_type(ctx, operands),
-        "array_column" => array_column_builtin_return_type(ctx, operands),
-        "array_flip" => array_flip_builtin_return_type(ctx, operands),
-        "array_fill" => array_fill_builtin_return_type(ctx, operands),
-        "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
-        "array_merge" => array_merge_builtin_return_type(ctx, operands),
-        "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
-        | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
-        "in_array" => Some(PhpType::Bool),
-        "array_is_list" => Some(PhpType::Bool),
-        "array_key_first" | "array_key_last" => Some(PhpType::Mixed),
-        // `array_keys`/`array_slice` produce a fresh indexed array of boxed `Mixed`
-        // payloads (keys, or the sliced elements). These mirror the result type the
-        // first-class-callable fallback supplied before they were registered as
-        // builtins, so the EIR backend keeps receiving a concrete `Array` result
-        // type rather than the registry's `Mixed` return-type placeholder.
-        "array_keys" | "array_slice" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
-        "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
-        "array_values" => {
-            let array = operands.first()?;
-            match ctx.builder.value_php_type(*array).codegen_repr() {
-                PhpType::Array(elem) => Some(PhpType::Array(elem)),
-                PhpType::AssocArray { value, .. } => Some(PhpType::Array(value)),
-                other => Some(other),
-            }
-        }
-        "array_reverse" | "array_unique" | "array_pad" => {
-            let array = operands.first()?;
-            match ctx.builder.value_php_type(*array).codegen_repr() {
-                PhpType::Array(elem) => Some(PhpType::Array(elem)),
-                other => Some(other),
-            }
-        }
-        "array_chunk" => {
-            let array = operands.first()?;
-            match ctx.builder.value_php_type(*array).codegen_repr() {
-                PhpType::Array(elem) => Some(PhpType::Array(Box::new(PhpType::Array(elem)))),
-                other => Some(other),
-            }
-        }
-        "array_replace" | "array_replace_recursive" | "array_diff_assoc"
-        | "array_intersect_assoc" => two_input_hash_builtin_return_type(ctx, operands),
-        "array_merge_recursive" => array_merge_recursive_builtin_return_type(ctx, operands),
-        "array_find" => Some(PhpType::Mixed),
-        "array_any" | "array_all" => Some(PhpType::Bool),
-        "array_multisort" => Some(PhpType::Bool),
-        "array_walk_recursive" => Some(PhpType::Void),
-        "array_udiff" | "array_uintersect" => {
-            array_preserve_first_builtin_return_type(ctx, operands)
-        }
-        _ => None,
-    }
-}
-
-/// Returns the hash result metadata for the two-input hash builtins (`array_replace`,
-/// `array_replace_recursive`, `array_diff_assoc`, `array_intersect_assoc`).
-///
-/// Mirrors the type checker's `two_input_hash_result`: the key and value each widen to `Mixed`
-/// when the two operands disagree, so the result hash dispatches keys/values correctly at runtime.
-fn two_input_hash_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let first = operands.first()?;
-    let second = operands.get(1)?;
-    let t1 = ctx.builder.value_php_type(*first).codegen_repr();
-    let t2 = ctx.builder.value_php_type(*second).codegen_repr();
-    Some(PhpType::two_input_hash_result(&t1, &t2))
-}
-
-/// Returns the hash result metadata for `array_merge_recursive(a, b)`.
-///
-/// Scalar collisions combine into lists, so the value type is always `Mixed`; the key widens to
-/// `Mixed` when the two operands disagree, matching the type checker.
-fn array_merge_recursive_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let first = operands.first()?;
-    let second = operands.get(1)?;
-    let t1 = ctx.builder.value_php_type(*first).codegen_repr();
-    let t2 = ctx.builder.value_php_type(*second).codegen_repr();
-    Some(PhpType::AssocArray {
-        key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
-        value: Box::new(PhpType::Mixed),
-    })
-}
-
-/// Returns precise return metadata for `array_fill(start, count, value)`.
-fn array_fill_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let value = operands.get(2)?;
-    let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
-    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
-}
-
-/// Returns the indexed element storage type for EIR `array_fill()` results.
-fn array_fill_indexed_element_type(value_ty: PhpType) -> PhpType {
-    match value_ty.codegen_repr() {
-        PhpType::Void | PhpType::Never => PhpType::Mixed,
-        other => other,
-    }
-}
-
-/// Returns the extracted column element type for `array_column()`.
-fn array_column_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let array = operands.first()?;
-    match ctx.builder.value_php_type(*array).codegen_repr() {
-        PhpType::Array(inner) => match inner.codegen_repr() {
-            PhpType::AssocArray { value, .. } => Some(PhpType::Array(value)),
-            other => Some(other),
-        },
-        other => Some(other),
-    }
-}
-
-/// Returns precise return metadata for array builtins that preserve the first operand type.
-fn array_preserve_first_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let first = operands.first()?;
-    Some(ctx.builder.value_php_type(*first).codegen_repr())
-}
-
-/// Returns precise return metadata for `array_fill_keys(keys, value)`.
-fn array_fill_keys_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let keys = operands.first()?;
-    let value = operands.get(1)?;
-    let key_ty = match ctx.builder.value_php_type(*keys).codegen_repr() {
-        PhpType::Array(elem) => array_key_type_from_value_type(elem.codegen_repr()),
-        _ => return None,
-    };
-    let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
-    Some(PhpType::AssocArray {
-        key: Box::new(key_ty),
-        value: Box::new(value_ty),
-    })
-}
-
-/// Returns precise return metadata for `array_flip(array)`.
-fn array_flip_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let array = operands.first()?;
-    match ctx.builder.value_php_type(*array).codegen_repr() {
-        PhpType::Array(value) => Some(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(value.codegen_repr())),
-            value: Box::new(PhpType::Int),
-        }),
-        PhpType::AssocArray { key, value } => Some(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(value.codegen_repr())),
-            value: key,
-        }),
-        _ => None,
-    }
-}
-
-/// Returns precise return metadata for `array_combine(keys, values)`.
-fn array_combine_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let keys = operands.first()?;
-    let values = operands.get(1)?;
-    let key_ty = match ctx.builder.value_php_type(*keys).codegen_repr() {
-        PhpType::Array(elem) => array_key_type_from_value_type(elem.codegen_repr()),
-        _ => return None,
-    };
-    let value_ty = match ctx.builder.value_php_type(*values).codegen_repr() {
-        PhpType::Array(elem) => elem.codegen_repr(),
-        _ => return None,
-    };
-    Some(PhpType::AssocArray {
-        key: Box::new(key_ty),
-        value: Box::new(value_ty),
-    })
-}
-
-/// Returns precise return metadata for `array_merge()`.
-///
-/// Empty indexed arrays lower as `Array<Void>`; when that is the first operand, the merged
-/// array inherits the second operand's element metadata so later indexed reads materialize
-/// real payload values instead of void sentinels.
-fn array_merge_builtin_return_type(
-    ctx: &LoweringContext<'_, '_>,
-    operands: &[crate::ir::ValueId],
-) -> Option<PhpType> {
-    let first = operands.first()?;
-    let first_ty = ctx.builder.value_php_type(*first).codegen_repr();
-    let second_ty = operands
-        .get(1)
-        .map(|value| ctx.builder.value_php_type(*value).codegen_repr());
-    match first_ty {
-        PhpType::Array(elem) if is_empty_array_element_type(elem.as_ref()) => match second_ty {
-            Some(PhpType::Array(right)) if is_scalar_merge_element_type(right.as_ref()) => {
-                Some(PhpType::Array(right))
-            }
-            _ => Some(PhpType::Array(elem)),
-        },
-        PhpType::Array(elem) => Some(PhpType::Array(elem)),
-        other => Some(other),
-    }
-}
-
-/// Returns true for the element sentinel used by statically empty indexed arrays.
-fn is_empty_array_element_type(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Void)
-}
-
-/// Returns true for element types copied safely by the scalar merge runtime helper.
-fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
-    )
-}
-
-/// Returns precise builtin return types needed by EIR value materialization.
-fn builtin_return_type_override(name: &str) -> Option<PhpType> {
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "chdir" | "checkdate" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
-        | "class_alias" | "class_exists" | "copy" | "define" | "defined"
-        | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
-        | "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
-        | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_object" | "is_real" | "is_scalar" | "is_string"
-        | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists"
-        | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link"
-        | "method_exists" | "mkdir" | "property_exists" | "rename"
-        | "enum_exists" | "trait_exists" | "putenv" | "rmdir" | "is_readable"
-        | "is_subclass_of" | "is_writeable" | "is_writable" | "settype"
-        | "is_resource" | "hash_equals" | "hash_update" | "spl_autoload_register"
-        | "spl_autoload_unregister" | "stream_context_set_option" | "stream_context_set_params"
-        | "stream_filter_register" | "stream_filter_remove" | "__elephc_phar_set_compression"
-        | "__elephc_phar_set_metadata" | "__elephc_phar_set_stub"
-        | "__elephc_phar_set_file_metadata"
-        | "__elephc_phar_sign_openssl" | "__elephc_phar_sign_hash"
-        | "__elephc_phar_set_zip_password"
-        | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
-        | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
-        | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
-        | "unlink" => {
-            Some(PhpType::Bool)
-        }
-        "basename" | "date" | "gmdate" | "dirname" | "exec" | "get_class" | "get_parent_class"
-        | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
-        | "readline" | "shell_exec" | "sys_get_temp_dir"
-        | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
-        | "stream_get_line" | "system" | "spl_autoload_extensions" | "strval" | "tempnam" | "vsprintf"
-        | "__elephc_phar_get_metadata" | "__elephc_phar_get_stub"
-        | "__elephc_phar_get_file_metadata"
-        | "__elephc_phar_gzip_archive" | "__elephc_phar_bzip2_archive"
-        | "__elephc_phar_decompress_archive"
-        | "__elephc_phar_get_signature_hash" | "__elephc_phar_get_signature_type" => {
-            Some(PhpType::Str)
-        }
-        "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
-        "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
-        | "stream_bucket_append" | "stream_bucket_prepend" | "unset" => Some(PhpType::Void),
-        "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
-        // ob_* state mutators return plain PHP bools (false when no buffer is active);
-        // ob_implicit_flush always returns true like PHP 8.
-        "ob_start" | "ob_clean" | "ob_end_clean" | "ob_end_flush" | "ob_flush"
-        | "ob_implicit_flush" => Some(PhpType::Bool),
-        "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
-        | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
-        | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "gmmktime" | "sleep"
-        | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
-        | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
-        | "stream_set_read_buffer" | "stream_set_write_buffer"
-        | "__elephc_strtotime_raw" | "time" | "ob_get_level"
-        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
-            Some(PhpType::Int)
-        }
-        // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,
-        // or boolean false when the string cannot be parsed. The backend boxes the result so
-        // `=== false` and `echo` observe the distinct false; `__elephc_strtotime_raw` (the DateTime
-        // internal alias above) stays a plain Int that maps the failure sentinel to -1.
-        "strtotime" => Some(PhpType::Union(vec![PhpType::Int, PhpType::False])),
-        // microtime() with a non-literal `as_float` flag yields `string|float` (boxed `Mixed`):
-        // the runtime branches on the flag and boxes either the "0.NNNNNNNN sec" string or the
-        // float. Literal-true / literal-false / omitted cases are resolved earlier by
-        // `call_return_type_for_args` (Float / Str), so this entry is only reached for a
-        // non-literal flag.
-        "microtime" => Some(PhpType::Union(vec![PhpType::Str, PhpType::Float])),
-        "spl_object_hash" => Some(PhpType::Str),
-        "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
-        "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
-            Some(PhpType::stream_resource())
-        }
-        "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
-        | "stream_get_meta_data" => Some(PhpType::AssocArray {
-            key: Box::new(PhpType::Str),
-            value: Box::new(PhpType::Mixed),
-        }),
-        // ob_* boxed results: string|false getters, int|false length, and the
-        // status hash boxed as a Mixed associative array (like getdate/localtime).
-        "ob_get_contents" | "ob_get_clean" | "ob_get_flush" | "ob_get_length"
-        | "ob_get_status"
-        | "getdate" | "localtime" | "hrtime" | "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
-        | "fileowner" | "fileperms" | "filetype" | "readfile" | "readlink" | "realpath"
-        | "fgetc" | "fgets" | "fopen" | "fstat" | "hash_copy" | "hash_file" | "hash_init"
-        | "gethostbyaddr" | "getprotobyname" | "getprotobynumber" | "getservbyname"
-        | "getservbyport" | "fsockopen" | "inet_ntop" | "inet_pton" | "ip2long" | "opendir"
-        | "pfsockopen" | "readdir" | "popen" | "stat" | "lstat" | "stream_get_contents"
-        | "stream_bucket_make_writeable" | "stream_bucket_new" | "stream_filter_append"
-        | "stream_filter_prepend" | "stream_resolve_include_path" | "stream_socket_accept"
-        | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
-        | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
-        | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos" => {
-            Some(PhpType::Mixed)
-        }
-        "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
-        "__elephc_phar_list_entries"
-        | "class_attribute_names"
-        | "explode"
-        | "fgetcsv"
-        | "file"
-        | "get_declared_classes"
-        | "fscanf"
-        | "get_declared_interfaces"
-        | "get_declared_traits"
-        | "glob"
-        | "hash_algos"
-        | "ob_list_handlers"
-        | "scandir"
-        | "spl_classes"
-        | "str_split"
-        | "stream_get_filters"
-        | "stream_get_transports"
-        | "stream_get_wrappers"
-        | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),
-        "class_attribute_args" => Some(PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(PhpType::Mixed),
-        }),
-        "class_get_attributes" => Some(PhpType::Array(Box::new(PhpType::Object(
-            "ReflectionAttribute".to_string(),
-        )))),
-        _ => None,
     }
 }
 
@@ -11254,13 +10707,12 @@ fn emit_closure_bind(
     new_this: crate::ir::ValueId,
     expr: &Expr,
 ) -> LoweredValue {
-    let data = ctx.intern_function_name("closure_bind");
     ctx.emit_value(
-        Op::BuiltinCall,
+        Op::ClosureBind,
         vec![closure, new_this],
-        Some(Immediate::Data(data)),
+        None,
         PhpType::Callable,
-        Op::BuiltinCall.default_effects(),
+        Op::ClosureBind.default_effects(),
         Some(expr.span),
     )
 }
@@ -11603,16 +11055,15 @@ fn lower_reflection_builtin_function_call(
     expr: &Expr,
 ) -> LoweredValue {
     let operands = lower_builtin_call_args(ctx, function_name, Some(signature), args);
-    let php_type = call_return_type_for_args(ctx, function_name, args, &operands)
+    let php_type = registry_builtin_result_type(ctx, function_name, args, &operands, expr.span)
         .unwrap_or_else(|| call_return_type(ctx, function_name, &operands));
-    let data = ctx.intern_function_name(function_name);
-    ctx.emit_value(
-        Op::BuiltinCall,
+    emit_builtin_call_value(
+        ctx,
+        function_name,
         operands,
-        Some(Immediate::Data(data)),
         php_type,
-        effects_lookup::builtin_effects(function_name),
-        Some(expr.span),
+        expr.span,
+        None,
     )
 }
 
@@ -13890,7 +13341,7 @@ fn release_owned_call_arg_temporaries_with_signature(
             });
             if !independently_boxed
                 && return_alias.may_alias_parameter(parameter_index)
-                && call_result_may_alias_arg(ctx, *value, result)
+                && result.is_some_and(|result| ctx.call_result_may_alias_arg(*value, result))
             {
                 continue;
             }
@@ -13923,54 +13374,6 @@ fn call_arg_gets_independent_mixed_box(
                     PhpType::Mixed | PhpType::Union(_)
                 )
         })
-}
-
-/// Returns true when a call result can legally be the same refcounted payload as an argument.
-fn call_result_may_alias_arg(
-    ctx: &LoweringContext<'_, '_>,
-    arg: crate::ir::ValueId,
-    result: Option<crate::ir::ValueId>,
-) -> bool {
-    let Some(result) = result else {
-        return false;
-    };
-    if matches!(
-        ctx.builder.value_defining_op(arg),
-        Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
-    ) {
-        return false;
-    }
-    let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();
-    let result_ty = ctx.builder.value_php_type(result).codegen_repr();
-    if !Ownership::php_type_needs_lifetime_tracking(&arg_ty)
-        || !Ownership::php_type_needs_lifetime_tracking(&result_ty)
-    {
-        return false;
-    }
-    match (&arg_ty, &result_ty) {
-        (PhpType::Mixed | PhpType::Union(_), _) | (_, PhpType::Mixed | PhpType::Union(_)) => true,
-        (PhpType::Object(_), PhpType::Object(_)) => true,
-        (PhpType::Array(_), PhpType::Array(_)) => true,
-        (
-            PhpType::AssocArray { .. },
-            PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
-        ) => true,
-        // `iterable` is a supertype of arrays and Traversable objects, so a
-        // function can accept one container shape and return the same payload
-        // typed as `iterable` (e.g. `function id(iterable $x): iterable`
-        // returning an array argument). Treat container/iterable pairings in
-        // either direction as a possible alias so the shared payload is not
-        // released while the callee still returns it.
-        (
-            PhpType::Iterable,
-            PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_),
-        ) => true,
-        (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
-        (PhpType::Str, PhpType::Str) => true,
-        (PhpType::Callable, PhpType::Callable) => true,
-        (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
-        _ => arg_ty == result_ty,
-    }
 }
 
 /// Makes a borrowed read result independent from an owning receiver before releasing it.

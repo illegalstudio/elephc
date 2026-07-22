@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `uksort` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `uksort` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(fixed(["array", "callback"]))`: exactly 2
@@ -11,13 +10,9 @@
 //!   mutation (ir_lower reads `ref_params` from the registry sig).
 //! - `check` validates the comparator with two integer dummy arguments — `uksort` compares
 //!   array keys (always integer in the supported subset), not values. Returns `Void`.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_uksort` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::PhpType;
@@ -28,7 +23,9 @@ builtin! {
     params: [ref array: Mixed, callback: Mixed],
     returns: Void,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Uksort,
+    ),
     summary: "Sorts an array by keys using a user-defined comparison function.",
     php_manual: "https://www.php.net/manual/en/function.uksort.php",
 }
@@ -53,9 +50,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &label,
     )?;
     Ok(PhpType::Void)
-}
-
-/// Lowers a `uksort` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_uksort(ctx, inst)
 }

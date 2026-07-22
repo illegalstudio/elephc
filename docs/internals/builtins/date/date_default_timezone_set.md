@@ -2,7 +2,7 @@
 title: "date_default_timezone_set() — internals"
 description: "Compiler internals for date_default_timezone_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 92
+  order: 94
 ---
 
 ## `date_default_timezone_set()` — internals
@@ -10,24 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_set.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:84](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L84) (`lower_date_default_timezone_set`)
-- **Function symbol**: `lower_date_default_timezone_set()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper.
-- Materializes the identifier string into the registers the helper reads (ptr/len in
-- `x1`/`x2` on ARM64, `rax`/`rdx` on x86_64), then `__rt_date_default_timezone_set`
-- applies it via libc `putenv`+`tzset` and returns PHP `true` in the integer-result register.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.date_default_timezone_set` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_date_default_timezone_set`
-- `__rt_microtime`
-- `__rt_microtime_mixed`
-- `__rt_microtime_str`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.date_default_timezone_set`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

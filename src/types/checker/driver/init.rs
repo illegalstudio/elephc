@@ -150,6 +150,7 @@ impl Checker {
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
+            builtin_call_types: HashMap::new(),
         }
     }
 }

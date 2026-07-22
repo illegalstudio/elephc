@@ -2,7 +2,7 @@
 title: "lstat()"
 description: "Gives information about a file or symbolic link."
 sidebar:
-  order: 137
+  order: 139
 ---
 
 ## lstat()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `lstat` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/lstat.md).
-

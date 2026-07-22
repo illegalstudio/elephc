@@ -1,22 +1,17 @@
 //! Purpose:
-//! Home of the PHP `realpath_cache_get` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `realpath_cache_get` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `AssocArray{Str, Mixed}` to reflect the cache map structure.
 //! - `arity_error` is overridden to preserve the legacy message
 //!   "realpath_cache_get() takes exactly 0 arguments" (the registry default for
 //!   0-arg builtins produces "takes no arguments").
-//! - `lower` is a thin wrapper over `io::lower_realpath_cache_get` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,7 +21,9 @@ builtin! {
     arity_error: "realpath_cache_get() takes exactly 0 arguments",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::RealpathCacheGet,
+    ),
     summary: "Returns realpath cache entries.",
     php_manual: "function.realpath-cache-get",
 }
@@ -39,9 +36,4 @@ fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     })
-}
-
-/// Lowers a `realpath_cache_get` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_realpath_cache_get(ctx, inst)
 }

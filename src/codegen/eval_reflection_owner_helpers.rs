@@ -422,12 +422,12 @@ fn reflection_property_offset(info: &ClassInfo, property: &str) -> Option<usize>
 fn emit_reflection_owner_new_stub(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, xzr"); // report helper failure when Reflection owner metadata is missing
-            emitter.instruction("ret"); // return the null pointer to Rust
+            emitter.instruction("mov x0, xzr");                                 // report helper failure when Reflection owner metadata is missing
+            emitter.instruction("ret");                                         // return the null pointer to Rust
         }
         Arch::X86_64 => {
-            emitter.instruction("xor eax, eax"); // report helper failure when Reflection owner metadata is missing
-            emitter.instruction("ret"); // return the null pointer to Rust
+            emitter.instruction("xor eax, eax");                                // report helper failure when Reflection owner metadata is missing
+            emitter.instruction("ret");                                         // return the null pointer to Rust
         }
     }
 }
@@ -450,60 +450,60 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type";
     let union_type_label = "__elephc_eval_reflection_owner_new_union_type";
     let intersection_type_label = "__elephc_eval_reflection_owner_new_intersection_type";
-    emitter.instruction("sub sp, sp, #160"); // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #144]"); // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #144"); // establish a stable helper frame pointer
-    emitter.instruction("str x0, [sp, #0]"); // save the Reflection owner kind
-    emitter.instruction("str x1, [sp, #8]"); // save the reflected-name pointer
-    emitter.instruction("str x2, [sp, #16]"); // save the reflected-name length
-    emitter.instruction("str x3, [sp, #24]"); // save the boxed ReflectionAttribute array
-    emitter.instruction("str x4, [sp, #80]"); // save the boxed ReflectionClass interface-name array
-    emitter.instruction("str x5, [sp, #88]"); // save the boxed ReflectionClass trait-name array
-    emitter.instruction("str x6, [sp, #104]"); // save the boxed ReflectionClass method-name array
-    emitter.instruction("str x7, [sp, #112]"); // save the boxed ReflectionClass property-name array
-    emitter.instruction("ldr x8, [sp, #160]"); // load the boxed ReflectionClass method objects array from the first stack argument
-    emitter.instruction("str x8, [sp, #120]"); // save the boxed ReflectionClass method objects array
-    emitter.instruction("ldr x8, [sp, #168]"); // load the boxed ReflectionClass property objects array from the second stack argument
-    emitter.instruction("str x8, [sp, #128]"); // save the boxed ReflectionClass property objects array
-    emitter.instruction("ldr x8, [sp, #176]"); // load the boxed ReflectionClass parent value from the third stack argument
-    emitter.instruction("str x8, [sp, #136]"); // save the boxed ReflectionClass parent value
-    emitter.instruction("ldr x8, [sp, #184]"); // load ReflectionClass modifier flags from the fourth stack argument
-    emitter.instruction("str x8, [sp, #48]"); // save ReflectionClass modifier flags
-    emitter.instruction("ldr x8, [sp, #192]"); // load owner modifier/count metadata from the fifth stack argument
-    emitter.instruction("str x8, [sp, #96]"); // save owner modifier/count metadata
-    emitter.instruction("ldr x8, [sp, #200]"); // load ReflectionMethod getModifiers bitmask from the sixth stack argument
-    emitter.instruction("str x8, [sp, #72]"); // save ReflectionMethod getModifiers bitmask
-    emitter.instruction("ldr x8, [sp, #208]"); // load boxed ReflectionClassConstant value from the seventh stack argument
-    emitter.instruction("str x8, [sp, #56]"); // save boxed ReflectionClassConstant value
-    emitter.instruction("ldr x8, [sp, #216]"); // load boxed ReflectionEnumBackedCase backing value from the eighth stack argument
-    emitter.instruction("str x8, [sp, #64]"); // save boxed ReflectionEnumBackedCase backing value
-    emitter.instruction("cmp x0, #0"); // owner kind 0 means ReflectionClass
-    emitter.instruction(&format!("b.eq {}", class_label)); // allocate a ReflectionClass owner
-    emitter.instruction("cmp x0, #1"); // owner kind 1 means ReflectionMethod
-    emitter.instruction(&format!("b.eq {}", method_label)); // allocate a ReflectionMethod owner
-    emitter.instruction("cmp x0, #2"); // owner kind 2 means ReflectionProperty
-    emitter.instruction(&format!("b.eq {}", property_label)); // allocate a ReflectionProperty owner
-    emitter.instruction("cmp x0, #3"); // owner kind 3 means ReflectionClassConstant
-    emitter.instruction(&format!("b.eq {}", class_constant_label)); // allocate a ReflectionClassConstant owner
-    emitter.instruction("cmp x0, #4"); // owner kind 4 means ReflectionEnumUnitCase
-    emitter.instruction(&format!("b.eq {}", enum_unit_case_label)); // allocate a ReflectionEnumUnitCase owner
-    emitter.instruction("cmp x0, #5"); // owner kind 5 means ReflectionEnumBackedCase
-    emitter.instruction(&format!("b.eq {}", enum_backed_case_label)); // allocate a ReflectionEnumBackedCase owner
-    emitter.instruction("cmp x0, #6"); // owner kind 6 means ReflectionParameter
-    emitter.instruction(&format!("b.eq {}", parameter_label)); // allocate a ReflectionParameter owner
-    emitter.instruction("cmp x0, #7"); // owner kind 7 means ReflectionNamedType
-    emitter.instruction(&format!("b.eq {}", named_type_label)); // allocate a ReflectionNamedType owner
-    emitter.instruction("cmp x0, #8"); // owner kind 8 means ReflectionUnionType
-    emitter.instruction(&format!("b.eq {}", union_type_label)); // allocate a ReflectionUnionType owner
-    emitter.instruction("cmp x0, #9"); // owner kind 9 means ReflectionIntersectionType
-    emitter.instruction(&format!("b.eq {}", intersection_type_label)); // allocate a ReflectionIntersectionType owner
-    emitter.instruction("cmp x0, #10"); // owner kind 10 means ReflectionFunction
-    emitter.instruction(&format!("b.eq {}", function_label)); // allocate a ReflectionFunction owner
-    emitter.instruction("cmp x0, #11"); // owner kind 11 means ReflectionEnum
-    emitter.instruction(&format!("b.eq {}", enum_label)); // allocate a ReflectionEnum owner
-    emitter.instruction("cmp x0, #12"); // owner kind 12 means ReflectionObject
-    emitter.instruction(&format!("b.eq {}", object_label)); // allocate a ReflectionObject owner
-    emitter.instruction(&format!("b {}", fail_label)); // reject unknown owner kinds
+    emitter.instruction("sub sp, sp, #160");                                    // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #144]");                            // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #144");                                   // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the Reflection owner kind
+    emitter.instruction("str x1, [sp, #8]");                                    // save the reflected-name pointer
+    emitter.instruction("str x2, [sp, #16]");                                   // save the reflected-name length
+    emitter.instruction("str x3, [sp, #24]");                                   // save the boxed ReflectionAttribute array
+    emitter.instruction("str x4, [sp, #80]");                                   // save the boxed ReflectionClass interface-name array
+    emitter.instruction("str x5, [sp, #88]");                                   // save the boxed ReflectionClass trait-name array
+    emitter.instruction("str x6, [sp, #104]");                                  // save the boxed ReflectionClass method-name array
+    emitter.instruction("str x7, [sp, #112]");                                  // save the boxed ReflectionClass property-name array
+    emitter.instruction("ldr x8, [sp, #160]");                                  // load the boxed ReflectionClass method objects array from the first stack argument
+    emitter.instruction("str x8, [sp, #120]");                                  // save the boxed ReflectionClass method objects array
+    emitter.instruction("ldr x8, [sp, #168]");                                  // load the boxed ReflectionClass property objects array from the second stack argument
+    emitter.instruction("str x8, [sp, #128]");                                  // save the boxed ReflectionClass property objects array
+    emitter.instruction("ldr x8, [sp, #176]");                                  // load the boxed ReflectionClass parent value from the third stack argument
+    emitter.instruction("str x8, [sp, #136]");                                  // save the boxed ReflectionClass parent value
+    emitter.instruction("ldr x8, [sp, #184]");                                  // load ReflectionClass modifier flags from the fourth stack argument
+    emitter.instruction("str x8, [sp, #48]");                                   // save ReflectionClass modifier flags
+    emitter.instruction("ldr x8, [sp, #192]");                                  // load owner modifier/count metadata from the fifth stack argument
+    emitter.instruction("str x8, [sp, #96]");                                   // save owner modifier/count metadata
+    emitter.instruction("ldr x8, [sp, #200]");                                  // load ReflectionMethod getModifiers bitmask from the sixth stack argument
+    emitter.instruction("str x8, [sp, #72]");                                   // save ReflectionMethod getModifiers bitmask
+    emitter.instruction("ldr x8, [sp, #208]");                                  // load boxed ReflectionClassConstant value from the seventh stack argument
+    emitter.instruction("str x8, [sp, #56]");                                   // save boxed ReflectionClassConstant value
+    emitter.instruction("ldr x8, [sp, #216]");                                  // load boxed ReflectionEnumBackedCase backing value from the eighth stack argument
+    emitter.instruction("str x8, [sp, #64]");                                   // save boxed ReflectionEnumBackedCase backing value
+    emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
+    emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
+    emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
+    emitter.instruction(&format!("b.eq {}", method_label));                     // allocate a ReflectionMethod owner
+    emitter.instruction("cmp x0, #2");                                          // owner kind 2 means ReflectionProperty
+    emitter.instruction(&format!("b.eq {}", property_label));                   // allocate a ReflectionProperty owner
+    emitter.instruction("cmp x0, #3");                                          // owner kind 3 means ReflectionClassConstant
+    emitter.instruction(&format!("b.eq {}", class_constant_label));             // allocate a ReflectionClassConstant owner
+    emitter.instruction("cmp x0, #4");                                          // owner kind 4 means ReflectionEnumUnitCase
+    emitter.instruction(&format!("b.eq {}", enum_unit_case_label));             // allocate a ReflectionEnumUnitCase owner
+    emitter.instruction("cmp x0, #5");                                          // owner kind 5 means ReflectionEnumBackedCase
+    emitter.instruction(&format!("b.eq {}", enum_backed_case_label));           // allocate a ReflectionEnumBackedCase owner
+    emitter.instruction("cmp x0, #6");                                          // owner kind 6 means ReflectionParameter
+    emitter.instruction(&format!("b.eq {}", parameter_label));                  // allocate a ReflectionParameter owner
+    emitter.instruction("cmp x0, #7");                                          // owner kind 7 means ReflectionNamedType
+    emitter.instruction(&format!("b.eq {}", named_type_label));                 // allocate a ReflectionNamedType owner
+    emitter.instruction("cmp x0, #8");                                          // owner kind 8 means ReflectionUnionType
+    emitter.instruction(&format!("b.eq {}", union_type_label));                 // allocate a ReflectionUnionType owner
+    emitter.instruction("cmp x0, #9");                                          // owner kind 9 means ReflectionIntersectionType
+    emitter.instruction(&format!("b.eq {}", intersection_type_label));          // allocate a ReflectionIntersectionType owner
+    emitter.instruction("cmp x0, #10");                                         // owner kind 10 means ReflectionFunction
+    emitter.instruction(&format!("b.eq {}", function_label));                   // allocate a ReflectionFunction owner
+    emitter.instruction("cmp x0, #11");                                         // owner kind 11 means ReflectionEnum
+    emitter.instruction(&format!("b.eq {}", enum_label));                       // allocate a ReflectionEnum owner
+    emitter.instruction("cmp x0, #12");                                         // owner kind 12 means ReflectionObject
+    emitter.instruction(&format!("b.eq {}", object_label));                     // allocate a ReflectionObject owner
+    emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
         class_label,
@@ -622,17 +622,17 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
         box_label,
     );
     emitter.label(box_label);
-    emitter.instruction("mov x0, #6"); // runtime tag 6 = object
-    emitter.instruction("ldr x1, [sp, #32]"); // move the Reflection owner object pointer into the Mixed payload
-    emitter.instruction("mov x2, xzr"); // object payloads do not use a high word
-    emitter.instruction("bl __rt_mixed_from_value"); // box the Reflection owner object for eval
-    emitter.instruction(&format!("b {}", done_label)); // skip the fail-closed return path after boxing
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
+    emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
+    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
+    emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
-    emitter.instruction("mov x0, xzr"); // return a null pointer so Rust reports runtime failure
+    emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #144]"); // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #160"); // release the helper frame
-    emitter.instruction("ret"); // return the boxed reflection owner to Rust
+    emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #160");                                    // release the helper frame
+    emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
 }
 
 /// Emits the x86_64 Reflection owner materializer helper body.
@@ -653,62 +653,62 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type_x";
     let union_type_label = "__elephc_eval_reflection_owner_new_union_type_x";
     let intersection_type_label = "__elephc_eval_reflection_owner_new_intersection_type_x";
-    emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
-    emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 144"); // reserve slots for inputs, object, metadata arrays, and name parts
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the Reflection owner kind
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the reflected-name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx"); // save the reflected-name length
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx"); // save the boxed ReflectionAttribute array
-    emitter.instruction("mov QWORD PTR [rbp - 88], r8"); // save the boxed ReflectionClass interface-name array
-    emitter.instruction("mov QWORD PTR [rbp - 96], r9"); // save the boxed ReflectionClass trait-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 16]"); // load the boxed ReflectionClass method-name array from the first stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 112], rax"); // save the boxed ReflectionClass method-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 24]"); // load the boxed ReflectionClass property-name array from the second stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 120], rax"); // save the boxed ReflectionClass property-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 32]"); // load the boxed ReflectionClass method objects array from the third stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 128], rax"); // save the boxed ReflectionClass method objects array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 40]"); // load the boxed ReflectionClass property objects array from the fourth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 136], rax"); // save the boxed ReflectionClass property objects array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 48]"); // load the boxed ReflectionClass parent value from the fifth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 144], rax"); // save the boxed ReflectionClass parent value
-    emitter.instruction("mov rax, QWORD PTR [rbp + 56]"); // load ReflectionClass modifier flags from the sixth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax"); // save ReflectionClass modifier flags
-    emitter.instruction("mov rax, QWORD PTR [rbp + 64]"); // load owner modifier/count metadata from the seventh stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 104], rax"); // save owner modifier/count metadata
-    emitter.instruction("mov rax, QWORD PTR [rbp + 72]"); // load ReflectionMethod getModifiers bitmask from the eighth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 80], rax"); // save ReflectionMethod getModifiers bitmask
-    emitter.instruction("mov rax, QWORD PTR [rbp + 80]"); // load boxed ReflectionClassConstant value from the ninth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax"); // save boxed ReflectionClassConstant value
-    emitter.instruction("mov rax, QWORD PTR [rbp + 88]"); // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax"); // save boxed ReflectionEnumBackedCase backing value
-    emitter.instruction("cmp rdi, 0"); // owner kind 0 means ReflectionClass
-    emitter.instruction(&format!("je {}", class_label)); // allocate a ReflectionClass owner
-    emitter.instruction("cmp rdi, 1"); // owner kind 1 means ReflectionMethod
-    emitter.instruction(&format!("je {}", method_label)); // allocate a ReflectionMethod owner
-    emitter.instruction("cmp rdi, 2"); // owner kind 2 means ReflectionProperty
-    emitter.instruction(&format!("je {}", property_label)); // allocate a ReflectionProperty owner
-    emitter.instruction("cmp rdi, 3"); // owner kind 3 means ReflectionClassConstant
-    emitter.instruction(&format!("je {}", class_constant_label)); // allocate a ReflectionClassConstant owner
-    emitter.instruction("cmp rdi, 4"); // owner kind 4 means ReflectionEnumUnitCase
-    emitter.instruction(&format!("je {}", enum_unit_case_label)); // allocate a ReflectionEnumUnitCase owner
-    emitter.instruction("cmp rdi, 5"); // owner kind 5 means ReflectionEnumBackedCase
-    emitter.instruction(&format!("je {}", enum_backed_case_label)); // allocate a ReflectionEnumBackedCase owner
-    emitter.instruction("cmp rdi, 6"); // owner kind 6 means ReflectionParameter
-    emitter.instruction(&format!("je {}", parameter_label)); // allocate a ReflectionParameter owner
-    emitter.instruction("cmp rdi, 7"); // owner kind 7 means ReflectionNamedType
-    emitter.instruction(&format!("je {}", named_type_label)); // allocate a ReflectionNamedType owner
-    emitter.instruction("cmp rdi, 8"); // owner kind 8 means ReflectionUnionType
-    emitter.instruction(&format!("je {}", union_type_label)); // allocate a ReflectionUnionType owner
-    emitter.instruction("cmp rdi, 9"); // owner kind 9 means ReflectionIntersectionType
-    emitter.instruction(&format!("je {}", intersection_type_label)); // allocate a ReflectionIntersectionType owner
-    emitter.instruction("cmp rdi, 10"); // owner kind 10 means ReflectionFunction
-    emitter.instruction(&format!("je {}", function_label)); // allocate a ReflectionFunction owner
-    emitter.instruction("cmp rdi, 11"); // owner kind 11 means ReflectionEnum
-    emitter.instruction(&format!("je {}", enum_label)); // allocate a ReflectionEnum owner
-    emitter.instruction("cmp rdi, 12"); // owner kind 12 means ReflectionObject
-    emitter.instruction(&format!("je {}", object_label)); // allocate a ReflectionObject owner
-    emitter.instruction(&format!("jmp {}", fail_label)); // reject unknown owner kinds
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 144");                                        // reserve slots for inputs, object, metadata arrays, and name parts
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the Reflection owner kind
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the reflected-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the reflected-name length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed ReflectionAttribute array
+    emitter.instruction("mov QWORD PTR [rbp - 88], r8");                        // save the boxed ReflectionClass interface-name array
+    emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // save the boxed ReflectionClass trait-name array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the boxed ReflectionClass method-name array from the first stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // save the boxed ReflectionClass method-name array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load the boxed ReflectionClass property-name array from the second stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // save the boxed ReflectionClass property-name array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 32]");                       // load the boxed ReflectionClass method objects array from the third stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // save the boxed ReflectionClass method objects array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 40]");                       // load the boxed ReflectionClass property objects array from the fourth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // save the boxed ReflectionClass property objects array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 48]");                       // load the boxed ReflectionClass parent value from the fifth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the boxed ReflectionClass parent value
+    emitter.instruction("mov rax, QWORD PTR [rbp + 56]");                       // load ReflectionClass modifier flags from the sixth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
+    emitter.instruction("mov rax, QWORD PTR [rbp + 64]");                       // load owner modifier/count metadata from the seventh stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save owner modifier/count metadata
+    emitter.instruction("mov rax, QWORD PTR [rbp + 72]");                       // load ReflectionMethod getModifiers bitmask from the eighth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save ReflectionMethod getModifiers bitmask
+    emitter.instruction("mov rax, QWORD PTR [rbp + 80]");                       // load boxed ReflectionClassConstant value from the ninth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
+    emitter.instruction("mov rax, QWORD PTR [rbp + 88]");                       // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
+    emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
+    emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
+    emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
+    emitter.instruction(&format!("je {}", method_label));                       // allocate a ReflectionMethod owner
+    emitter.instruction("cmp rdi, 2");                                          // owner kind 2 means ReflectionProperty
+    emitter.instruction(&format!("je {}", property_label));                     // allocate a ReflectionProperty owner
+    emitter.instruction("cmp rdi, 3");                                          // owner kind 3 means ReflectionClassConstant
+    emitter.instruction(&format!("je {}", class_constant_label));               // allocate a ReflectionClassConstant owner
+    emitter.instruction("cmp rdi, 4");                                          // owner kind 4 means ReflectionEnumUnitCase
+    emitter.instruction(&format!("je {}", enum_unit_case_label));               // allocate a ReflectionEnumUnitCase owner
+    emitter.instruction("cmp rdi, 5");                                          // owner kind 5 means ReflectionEnumBackedCase
+    emitter.instruction(&format!("je {}", enum_backed_case_label));             // allocate a ReflectionEnumBackedCase owner
+    emitter.instruction("cmp rdi, 6");                                          // owner kind 6 means ReflectionParameter
+    emitter.instruction(&format!("je {}", parameter_label));                    // allocate a ReflectionParameter owner
+    emitter.instruction("cmp rdi, 7");                                          // owner kind 7 means ReflectionNamedType
+    emitter.instruction(&format!("je {}", named_type_label));                   // allocate a ReflectionNamedType owner
+    emitter.instruction("cmp rdi, 8");                                          // owner kind 8 means ReflectionUnionType
+    emitter.instruction(&format!("je {}", union_type_label));                   // allocate a ReflectionUnionType owner
+    emitter.instruction("cmp rdi, 9");                                          // owner kind 9 means ReflectionIntersectionType
+    emitter.instruction(&format!("je {}", intersection_type_label));            // allocate a ReflectionIntersectionType owner
+    emitter.instruction("cmp rdi, 10");                                         // owner kind 10 means ReflectionFunction
+    emitter.instruction(&format!("je {}", function_label));                     // allocate a ReflectionFunction owner
+    emitter.instruction("cmp rdi, 11");                                         // owner kind 11 means ReflectionEnum
+    emitter.instruction(&format!("je {}", enum_label));                         // allocate a ReflectionEnum owner
+    emitter.instruction("cmp rdi, 12");                                         // owner kind 12 means ReflectionObject
+    emitter.instruction(&format!("je {}", object_label));                       // allocate a ReflectionObject owner
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
         class_label,
@@ -827,17 +827,17 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
         box_label,
     );
     emitter.label(box_label);
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]"); // move the Reflection owner object pointer into the Mixed payload
-    emitter.instruction("xor esi, esi"); // object payloads do not use a high word
-    emitter.instruction("mov eax, 6"); // runtime tag 6 = object
-    emitter.instruction("call __rt_mixed_from_value"); // box the Reflection owner object for eval
-    emitter.instruction(&format!("jmp {}", done_label)); // skip the fail-closed return path after boxing
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
+    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
+    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
+    emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
-    emitter.instruction("xor eax, eax"); // return a null pointer so Rust reports runtime failure
+    emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction("mov rsp, rbp"); // discard helper spill slots
-    emitter.instruction("pop rbp"); // restore the Rust caller frame pointer
-    emitter.instruction("ret"); // return the boxed reflection owner to Rust
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
 }
 
 /// Emits one ARM64 owner-kind allocation and slot-population body.
@@ -852,7 +852,7 @@ fn emit_aarch64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_aarch64(emitter, layout);
-    emitter.instruction("str x0, [sp, #32]"); // save the unboxed Reflection owner object pointer
+    emitter.instruction("str x0, [sp, #32]");                                   // save the unboxed Reflection owner object pointer
     if set_name {
         emit_set_owner_name_property_aarch64(emitter, layout);
     }
@@ -873,7 +873,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_declaring_function_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
-    emitter.instruction(&format!("b {}", box_label)); // box this populated Reflection owner object
+    emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
 }
 
 /// Emits one x86_64 owner-kind allocation and slot-population body.
@@ -888,7 +888,7 @@ fn emit_x86_64_owner_kind_body(
 ) {
     emitter.label(label);
     emit_alloc_reflection_owner_object_x86_64(emitter, layout);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax"); // save the unboxed Reflection owner object pointer
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the unboxed Reflection owner object pointer
     if set_name {
         emit_set_owner_name_property_x86_64(emitter, layout);
     }
@@ -909,7 +909,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_declaring_function_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
-    emitter.instruction(&format!("jmp {}", box_label)); // box this populated Reflection owner object
+    emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
 }
 
 /// Allocates a zero-initialized ARM64 Reflection owner object payload.
@@ -918,12 +918,12 @@ fn emit_alloc_reflection_owner_object_aarch64(
     layout: &ReflectionOwnerLayout,
 ) {
     let payload_size = 8 + layout.property_count * 16;
-    emitter.instruction(&format!("mov x0, #{}", payload_size)); // request Reflection owner object payload storage
+    emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request Reflection owner object payload storage
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #4"); // heap kind 4 marks the payload as an object
-    emitter.instruction("str x9, [x0, #-8]"); // stamp the object heap header before the payload
-    emitter.instruction(&format!("mov x10, #{}", layout.class_id)); // materialize the Reflection owner class id
-    emitter.instruction("str x10, [x0]"); // store the class id at object payload offset zero
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks the payload as an object
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header before the payload
+    emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the Reflection owner class id
+    emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
     for index in 0..layout.property_count {
         let offset = 8 + index * 16;
         abi::emit_store_zero_to_address(emitter, "x0", offset);
@@ -937,15 +937,15 @@ fn emit_alloc_reflection_owner_object_x86_64(
     layout: &ReflectionOwnerLayout,
 ) {
     let payload_size = 8 + layout.property_count * 16;
-    emitter.instruction(&format!("mov rax, {}", payload_size)); // request Reflection owner object payload storage
+    emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     )); // materialize the x86_64 object heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10"); // stamp the object heap header before the payload
-    emitter.instruction(&format!("mov r10, {}", layout.class_id)); // materialize the Reflection owner class id
-    emitter.instruction("mov QWORD PTR [rax], r10"); // store the class id at object payload offset zero
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
+    emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
     for index in 0..layout.property_count {
         let offset = 8 + index * 16;
         abi::emit_store_zero_to_address(emitter, "rax", offset);
@@ -961,10 +961,10 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     let Some(name_hi) = layout.name_hi else {
         return;
     };
-    emitter.instruction("ldr x1, [sp, #8]"); // reload the reflected-name pointer for persistence
-    emitter.instruction("ldr x2, [sp, #16]"); // reload the reflected-name length for persistence
-    emitter.instruction("bl __rt_str_persist"); // copy the eval-owned name bytes for object ownership
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the reflected-name pointer for persistence
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the reflected-name length for persistence
+    emitter.instruction("bl __rt_str_persist");                                 // copy the eval-owned name bytes for object ownership
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
     let (
@@ -1002,43 +1002,43 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
         "__elephc_eval_reflection_owner_name_store_parts_{}",
         layout.class_id
     );
-    emitter.instruction("ldr x3, [sp, #8]"); // reload the original reflected-name pointer for splitting
-    emitter.instruction("ldr x4, [sp, #16]"); // reload the original reflected-name length for splitting
-    emitter.instruction("mov x5, x4"); // start scanning from one byte past the final name byte
-    emitter.instruction(&format!("cbz x5, {}", no_namespace_label)); // empty names have no namespace component
+    emitter.instruction("ldr x3, [sp, #8]");                                    // reload the original reflected-name pointer for splitting
+    emitter.instruction("ldr x4, [sp, #16]");                                   // reload the original reflected-name length for splitting
+    emitter.instruction("mov x5, x4");                                          // start scanning from one byte past the final name byte
+    emitter.instruction(&format!("cbz x5, {}", no_namespace_label));            // empty names have no namespace component
     emitter.label(&scan_loop_label);
-    emitter.instruction("sub x5, x5, #1"); // move the scan cursor to the previous byte
-    emitter.instruction("ldrb w6, [x3, x5]"); // read one reflected-name byte from the scan cursor
-    emitter.instruction("cmp w6, #92"); // compare against PHP namespace separator '\\'
-    emitter.instruction(&format!("b.eq {}", found_label)); // split at the final namespace separator
-    emitter.instruction(&format!("cbnz x5, {}", scan_loop_label)); // keep scanning until the first byte has been checked
+    emitter.instruction("sub x5, x5, #1");                                      // move the scan cursor to the previous byte
+    emitter.instruction("ldrb w6, [x3, x5]");                                   // read one reflected-name byte from the scan cursor
+    emitter.instruction("cmp w6, #92");                                         // compare against PHP namespace separator '\\'
+    emitter.instruction(&format!("b.eq {}", found_label));                      // split at the final namespace separator
+    emitter.instruction(&format!("cbnz x5, {}", scan_loop_label));              // keep scanning until the first byte has been checked
     emitter.label(&no_namespace_label);
-    emitter.instruction("str x3, [sp, #56]"); // short-name pointer is the original name pointer
-    emitter.instruction("str x4, [sp, #64]"); // short-name length is the full name length
-    emitter.instruction("str xzr, [sp, #72]"); // namespace length is zero for global names
-    emitter.instruction(&format!("b {}", store_parts_label)); // skip the namespaced split path
+    emitter.instruction("str x3, [sp, #56]");                                   // short-name pointer is the original name pointer
+    emitter.instruction("str x4, [sp, #64]");                                   // short-name length is the full name length
+    emitter.instruction("str xzr, [sp, #72]");                                  // namespace length is zero for global names
+    emitter.instruction(&format!("b {}", store_parts_label));                   // skip the namespaced split path
     emitter.label(&found_label);
-    emitter.instruction("add x6, x5, #1"); // compute the short-name byte offset after the separator
-    emitter.instruction("add x7, x3, x6"); // compute the short-name pointer
-    emitter.instruction("sub x8, x4, x6"); // compute the short-name length
-    emitter.instruction("str x7, [sp, #56]"); // save the short-name pointer across persistence calls
-    emitter.instruction("str x8, [sp, #64]"); // save the short-name length across persistence calls
-    emitter.instruction("str x5, [sp, #72]"); // namespace length is the separator offset
+    emitter.instruction("add x6, x5, #1");                                      // compute the short-name byte offset after the separator
+    emitter.instruction("add x7, x3, x6");                                      // compute the short-name pointer
+    emitter.instruction("sub x8, x4, x6");                                      // compute the short-name length
+    emitter.instruction("str x7, [sp, #56]");                                   // save the short-name pointer across persistence calls
+    emitter.instruction("str x8, [sp, #64]");                                   // save the short-name length across persistence calls
+    emitter.instruction("str x5, [sp, #72]");                                   // namespace length is the separator offset
     emitter.label(&store_parts_label);
-    emitter.instruction("ldr x1, [sp, #8]"); // use the original name pointer for namespace persistence
-    emitter.instruction("ldr x2, [sp, #72]"); // reload the namespace byte length
-    emitter.instruction("bl __rt_str_persist"); // copy the namespace bytes for ReflectionClass storage
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // use the original name pointer for namespace persistence
+    emitter.instruction("ldr x2, [sp, #72]");                                   // reload the namespace byte length
+    emitter.instruction("bl __rt_str_persist");                                 // copy the namespace bytes for ReflectionClass storage
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", namespace_name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", namespace_name_hi);
-    emitter.instruction("cmp x2, #0"); // detect whether a namespace component was present
-    emitter.instruction("cset x10, ne"); // materialize ReflectionClass::inNamespace()
+    emitter.instruction("cmp x2, #0");                                          // detect whether a namespace component was present
+    emitter.instruction("cset x10, ne");                                        // materialize ReflectionClass::inNamespace()
     abi::emit_store_to_address(emitter, "x10", "x9", in_namespace_lo);
     abi::emit_store_zero_to_address(emitter, "x9", in_namespace_hi);
-    emitter.instruction("ldr x1, [sp, #56]"); // reload the short-name pointer
-    emitter.instruction("ldr x2, [sp, #64]"); // reload the short-name byte length
-    emitter.instruction("bl __rt_str_persist"); // copy the short-name bytes for ReflectionClass storage
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x1, [sp, #56]");                                   // reload the short-name pointer
+    emitter.instruction("ldr x2, [sp, #64]");                                   // reload the short-name byte length
+    emitter.instruction("bl __rt_str_persist");                                 // copy the short-name bytes for ReflectionClass storage
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", short_name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", short_name_hi);
 }
@@ -1051,10 +1051,10 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     let Some(name_hi) = layout.name_hi else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]"); // reload the reflected-name pointer for persistence
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]"); // reload the reflected-name length for persistence
-    emitter.instruction("call __rt_str_persist"); // copy the eval-owned name bytes for object ownership
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reflected-name pointer for persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the reflected-name length for persistence
+    emitter.instruction("call __rt_str_persist");                               // copy the eval-owned name bytes for object ownership
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
     let (
@@ -1091,47 +1091,47 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
         "__elephc_eval_reflection_owner_name_store_parts_{}_x",
         layout.class_id
     );
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]"); // reload the original reflected-name pointer for splitting
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]"); // reload the original reflected-name length for splitting
-    emitter.instruction("mov r11, r9"); // start scanning from one byte past the final name byte
-    emitter.instruction("test r11, r11"); // check whether the reflected name is empty
-    emitter.instruction(&format!("jz {}", no_namespace_label)); // empty names have no namespace component
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the original reflected-name pointer for splitting
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the original reflected-name length for splitting
+    emitter.instruction("mov r11, r9");                                         // start scanning from one byte past the final name byte
+    emitter.instruction("test r11, r11");                                       // check whether the reflected name is empty
+    emitter.instruction(&format!("jz {}", no_namespace_label));                 // empty names have no namespace component
     emitter.label(&scan_loop_label);
-    emitter.instruction("sub r11, 1"); // move the scan cursor to the previous byte
-    emitter.instruction("movzx eax, BYTE PTR [r8 + r11]"); // read one reflected-name byte from the scan cursor
-    emitter.instruction("cmp eax, 92"); // compare against PHP namespace separator '\\'
-    emitter.instruction(&format!("je {}", found_label)); // split at the final namespace separator
-    emitter.instruction("test r11, r11"); // check whether the first byte has been examined
-    emitter.instruction(&format!("jnz {}", scan_loop_label)); // keep scanning until the first byte has been checked
+    emitter.instruction("sub r11, 1");                                          // move the scan cursor to the previous byte
+    emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");                      // read one reflected-name byte from the scan cursor
+    emitter.instruction("cmp eax, 92");                                         // compare against PHP namespace separator '\\'
+    emitter.instruction(&format!("je {}", found_label));                        // split at the final namespace separator
+    emitter.instruction("test r11, r11");                                       // check whether the first byte has been examined
+    emitter.instruction(&format!("jnz {}", scan_loop_label));                   // keep scanning until the first byte has been checked
     emitter.label(&no_namespace_label);
-    emitter.instruction("mov QWORD PTR [rbp - 64], r8"); // short-name pointer is the original name pointer
-    emitter.instruction("mov QWORD PTR [rbp - 72], r9"); // short-name length is the full name length
-    emitter.instruction("mov QWORD PTR [rbp - 80], 0"); // namespace length is zero for global names
-    emitter.instruction(&format!("jmp {}", store_parts_label)); // skip the namespaced split path
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // short-name pointer is the original name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // short-name length is the full name length
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // namespace length is zero for global names
+    emitter.instruction(&format!("jmp {}", store_parts_label));                 // skip the namespaced split path
     emitter.label(&found_label);
-    emitter.instruction("lea rax, [r11 + 1]"); // compute the short-name byte offset after the separator
-    emitter.instruction("lea r10, [r8 + rax]"); // compute the short-name pointer
-    emitter.instruction("mov rcx, r9"); // copy the full name length before subtracting the prefix
-    emitter.instruction("sub rcx, rax"); // compute the short-name length
-    emitter.instruction("mov QWORD PTR [rbp - 64], r10"); // save the short-name pointer across persistence calls
-    emitter.instruction("mov QWORD PTR [rbp - 72], rcx"); // save the short-name length across persistence calls
-    emitter.instruction("mov QWORD PTR [rbp - 80], r11"); // namespace length is the separator offset
+    emitter.instruction("lea rax, [r11 + 1]");                                  // compute the short-name byte offset after the separator
+    emitter.instruction("lea r10, [r8 + rax]");                                 // compute the short-name pointer
+    emitter.instruction("mov rcx, r9");                                         // copy the full name length before subtracting the prefix
+    emitter.instruction("sub rcx, rax");                                        // compute the short-name length
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the short-name pointer across persistence calls
+    emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // save the short-name length across persistence calls
+    emitter.instruction("mov QWORD PTR [rbp - 80], r11");                       // namespace length is the separator offset
     emitter.label(&store_parts_label);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]"); // use the original name pointer for namespace persistence
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]"); // reload the namespace byte length
-    emitter.instruction("call __rt_str_persist"); // copy the namespace bytes for ReflectionClass storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // use the original name pointer for namespace persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload the namespace byte length
+    emitter.instruction("call __rt_str_persist");                               // copy the namespace bytes for ReflectionClass storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", namespace_name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", namespace_name_hi);
-    emitter.instruction("test rdx, rdx"); // detect whether a namespace component was present
-    emitter.instruction("setne al"); // materialize ReflectionClass::inNamespace()
-    emitter.instruction("movzx eax, al"); // widen the namespace boolean to a full word
+    emitter.instruction("test rdx, rdx");                                       // detect whether a namespace component was present
+    emitter.instruction("setne al");                                            // materialize ReflectionClass::inNamespace()
+    emitter.instruction("movzx eax, al");                                       // widen the namespace boolean to a full word
     abi::emit_store_to_address(emitter, "rax", "r10", in_namespace_lo);
     abi::emit_store_zero_to_address(emitter, "r10", in_namespace_hi);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]"); // reload the short-name pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]"); // reload the short-name byte length
-    emitter.instruction("call __rt_str_persist"); // copy the short-name bytes for ReflectionClass storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the short-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the short-name byte length
+    emitter.instruction("call __rt_str_persist");                               // copy the short-name bytes for ReflectionClass storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", short_name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", short_name_hi);
 }
@@ -1199,56 +1199,56 @@ fn emit_set_owner_class_flags_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x11, [sp, #48]"); // reload ReflectionClass modifier flags
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
-    emitter.instruction("and x10, x11, #1"); // extract the final-class flag as a boolean
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionClass modifier flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract the final-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
-    emitter.instruction("lsr x10, x11, #1"); // move the abstract-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the abstract-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #1");                                    // move the abstract-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the abstract-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
-    emitter.instruction("lsr x10, x11, #2"); // move the interface bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the interface flag as a boolean
+    emitter.instruction("lsr x10, x11, #2");                                    // move the interface bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the interface flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_interface_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_interface_hi);
-    emitter.instruction("lsr x10, x11, #3"); // move the trait bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the trait flag as a boolean
+    emitter.instruction("lsr x10, x11, #3");                                    // move the trait bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the trait flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_trait_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_trait_hi);
-    emitter.instruction("lsr x10, x11, #4"); // move the enum bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the enum flag as a boolean
+    emitter.instruction("lsr x10, x11, #4");                                    // move the enum bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the enum flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_enum_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_enum_hi);
-    emitter.instruction("lsr x10, x11, #5"); // move the readonly-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the readonly-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #5");                                    // move the readonly-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the readonly-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_readonly_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
-    emitter.instruction("lsr x10, x11, #6"); // move the instantiable-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the instantiable-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #6");                                    // move the instantiable-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the instantiable-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_instantiable_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_instantiable_hi);
-    emitter.instruction("lsr x10, x11, #7"); // move the cloneable-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the cloneable-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #7");                                    // move the cloneable-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the cloneable-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_cloneable_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_cloneable_hi);
-    emitter.instruction("lsr x10, x11, #8"); // move the internal-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the internal-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #8");                                    // move the internal-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the internal-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_internal_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_internal_hi);
-    emitter.instruction("lsr x10, x11, #9"); // move the user-defined-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the user-defined-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #9");                                    // move the user-defined-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the user-defined-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_user_defined_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_user_defined_hi);
-    emitter.instruction("lsr x10, x11, #10"); // move the iterable-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the iterable-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #10");                                   // move the iterable-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the iterable-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_iterable_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_iterable_hi);
-    emitter.instruction("lsr x10, x11, #11"); // move the anonymous-class bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the anonymous-class flag as a boolean
+    emitter.instruction("lsr x10, x11, #11");                                   // move the anonymous-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the anonymous-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_anonymous_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_anonymous_hi);
-    emitter.instruction("ldr x10, [sp, #96]"); // reload PHP ReflectionClass::getModifiers() bitmask
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
 }
@@ -1316,68 +1316,68 @@ fn emit_set_owner_class_flags_property_x86_64(
     else {
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload ReflectionClass modifier flags
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the final bit
-    emitter.instruction("and rax, 1"); // extract the final-class flag as a boolean
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionClass modifier flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the final bit
+    emitter.instruction("and rax, 1");                                          // extract the final-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the abstract bit
-    emitter.instruction("shr rax, 1"); // move the abstract-class bit into position
-    emitter.instruction("and rax, 1"); // extract the abstract-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the abstract bit
+    emitter.instruction("shr rax, 1");                                          // move the abstract-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the abstract-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the interface bit
-    emitter.instruction("shr rax, 2"); // move the interface bit into position
-    emitter.instruction("and rax, 1"); // extract the interface flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the interface bit
+    emitter.instruction("shr rax, 2");                                          // move the interface bit into position
+    emitter.instruction("and rax, 1");                                          // extract the interface flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_interface_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_interface_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the trait bit
-    emitter.instruction("shr rax, 3"); // move the trait bit into position
-    emitter.instruction("and rax, 1"); // extract the trait flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the trait bit
+    emitter.instruction("shr rax, 3");                                          // move the trait bit into position
+    emitter.instruction("and rax, 1");                                          // extract the trait flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_trait_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_trait_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the enum bit
-    emitter.instruction("shr rax, 4"); // move the enum bit into position
-    emitter.instruction("and rax, 1"); // extract the enum flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the enum bit
+    emitter.instruction("shr rax, 4");                                          // move the enum bit into position
+    emitter.instruction("and rax, 1");                                          // extract the enum flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_enum_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_enum_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the readonly-class bit
-    emitter.instruction("shr rax, 5"); // move the readonly-class bit into position
-    emitter.instruction("and rax, 1"); // extract the readonly-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the readonly-class bit
+    emitter.instruction("shr rax, 5");                                          // move the readonly-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the readonly-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_readonly_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the instantiable bit
-    emitter.instruction("shr rax, 6"); // move the instantiable-class bit into position
-    emitter.instruction("and rax, 1"); // extract the instantiable-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the instantiable bit
+    emitter.instruction("shr rax, 6");                                          // move the instantiable-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the instantiable-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_instantiable_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_instantiable_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the cloneable bit
-    emitter.instruction("shr rax, 7"); // move the cloneable-class bit into position
-    emitter.instruction("and rax, 1"); // extract the cloneable-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the cloneable bit
+    emitter.instruction("shr rax, 7");                                          // move the cloneable-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the cloneable-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_cloneable_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_cloneable_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the internal bit
-    emitter.instruction("shr rax, 8"); // move the internal-class bit into position
-    emitter.instruction("and rax, 1"); // extract the internal-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the internal bit
+    emitter.instruction("shr rax, 8");                                          // move the internal-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the internal-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_internal_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_internal_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the user-defined bit
-    emitter.instruction("shr rax, 9"); // move the user-defined-class bit into position
-    emitter.instruction("and rax, 1"); // extract the user-defined-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the user-defined bit
+    emitter.instruction("shr rax, 9");                                          // move the user-defined-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the user-defined-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_user_defined_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_user_defined_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the iterable bit
-    emitter.instruction("shr rax, 10"); // move the iterable-class bit into position
-    emitter.instruction("and rax, 1"); // extract the iterable-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the iterable bit
+    emitter.instruction("shr rax, 10");                                         // move the iterable-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the iterable-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_iterable_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_iterable_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the anonymous bit
-    emitter.instruction("shr rax, 11"); // move the anonymous-class bit into position
-    emitter.instruction("and rax, 1"); // extract the anonymous-class flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the anonymous bit
+    emitter.instruction("shr rax, 11");                                         // move the anonymous-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the anonymous-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_anonymous_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_anonymous_hi);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 104]"); // reload PHP ReflectionClass::getModifiers() bitmask
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
 }
@@ -1407,61 +1407,61 @@ fn emit_set_owner_member_flags_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x11, [sp, #48]"); // reload Reflection member predicate flags
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload Reflection member predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     if let (Some(is_static_lo), Some(is_static_hi)) = (layout.is_static_lo, layout.is_static_hi) {
-        emitter.instruction("and x10, x11, #1"); // extract the static-member flag as a boolean
+        emitter.instruction("and x10, x11, #1");                                // extract the static-member flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_static_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_static_hi);
     }
-    emitter.instruction("lsr x10, x11, #1"); // move the public-member bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the public-member flag as a boolean
+    emitter.instruction("lsr x10, x11, #1");                                    // move the public-member bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the public-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_public_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_public_hi);
-    emitter.instruction("lsr x10, x11, #2"); // move the protected-member bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the protected-member flag as a boolean
+    emitter.instruction("lsr x10, x11, #2");                                    // move the protected-member bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the protected-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_protected_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_protected_hi);
-    emitter.instruction("lsr x10, x11, #3"); // move the private-member bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the private-member flag as a boolean
+    emitter.instruction("lsr x10, x11, #3");                                    // move the private-member bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_private_hi);
     if let (Some(is_enum_case_lo), Some(is_enum_case_hi)) =
         (layout.is_enum_case_lo, layout.is_enum_case_hi)
     {
-        emitter.instruction("lsr x10, x11, #7"); // move the enum-case flag into position
-        emitter.instruction("and x10, x10, #1"); // extract the enum-case flag as a boolean
+        emitter.instruction("lsr x10, x11, #7");                                // move the enum-case flag into position
+        emitter.instruction("and x10, x10, #1");                                // extract the enum-case flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_enum_case_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_enum_case_hi);
     }
     if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
         (layout.is_readonly_lo, layout.is_readonly_hi)
     {
-        emitter.instruction("lsr x10, x11, #6"); // move the readonly-property bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the readonly-property flag as a boolean
+        emitter.instruction("lsr x10, x11, #6");                                // move the readonly-property bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the readonly-property flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
     }
     if let (Some(has_default_value_lo), Some(has_default_value_hi)) =
         (layout.has_default_value_lo, layout.has_default_value_hi)
     {
-        emitter.instruction("lsr x10, x11, #8"); // move the default-value bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the default-value flag as a boolean
+        emitter.instruction("lsr x10, x11, #8");                                // move the default-value bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the default-value flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", has_default_value_lo);
         abi::emit_store_zero_to_address(emitter, "x9", has_default_value_hi);
     }
     if let (Some(is_promoted_lo), Some(is_promoted_hi)) =
         (layout.is_promoted_lo, layout.is_promoted_hi)
     {
-        emitter.instruction("lsr x10, x11, #9"); // move the promoted-property bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the promoted-property flag as a boolean
+        emitter.instruction("lsr x10, x11, #9");                                // move the promoted-property bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the promoted-property flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_promoted_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_promoted_hi);
     }
     if let (Some(is_virtual_lo), Some(is_virtual_hi)) = (layout.is_virtual_lo, layout.is_virtual_hi)
     {
-        emitter.instruction("lsr x10, x11, #10"); // move the virtual-property bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the virtual-property flag as a boolean
+        emitter.instruction("lsr x10, x11, #10");                               // move the virtual-property bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the virtual-property flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_virtual_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_virtual_hi);
     }
@@ -1484,22 +1484,22 @@ fn emit_set_owner_member_flags_property_aarch64(
             emitter.instruction("lsl x12, x12, #1");                            // move final/abstract into PHP modifier bit positions
             emitter.instruction("orr x10, x10, x12");                           // merge final/abstract into the method modifier bitmask
         } else {
-            emitter.instruction("ldr x10, [sp, #96]"); // reload PHP Reflection member getModifiers() bitmask
+            emitter.instruction("ldr x10, [sp, #96]");                          // reload PHP Reflection member getModifiers() bitmask
         }
         abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
         abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
     }
     if let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) {
-        emitter.instruction("lsr x10, x11, #4"); // move the final-member bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the final-member flag as a boolean
+        emitter.instruction("lsr x10, x11, #4");                                // move the final-member bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the final-member flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
     }
     if let (Some(is_abstract_lo), Some(is_abstract_hi)) =
         (layout.is_abstract_lo, layout.is_abstract_hi)
     {
-        emitter.instruction("lsr x10, x11, #5"); // move the abstract-member bit into position
-        emitter.instruction("and x10, x10, #1"); // extract the abstract-member flag as a boolean
+        emitter.instruction("lsr x10, x11, #5");                                // move the abstract-member bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the abstract-member flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
     }
@@ -1513,9 +1513,9 @@ fn emit_set_owner_low_bit_final_property_aarch64(
     let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) else {
         return;
     };
-    emitter.instruction("ldr x11, [sp, #48]"); // reload Reflection owner predicate flags
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
-    emitter.instruction("and x10, x11, #1"); // extract bit-zero finality as a boolean
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload Reflection owner predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract bit-zero finality as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
 }
@@ -1546,70 +1546,70 @@ fn emit_set_owner_member_flags_property_x86_64(
         emit_set_owner_low_bit_final_property_x86_64(emitter, layout);
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload Reflection member predicate flags
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload Reflection member predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     if let (Some(is_static_lo), Some(is_static_hi)) = (layout.is_static_lo, layout.is_static_hi) {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the static bit
-        emitter.instruction("and rax, 1"); // extract the static-member flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the static bit
+        emitter.instruction("and rax, 1");                                      // extract the static-member flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_static_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_static_hi);
     }
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the public bit
-    emitter.instruction("shr rax, 1"); // move the public-member bit into position
-    emitter.instruction("and rax, 1"); // extract the public-member flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the public bit
+    emitter.instruction("shr rax, 1");                                          // move the public-member bit into position
+    emitter.instruction("and rax, 1");                                          // extract the public-member flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_public_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_public_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the protected bit
-    emitter.instruction("shr rax, 2"); // move the protected-member bit into position
-    emitter.instruction("and rax, 1"); // extract the protected-member flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the protected bit
+    emitter.instruction("shr rax, 2");                                          // move the protected-member bit into position
+    emitter.instruction("and rax, 1");                                          // extract the protected-member flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_protected_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_protected_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the private bit
-    emitter.instruction("shr rax, 3"); // move the private-member bit into position
-    emitter.instruction("and rax, 1"); // extract the private-member flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the private bit
+    emitter.instruction("shr rax, 3");                                          // move the private-member bit into position
+    emitter.instruction("and rax, 1");                                          // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_private_hi);
     if let (Some(is_enum_case_lo), Some(is_enum_case_hi)) =
         (layout.is_enum_case_lo, layout.is_enum_case_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the enum-case bit
-        emitter.instruction("shr rax, 7"); // move the enum-case bit into position
-        emitter.instruction("and rax, 1"); // extract the enum-case flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the enum-case bit
+        emitter.instruction("shr rax, 7");                                      // move the enum-case bit into position
+        emitter.instruction("and rax, 1");                                      // extract the enum-case flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_enum_case_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_enum_case_hi);
     }
     if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
         (layout.is_readonly_lo, layout.is_readonly_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the readonly bit
-        emitter.instruction("shr rax, 6"); // move the readonly-property bit into position
-        emitter.instruction("and rax, 1"); // extract the readonly-property flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the readonly bit
+        emitter.instruction("shr rax, 6");                                      // move the readonly-property bit into position
+        emitter.instruction("and rax, 1");                                      // extract the readonly-property flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
     }
     if let (Some(has_default_value_lo), Some(has_default_value_hi)) =
         (layout.has_default_value_lo, layout.has_default_value_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the default-value bit
-        emitter.instruction("shr rax, 8"); // move the default-value bit into position
-        emitter.instruction("and rax, 1"); // extract the default-value flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the default-value bit
+        emitter.instruction("shr rax, 8");                                      // move the default-value bit into position
+        emitter.instruction("and rax, 1");                                      // extract the default-value flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", has_default_value_lo);
         abi::emit_store_zero_to_address(emitter, "r10", has_default_value_hi);
     }
     if let (Some(is_promoted_lo), Some(is_promoted_hi)) =
         (layout.is_promoted_lo, layout.is_promoted_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the promoted-property bit
-        emitter.instruction("shr rax, 9"); // move the promoted-property bit into position
-        emitter.instruction("and rax, 1"); // extract the promoted-property flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the promoted-property bit
+        emitter.instruction("shr rax, 9");                                      // move the promoted-property bit into position
+        emitter.instruction("and rax, 1");                                      // extract the promoted-property flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_promoted_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_promoted_hi);
     }
     if let (Some(is_virtual_lo), Some(is_virtual_hi)) = (layout.is_virtual_lo, layout.is_virtual_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the virtual-property bit
-        emitter.instruction("shr rax, 10"); // move the virtual-property bit into position
-        emitter.instruction("and rax, 1"); // extract the virtual-property flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the virtual-property bit
+        emitter.instruction("shr rax, 10");                                     // move the virtual-property bit into position
+        emitter.instruction("and rax, 1");                                      // extract the virtual-property flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_virtual_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_virtual_hi);
     }
@@ -1635,24 +1635,24 @@ fn emit_set_owner_member_flags_property_x86_64(
             emitter.instruction("shl rdx, 1");                                  // move final/abstract into PHP modifier bit positions
             emitter.instruction("or rax, rdx");                                 // merge final/abstract into the method modifier bitmask
         } else {
-            emitter.instruction("mov rax, QWORD PTR [rbp - 104]"); // reload PHP Reflection member getModifiers() bitmask
+            emitter.instruction("mov rax, QWORD PTR [rbp - 104]");              // reload PHP Reflection member getModifiers() bitmask
         }
         abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
         abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
     }
     if let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the final bit
-        emitter.instruction("shr rax, 4"); // move the final-member bit into position
-        emitter.instruction("and rax, 1"); // extract the final-member flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the final bit
+        emitter.instruction("shr rax, 4");                                      // move the final-member bit into position
+        emitter.instruction("and rax, 1");                                      // extract the final-member flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
     }
     if let (Some(is_abstract_lo), Some(is_abstract_hi)) =
         (layout.is_abstract_lo, layout.is_abstract_hi)
     {
-        emitter.instruction("mov rax, r11"); // copy flags before extracting the abstract bit
-        emitter.instruction("shr rax, 5"); // move the abstract-member bit into position
-        emitter.instruction("and rax, 1"); // extract the abstract-member flag as a boolean
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the abstract bit
+        emitter.instruction("shr rax, 5");                                      // move the abstract-member bit into position
+        emitter.instruction("and rax, 1");                                      // extract the abstract-member flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
     }
@@ -1666,10 +1666,10 @@ fn emit_set_owner_low_bit_final_property_x86_64(
     let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) else {
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload Reflection owner predicate flags
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
-    emitter.instruction("mov rax, r11"); // copy flags before extracting bit-zero finality
-    emitter.instruction("and rax, 1"); // extract bit-zero finality as a boolean
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload Reflection owner predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting bit-zero finality
+    emitter.instruction("and rax, 1");                                          // extract bit-zero finality as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
 }
@@ -1685,8 +1685,8 @@ fn emit_set_owner_required_parameter_count_property_aarch64(
     ) else {
         return;
     };
-    emitter.instruction("ldr x10, [sp, #96]"); // reload ReflectionMethod required-parameter count
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload ReflectionMethod required-parameter count
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x10", "x9", required_parameter_count_lo);
     abi::emit_store_zero_to_address(emitter, "x9", required_parameter_count_hi);
     if let (Some(is_deprecated_lo), Some(is_deprecated_hi)) =
@@ -1711,8 +1711,8 @@ fn emit_set_owner_required_parameter_count_property_x86_64(
     ) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 104]"); // reload ReflectionMethod required-parameter count
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload ReflectionMethod required-parameter count
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", required_parameter_count_lo);
     abi::emit_store_zero_to_address(emitter, "r10", required_parameter_count_hi);
     if let (Some(is_deprecated_lo), Some(is_deprecated_hi)) =
@@ -1781,48 +1781,48 @@ fn emit_set_owner_parameter_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x11, [sp, #48]"); // reload ReflectionParameter predicate flags
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionParameter object pointer
-    emitter.instruction("ldr x10, [sp, #96]"); // reload the zero-based parameter position
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionParameter predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload the zero-based parameter position
     abi::emit_store_to_address(emitter, "x10", "x9", position_lo);
     abi::emit_store_zero_to_address(emitter, "x9", position_hi);
-    emitter.instruction("and x10, x11, #1"); // extract the optional-parameter flag as a boolean
+    emitter.instruction("and x10, x11, #1");                                    // extract the optional-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_optional_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_optional_hi);
-    emitter.instruction("lsr x10, x11, #1"); // move the variadic-parameter bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the variadic-parameter flag as a boolean
+    emitter.instruction("lsr x10, x11, #1");                                    // move the variadic-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the variadic-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_variadic_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_variadic_hi);
-    emitter.instruction("lsr x10, x11, #2"); // move the by-reference-parameter bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the by-reference-parameter flag as a boolean
+    emitter.instruction("lsr x10, x11, #2");                                    // move the by-reference-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the by-reference-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_passed_by_reference_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_passed_by_reference_hi);
-    emitter.instruction("lsr x10, x11, #3"); // move the typed-parameter bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the typed-parameter flag as a boolean
+    emitter.instruction("lsr x10, x11, #3");                                    // move the typed-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the typed-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", has_type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", has_type_hi);
-    emitter.instruction("lsr x10, x11, #4"); // move the default-value bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the default-value flag as a boolean
+    emitter.instruction("lsr x10, x11, #4");                                    // move the default-value bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the default-value flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", has_default_value_lo);
     abi::emit_store_zero_to_address(emitter, "x9", has_default_value_hi);
-    emitter.instruction("lsr x10, x11, #5"); // move the promoted-parameter bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the promoted-parameter flag as a boolean
+    emitter.instruction("lsr x10, x11, #5");                                    // move the promoted-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the promoted-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_promoted_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_promoted_hi);
-    emitter.instruction("lsr x10, x11, #6"); // move the nullable-parameter bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the nullable-parameter flag as a boolean
+    emitter.instruction("lsr x10, x11, #6");                                    // move the nullable-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the nullable-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
-    emitter.instruction("lsr x10, x11, #7"); // move the default-constant bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the default-constant flag as a boolean
+    emitter.instruction("lsr x10, x11, #7");                                    // move the default-constant bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the default-constant flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_default_value_constant_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_default_value_constant_hi);
-    emitter.instruction("lsr x10, x11, #8"); // move the array-type bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the array-type flag as a boolean
+    emitter.instruction("lsr x10, x11, #8");                                    // move the array-type bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the array-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_array_type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_array_type_hi);
-    emitter.instruction("lsr x10, x11, #9"); // move the callable-type bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the callable-type flag as a boolean
+    emitter.instruction("lsr x10, x11, #9");                                    // move the callable-type bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the callable-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_callable_type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_callable_type_hi);
 }
@@ -1837,12 +1837,12 @@ fn emit_set_owner_parameter_type_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #120]"); // reload the boxed ReflectionParameter type value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null type metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed type value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed type value for ReflectionParameter storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed type value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("ldr x0, [sp, #120]");                                  // reload the boxed ReflectionParameter type value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null type metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed type value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed type value for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed type value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", type_hi);
 }
@@ -1878,12 +1878,12 @@ fn emit_set_owner_parameter_default_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #128]"); // reload the boxed ReflectionParameter default value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null default metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed default value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed default value for ReflectionParameter storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed default value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("ldr x0, [sp, #128]");                                  // reload the boxed ReflectionParameter default value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null default metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed default value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed default value for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed default value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", default_lo);
     abi::emit_store_zero_to_address(emitter, "x9", default_hi);
 }
@@ -1901,17 +1901,17 @@ fn emit_set_owner_parameter_default_constant_name_property_aarch64(
     ) else {
         return;
     };
-    emitter.instruction("ldr x10, [sp, #48]"); // reload ReflectionParameter predicate flags
-    emitter.instruction("lsr x10, x10, #7"); // move the default-constant bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the default-constant flag as a boolean
-    emitter.instruction(&format!("cbz x10, {}", done_label)); // keep the empty name when no constant default exists
-    emitter.instruction("ldr x0, [sp, #56]"); // reload the boxed ReflectionParameter default-constant name
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null default-constant metadata
-    emitter.instruction("bl __rt_mixed_unbox"); // expose the default-constant name string payload
-    emitter.instruction("cmp x0, #1"); // runtime tag 1 means string
-    emitter.instruction(&format!("b.ne {}", fail_label)); // reject non-string default-constant metadata
-    emitter.instruction("bl __rt_str_persist"); // copy the default-constant name bytes for parameter storage
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("ldr x10, [sp, #48]");                                  // reload ReflectionParameter predicate flags
+    emitter.instruction("lsr x10, x10, #7");                                    // move the default-constant bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the default-constant flag as a boolean
+    emitter.instruction(&format!("cbz x10, {}", done_label));                   // keep the empty name when no constant default exists
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed ReflectionParameter default-constant name
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null default-constant metadata
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the default-constant name string payload
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means string
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-string default-constant metadata
+    emitter.instruction("bl __rt_str_persist");                                 // copy the default-constant name bytes for parameter storage
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
     emitter.label(done_label);
@@ -1927,17 +1927,17 @@ fn emit_set_owner_named_type_flags_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x11, [sp, #48]"); // reload ReflectionNamedType predicate flags
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionNamedType object pointer
-    emitter.instruction("and x10, x11, #1"); // extract the nullable-type flag as a boolean
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionNamedType predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionNamedType object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
     let (Some(is_builtin_lo), Some(is_builtin_hi)) = (layout.is_builtin_lo, layout.is_builtin_hi)
     else {
         return;
     };
-    emitter.instruction("lsr x10, x11, #1"); // move the builtin-type bit into position
-    emitter.instruction("and x10, x10, #1"); // extract the builtin-type flag as a boolean
+    emitter.instruction("lsr x10, x11, #1");                                    // move the builtin-type bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the builtin-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_builtin_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_builtin_hi);
 }
@@ -1994,58 +1994,58 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
     else {
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload ReflectionParameter predicate flags
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionParameter object pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 104]"); // reload the zero-based parameter position
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionParameter predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload the zero-based parameter position
     abi::emit_store_to_address(emitter, "rax", "r10", position_lo);
     abi::emit_store_zero_to_address(emitter, "r10", position_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the optional bit
-    emitter.instruction("and rax, 1"); // extract the optional-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the optional bit
+    emitter.instruction("and rax, 1");                                          // extract the optional-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_optional_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_optional_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the variadic bit
-    emitter.instruction("shr rax, 1"); // move the variadic-parameter bit into position
-    emitter.instruction("and rax, 1"); // extract the variadic-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the variadic bit
+    emitter.instruction("shr rax, 1");                                          // move the variadic-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the variadic-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_variadic_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_variadic_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the by-reference bit
-    emitter.instruction("shr rax, 2"); // move the by-reference-parameter bit into position
-    emitter.instruction("and rax, 1"); // extract the by-reference-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the by-reference bit
+    emitter.instruction("shr rax, 2");                                          // move the by-reference-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the by-reference-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_passed_by_reference_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_passed_by_reference_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the typed bit
-    emitter.instruction("shr rax, 3"); // move the typed-parameter bit into position
-    emitter.instruction("and rax, 1"); // extract the typed-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the typed bit
+    emitter.instruction("shr rax, 3");                                          // move the typed-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the typed-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", has_type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", has_type_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the default-value bit
-    emitter.instruction("shr rax, 4"); // move the default-value bit into position
-    emitter.instruction("and rax, 1"); // extract the default-value flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the default-value bit
+    emitter.instruction("shr rax, 4");                                          // move the default-value bit into position
+    emitter.instruction("and rax, 1");                                          // extract the default-value flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", has_default_value_lo);
     abi::emit_store_zero_to_address(emitter, "r10", has_default_value_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the promoted bit
-    emitter.instruction("shr rax, 5"); // move the promoted-parameter bit into position
-    emitter.instruction("and rax, 1"); // extract the promoted-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the promoted bit
+    emitter.instruction("shr rax, 5");                                          // move the promoted-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the promoted-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_promoted_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_promoted_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the nullable bit
-    emitter.instruction("shr rax, 6"); // move the nullable-parameter bit into position
-    emitter.instruction("and rax, 1"); // extract the nullable-parameter flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the nullable bit
+    emitter.instruction("shr rax, 6");                                          // move the nullable-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the nullable-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the default-constant bit
-    emitter.instruction("shr rax, 7"); // move the default-constant bit into position
-    emitter.instruction("and rax, 1"); // extract the default-constant flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the default-constant bit
+    emitter.instruction("shr rax, 7");                                          // move the default-constant bit into position
+    emitter.instruction("and rax, 1");                                          // extract the default-constant flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_default_value_constant_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_default_value_constant_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the array-type bit
-    emitter.instruction("shr rax, 8"); // move the array-type bit into position
-    emitter.instruction("and rax, 1"); // extract the array-type flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the array-type bit
+    emitter.instruction("shr rax, 8");                                          // move the array-type bit into position
+    emitter.instruction("and rax, 1");                                          // extract the array-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_array_type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_array_type_hi);
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the callable-type bit
-    emitter.instruction("shr rax, 9"); // move the callable-type bit into position
-    emitter.instruction("and rax, 1"); // extract the callable-type flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the callable-type bit
+    emitter.instruction("shr rax, 9");                                          // move the callable-type bit into position
+    emitter.instruction("and rax, 1");                                          // extract the callable-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_callable_type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_callable_type_hi);
 }
@@ -2060,13 +2060,13 @@ fn emit_set_owner_parameter_type_property_x86_64(
     else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 128]"); // reload the boxed ReflectionParameter type value
-    emitter.instruction("test rax, rax"); // check whether the boxed type value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null type metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed type value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed type value for ReflectionParameter storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed type value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // reload the boxed ReflectionParameter type value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed type value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null type metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed type value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed type value for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed type value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", type_hi);
 }
@@ -2103,13 +2103,13 @@ fn emit_set_owner_parameter_default_property_x86_64(
     else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 136]"); // reload the boxed ReflectionParameter default value
-    emitter.instruction("test rax, rax"); // check whether the boxed default value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null default metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed default value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed default value for ReflectionParameter storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed default value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 136]");                      // reload the boxed ReflectionParameter default value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed default value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null default metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed default value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed default value for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed default value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", default_lo);
     abi::emit_store_zero_to_address(emitter, "r10", default_hi);
 }
@@ -2127,19 +2127,19 @@ fn emit_set_owner_parameter_default_constant_name_property_x86_64(
     ) else {
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload ReflectionParameter predicate flags
-    emitter.instruction("shr r11, 7"); // move the default-constant bit into position
-    emitter.instruction("and r11, 1"); // extract the default-constant flag as a boolean
-    emitter.instruction(&format!("jz {}", done_label)); // keep the empty name when no constant default exists
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]"); // reload the boxed ReflectionParameter default-constant name
-    emitter.instruction("test rax, rax"); // check whether the boxed default-constant name is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null default-constant metadata
-    emitter.instruction("call __rt_mixed_unbox"); // expose the default-constant name string payload
-    emitter.instruction("cmp rax, 1"); // runtime tag 1 means string
-    emitter.instruction(&format!("jne {}", fail_label)); // reject non-string default-constant metadata
-    emitter.instruction("mov rax, rdi"); // move the string pointer into the x86_64 persist argument
-    emitter.instruction("call __rt_str_persist"); // copy the default-constant name bytes for parameter storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionParameter object pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionParameter predicate flags
+    emitter.instruction("shr r11, 7");                                          // move the default-constant bit into position
+    emitter.instruction("and r11, 1");                                          // extract the default-constant flag as a boolean
+    emitter.instruction(&format!("jz {}", done_label));                         // keep the empty name when no constant default exists
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the boxed ReflectionParameter default-constant name
+    emitter.instruction("test rax, rax");                                       // check whether the boxed default-constant name is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null default-constant metadata
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the default-constant name string payload
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 means string
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-string default-constant metadata
+    emitter.instruction("mov rax, rdi");                                        // move the string pointer into the x86_64 persist argument
+    emitter.instruction("call __rt_str_persist");                               // copy the default-constant name bytes for parameter storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
     emitter.label(done_label);
@@ -2155,19 +2155,19 @@ fn emit_set_owner_named_type_flags_property_x86_64(
     else {
         return;
     };
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]"); // reload ReflectionNamedType predicate flags
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionNamedType object pointer
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the nullable bit
-    emitter.instruction("and rax, 1"); // extract the nullable-type flag as a boolean
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionNamedType predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionNamedType object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the nullable bit
+    emitter.instruction("and rax, 1");                                          // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
     let (Some(is_builtin_lo), Some(is_builtin_hi)) = (layout.is_builtin_lo, layout.is_builtin_hi)
     else {
         return;
     };
-    emitter.instruction("mov rax, r11"); // copy flags before extracting the builtin bit
-    emitter.instruction("shr rax, 1"); // move the builtin-type bit into position
-    emitter.instruction("and rax, 1"); // extract the builtin-type flag as a boolean
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the builtin bit
+    emitter.instruction("shr rax, 1");                                          // move the builtin-type bit into position
+    emitter.instruction("and rax, 1");                                          // extract the builtin-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_builtin_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_builtin_hi);
 }
@@ -2206,16 +2206,16 @@ fn emit_set_owner_metadata_array_slot_aarch64(
     high_offset: usize,
     fail_label: &str,
 ) {
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", boxed_slot)); // reload the boxed ReflectionClass metadata-name array
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null metadata-name arrays
-    emitter.instruction("bl __rt_mixed_unbox"); // expose the metadata-name array tag and payload pointer
-    emitter.instruction("cmp x0, #4"); // runtime tag 4 means indexed array
-    emitter.instruction(&format!("b.ne {}", fail_label)); // reject non-array metadata-name metadata
-    emitter.instruction("str x1, [sp, #40]"); // save the unboxed metadata-name array across incref
-    emitter.instruction("mov x0, x1"); // move the array payload into the incref argument register
-    emitter.instruction("bl __rt_incref"); // retain the metadata-name array for ReflectionClass storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained metadata-name array payload
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", boxed_slot));             // reload the boxed ReflectionClass metadata-name array
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null metadata-name arrays
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the metadata-name array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array metadata-name metadata
+    emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed metadata-name array across incref
+    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
+    emitter.instruction("bl __rt_incref");                                      // retain the metadata-name array for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained metadata-name array payload
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low_offset);
     abi::emit_load_int_immediate(emitter, "x10", 4);
     abi::emit_store_to_address(emitter, "x10", "x9", high_offset);
@@ -2260,17 +2260,17 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     } else {
         format!("+ {}", boxed_slot)
     };
-    emitter.instruction(&format!("mov rax, QWORD PTR [rbp {}]", boxed_slot)); // reload the boxed ReflectionClass metadata-name array
-    emitter.instruction("test rax, rax"); // check whether the boxed metadata-name array is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null metadata-name arrays
-    emitter.instruction("call __rt_mixed_unbox"); // expose the metadata-name array tag and payload pointer
-    emitter.instruction("cmp rax, 4"); // runtime tag 4 means indexed array
-    emitter.instruction(&format!("jne {}", fail_label)); // reject non-array metadata-name metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdi"); // save the unboxed metadata-name array across incref
-    emitter.instruction("mov rax, rdi"); // move the array payload into the incref argument register
-    emitter.instruction("call __rt_incref"); // retain the metadata-name array for ReflectionClass storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained metadata-name array payload
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp {}]", boxed_slot));   // reload the boxed ReflectionClass metadata-name array
+    emitter.instruction("test rax, rax");                                       // check whether the boxed metadata-name array is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null metadata-name arrays
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the metadata-name array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array metadata-name metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed metadata-name array across incref
+    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
+    emitter.instruction("call __rt_incref");                                    // retain the metadata-name array for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained metadata-name array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low_offset);
     abi::emit_load_int_immediate(emitter, "r11", 4);
     abi::emit_store_to_address(emitter, "r11", "r10", high_offset);
@@ -2285,12 +2285,12 @@ fn emit_set_owner_constructor_property_aarch64(
     let (Some(low), Some(high)) = (layout.constructor_lo, layout.constructor_hi) else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #224]"); // reload the boxed ReflectionClass constructor value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null constructor metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed constructor value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed constructor value for ReflectionClass storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed constructor value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x0, [sp, #224]");                                  // reload the boxed ReflectionClass constructor value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null constructor metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed constructor value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed constructor value for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed constructor value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
@@ -2304,13 +2304,13 @@ fn emit_set_owner_constructor_property_x86_64(
     let (Some(low), Some(high)) = (layout.constructor_lo, layout.constructor_hi) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp + 96]"); // reload the boxed ReflectionClass constructor value
-    emitter.instruction("test rax, rax"); // check whether the boxed constructor value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null constructor metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed constructor value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed constructor value for ReflectionClass storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed constructor value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp + 96]");                       // reload the boxed ReflectionClass constructor value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed constructor value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null constructor metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed constructor value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed constructor value for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed constructor value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
@@ -2324,12 +2324,12 @@ fn emit_set_owner_parent_class_property_aarch64(
     let (Some(low), Some(high)) = (layout.parent_class_lo, layout.parent_class_hi) else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #136]"); // reload the boxed ReflectionClass parent value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null parent metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed parent value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed parent value for ReflectionClass storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed parent value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed ReflectionClass parent value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null parent metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed parent value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed parent value for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed parent value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
@@ -2343,13 +2343,13 @@ fn emit_set_owner_parent_class_property_x86_64(
     let (Some(low), Some(high)) = (layout.parent_class_lo, layout.parent_class_hi) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 144]"); // reload the boxed ReflectionClass parent value
-    emitter.instruction("test rax, rax"); // check whether the boxed parent value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null parent metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed parent value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed parent value for ReflectionClass storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed parent value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed ReflectionClass parent value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed parent value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null parent metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed parent value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed parent value for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed parent value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
@@ -2364,12 +2364,12 @@ fn emit_set_owner_declaring_function_property_aarch64(
     else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #80]"); // reload the boxed ReflectionParameter declaring function
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null declaring-function metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed declaring function across incref
-    emitter.instruction("bl __rt_incref"); // retain the declaring function for ReflectionParameter storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained declaring function value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x0, [sp, #80]");                                   // reload the boxed ReflectionParameter declaring function
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null declaring-function metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed declaring function across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the declaring function for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained declaring function value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
@@ -2384,13 +2384,13 @@ fn emit_set_owner_declaring_function_property_x86_64(
     else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 88]"); // reload the boxed ReflectionParameter declaring function
-    emitter.instruction("test rax, rax"); // check whether the declaring-function value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null declaring-function metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed declaring function across incref
-    emitter.instruction("call __rt_incref"); // retain the declaring function for ReflectionParameter storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained declaring function value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the boxed ReflectionParameter declaring function
+    emitter.instruction("test rax, rax");                                       // check whether the declaring-function value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null declaring-function metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed declaring function across incref
+    emitter.instruction("call __rt_incref");                                    // retain the declaring function for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained declaring function value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
@@ -2404,12 +2404,12 @@ fn emit_set_owner_constant_value_property_aarch64(
     let (Some(low), Some(high)) = (layout.value_lo, layout.value_hi) else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #56]"); // reload the boxed ReflectionClassConstant value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null constant-value metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed constant value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed constant value for ReflectionClassConstant storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed constant value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionClassConstant object pointer
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed ReflectionClassConstant value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null constant-value metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed constant value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed constant value for ReflectionClassConstant storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed constant value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionClassConstant object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
@@ -2443,13 +2443,13 @@ fn emit_set_owner_constant_value_property_x86_64(
     let (Some(low), Some(high)) = (layout.value_lo, layout.value_hi) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]"); // reload the boxed ReflectionClassConstant value
-    emitter.instruction("test rax, rax"); // check whether the boxed constant value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null constant-value metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed constant value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed constant value for ReflectionClassConstant storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed constant value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionClassConstant object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the boxed ReflectionClassConstant value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed constant value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null constant-value metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed constant value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed constant value for ReflectionClassConstant storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed constant value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionClassConstant object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
@@ -2484,12 +2484,12 @@ fn emit_set_owner_backing_value_property_aarch64(
     let (Some(low), Some(high)) = (layout.backing_value_lo, layout.backing_value_hi) else {
         return;
     };
-    emitter.instruction("ldr x0, [sp, #64]"); // reload the boxed ReflectionEnumBackedCase backing value
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null backing-value metadata
-    emitter.instruction("str x0, [sp, #40]"); // save the boxed backing value across incref
-    emitter.instruction("bl __rt_incref"); // retain the boxed backing value for ReflectionEnumBackedCase storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained boxed backing value
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the ReflectionEnumBackedCase object pointer
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the boxed ReflectionEnumBackedCase backing value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null backing-value metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed backing value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed backing value for ReflectionEnumBackedCase storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed backing value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionEnumBackedCase object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
@@ -2503,13 +2503,13 @@ fn emit_set_owner_backing_value_property_x86_64(
     let (Some(low), Some(high)) = (layout.backing_value_lo, layout.backing_value_hi) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 72]"); // reload the boxed ReflectionEnumBackedCase backing value
-    emitter.instruction("test rax, rax"); // check whether the boxed backing value is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null backing-value metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax"); // save the boxed backing value across incref
-    emitter.instruction("call __rt_incref"); // retain the boxed backing value for ReflectionEnumBackedCase storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained boxed backing value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the ReflectionEnumBackedCase object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the boxed ReflectionEnumBackedCase backing value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed backing value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null backing-value metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed backing value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed backing value for ReflectionEnumBackedCase storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed backing value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionEnumBackedCase object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
@@ -2520,16 +2520,16 @@ fn emit_set_owner_attrs_property_aarch64(
     layout: &ReflectionOwnerLayout,
     fail_label: &str,
 ) {
-    emitter.instruction("ldr x0, [sp, #24]"); // reload the boxed ReflectionAttribute array
-    emitter.instruction(&format!("cbz x0, {}", fail_label)); // reject malformed null attribute arrays
-    emitter.instruction("bl __rt_mixed_unbox"); // expose the attribute array tag and payload pointer
-    emitter.instruction("cmp x0, #4"); // runtime tag 4 means indexed array
-    emitter.instruction(&format!("b.ne {}", fail_label)); // reject non-array attribute metadata
-    emitter.instruction("str x1, [sp, #40]"); // save the unboxed attribute array across incref
-    emitter.instruction("mov x0, x1"); // move the array payload into the incref argument register
-    emitter.instruction("bl __rt_incref"); // retain the attribute array for Reflection owner storage
-    emitter.instruction("ldr x1, [sp, #40]"); // reload the retained attribute array payload
-    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed ReflectionAttribute array
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null attribute arrays
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the attribute array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array attribute metadata
+    emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed attribute array across incref
+    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
+    emitter.instruction("bl __rt_incref");                                      // retain the attribute array for Reflection owner storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained attribute array payload
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.attrs_lo);
     abi::emit_load_int_immediate(emitter, "x10", 4);
     abi::emit_store_to_address(emitter, "x10", "x9", layout.attrs_hi);
@@ -2541,17 +2541,17 @@ fn emit_set_owner_attrs_property_x86_64(
     layout: &ReflectionOwnerLayout,
     fail_label: &str,
 ) {
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]"); // reload the boxed ReflectionAttribute array
-    emitter.instruction("test rax, rax"); // check whether the boxed attribute array is null
-    emitter.instruction(&format!("jz {}", fail_label)); // reject malformed null attribute arrays
-    emitter.instruction("call __rt_mixed_unbox"); // expose the attribute array tag and payload pointer
-    emitter.instruction("cmp rax, 4"); // runtime tag 4 means indexed array
-    emitter.instruction(&format!("jne {}", fail_label)); // reject non-array attribute metadata
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdi"); // save the unboxed attribute array across incref
-    emitter.instruction("mov rax, rdi"); // move the array payload into the incref argument register
-    emitter.instruction("call __rt_incref"); // retain the attribute array for Reflection owner storage
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]"); // reload the retained attribute array payload
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed ReflectionAttribute array
+    emitter.instruction("test rax, rax");                                       // check whether the boxed attribute array is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null attribute arrays
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the attribute array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array attribute metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed attribute array across incref
+    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
+    emitter.instruction("call __rt_incref");                                    // retain the attribute array for Reflection owner storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained attribute array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", layout.attrs_lo);
     abi::emit_load_int_immediate(emitter, "r11", 4);
     abi::emit_store_to_address(emitter, "r11", "r10", layout.attrs_hi);

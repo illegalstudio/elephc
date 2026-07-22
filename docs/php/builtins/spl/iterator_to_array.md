@@ -2,7 +2,7 @@
 title: "iterator_to_array()"
 description: "Copy the iterator into an array."
 sidebar:
-  order: 340
+  order: 342
 ---
 
 ## iterator_to_array()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `iterator_to_array` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/iterator_to_array.md).
-

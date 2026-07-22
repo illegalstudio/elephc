@@ -2,7 +2,7 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 172
+  order: 174
 ---
 
 ## fputcsv()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fputcsv` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fputcsv.md).
-

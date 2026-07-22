@@ -2,7 +2,7 @@
 title: "microtime()"
 description: "Returns the current Unix timestamp with microseconds."
 sidebar:
-  order: 98
+  order: 100
 ---
 
 ## microtime()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `microtime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/microtime.md).
-

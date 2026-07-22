@@ -2,7 +2,7 @@
 title: "json_validate()"
 description: "Checks if a string contains valid JSON."
 sidebar:
-  order: 251
+  order: 253
 ---
 
 ## json_validate()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `json_validate` is implemented in the compiler, see [the internals page](../../../internals/builtins/json/json_validate.md).
-

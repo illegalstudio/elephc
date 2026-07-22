@@ -1,12 +1,11 @@
 //! Purpose:
-//! Type-checks the numeric PHP builtin family.
-//! Validates arity, argument types, warning-producing cases, and inferred return types for direct calls.
+//! Type-checks compiler-resident PHP language constructs with lazy or l-value operands.
 //!
 //! Called from:
 //! - `crate::types::checker::builtins::check_builtin()`
 //!
 //! Key details:
-//! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
+//! - These constructs cannot use ordinary eager registry call normalization.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
@@ -14,21 +13,14 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
-type BuiltinResult = Result<Option<PhpType>, CompileError>;
-
-/// Type-checks numeric and language-construct PHP builtins.
+/// Type-checks compiler-resident PHP language constructs.
 ///
-/// Validates argument count, argument types, and special cases (e.g., `buffer_free`
-/// restriction on `$this`, locals-only) for the builtin functions in the numeric
-/// family. Returns the inferred `PhpType` on success, or a `CompileError` on type/
-/// arity mismatch.
+/// Validates arity, eager subexpressions, and non-reading property probes while
+/// preserving the lazy semantics that prevent ordinary registry normalization.
 ///
 /// ## Supported builtins
-/// - Legacy scalar aliases not yet migrated into `src/builtins/`: `strval`,
-///   `is_double`, `is_real`, `is_integer`, `is_long`
 /// - Control: `exit`, `die`, `empty`
-/// - Unset: `unset`
-/// - Buffers: `buffer_len`, `buffer_free`
+/// - Property/local probes: `isset`, `unset`
 ///
 /// ## Arguments
 /// - `checker`: mutable checker state for inference
@@ -38,15 +30,14 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// - `env`: current type environment
 ///
 /// ## Returns
-/// `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown builtins
-/// (caller falls through), or `Err(CompileError)` on validation failure.
-pub(super) fn check_builtin(
+/// Returns the inferred type or a source diagnostic for an invalid construct.
+pub(super) fn check(
     checker: &mut Checker,
     name: &str,
     args: &[Expr],
     span: crate::span::Span,
     env: &TypeEnv,
-) -> BuiltinResult {
+) -> Result<PhpType, CompileError> {
     match name {
         "exit" | "die" => {
             if args.len() > 1 {
@@ -58,42 +49,14 @@ pub(super) fn check_builtin(
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
             }
-            Ok(Some(PhpType::Void))
-        }
-        "strval" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "is_double" | "is_real" | "is_integer" | "is_long" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
-        }
-        "method_exists" | "property_exists" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Bool))
+            Ok(PhpType::Void)
         }
         "empty" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Bool))
+            Ok(PhpType::Bool)
         }
         "unset" => {
             if args.is_empty() {
@@ -102,9 +65,43 @@ pub(super) fn check_builtin(
             for arg in args {
                 check_unset_arg(checker, arg, env)?;
             }
-            Ok(Some(PhpType::Void))
+            Ok(PhpType::Void)
         }
-        _ => Ok(None),
+        "isset" => {
+            if args.is_empty() {
+                return Err(CompileError::new(span, "isset() takes at least 1 argument"));
+            }
+            for arg in args {
+                check_isset_arg(checker, arg, env)?;
+            }
+            Ok(PhpType::Bool)
+        }
+        _ => unreachable!("non-language construct reached language construct checker"),
+    }
+}
+
+/// Type-checks one `isset()` operand without forcing an observable property read.
+fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::PropertyAccess { object, .. }
+    | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
+    {
+        let object_ty = checker.infer_type(object, env)?;
+        if isset_object_receiver_type(checker, &object_ty) {
+            return Ok(());
+        }
+    }
+    checker.infer_type(arg, env).map(|_| ())
+}
+
+/// Returns whether an `isset()` receiver can use non-reading property semantics.
+fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            checker.union_single_object_class(ty).is_some()
+                || members.iter().any(|member| matches!(member, PhpType::Mixed))
+        }
+        _ => false,
     }
 }
 

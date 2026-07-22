@@ -2,7 +2,7 @@
 title: "is_object()"
 description: "Checks whether a variable is an object."
 sidebar:
-  order: 446
+  order: 451
 ---
 
 ## is_object()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_object` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_object.md).
-

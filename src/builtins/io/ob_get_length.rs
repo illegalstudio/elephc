@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `ob_get_length` builtin: its declaration and lowering.
+//! Home of the PHP `ob_get_length` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook when present),
-//!   and the EIR backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(Int, False)`: the buffered byte count, or `false` when
-//! -   no output buffer is active (runtime -1 sentinel boxed by the lowering).
-//! - `lower` is a thin wrapper over `output_buffering::lower_ob_get_length`.
+//!   no output buffer is active (runtime -1 sentinel boxed by the lowering).
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -22,9 +17,10 @@ builtin! {
     area: Io,
     params: [],
     returns: Mixed,
-    returns_fresh_storage: true,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ObGetLength,
+    ),
     summary: "Returns the length of the output buffer.",
     php_manual: "function.ob-get-length",
 }
@@ -33,9 +29,4 @@ builtin! {
 /// output buffer is active.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
-}
-
-/// Lowers an `ob_get_length` call by dispatching to the shared output-buffering emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::output_buffering::lower_ob_get_length(ctx, inst)
 }

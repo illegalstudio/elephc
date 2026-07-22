@@ -2,7 +2,7 @@
 title: "stream_get_filters() — internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 221
 ---
 
 ## `stream_get_filters()` — internals
@@ -10,17 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_filters.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1491](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1491) (`lower_stream_get_filters`)
-- **Function symbol**: `lower_stream_get_filters()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `stream_get_filters()` to the static built-in filter list.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.stream_get_filters` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.stream_get_filters`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

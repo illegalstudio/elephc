@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `preg_match` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `preg_match` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The third param `matches` is by-reference (`ref matches: Mixed = DefaultSpec::EmptyArray`),
@@ -15,13 +14,9 @@
 //!   "Undefined variable" error.
 //! - `check` validates that args[2] (when present) is a `Variable` expression; passing
 //!   a non-variable to the by-ref `$matches` param is a compile error.
-//! - `lower` is a thin wrapper over `regex::lower_preg_match` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -32,7 +27,10 @@ builtin! {
     returns: Int,
     check: check,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::PregMatch),
+        crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex,
+    ),
     summary: "Performs a regular expression match.",
 }
 
@@ -52,9 +50,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers a `preg_match` call by dispatching to the shared regex emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::regex::lower_preg_match(ctx, inst)
 }

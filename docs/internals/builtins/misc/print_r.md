@@ -2,7 +2,7 @@
 title: "print_r() — internals"
 description: "Compiler internals for print_r(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 299
 ---
 
 ## `print_r()` — internals
@@ -10,27 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/print_r.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/print_r.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/debug.rs`:34](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/debug.rs#L34) (`lower_print_r`)
-- **Function symbol**: `lower_print_r()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `print_r(value, $return = false)` for concrete scalar/resource values
-- and array/hash shells.
-- Dispatch follows the call's static result type, which the checker
-- (`src/builtins/io/print_r.rs`) and the EIR return-type override
-- (`print_r_builtin_return_type_for_args`) derive from the `$return` flag:
-- - `Str` (literal `true`): render into the capture buffer and return the owned
-- string finalized by `__rt_pr_finish`.
-- - `Bool` (flag absent or literal `false`): render to stdout and return `true`.
-- - `Mixed` (runtime flag): select the mode at runtime; see
-- `lower_print_r_runtime_flag`.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.print_r` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_pr_finish`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.print_r`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto()"
 description: "Turns encryption on/off on an already connected socket."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## stream_socket_enable_crypto()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_socket_enable_crypto` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_socket_enable_crypto.md).
-

@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `unserialize` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `unserialize` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The check hook validates the data argument is string-compatible.
@@ -14,10 +13,7 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::system::json_support;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,7 +25,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Unserialize,
+    ),
     summary: "Creates a PHP value from a stored representation.",
 }
 
@@ -49,9 +47,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.checker.infer_type(options, cx.env)?;
     }
     Ok(PhpType::Mixed)
-}
-
-/// Lowers an `unserialize` call by dispatching to the shared serialize emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::serialize::lower_unserialize(ctx, inst)
 }

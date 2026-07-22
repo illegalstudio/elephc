@@ -1,40 +1,24 @@
 //! Purpose:
-//! Home of the PHP `hex2bin` builtin: its declaration and lowering.
+//! Home of the PHP `hex2bin` builtin and its backend-neutral runtime semantics.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - The builtin registry, checker, optimizer, and AST-to-EIR builtin lowering path.
 //!
 //! Key details:
-//! - No `check` hook is needed: `hex2bin` is a pure-data builtin whose return
-//!   type (`Str`) is fully determined by its declaration. The registry derives the
-//!   return type from the `returns:` field without calling a check hook.
-//! - `lower` is a thin wrapper over the shared `lower_unary_string_runtime` emitter,
-//!   passing the `__rt_hex2bin` runtime helper.
+//! - The typed runtime target has a validated `Str -> Str` EIR signature.
+//! - Invalid hexadecimal input retains its observable warning effect.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
+use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
     name: "hex2bin",
     area: String,
     params: [string: Str],
     returns: Str,
-    lower: lower,
+    semantics: crate::builtins::semantics::unary_string_runtime(
+        RuntimeCallTarget::UnaryString(UnaryStringRuntime::HexToBin),
+        crate::ir::Effects::MAY_WARN,
+    ),
     summary: "Decodes a hexadecimal string back into its binary representation.",
     php_manual: "https://www.php.net/manual/en/function.hex2bin.php",
-}
-
-/// Lowers a `hex2bin` call by dispatching to the shared per-arch unary string runtime.
-fn lower(
-    ctx: &mut FunctionContext,
-    inst: &Instruction,
-) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_unary_string_runtime(
-        ctx,
-        inst,
-        "hex2bin",
-        "__rt_hex2bin",
-    )
 }

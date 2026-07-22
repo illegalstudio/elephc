@@ -2,7 +2,7 @@
 title: "date()"
 description: "Formats a local time/date."
 sidebar:
-  order: 90
+  order: 92
 ---
 
 ## date()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `date` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/date.md).
-

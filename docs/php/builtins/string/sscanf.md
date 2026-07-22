@@ -2,7 +2,7 @@
 title: "sscanf()"
 description: "Parses a string according to a format."
 sidebar:
-  order: 399
+  order: 401
 ---
 
 ## sscanf()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `sscanf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/sscanf.md).
-

@@ -2,7 +2,7 @@
 title: "ob_get_status()"
 description: "Gets status of output buffers."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## ob_get_status()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_get_status` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_status.md).
-

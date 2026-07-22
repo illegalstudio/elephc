@@ -35,6 +35,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
+mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
 mod comparisons;
@@ -50,6 +51,7 @@ mod ownership;
 mod pointers;
 mod predicates;
 mod property_values;
+mod runtime_calls;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -119,6 +121,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LooseNotEq => comparisons::lower_loose_eq(ctx, &inst, false),
         Op::IsNull => predicates::lower_is_null(ctx, &inst),
         Op::IsTruthy => predicates::lower_is_truthy(ctx, &inst),
+        Op::TypePredicate => builtins::lower_type_predicate(ctx, &inst),
         Op::IToF => floats::lower_int_to_float(ctx, &inst),
         Op::FToI => floats::lower_float_to_int(ctx, &inst),
         Op::IToStr => strings::lower_int_like_to_string(ctx, &inst),
@@ -205,6 +208,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             static_properties::lower_store_reflection_static_property(ctx, &inst)
         }
         Op::Call => lower_direct_call(ctx, &inst),
+        Op::ClosureBind => builtins::lower_closure_bind(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
@@ -216,7 +220,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
-        Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
         Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
         Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
@@ -1536,6 +1540,9 @@ fn emit_runtime_callable_invoker_inline(
     sig: &FunctionSig,
     captures: &[(String, PhpType, bool)],
 ) -> String {
+    if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
+        return label;
+    }
     let label = ctx.next_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::runtime_callable_invoker::RuntimeCallableInvoker {
@@ -1546,10 +1553,12 @@ fn emit_runtime_callable_invoker_inline(
     abi::emit_jump(ctx.emitter, &done_label);
     super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
     ctx.emitter.label(&done_label);
+    ctx.shared
+        .cache_runtime_callable_invoker(sig, captures, &label);
     label
 }
 
-/// Emits a legacy builtin wrapper inline so EIR descriptors can point at PHP-ABI code.
+/// Emits a synthetic EIR builtin wrapper so callable descriptors can use the PHP ABI.
 pub(super) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
@@ -1558,48 +1567,17 @@ pub(super) fn emit_runtime_builtin_wrapper_inline(
     emit_runtime_call_wrapper_inline(ctx, name, sig, RuntimeCallWrapperKind::Builtin)
 }
 
-/// Returns the concrete EIR ABI signature used by runtime builtin descriptors.
+/// Returns the registry/runtime-descriptor ABI used by builtin callable wrappers.
 pub(super) fn runtime_builtin_wrapper_sig(name: &str, sig: &FunctionSig) -> FunctionSig {
     let mut sig = sig.clone();
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "count" => truncate_wrapper_params(&mut sig, 1),
-        "array_sum" | "array_product" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Array(Box::new(PhpType::Int)))
+    if let Some(def) = crate::builtins::registry::lookup(name) {
+        if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
+            def.spec.semantics.runtime_functions
+        {
+            runtime_fn.refine_runtime_callable_wrapper_sig(&mut sig);
         }
-        "clamp" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Int);
-            set_wrapper_param_type(&mut sig, 1, PhpType::Int);
-            set_wrapper_param_type(&mut sig, 2, PhpType::Int);
-            sig.return_type = PhpType::Int;
-        }
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort" => {
-            set_wrapper_param_type(&mut sig, 0, PhpType::Array(Box::new(PhpType::Int)))
-        }
-        _ => {}
     }
     sig
-}
-
-/// Truncates wrapper parameters to the runtime-supported visible arity.
-fn truncate_wrapper_params(sig: &mut FunctionSig, count: usize) {
-    sig.params.truncate(count);
-    sig.defaults.truncate(count);
-    sig.ref_params.truncate(count);
-    sig.declared_params.truncate(count);
-    if sig
-        .variadic
-        .as_deref()
-        .is_some_and(|name| !sig.params.iter().any(|(param_name, _)| param_name == name))
-    {
-        sig.variadic = None;
-    }
-}
-
-/// Replaces one wrapper parameter type when the parameter exists.
-fn set_wrapper_param_type(sig: &mut FunctionSig, index: usize, php_type: PhpType) {
-    if let Some((_, param_ty)) = sig.params.get_mut(index) {
-        *param_ty = php_type;
-    }
 }
 
 /// Emits an EIR extern wrapper inline so descriptors can point at PHP-ABI code.
@@ -1625,6 +1603,13 @@ fn emit_runtime_call_wrapper_inline(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<String> {
+    let cached = match kind {
+        RuntimeCallWrapperKind::Builtin => ctx.shared.runtime_builtin_wrapper(name, sig),
+        RuntimeCallWrapperKind::Extern => ctx.shared.runtime_extern_wrapper(name, sig),
+    };
+    if let Some(label) = cached {
+        return Ok(label);
+    }
     let label_prefix = match kind {
         RuntimeCallWrapperKind::Builtin => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
@@ -1632,7 +1617,7 @@ fn emit_runtime_call_wrapper_inline(
     let label = ctx.next_label(label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     let mut wrapper_module = ctx.module.clone();
-    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind);
+    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     abi::emit_jump(ctx.emitter, &done_label);
     super::block_emit::emit_synthetic_function_with_label(
         &wrapper_module,
@@ -1644,6 +1629,14 @@ fn emit_runtime_call_wrapper_inline(
         false,
     )?;
     ctx.emitter.label(&done_label);
+    match kind {
+        RuntimeCallWrapperKind::Builtin => {
+            ctx.shared.cache_runtime_builtin_wrapper(name, sig, &label)
+        }
+        RuntimeCallWrapperKind::Extern => {
+            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
+        }
+    }
     Ok(label)
 }
 
@@ -1654,7 +1647,7 @@ fn build_runtime_call_wrapper_function(
     name: &str,
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
-) -> Function {
+) -> Result<Function> {
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
         label.to_string(),
@@ -1679,20 +1672,102 @@ fn build_runtime_call_wrapper_function(
     builder.set_entry(entry);
     builder.position_at_end(entry);
     let operands = wrapper_param_operands(&mut builder, sig);
-    let op = match kind {
-        RuntimeCallWrapperKind::Builtin => Op::BuiltinCall,
-        RuntimeCallWrapperKind::Extern => Op::ExternCall,
+    let result = match kind {
+        RuntimeCallWrapperKind::Builtin => {
+            let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
+                CodegenIrError::invalid_module(format!(
+                    "callable wrapper {} is not registry-backed",
+                    name,
+                ))
+            })?;
+            let mut lowering = WrapperBuiltinLoweringContext {
+                builder: &mut builder,
+            };
+            Some(crate::builtins::semantics::lower_registry_call(
+                &mut lowering,
+                def,
+                &operands,
+                &return_php_type,
+                crate::span::Span::dummy(),
+            )
+            .map_err(|error| {
+                CodegenIrError::invalid_module(format!(
+                    "callable wrapper lowering for {} failed: {}",
+                    name, error,
+                ))
+            })?
+            .value)
+        }
+        RuntimeCallWrapperKind::Extern => builder.emit(
+            Op::ExternCall,
+            operands,
+            Some(Immediate::Data(data)),
+            wrapper_return_ir_type(&return_php_type),
+            return_php_type.clone(),
+            Ownership::for_php_type(&return_php_type),
+        ),
     };
-    let result = builder.emit(
-        op,
-        operands,
-        Some(Immediate::Data(data)),
-        wrapper_return_ir_type(&return_php_type),
-        return_php_type.clone(),
-        Ownership::for_php_type(&return_php_type),
-    );
     builder.terminate(Terminator::Return { value: result });
-    function
+    Ok(function)
+}
+
+/// EIR construction adapter used by synthetic builtin callable wrappers.
+struct WrapperBuiltinLoweringContext<'a, 'f> {
+    builder: &'a mut Builder<'f>,
+}
+
+impl crate::builtins::semantics::BuiltinLoweringContext
+    for WrapperBuiltinLoweringContext<'_, '_>
+{
+    /// Returns PHP metadata attached to one synthetic-wrapper operand.
+    fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.builder.value_php_type(value)
+    }
+
+    /// Emits one backend-neutral operation into the synthetic wrapper body.
+    fn emit_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let value = self
+            .builder
+            .emit_with_effects(
+                op,
+                operands,
+                immediate,
+                wrapper_value_ir_type(&php_type),
+                php_type.clone(),
+                Ownership::for_php_type(&php_type),
+                effects,
+                span,
+            )
+            .expect("builtin wrapper operation produces a value");
+        crate::builtins::semantics::LoweredBuiltinValue { value }
+    }
+
+    /// Emits one typed runtime operation into the synthetic wrapper body.
+    fn emit_runtime_call(
+        &mut self,
+        target: crate::ir::RuntimeCallTarget,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        self.emit_value(
+            Op::RuntimeCall,
+            operands,
+            Some(Immediate::RuntimeCall(target)),
+            php_type,
+            effects,
+            span,
+        )
+    }
 }
 
 /// Converts callable signature params into EIR function params with matching ABI/local slots.
@@ -1966,6 +2041,9 @@ fn callable_target_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers high-level runtime fallback casts that Phase 04 can identify by type.
 fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(Immediate::RuntimeCall(target)) = inst.immediate {
+        return runtime_calls::lower(ctx, inst, target);
+    }
     if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
         return lower_property_array_runtime_set(ctx, inst);
     }

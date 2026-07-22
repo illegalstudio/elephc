@@ -1,19 +1,15 @@
 //! Purpose:
-//! Home of the PHP `spl_object_hash` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `spl_object_hash` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required to validate that the argument is an object; returns `Str`.
 //! - The hash is derived from the object's heap pointer stringified via `__rt_itoa`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -22,7 +18,9 @@ builtin! {
     params: [object: Mixed],
     returns: Str,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::SplObjectHash,
+    ),
     summary: "Return hash id for given object.",
     php_manual: "https://www.php.net/manual/en/function.spl-object-hash.php",
 }
@@ -37,9 +35,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Str)
-}
-
-/// Lowers `spl_object_hash()` by delegating to the object-pointer-to-string emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_spl_object_hash(ctx, inst)
 }

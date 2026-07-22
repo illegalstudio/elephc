@@ -1,28 +1,21 @@
 //! Purpose:
-//! Home of the PHP `stream_wrapper_unregister` builtin: its declaration and lowering.
+//! Home of the PHP `stream_wrapper_unregister` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No check hook: the common registry path infers the protocol argument and returns `Bool`.
-//! - `lower` is a thin wrapper over `io::lower_stream_wrapper_unregister` in the EIR backend.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "stream_wrapper_unregister",
     area: Io,
     params: [protocol: Str],
     returns: Bool,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::StreamWrapperUnregister,
+    ),
     summary: "Unregisters a previously registered URL wrapper.",
     php_manual: "function.stream-wrapper-unregister",
-}
-
-/// Lowers a `stream_wrapper_unregister` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_stream_wrapper_unregister(ctx, inst)
 }

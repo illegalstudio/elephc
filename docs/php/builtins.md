@@ -96,6 +96,8 @@ sidebar:
 | [`interface_exists()`](./builtins/class/interface_exists.md) | `(string $interface, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`is_a()`](./builtins/class/is_a.md) | `(object $object_or_class, string $class, bool $allow_string = false): bool` | `bool` | ✓ | ✓ |
 | [`is_subclass_of()`](./builtins/class/is_subclass_of.md) | `(mixed $object_or_class, string $class, bool $allow_string = true): bool` | `bool` | ✓ | ✓ |
+| [`method_exists()`](./builtins/class/method_exists.md) | `(mixed $object_or_class, string $method): bool` | `bool` | ✓ | ✓ |
+| [`property_exists()`](./builtins/class/property_exists.md) | `(mixed $object_or_class, string $property): bool` | `bool` | ✓ | ✓ |
 | [`trait_exists()`](./builtins/class/trait_exists.md) | `(string $trait, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`checkdate()`](./builtins/date/checkdate.md) | `(int $month, int $day, int $year): bool` | `bool` | ✓ | ✓ |
 | [`date()`](./builtins/date/date.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
@@ -449,13 +451,18 @@ sidebar:
 | [`is_array()`](./builtins/type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./builtins/type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./builtins/type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_double()`](./builtins/type/is_double.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_float()`](./builtins/type/is_float.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_int()`](./builtins/type/is_int.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_integer()`](./builtins/type/is_integer.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_iterable()`](./builtins/type/is_iterable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_long()`](./builtins/type/is_long.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_null()`](./builtins/type/is_null.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_numeric()`](./builtins/type/is_numeric.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_object()`](./builtins/type/is_object.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_real()`](./builtins/type/is_real.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_resource()`](./builtins/type/is_resource.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_scalar()`](./builtins/type/is_scalar.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_string()`](./builtins/type/is_string.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`settype()`](./builtins/type/settype.md) | `(mixed $var, string $type): bool` | `bool` | ✓ | ✓ |
+| [`strval()`](./builtins/type/strval.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

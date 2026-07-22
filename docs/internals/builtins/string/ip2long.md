@@ -2,7 +2,7 @@
 title: "ip2long() — internals"
 description: "Compiler internals for ip2long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 384
+  order: 386
 ---
 
 ## `ip2long()` — internals
@@ -10,19 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ip2long.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ip2long.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:550](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L550) (`lower_ip2long`)
-- **Function symbol**: `lower_ip2long()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `ip2long(string)` and boxes invalid-address results as PHP false.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.ip2long` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_ip2long`
-- `__rt_sprintf`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.ip2long`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

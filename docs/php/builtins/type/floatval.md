@@ -2,7 +2,7 @@
 title: "floatval()"
 description: "Returns the float value of a variable."
 sidebar:
-  order: 433
+  order: 435
 ---
 
 ## floatval()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `floatval` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/floatval.md).
-

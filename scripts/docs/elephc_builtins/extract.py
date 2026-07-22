@@ -11,9 +11,9 @@ registry, plus records for builtins only the eval interpreter exposes.
 
 For each builtin we enrich the registry data with:
 
-1. its lowering location — the emitter its home-file ``lower`` hook dispatches to,
-   plus that emitter's ``__rt_*`` runtime helpers and leading ``///`` doc notes,
-2. its documentation area (derived from the lowering file path, as before),
+1. its backend-neutral lowering boundary and typed EIR runtime target,
+2. its documentation area from the registry's own ``Area`` metadata plus the
+   smaller user-facing category overrides,
 3. optional type-precision refinements for non-scalar params/returns that the
    registry represents coarsely as ``Mixed`` (``PARAM_TYPES`` / ``RETURN_TYPE_OVERRIDES``).
 
@@ -41,9 +41,6 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from registry import (  # noqa: E402  (sys.path tweak above)
-    AREA_BY_FILE,
-    AREA_BY_LOWERING_FN,
-    AREA_BY_MODULE,
     AREA_BY_NAME,
     Builtin,
     BuiltinSig,
@@ -53,6 +50,8 @@ from registry import (  # noqa: E402  (sys.path tweak above)
     PARAM_TYPES,
     Parameter,
     RETURN_TYPE_OVERRIDES,
+    REGISTRY_AREA_DEFAULTS,
+    REGISTRY_AREA_OVERRIDES,
     RUNTIME_HELPER_OVERRIDES,
     slug,
 )
@@ -72,9 +71,12 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     to ``cargo run``.
     """
     cmd: list[str]
+    source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
+    source_inputs.extend((repo / "src").rglob("*.rs"))
+    newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
     for profile in ("release", "debug"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
-        if exe.exists():
+        if exe.exists() and exe.stat().st_mtime >= newest_source_mtime:
             cmd = [str(exe), "--include-internal"]
             break
     else:
@@ -95,7 +97,7 @@ def run_gen_builtins(repo: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Home-file lowering map: name -> the emitter its `lower` hook dispatches to
+# Home-file map: name -> its single-source registry declaration
 # ---------------------------------------------------------------------------
 
 # Core registry-machinery files under src/builtins/ that are NOT builtin homes.
@@ -110,22 +112,16 @@ _NON_HOME_FILES = {
 }
 
 _NAME_RE = re.compile(r'name:\s*"([^"]+)"')
-# The `lower` hook dispatches to the real emitter via a fully-qualified path,
-# e.g. `crate::codegen::lower_inst::builtins::math::lower_abs(ctx, inst)`
-# (the `(ctx` may be on the following line — `\s*` spans newlines).
-_EMITTER_RE = re.compile(r"lower_inst::builtins::([A-Za-z0-9_:]+)\s*\(\s*ctx\b")
 
 
-def build_home_lowering_map(repo: Path) -> dict[str, tuple[str, str, str]]:
-    """Map each registry builtin name (lowercased) to ``(emitter_fn, module, home_rel)``.
+def build_home_file_map(repo: Path) -> dict[str, str]:
+    """Map each registry builtin name to its single-source home file.
 
     Scans every builtin home file under ``src/builtins/`` (skipping the registry
-    machinery files), reads its ``builtin!`` name and the emitter path its
-    ``lower`` hook dispatches to. ``module`` is the last path segment before the
-    emitter function (used for the AREA_BY_MODULE area fallback); ``home_rel`` is
-    the home file path relative to the repo root.
+    machinery files) and reads its ``builtin!`` name. Backend lowering metadata
+    comes from the exported semantic descriptor, never from a Rust emitter path.
     """
-    out: dict[str, tuple[str, str, str]] = {}
+    out: dict[str, str] = {}
     builtins_root = repo / "src" / "builtins"
     for path in builtins_root.rglob("*.rs"):
         if path.name in _NON_HOME_FILES:
@@ -137,14 +133,7 @@ def build_home_lowering_map(repo: Path) -> dict[str, tuple[str, str, str]]:
         if not name_match:
             continue
         canonical = name_match.group(1).lower()
-        emitter_fn = ""
-        module = ""
-        emit_match = _EMITTER_RE.search(text)
-        if emit_match:
-            segments = emit_match.group(1).split("::")
-            emitter_fn = segments[-1]
-            module = segments[-2] if len(segments) >= 2 else ""
-        out[canonical] = (emitter_fn, module, str(path.relative_to(repo)))
+        out[canonical] = str(path.relative_to(repo))
     return out
 
 
@@ -186,23 +175,6 @@ def collect_runtime_helpers(notes: str, body: str) -> list[str]:
     return sorted(found)
 
 
-def parse_area_for_file(rel_path: str) -> tuple[Optional[str], str]:
-    """Look up the ``(area, sub_area)`` for a lowering file path under ``builtins/``.
-
-    Returns ``(None, "")`` as a sentinel when the file is the root dispatcher and
-    the area should be inferred from the module/function instead.
-    """
-    key = rel_path.replace("builtins/", "").replace("builtins\\", "")
-    if key in AREA_BY_FILE:
-        val = AREA_BY_FILE[key]
-        return (None, "") if val is None else val
-    base = Path(key).name
-    if base in AREA_BY_FILE:
-        val = AREA_BY_FILE[base]
-        return (None, "") if val is None else val
-    return ("Misc", "Misc")
-
-
 def resolve_lowering(
     repo: Path,
     read,
@@ -242,31 +214,50 @@ def resolve_lowering(
     return lowering
 
 
-def resolve_area(
-    canonical: str, lowering: LoweringInfo, emitter_fn: str, module: str
-) -> tuple[str, str]:
-    """Resolve a builtin's documentation ``(area, sub_area)``.
+def resolve_registry_lowering(repo: Path, read, entry: dict, sig_file: str) -> LoweringInfo:
+    """Describe a registry builtin's backend-neutral EIR lowering boundary."""
+    semantics = entry.get("semantics") or {}
+    strategy = semantics.get("target_strategy", "unknown")
+    lowering_kind = semantics.get("lowering") or {}
+    boundary_file = repo / "src" / "builtins" / "semantics.rs"
+    definition = find_lowering_function_def(read(boundary_file), "lower_registry_call")
+    boundary_line = definition[1] if definition else None
+    notes = [
+        f"Uses the `{strategy}` strategy from the single-source builtin descriptor.",
+    ]
+    if lowering_kind.get("kind") == "runtime_call":
+        target = lowering_kind.get("target", "unknown")
+        notes.extend(
+            [
+                f"Emits the typed EIR target `runtime.{target}` through `BuiltinLoweringContext`.",
+                "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.",
+            ]
+        )
+    else:
+        notes.append(
+            "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        )
+    return LoweringInfo(
+        sig_file=sig_file,
+        codegen_file=str(boundary_file.relative_to(repo)),
+        codegen_line=boundary_line,
+        codegen_function="lower_registry_call",
+        notes=notes,
+    )
 
-    Priority (most specific first): per-name override → the lowering file's path →
-    the generic libm/lowering-fn mapping → the dispatch module → ``Misc``.
-    """
-    area = AREA_BY_NAME.get(canonical, ("Misc", "Misc"))
-    if area == ("Misc", "Misc") and lowering.codegen_file:
-        cf = lowering.codegen_file
-        prefix = "src/codegen/lower_inst/builtins"
-        rel_under = cf[len(prefix) + 1 :] if cf.startswith(prefix + "/") else cf
-        file_area = parse_area_for_file(rel_under)
-        if file_area[0] is not None and (file_area[0] != "Misc" or file_area[1] != "Misc"):
-            area = file_area
-    if area == ("Misc", "Misc"):
-        fn_area = AREA_BY_LOWERING_FN.get(emitter_fn) if emitter_fn else None
-        if fn_area is not None:
-            area = fn_area
-        elif module:
-            mod_area = AREA_BY_MODULE.get(module)
-            if mod_area is not None:
-                area = mod_area
-    return area
+
+def resolve_registry_area(canonical: str, registry_area: str) -> tuple[str, str]:
+    """Resolve the stable docs category from registry metadata and explicit PHP families."""
+    if canonical in REGISTRY_AREA_OVERRIDES:
+        return REGISTRY_AREA_OVERRIDES[canonical]
+    if canonical in AREA_BY_NAME:
+        return AREA_BY_NAME[canonical]
+    try:
+        return REGISTRY_AREA_DEFAULTS[registry_area]
+    except KeyError as exc:
+        raise ValueError(
+            f"builtin {canonical!r} has undocumented registry area {registry_area!r}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +525,7 @@ def build_registry(repo: Path) -> list[Builtin]:
     lowering_dir = src / "codegen" / "lower_inst" / "builtins"
 
     gen = run_gen_builtins(repo)
-    home_map = build_home_lowering_map(repo)
+    home_map = build_home_file_map(repo)
 
     file_cache: dict[Path, str] = {}
 
@@ -594,7 +585,9 @@ def build_registry(repo: Path) -> list[Builtin]:
                 )
             )
 
-        emitter_fn, module, home_rel = home_map.get(canonical, ("", "", None))
+        home_rel = home_map.get(canonical)
+        if home_rel is None:
+            raise ValueError(f"registry builtin {canonical!r} has no single-source home file")
 
         return_type = _normalize_type(entry.get("returns", "mixed"))
         # The registry types non-scalar returns as `Mixed`; recover the precise
@@ -605,9 +598,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 return_type = precise
         if canonical in RETURN_TYPE_OVERRIDES:
             return_type = RETURN_TYPE_OVERRIDES[canonical]
-        lowering = resolve_lowering(
-            repo, read, dispatch, lowering_dir, emitter_fn, home_rel
-        )
+        lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
 
@@ -618,9 +609,9 @@ def build_registry(repo: Path) -> list[Builtin]:
             description = lowering.notes[0]
 
         if is_internal and canonical in INTERNAL_NOTES:
-            lowering.notes = INTERNAL_NOTES[canonical]
+            lowering.notes = INTERNAL_NOTES[canonical] + lowering.notes
 
-        area = resolve_area(canonical, lowering, emitter_fn, module)
+        area = resolve_registry_area(canonical, entry["area"])
 
         builtins.append(
             Builtin(
@@ -639,6 +630,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 description=description,
                 eval_support=entry.get("eval"),
                 is_extension=bool(entry.get("extension")),
+                semantics=entry.get("semantics"),
             )
         )
 
@@ -743,6 +735,7 @@ def _builtin_to_dict(b: Builtin) -> dict:
             "runtime_helpers": b.lowering.runtime_helpers,
             "notes": b.lowering.notes,
         },
+        "semantics": b.semantics,
         "eval": b.eval_support or {"supported": False, "kind": "none"},
         "eval_only": b.eval_only,
     }

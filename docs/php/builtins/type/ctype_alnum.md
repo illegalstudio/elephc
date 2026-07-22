@@ -2,7 +2,7 @@
 title: "ctype_alnum()"
 description: "Checks if all characters in the string are alphanumeric."
 sidebar:
-  order: 429
+  order: 431
 ---
 
 ## ctype_alnum()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ctype_alnum` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/ctype_alnum.md).
-

@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `class_implements` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/class_implements.md).
-

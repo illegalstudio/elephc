@@ -2,7 +2,7 @@
 title: "readline()"
 description: "Reads a line from the user's terminal."
 sidebar:
-  order: 327
+  order: 329
 ---
 
 ## readline()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `readline` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/readline.md).
-

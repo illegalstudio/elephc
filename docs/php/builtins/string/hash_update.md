@@ -2,7 +2,7 @@
 title: "hash_update()"
 description: "Pumps data into an active incremental hashing context."
 sidebar:
-  order: 376
+  order: 378
 ---
 
 ## hash_update()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_update` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_update.md).
-

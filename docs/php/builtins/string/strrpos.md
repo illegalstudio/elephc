@@ -2,7 +2,7 @@
 title: "strrpos()"
 description: "Finds the numeric position of the last occurrence of a substring."
 sidebar:
-  order: 414
+  order: 416
 ---
 
 ## strrpos()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `strrpos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strrpos.md).
-

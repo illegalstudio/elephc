@@ -2,7 +2,7 @@
 title: "readlink()"
 description: "Returns the target of a symbolic link."
 sidebar:
-  order: 142
+  order: 144
 ---
 
 ## readlink()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `readlink` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/readlink.md).
-

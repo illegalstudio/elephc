@@ -2,7 +2,7 @@
 title: "fseek()"
 description: "Seeks on a file pointer."
 sidebar:
-  order: 175
+  order: 177
 ---
 
 ## fseek()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fseek` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fseek.md).
-

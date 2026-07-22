@@ -1,22 +1,16 @@
 //! Purpose:
-//! Home of the PHP `class_implements` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `class_implements` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook via support),
-//!   and the EIR backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `lazy_check: true` so the hook infers each argument exactly once in source order,
 //!   matching the legacy arm.
 //! - The check hook validates that the first argument is an object or string literal
 //!   and that the optional autoload arg is a literal bool or int.
-//! - `lower` is a thin wrapper over `class_relations::lower_class_relation` parameterized
-//!   with this builtin's name.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "class_implements",
@@ -25,16 +19,9 @@ builtin! {
     returns: Mixed,
     check: crate::builtins::callables::support::check_class_relation,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ClassImplements,
+    ),
     summary: "Returns the interfaces which are implemented by the given class or its parents.",
     php_manual: "function.class-implements",
-}
-
-/// Lowers a `class_implements` call by dispatching to the shared class-relation emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::class_relations::lower_class_relation(
-        ctx,
-        inst,
-        "class_implements",
-    )
 }

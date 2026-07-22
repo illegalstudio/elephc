@@ -2,7 +2,7 @@
 title: "stream_get_line()"
 description: "Gets line from stream resource up to a given delimiter."
 sidebar:
-  order: 220
+  order: 222
 ---
 
 ## stream_get_line()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_get_line` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_get_line.md).
-

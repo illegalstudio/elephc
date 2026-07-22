@@ -2,7 +2,7 @@
 title: "disk_free_space()"
 description: "Returns available space on filesystem or disk partition."
 sidebar:
-  order: 110
+  order: 112
 ---
 
 ## disk_free_space()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `disk_free_space` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/disk_free_space.md).
-

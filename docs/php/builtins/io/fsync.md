@@ -2,7 +2,7 @@
 title: "fsync()"
 description: "Synchronizes changes to the file (including meta-data)."
 sidebar:
-  order: 177
+  order: 179
 ---
 
 ## fsync()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fsync` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fsync.md).
-

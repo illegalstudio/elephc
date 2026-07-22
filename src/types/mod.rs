@@ -68,8 +68,6 @@ pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };
-#[cfg(test)]
-pub(crate) use signatures::legacy_builtin_call_sig;
 pub use signatures::FunctionSig;
 
 /// Type checks the program after name resolution. Returns `CheckResult` with type

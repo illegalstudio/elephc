@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `opendir` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `opendir` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(stream_resource, Bool)` to reflect PHP's false-on-failure
@@ -11,13 +10,9 @@
 //!   pre-inferred by the registry and no resource validation is performed.
 //! - `returns: Mixed` is used because the union involves a resource type that the
 //!   scalar `returns:` field cannot express.
-//! - `lower` is a thin wrapper over `io::lower_opendir` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,7 +21,9 @@ builtin! {
     params: [directory: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Opendir,
+    ),
     summary: "Open directory handle.",
     php_manual: "function.opendir",
 }
@@ -40,9 +37,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::stream_resource(),
         PhpType::Bool,
     ]))
-}
-
-/// Lowers an `opendir` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_opendir(ctx, inst)
 }

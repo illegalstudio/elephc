@@ -2,7 +2,7 @@
 title: "tmpfile()"
 description: "Creates a temporary file."
 sidebar:
-  order: 153
+  order: 155
 ---
 
 ## tmpfile()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `tmpfile` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/tmpfile.md).
-

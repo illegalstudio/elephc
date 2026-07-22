@@ -2,7 +2,7 @@
 title: "inet_pton()"
 description: "Converts a human-readable IP address to its packed in_addr representation."
 sidebar:
-  order: 383
+  order: 385
 ---
 
 ## inet_pton()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `inet_pton` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/inet_pton.md).
-

@@ -2,7 +2,7 @@
 title: "hash_equals()"
 description: "Compares two strings using a constant-time algorithm."
 sidebar:
-  order: 372
+  order: 374
 ---
 
 ## hash_equals()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hash_equals` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_equals.md).
-

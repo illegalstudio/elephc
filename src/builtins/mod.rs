@@ -4,19 +4,20 @@
 //! that drives the catalog, signatures, type-check, lowering dispatch, and docs.
 //!
 //! Called from:
-//! - `crate::types::checker::builtins`, `crate::types::signatures`,
-//!   `crate::codegen::lower_inst::builtins`, and `gen_builtins` (doc export).
+//! - Checker, optimizer, EIR lowering, callable wrappers, and `gen_builtins`.
 //!
 //! Key details:
-//! - Homes live under `<area>/<name>.rs`; the legacy dispatch points fall back to
-//!   their old paths until every area has migrated.
+//! - Homes live under `<area>/<name>.rs` and select backend-neutral EIR semantics.
+//! - Backend dispatch consumes typed runtime targets and never PHP function names.
 
 #[macro_use]
 mod macros;
+pub mod semantics;
 pub mod spec;
 pub mod registry;
 pub mod docs;
 mod convert;
+mod requirements;
 mod array;
 mod callables;
 mod io;

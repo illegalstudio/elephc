@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `trim` builtin: its declaration and lowering.
+//! Home of the PHP `trim` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No `check` hook is needed: `trim` is a pure-data builtin. The registry's arity
 //!   check (1 required, 1 optional → 1 or 2 args) exactly matches the legacy check-arm
 //!   constraint, so no additional validation is needed.
-//! - `lower` is a thin wrapper over `lower_trim_like` which dispatches to the appropriate
-//!   runtime helper depending on whether a mask argument is provided.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "trim",
@@ -24,21 +19,9 @@ builtin! {
         characters: Str = crate::builtins::spec::DefaultSpec::Str(" \n\r\t\u{000b}\u{000c}\0"),
     ],
     returns: Str,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Trim,
+    ),
     summary: "Strips whitespace (or other characters) from the beginning and end of a string.",
     php_manual: "https://www.php.net/manual/en/function.trim.php",
-}
-
-/// Lowers a `trim` call by dispatching to `lower_trim_like` with the default and mask runtime labels.
-fn lower(
-    ctx: &mut FunctionContext,
-    inst: &Instruction,
-) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::strings::lower_trim_like(
-        ctx,
-        inst,
-        "trim",
-        "__rt_trim",
-        "__rt_trim_mask",
-    )
 }

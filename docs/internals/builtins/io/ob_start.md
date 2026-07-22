@@ -2,7 +2,7 @@
 title: "ob_start() — internals"
 description: "Compiler internals for ob_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## `ob_start()` — internals
@@ -10,25 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_start.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_start.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/output_buffering.rs`:44](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/output_buffering.rs#L44) (`lower_ob_start`)
-- **Function symbol**: `lower_ob_start()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `ob_start([$callback[, $chunk_size[, $flags]]])` to `__rt_ob_start_ex`.
-- Resolves the handler triple (invocation stub, env word, display name) from
-- the callback operand: `null` selects the default handler; a `Callable`
-- descriptor is retained and invoked through `__rt_ob_invoke_descriptor`; a
-- runtime string dispatches through the shared callable descriptor cases (a
-- miss raises PHP's invalid-callback warning and returns `false`); a boxed
-- `Mixed` value unboxes to one of those shapes at run time.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.ob_start` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_ob_invoke_descriptor`
-- `__rt_ob_start_ex`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.ob_start`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

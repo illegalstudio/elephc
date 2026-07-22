@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `lchown` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `lchown` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Bool` and requires the `user` argument to be `Int` or `Str`.
 //!   `lchown` changes the owner of a symlink itself rather than its target.
-//! - `lower` is a thin wrapper over `io::lower_lchown` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [filename: Str, user: Str],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Lchown,
+    ),
     summary: "Changes user ownership of a symlink.",
     php_manual: "function.lchown",
 }
@@ -39,9 +36,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers an `lchown` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_lchown(ctx, inst)
 }

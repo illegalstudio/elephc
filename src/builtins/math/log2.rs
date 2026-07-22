@@ -1,30 +1,24 @@
 //! Purpose:
-//! Home of the PHP `log2` builtin: its declaration and lowering.
+//! Home of the PHP `log2` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No `check` hook is needed: `log2` is a pure-data builtin whose return type
 //!   (`Float`) is fully determined by its declaration. The registry common path
 //!   infers the argument and enforces arity before falling back to `returns`.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "log2",
     area: Math,
     params: [num: Float],
     returns: Float,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Log2,
+    ),
     summary: "Returns the base-2 logarithm of a number.",
     php_manual: "https://www.php.net/manual/en/function.log2.php",
-}
-
-/// Lowers a `log2` call by dispatching to the libm emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "log2")
 }

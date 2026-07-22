@@ -9,34 +9,37 @@
 //! - Effect summaries must account for globals, heap/runtime state, output, throws, and by-reference mutation.
 
 use super::*;
-use super::builtins::is_pure_non_throwing_builtin;
+use crate::types::PhpType;
 
 /// Looks up the effect for a named function call.
 ///
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
-/// `is_pure_non_throwing_builtin` for builtins; all other calls default to `Effect::PURE` with
-/// side effects and may-throw, conservatively modeling unknown behavior.
-pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
+/// Registry builtins consume their shared descriptor; unknown calls remain conservative.
+pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
     ACTIVE_FUNCTION_EFFECTS.with(|slot| {
         slot.borrow()
             .as_ref()
             .and_then(|effects| effects.get(name).copied())
     })
     .unwrap_or_else(|| {
-        if is_pure_non_throwing_builtin(name) {
-            Effect::PURE
-        } else if crate::builtins::registry::lookup(name).is_some() {
-            // A known builtin can mutate by-ref arguments, heap state, or
-            // emit output, but it can never write PHP `global` storage —
-            // unless it invokes a user callback, which can.
+        if let Some(def) = crate::builtins::registry::lookup(name) {
+            let semantics = def.spec.semantics;
+            let arg_types = semantic_optimizer_arg_types(def, args);
+            let input = crate::builtins::semantics::BuiltinSemanticInput {
+                name: def.name,
+                args,
+                arg_types: &arg_types,
+                span: crate::span::Span::dummy(),
+            };
+            let effects = match semantics.effects {
+                crate::builtins::semantics::BuiltinEffects::Static(effects) => effects,
+                crate::builtins::semantics::BuiltinEffects::Shared(resolve) => resolve(&input),
+            };
+            let effect = Effect::from_eir(effects);
             if builtin_invokes_callbacks(name) {
-                Effect::PURE
-                    .with_side_effects()
-                    .with_may_throw()
-                    .with_writes_globals()
-            } else {
-                Effect::PURE.with_side_effects().with_may_throw()
+                return effect.with_side_effects().with_may_throw().with_writes_globals();
             }
+            effect
         } else {
             Effect::PURE
                 .with_side_effects()
@@ -44,6 +47,36 @@ pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
                 .with_writes_globals()
         }
     })
+}
+
+/// Derives safe semantic argument types from literals or the checked registry signature.
+fn semantic_optimizer_arg_types(
+    def: &crate::builtins::registry::BuiltinDef,
+    args: &[Expr],
+) -> Vec<PhpType> {
+    if args.is_empty() {
+        return def.params.iter().map(|(_, ty)| ty.clone()).collect();
+    }
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| match &arg.kind {
+            ExprKind::StringLiteral(_) => PhpType::Str,
+            ExprKind::IntLiteral(_) => PhpType::Int,
+            ExprKind::FloatLiteral(_) => PhpType::Float,
+            ExprKind::BoolLiteral(_) => PhpType::Bool,
+            ExprKind::Null => PhpType::Void,
+            _ => def
+                .params
+                .get(index)
+                .map(|(_, ty)| ty.clone())
+                .or_else(|| {
+                    def.variadic
+                        .as_ref()
+                        .and_then(|_| def.params.last().map(|(_, ty)| ty.clone()))
+                })
+                .unwrap_or(PhpType::Mixed),
+        })
+        .collect()
 }
 
 /// Computes the effect for a closure body by delegating to `block_effect`.
@@ -86,7 +119,7 @@ pub(in crate::optimize) fn callable_alias_effect(name: &str) -> Effect {
 /// - `Method { object, method }` → combines `expr_effect(object)` with `private_instance_method_call_effect`
 pub(super) fn callable_target_call_effect(target: &CallableTarget) -> Effect {
     match target {
-        CallableTarget::Function(name) => function_call_effect(name.as_str()),
+        CallableTarget::Function(name) => function_call_effect(name.as_str(), &[]),
         CallableTarget::StaticMethod { receiver, method } => static_method_call_effect(receiver, method),
         CallableTarget::Method { object, method } => {
             expr_effect(object).combine(private_instance_method_call_effect(object, method))

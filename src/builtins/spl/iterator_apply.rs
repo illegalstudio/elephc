@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `iterator_apply` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `iterator_apply` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - A `check` hook is required to validate the Traversable source, resolve the callback
@@ -12,10 +11,7 @@
 //!   order when the callback signature drives argument type narrowing.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 use crate::types::checker::builtins::spl as checker_spl;
 
@@ -26,7 +22,9 @@ builtin! {
     returns: Int,
     check: check,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::IteratorApply,
+    ),
     summary: "Call a function for every element in an iterator.",
     php_manual: "https://www.php.net/manual/en/function.iterator-apply.php",
 }
@@ -65,9 +63,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Int)
-}
-
-/// Lowers `iterator_apply()` by delegating to the iterator-apply emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::spl::lower_iterator_apply(ctx, inst)
 }

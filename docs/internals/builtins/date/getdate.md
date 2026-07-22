@@ -2,7 +2,7 @@
 title: "getdate() — internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 93
+  order: 95
 ---
 
 ## `getdate()` — internals
@@ -10,23 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getdate.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:183](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L183) (`lower_getdate`)
-- **Function symbol**: `lower_getdate()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `getdate([$timestamp])` through the shared decomposition runtime helper.
-- Marshals the optional timestamp (the `-1` current-time sentinel when omitted; a boxed
-- `Mixed`/`Union` argument is unboxed) into the integer result register where `__rt_getdate`
-- reads it, then boxes the returned associative-array hash pointer into a `Mixed` cell — the same
-- representation `stat`/`getdate` use, so the checker types the result `Mixed`.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.getdate` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_getdate`
-- `__rt_mixed_from_value`
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.getdate`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

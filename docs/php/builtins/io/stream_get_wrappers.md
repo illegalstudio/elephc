@@ -2,7 +2,7 @@
 title: "stream_get_wrappers()"
 description: "Retrieves list of registered streams."
 sidebar:
-  order: 223
+  order: 225
 ---
 
 ## stream_get_wrappers()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `stream_get_wrappers` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_get_wrappers.md).
-

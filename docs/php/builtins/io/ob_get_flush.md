@@ -2,7 +2,7 @@
 title: "ob_get_flush()"
 description: "Flushes the output buffer, returns it as a string and turns off output buffering."
 sidebar:
-  order: 195
+  order: 197
 ---
 
 ## ob_get_flush()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ob_get_flush` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_flush.md).
-

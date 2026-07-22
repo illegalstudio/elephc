@@ -1,30 +1,22 @@
 //! Purpose:
-//! Home of the PHP `ob_clean` builtin: its declaration and lowering.
+//! Home of the PHP `ob_clean` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook when present),
-//!   and the EIR backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - Truncates the top buffer without popping it.
 //! - Pure-data builtin: returns `Bool` (`false` when no output buffer is active).
-//! - `lower` is a thin wrapper over `output_buffering::lower_ob_clean`.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "ob_clean",
     area: Io,
     params: [],
     returns: Bool,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ObClean,
+    ),
     summary: "Cleans (erases) the contents of the active output buffer.",
     php_manual: "function.ob-clean",
-}
-
-/// Lowers an `ob_clean` call by dispatching to the shared output-buffering emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::output_buffering::lower_ob_clean(ctx, inst)
 }

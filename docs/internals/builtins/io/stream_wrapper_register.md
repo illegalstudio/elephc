@@ -2,7 +2,7 @@
 title: "stream_wrapper_register() — internals"
 description: "Compiler internals for stream_wrapper_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 243
+  order: 245
 ---
 
 ## `stream_wrapper_register()` — internals
@@ -10,18 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_wrapper_register.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_wrapper_register.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:998](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L998) (`lower_stream_wrapper_register`)
-- **Function symbol**: `lower_stream_wrapper_register()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `stream_wrapper_register(protocol, class, flags?)`.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.stream_wrapper_register` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_stream_wrapper_register`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.stream_wrapper_register`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

@@ -3,7 +3,7 @@
 //! Bridges already-evaluated EIR operands to the shared target-aware regex runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - `preg_match()` captures currently support direct local `$matches` variables.

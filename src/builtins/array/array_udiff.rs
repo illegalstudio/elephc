@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_udiff` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_udiff` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `fixed(&["array1","array2","callback"])` (exactly 3
@@ -12,13 +11,9 @@
 //! - `check` validates the first argument is an indexed array, derives one contextual
 //!   comparator type from each input array, and validates the comparator
 //!   callback. Returns the first-argument array type.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_udiff` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,8 +22,9 @@ builtin! {
     params: [array1: Mixed, array2: Mixed, callback: Mixed],
     returns: Mixed,
     check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayUdiff,
+    ),
     summary: "Computes the difference of arrays using a callback comparator.",
     php_manual: "https://www.php.net/manual/en/function.array-udiff.php",
 }
@@ -61,9 +57,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &label,
     )?;
     Ok(arr_ty)
-}
-
-/// Lowers an `array_udiff` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_udiff(ctx, inst)
 }

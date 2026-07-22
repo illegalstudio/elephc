@@ -58,21 +58,21 @@ fn lower_mixed_container_key_exists(
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter
                 .instruction(&format!("cbz x9, {}", missing_label)); // null Mixed containers hold no keys
-            ctx.emitter.instruction("ldr x10, [x9]"); // load the container runtime tag
-            ctx.emitter.instruction("ldr x0, [x9, #8]"); // load the boxed payload pointer
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the container runtime tag
+            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // load the boxed payload pointer
             ctx.emitter
                 .instruction(&format!("cbz x0, {}", missing_label)); // defensive payload null guard
-            ctx.emitter.instruction("cmp x10, #5"); // tag 5 = associative hash
+            ctx.emitter.instruction("cmp x10, #5");                             // tag 5 = associative hash
             ctx.emitter
                 .instruction(&format!("b.eq {}", hash_label)); // hashes probe the hash table
-            ctx.emitter.instruction("cmp x10, #4"); // tag 4 = indexed array
+            ctx.emitter.instruction("cmp x10, #4");                             // tag 4 = indexed array
             ctx.emitter
                 .instruction(&format!("b.eq {}", indexed_label)); // indexed arrays use the int-key helper
             ctx.emitter
                 .instruction(&format!("b {}", missing_label)); // non-container payloads have no keys
 
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("cmn x2, #1"); // key_hi == -1 marks an integer key
+            ctx.emitter.instruction("cmn x2, #1");                              // key_hi == -1 marks an integer key
             ctx.emitter
                 .instruction(&format!("b.ne {}", missing_label)); // string keys never exist in indexed arrays
             abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
@@ -85,7 +85,7 @@ fn lower_mixed_container_key_exists(
                 .instruction(&format!("b {}", done_label)); // found flag already in x0
 
             ctx.emitter.label(&missing_label);
-            ctx.emitter.instruction("mov x0, #0"); // missing/unsupported containers answer false
+            ctx.emitter.instruction("mov x0, #0");                              // missing/unsupported containers answer false
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
@@ -93,25 +93,25 @@ fn lower_mixed_container_key_exists(
             // rsi/rdx with key_hi == -1 marking integer keys.
             materialize_hash_key_x86_64(ctx, key)?;
             ctx.load_value_to_reg(array, "r10")?;
-            ctx.emitter.instruction("test r10, r10"); // null Mixed containers hold no keys
+            ctx.emitter.instruction("test r10, r10");                           // null Mixed containers hold no keys
             ctx.emitter
                 .instruction(&format!("jz {}", missing_label));
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10]"); // load the container runtime tag
-            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]"); // load the boxed payload pointer
-            ctx.emitter.instruction("test rdi, rdi"); // defensive payload null guard
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the container runtime tag
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // load the boxed payload pointer
+            ctx.emitter.instruction("test rdi, rdi");                           // defensive payload null guard
             ctx.emitter
                 .instruction(&format!("jz {}", missing_label));
-            ctx.emitter.instruction("cmp r11, 5"); // tag 5 = associative hash
+            ctx.emitter.instruction("cmp r11, 5");                              // tag 5 = associative hash
             ctx.emitter
                 .instruction(&format!("je {}", hash_label)); // hashes probe the hash table
-            ctx.emitter.instruction("cmp r11, 4"); // tag 4 = indexed array
+            ctx.emitter.instruction("cmp r11, 4");                              // tag 4 = indexed array
             ctx.emitter
                 .instruction(&format!("je {}", indexed_label)); // indexed arrays use the int-key helper
             ctx.emitter
                 .instruction(&format!("jmp {}", missing_label)); // non-container payloads have no keys
 
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("cmp rdx, -1"); // key_hi == -1 marks an integer key
+            ctx.emitter.instruction("cmp rdx, -1");                             // key_hi == -1 marks an integer key
             ctx.emitter
                 .instruction(&format!("jne {}", missing_label)); // string keys never exist in indexed arrays
             abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
@@ -124,7 +124,7 @@ fn lower_mixed_container_key_exists(
                 .instruction(&format!("jmp {}", done_label)); // found flag already in rax
 
             ctx.emitter.label(&missing_label);
-            ctx.emitter.instruction("xor eax, eax"); // missing/unsupported containers answer false
+            ctx.emitter.instruction("xor eax, eax");                            // missing/unsupported containers answer false
             ctx.emitter.label(&done_label);
         }
     }
@@ -190,7 +190,7 @@ fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> 
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            ctx.emitter.instruction("fcvtzs x1, d0"); // PHP casts float array keys to integer keys
+            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -225,7 +225,7 @@ fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> R
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            ctx.emitter.instruction("cvttsd2si rsi, xmm0"); // PHP casts float array keys to integer keys
+            ctx.emitter.instruction("cvttsd2si rsi, xmm0");                     // PHP casts float array keys to integer keys
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }

@@ -2,7 +2,7 @@
 title: "fgetcsv()"
 description: "Gets line from file pointer and parse for CSV fields."
 sidebar:
-  order: 163
+  order: 165
 ---
 
 ## fgetcsv()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `fgetcsv` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fgetcsv.md).
-

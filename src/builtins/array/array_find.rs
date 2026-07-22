@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_find` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_find` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `fixed(&["array","callback"])` (exactly 2 required params).
@@ -11,13 +10,9 @@
 //! - `check` validates the first argument is an indexed array and validates the predicate
 //!   callback with its contextual element type. Returns `PhpType::Mixed` (the matching element
 //!   or null).
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_find` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,8 +21,9 @@ builtin! {
     params: [array: Mixed, callback: Mixed],
     returns: Mixed,
     check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayFind,
+    ),
     summary: "Returns the first element satisfying a predicate callback, or null.",
     php_manual: "https://www.php.net/manual/en/function.array-find.php",
 }
@@ -56,9 +52,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &label,
     )?;
     Ok(PhpType::Mixed)
-}
-
-/// Lowers an `array_find` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_find(ctx, inst)
 }

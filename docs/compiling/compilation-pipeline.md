@@ -41,7 +41,7 @@ PHP source
   -> ir-opt             EIR optimization passes (fixed-point driver)
   -> ir-print           print EIR and stop (with --emit-ir)
   -> runtime-cache      build/reuse the prebuilt runtime object
-  -> codegen-ir         EIR -> target assembly
+  -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
   -> source-map         write the .map sidecar (with --source-map)
   -> assemble           assembler: assembly -> object file

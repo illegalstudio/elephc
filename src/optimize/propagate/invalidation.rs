@@ -248,7 +248,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             };
             args_invalidation(args)
                 .union(callee_inv)
-                .union(top_level_globals_guard(function_call_effect(name.as_str())))
+                .union(top_level_globals_guard(function_call_effect(name.as_str(), args)))
         }
         ExprKind::MethodCall {
             object,

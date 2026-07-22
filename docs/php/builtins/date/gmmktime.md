@@ -2,7 +2,7 @@
 title: "gmmktime()"
 description: "Returns the Unix timestamp for a GMT date."
 sidebar:
-  order: 95
+  order: 97
 ---
 
 ## gmmktime()
@@ -39,4 +39,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `gmmktime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/gmmktime.md).
-

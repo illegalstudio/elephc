@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `usort` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `usort` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(fixed(["array", "callback"]))`: exactly 2
@@ -11,13 +10,9 @@
 //!   mutation (ir_lower reads `ref_params` from the registry sig).
 //! - `check` derives the comparator element type from the array value type and validates both
 //!   callback parameters contextually, including object and opaque element types. Returns `Void`.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_usort` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,7 +22,10 @@ builtin! {
     returns: Void,
     check: check,
     lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Usort),
+        crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort,
+    ),
     summary: "Sorts an array by values using a user-defined comparison function.",
     php_manual: "https://www.php.net/manual/en/function.usort.php",
 }
@@ -52,9 +50,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &label,
     )?;
     Ok(PhpType::Void)
-}
-
-/// Lowers a `usort` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_usort(ctx, inst)
 }

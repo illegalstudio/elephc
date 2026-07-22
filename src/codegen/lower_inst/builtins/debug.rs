@@ -3,7 +3,7 @@
 //! Handles concrete scalar/resource values and array/hash shells without recursive dumps.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Output must match PHP-compatible text for the supported concrete types.

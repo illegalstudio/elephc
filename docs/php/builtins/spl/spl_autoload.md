@@ -2,7 +2,7 @@
 title: "spl_autoload()"
 description: "Default implementation for __autoload()."
 sidebar:
-  order: 341
+  order: 343
 ---
 
 ## spl_autoload()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `spl_autoload` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/spl_autoload.md).
-

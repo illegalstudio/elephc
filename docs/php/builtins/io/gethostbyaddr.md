@@ -2,7 +2,7 @@
 title: "gethostbyaddr()"
 description: "Gets the Internet host name corresponding to a given IP address."
 sidebar:
-  order: 181
+  order: 183
 ---
 
 ## gethostbyaddr()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `gethostbyaddr` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/gethostbyaddr.md).
-

@@ -2,7 +2,7 @@
 title: "get_resource_type() — internals"
 description: "Compiler internals for get_resource_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 437
 ---
 
 ## `get_resource_type()` — internals
@@ -10,17 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/get_resource_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/get_resource_type.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:419](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L419) (`lower_get_resource_type`)
-- **Function symbol**: `lower_get_resource_type()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `get_resource_type(resource)` to elephc's current resource type label.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.get_resource_type` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.get_resource_type`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

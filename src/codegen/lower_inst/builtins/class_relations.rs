@@ -4,7 +4,7 @@
 //! from compile-time class/interface/trait metadata.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Results are boxed `Mixed` because PHP returns `array<string,string>|false`.

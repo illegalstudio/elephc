@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `array_product` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_product` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` computes the actual return type (Int or Float) based on the element type
 //!   of the argument array. The declared `returns: Int` is only used as the FCC type.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_product` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,7 +18,9 @@ builtin! {
     params: [array: Mixed],
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayProduct,
+    ),
     summary: "Calculate the product of values in an array.",
     php_manual: "https://www.php.net/manual/en/function.array-product.php",
 }
@@ -45,9 +42,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_product() argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_product` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_product(ctx, inst)
 }

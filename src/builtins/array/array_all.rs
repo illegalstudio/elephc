@@ -1,22 +1,17 @@
 //! Purpose:
-//! Home of the PHP `array_all` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_all` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `fixed(&["array","callback"])` (exactly 2 required params).
 //!   The legacy CHECK arm also required exactly 2 arguments; no arity override is needed.
 //! - `check` validates the first argument is an indexed array and validates the predicate
 //!   callback with its contextual element type. Returns `PhpType::Bool`.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_all` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -25,8 +20,9 @@ builtin! {
     params: [array: Mixed, callback: Mixed],
     returns: Bool,
     check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayAll,
+    ),
     summary: "Returns true when every array element satisfies the predicate callback.",
     php_manual: "https://www.php.net/manual/en/function.array-all.php",
 }
@@ -55,9 +51,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &label,
     )?;
     Ok(PhpType::Bool)
-}
-
-/// Lowers an `array_all` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_all(ctx, inst)
 }

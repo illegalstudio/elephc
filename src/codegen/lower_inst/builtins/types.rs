@@ -3,7 +3,7 @@
 //! Handles local retyping, class-name lookup against static metadata, and runtime object class ids.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Dynamic object lookups use the same dense `_class_name_*` runtime tables

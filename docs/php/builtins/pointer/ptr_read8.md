@@ -2,7 +2,7 @@
 title: "ptr_read8()"
 description: "Reads one unsigned byte through a raw pointer and returns it as an integer."
 sidebar:
-  order: 309
+  order: 311
 ---
 
 ## ptr_read8()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_read8` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_read8.md).
-

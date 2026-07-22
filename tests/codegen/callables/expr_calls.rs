@@ -16,6 +16,14 @@ fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
         || user_asm.contains(&eir_method)
 }
 
+/// Counts globally emitted callable artifacts whose assembly labels contain `kind`.
+fn global_callable_artifact_count(user_asm: &str, kind: &str) -> usize {
+    user_asm
+        .lines()
+        .filter(|line| line.starts_with(".globl ") && line.contains(kind))
+        .count()
+}
+
 /// Verifies that expr call returns string.
 #[test]
 fn test_expr_call_returns_string() {
@@ -391,6 +399,63 @@ echo ($callback)("ready");
 "#,
     );
     assert_eq!(out, "READY");
+}
+
+/// Verifies literal callback sites exclude unreachable builtins and share compatible ABI invokers.
+#[test]
+fn test_dynamic_string_callable_literal_targets_are_reachability_limited() {
+    let source = r#"<?php
+function map_upper(string $value): string {
+    return strtoupper($value);
+}
+function map_lower(string $value): string {
+    return strtolower($value);
+}
+$items = ["MiXeD"];
+$upper = array_map("map_upper", $items);
+$lower = array_map("map_lower", $items);
+echo $upper[0] . ":" . $lower[0];
+"#;
+    assert_eq!(compile_and_run(source), "MIXED:mixed");
+
+    let dir = make_cli_test_dir("elephc_callable_reachable_builtin_set");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert_eq!(
+        global_callable_artifact_count(&user_asm, "callable_builtin"),
+        0,
+        "known user callbacks must not materialize unrelated builtin wrappers:\n{}",
+        user_asm
+    );
+    assert_eq!(
+        global_callable_artifact_count(&user_asm, "callable_invoker"),
+        1,
+        "signature-compatible user descriptors should share one invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies an unconstrained string parameter retains the complete runtime builtin fallback.
+#[test]
+fn test_dynamic_string_callable_unknown_input_keeps_open_builtin_fallback() {
+    let source = r#"<?php
+function invoke_named(string $callback): mixed {
+    return $callback("MiXeD");
+}
+echo invoke_named("strtoupper");
+"#;
+    assert_eq!(compile_and_run(source), "MIXED");
+
+    let dir = make_cli_test_dir("elephc_callable_open_builtin_set");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        global_callable_artifact_count(&user_asm, "callable_builtin") > 2,
+        "an open runtime string must preserve the broad builtin fallback:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
 }
 
 /// Verifies direct string-variable calls can resolve public static method callback names.

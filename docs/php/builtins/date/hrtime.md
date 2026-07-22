@@ -2,7 +2,7 @@
 title: "hrtime()"
 description: "Returns the current high-resolution time."
 sidebar:
-  order: 96
+  order: 98
 ---
 
 ## hrtime()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `hrtime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/hrtime.md).
-

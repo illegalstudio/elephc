@@ -134,6 +134,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
+| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |

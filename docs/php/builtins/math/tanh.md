@@ -2,7 +2,7 @@
 title: "tanh()"
 description: "Returns the hyperbolic tangent of a number."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## tanh()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `tanh` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/tanh.md).
-

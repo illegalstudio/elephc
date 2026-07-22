@@ -1,34 +1,20 @@
 //! Purpose:
-//! Home of the PHP `is_float` builtin: its declaration and lowering.
+//! Home of the PHP `is_float` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook), via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - Pure-data builtin with no check hook; arity and arg inference are handled by the registry common path.
-//! - `lower` dispatches to the shared static-type-predicate emitter with `PhpType::Float`.
-
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
-use crate::types::PhpType;
+//! - Uses the shared typed EIR predicate; dynamic values are inspected by target-aware codegen.
 
 builtin! {
     name: "is_float",
     area: Types,
     params: [value: Mixed],
     returns: Bool,
-    lower: lower,
+    semantics: crate::builtins::semantics::type_predicate_semantics(
+        crate::ir::PhpTypePredicate::Float,
+    ),
     summary: "Checks whether a variable is a floating-point number.",
     php_manual: "function.is-float",
-}
-
-/// Lowers an `is_float` call by dispatching to the shared static-type-predicate emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_static_type_predicate(
-        ctx,
-        inst,
-        "is_float",
-        PhpType::Float,
-    )
 }

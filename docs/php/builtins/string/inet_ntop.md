@@ -2,7 +2,7 @@
 title: "inet_ntop()"
 description: "Converts a packed internet address to a human-readable representation."
 sidebar:
-  order: 382
+  order: 384
 ---
 
 ## inet_ntop()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `inet_ntop` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/inet_ntop.md).
-

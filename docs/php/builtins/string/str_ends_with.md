@@ -2,7 +2,7 @@
 title: "str_ends_with()"
 description: "Checks if a string ends with a given substring."
 sidebar:
-  order: 401
+  order: 403
 ---
 
 ## str_ends_with()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `str_ends_with` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_ends_with.md).
-

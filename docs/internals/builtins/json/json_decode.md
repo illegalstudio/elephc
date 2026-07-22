@@ -2,7 +2,7 @@
 title: "json_decode() — internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 247
+  order: 249
 ---
 
 ## `json_decode()` — internals
@@ -10,18 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_decode.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/json.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/json.rs#L30) (`lower_json_decode`)
-- **Function symbol**: `lower_json_decode()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `json_decode(json, associative?, depth?, flags?)` through the shared JSON decoder runtime.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.json_decode` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_json_decode_mixed`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.json_decode`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

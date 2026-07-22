@@ -638,8 +638,7 @@ fn emit_generator_callback(
                 emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off));
-                // load the boxed Mixed start argument
+                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off)); // load the boxed Mixed start argument
             }
         }
         if gen_param_kind(ty) == GenParamKind::Mixed {

@@ -2,7 +2,7 @@
 title: "umask()"
 description: "Changes the current umask."
 sidebar:
-  order: 155
+  order: 157
 ---
 
 ## umask()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `umask` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/umask.md).
-

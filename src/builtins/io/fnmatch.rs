@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `fnmatch` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `fnmatch` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the optional `flags` argument, when present, has type `Int`.
 //! - The registry pre-infers all arguments before calling the hook; the hook calls
 //!   `infer_type` on `flags` again (idempotent) to obtain its resolved type.
-//! - `lower` is a thin wrapper over `io::lower_fnmatch` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [pattern: Str, filename: Str, flags: Int = DefaultSpec::Int(0)],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Fnmatch,
+    ),
     summary: "Matches a filename against a pattern.",
     php_manual: "function.fnmatch",
 }
@@ -42,9 +39,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers a `fnmatch` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_fnmatch(ctx, inst)
 }

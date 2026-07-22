@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_filter` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_filter` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
@@ -13,13 +12,9 @@
 //! - `check` validates the first argument is an indexed array, derives callback argument types
 //!   from the static mode value, and validates the callback signature. The return type
 //!   preserves the input array element type.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_filter` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -29,8 +24,9 @@ builtin! {
     min_args: 2,
     returns: Mixed,
     check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayFilter,
+    ),
     summary: "Filters elements of an array using a callback function.",
     php_manual: "https://www.php.net/manual/en/function.array-filter.php",
 }
@@ -68,9 +64,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_filter() first argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_filter` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_filter(ctx, inst)
 }

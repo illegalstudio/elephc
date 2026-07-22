@@ -1,19 +1,18 @@
 //! Purpose:
-//! Home of the PHP `json_encode` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `json_encode` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The check hook validates that all flag/depth arguments are integers, reporting
 //!   each type error at the offending argument's span (not the call span).
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,8 +25,20 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: json_encode_semantics(),
     summary: "Returns the JSON representation of a value.",
+}
+
+/// Builds semantics whose EIR result matches the runtime's boxed string-or-false value.
+const fn json_encode_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::JsonEncode);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the representation-safe EIR type for the runtime-selected string-or-false result.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Validates that all flag and depth arguments are integers.
@@ -45,9 +56,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Str)
-}
-
-/// Lowers a `json_encode` call by dispatching to the shared JSON emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::json::lower_json_encode(ctx, inst)
 }

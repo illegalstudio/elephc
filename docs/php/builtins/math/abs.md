@@ -2,7 +2,7 @@
 title: "abs()"
 description: "Absolute value."
 sidebar:
-  order: 252
+  order: 254
 ---
 
 ## abs()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `abs` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/abs.md).
-

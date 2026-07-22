@@ -2,7 +2,7 @@
 title: "json_decode()"
 description: "Decodes a JSON string."
 sidebar:
-  order: 247
+  order: 249
 ---
 
 ## json_decode()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `json_decode` is implemented in the compiler, see [the internals page](../../../internals/builtins/json/json_decode.md).
-

@@ -3,7 +3,7 @@
 //! Materializes attribute name and literal argument arrays from EIR class metadata.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Class and attribute lookup follows PHP's case-insensitive symbol rules.

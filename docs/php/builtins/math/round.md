@@ -2,7 +2,7 @@
 title: "round()"
 description: "Rounds a float."
 sidebar:
-  order: 282
+  order: 284
 ---
 
 ## round()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `round` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/round.md).
-

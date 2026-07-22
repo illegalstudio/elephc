@@ -80,6 +80,8 @@ pub struct CheckResult {
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls, keyed by call span.
+    pub builtin_call_types: HashMap<Span, PhpType>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

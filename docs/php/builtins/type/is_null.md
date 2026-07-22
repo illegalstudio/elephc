@@ -2,7 +2,7 @@
 title: "is_null()"
 description: "Checks whether a variable is null."
 sidebar:
-  order: 444
+  order: 449
 ---
 
 ## is_null()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_null` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_null.md).
-

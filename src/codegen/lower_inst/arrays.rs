@@ -957,7 +957,7 @@ fn emit_mixed_array_get_deref_invoker_ref_cell(
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", mixed_reg, mixed_reg)); // null gap cells read as PHP null and carry no tag word to inspect
-            ctx.emitter.instruction(&format!("jz {}", done_label)); // skip marker detection for null gap cells
+            ctx.emitter.instruction(&format!("jz {}", done_label));             // skip marker detection for null gap cells
         }
     }
     abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 0);
@@ -994,13 +994,13 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, runtime_value_tag(&PhpType::Mixed))); // check whether the ref-cell stores a boxed Mixed handle
-            ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));    // retain and forward boxed Mixed values without reboxing their pointer
+            ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));     // retain and forward boxed Mixed values without reboxing their pointer
             ctx.emitter.instruction(&format!("cmp {}, #1", tag_reg));           // check whether the referenced value is a string slot
             ctx.emitter.instruction(&format!("b.eq {}", string_hi_label));      // load string length only for string ref-cells
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, runtime_value_tag(&PhpType::Mixed))); // check whether the ref-cell stores a boxed Mixed handle
-            ctx.emitter.instruction(&format!("je {}", mixed_cell_label));      // retain and forward boxed Mixed values without reboxing their pointer
+            ctx.emitter.instruction(&format!("je {}", mixed_cell_label));       // retain and forward boxed Mixed values without reboxing their pointer
             ctx.emitter.instruction(&format!("cmp {}, 1", tag_reg));            // check whether the referenced value is a string slot
             ctx.emitter.instruction(&format!("je {}", string_hi_label));        // load string length only for string ref-cells
         }

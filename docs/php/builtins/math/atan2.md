@@ -2,7 +2,7 @@
 title: "atan2()"
 description: "Returns the arc tangent of two variables."
 sidebar:
-  order: 256
+  order: 258
 ---
 
 ## atan2()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `atan2` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/atan2.md).
-

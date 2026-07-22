@@ -2,7 +2,7 @@
 title: "getprotobyname()"
 description: "Gets the protocol number associated with the given protocol name."
 sidebar:
-  order: 184
+  order: 186
 ---
 
 ## getprotobyname()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `getprotobyname` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/getprotobyname.md).
-

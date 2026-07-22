@@ -234,7 +234,7 @@ fn instruction_uses_eval(module: &Module, inst: &crate::ir::Instruction) -> bool
 
 /// Returns true when one lowered builtin call is PHP's `eval` construct.
 fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
-    if inst.op != Op::BuiltinCall {
+    if inst.op != Op::LanguageConstructCall {
         return false;
     }
     let Some(Immediate::Data(data)) = inst.immediate else {

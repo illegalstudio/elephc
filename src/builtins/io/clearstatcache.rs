@@ -1,9 +1,9 @@
 //! Purpose:
-//! Home of the PHP `clearstatcache` builtin: its declaration and lowering.
+//! Home of the PHP `clearstatcache` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - No `check` hook is needed: `clearstatcache` is a pure-data builtin whose return
@@ -11,12 +11,8 @@
 //!   infers arguments and enforces arity before falling back to `returns`.
 //! - PHP accepts up to 2 optional arguments; elephc has no stat cache but accepts
 //!   and ignores them (matching legacy behavior).
-//! - `lower` is a thin wrapper over `io::lower_clearstatcache` in the EIR backend.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "clearstatcache",
@@ -26,12 +22,9 @@ builtin! {
         filename: Str = DefaultSpec::Str("")
     ],
     returns: Void,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Clearstatcache,
+    ),
     summary: "Clears file status cache.",
     php_manual: "function.clearstatcache",
-}
-
-/// Lowers a `clearstatcache` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_clearstatcache(ctx, inst)
 }

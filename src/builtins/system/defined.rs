@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `defined` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `defined` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates that the argument is a string literal (AOT requirement: the
 //!   constant name must be statically known at compile time).
-//! - `lower` delegates to the module-level `lower_defined` in `src/codegen/lower_inst/builtins.rs`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -24,7 +19,9 @@ builtin! {
     params: [constant_name: Str],
     returns: Bool,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Defined,
+    ),
     summary: "Checks whether the given named constant exists.",
 }
 
@@ -41,9 +38,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(PhpType::Bool)
-}
-
-/// Lowers a `defined` call by delegating to the shared module-level emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_defined(ctx, inst)
 }

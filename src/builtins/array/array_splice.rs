@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_splice` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_splice` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The golden signature is `first_param_ref(optional(["array","offset","length"], required=2, [null]))`:
@@ -13,13 +12,9 @@
 //! - `check` reproduces the legacy rule: `Mixed`/`Union` first arg yields `Mixed`; `Array`
 //!   or `AssocArray` yields the first-arg type; any other type is an error. All remaining
 //!   args are inferred for side effects.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_splice` emitter.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +23,9 @@ builtin! {
     params: [ref array: Mixed, offset: Int, length: Mixed = DefaultSpec::Null],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArraySplice,
+    ),
     summary: "Removes a portion of the array and replaces it with something else.",
     php_manual: "https://www.php.net/manual/en/function.array-splice.php",
 }
@@ -54,9 +51,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     Ok(ty)
-}
-
-/// Lowers an `array_splice` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_splice(ctx, inst)
 }

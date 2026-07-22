@@ -2,7 +2,7 @@
 title: "pathinfo()"
 description: "Returns information about a file path."
 sidebar:
-  order: 139
+  order: 141
 ---
 
 ## pathinfo()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `pathinfo` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/pathinfo.md).
-

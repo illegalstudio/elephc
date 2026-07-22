@@ -2,7 +2,7 @@
 title: "fread() — internals"
 description: "Compiler internals for fread(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 173
+  order: 175
 ---
 
 ## `fread()` — internals
@@ -10,18 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fread.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fread.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2814](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2814) (`lower_fread`)
-- **Function symbol**: `lower_fread()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `fread(stream, length)` using the shared runtime file-read helper.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.fread` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_fread`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.fread`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

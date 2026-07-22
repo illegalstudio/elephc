@@ -2,7 +2,7 @@
 title: "number_format()"
 description: "Formats a number with grouped thousands."
 sidebar:
-  order: 391
+  order: 393
 ---
 
 ## number_format()
@@ -37,4 +37,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `number_format` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/number_format.md).
-

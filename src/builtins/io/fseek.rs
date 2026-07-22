@@ -1,21 +1,19 @@
 //! Purpose:
-//! Home of the PHP `fseek` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `fseek` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` calls `ensure_stream_resource` on the stream argument for validation and
 //!   returns `Int`, matching PHP's `0` success / `-1` failure contract. Arguments are
 //!   pre-inferred by the registry before the hook runs.
-//! - `lower` is a thin wrapper over `io::lower_fseek` in the EIR backend.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,9 +22,21 @@ builtin! {
     params: [stream: Mixed, offset: Int, whence: Int = DefaultSpec::Int(0)],
     returns: Int,
     check: check,
-    lower: lower,
+    semantics: fseek_semantics(),
     summary: "Seeks on a file pointer.",
     php_manual: "function.fseek",
+}
+
+/// Builds semantics whose EIR result matches the backend's integer status sentinel.
+const fn fseek_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Fseek);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the raw integer success or failure status emitted by the backend.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Int
 }
 
 /// Validates the stream argument and returns `Int` for the seek result.
@@ -38,9 +48,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
     )?;
     Ok(PhpType::Int)
-}
-
-/// Lowers an `fseek` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_fseek(ctx, inst)
 }

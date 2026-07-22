@@ -1,20 +1,18 @@
 //! Purpose:
-//! Home of the PHP `getenv` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `getenv` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(Str, Bool)` to reflect PHP's behaviour where `getenv`
 //!   returns the value string on success or `false` if the variable is unset.
-//! - `lower` is a thin wrapper over `system::lower_getenv` in the EIR backend.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,8 +21,20 @@ builtin! {
     params: [name: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: getenv_semantics(),
     summary: "Gets the value of an environment variable.",
+}
+
+/// Builds semantics whose EIR result matches the backend's string representation.
+const fn getenv_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Getenv);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the concrete EIR string layout produced for present and missing variables.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Str
 }
 
 /// Returns `Union(Str, Bool)` reflecting that `getenv` can return a string or `false`.
@@ -34,9 +44,4 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
-}
-
-/// Lowers a `getenv` call by dispatching to the shared system emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::system::lower_getenv(ctx, inst)
 }

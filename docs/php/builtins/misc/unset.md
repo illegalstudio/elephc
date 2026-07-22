@@ -2,7 +2,7 @@
 title: "unset()"
 description: "Unsets the given variables."
 sidebar:
-  order: 300
+  order: 302
 ---
 
 ## unset()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `unset` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/unset.md).
-

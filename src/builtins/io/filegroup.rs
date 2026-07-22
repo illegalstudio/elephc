@@ -1,21 +1,16 @@
 //! Purpose:
-//! Home of the PHP `filegroup` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `filegroup` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` returns `Union(Int, Bool)` reflecting PHP behaviour where `filegroup`
 //!   returns the numeric group ID of the file owner on success or `false` on failure.
 //! - The registry pre-infers arguments before calling this hook.
-//! - `lower` is a thin wrapper over `io::lower_filegroup` in the EIR backend.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -24,7 +19,9 @@ builtin! {
     params: [filename: Str],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Filegroup,
+    ),
     summary: "Gets file group.",
     php_manual: "function.filegroup",
 }
@@ -34,9 +31,4 @@ builtin! {
 /// The registry pre-infers arguments before calling this hook.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
-}
-
-/// Lowers a `filegroup` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_filegroup(ctx, inst)
 }

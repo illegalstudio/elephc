@@ -3,7 +3,7 @@
 //! Reuses the shared runtime stat helpers instead of duplicating platform logic.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Path operands are already evaluated by EIR and are materialized into the

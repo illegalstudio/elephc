@@ -2,7 +2,7 @@
 title: "readfile()"
 description: "Outputs a file."
 sidebar:
-  order: 141
+  order: 143
 ---
 
 ## readfile()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `readfile` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/readfile.md).
-

@@ -157,6 +157,32 @@ impl Effect {
         writes_globals: false,
     };
 
+    /// Converts shared EIR effect metadata into the AST optimizer's coarse safety model.
+    fn from_eir(effects: crate::ir::Effects) -> Self {
+        let mut effect = Self {
+            has_side_effects: effects.intersects(
+                crate::ir::Effects::WRITES_LOCAL
+                    | crate::ir::Effects::WRITES_HEAP
+                    | crate::ir::Effects::WRITES_GLOBAL
+                    | crate::ir::Effects::WRITES_FS
+                    | crate::ir::Effects::WRITES_PROCESS
+                    | crate::ir::Effects::OUTPUT
+                    | crate::ir::Effects::REFCOUNT_OP,
+            ),
+            may_throw: effects.intersects(
+                crate::ir::Effects::MAY_THROW
+                    | crate::ir::Effects::MAY_FATAL
+                    | crate::ir::Effects::MAY_WARN
+                    | crate::ir::Effects::MAY_DEOPT,
+            ),
+            writes_globals: effects.contains(crate::ir::Effects::WRITES_GLOBAL),
+        };
+        if effects.intersects(crate::ir::Effects::READS_FS | crate::ir::Effects::READS_PROCESS) {
+            effect.has_side_effects = true;
+        }
+        effect
+    }
+
     /// Marks this effect as having side effects.
     fn with_side_effects(mut self) -> Self {
         self.has_side_effects = true;

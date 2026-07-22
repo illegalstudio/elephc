@@ -3,7 +3,7 @@
 //! Delegates aggregate iteration, set operations, and key checks to existing runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Aggregate helpers accept indexed arrays with 8-byte payload slots, and
@@ -592,7 +592,12 @@ where
 
     let call_reg = abi::nested_call_reg(ctx.emitter);
     let specialization_ty = visible_arg_types.first().or(source_arg_ty);
-    let cases = runtime_string_descriptor_cases(ctx, specialization_ty)?;
+    let candidate_names = ctx.runtime_callable_candidates(callback);
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        specialization_ty,
+        candidate_names.as_deref(),
+    )?;
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {

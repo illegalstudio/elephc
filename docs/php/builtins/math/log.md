@@ -2,7 +2,7 @@
 title: "log()"
 description: "Natural logarithm."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## log()
@@ -35,4 +35,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `log` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/log.md).
-

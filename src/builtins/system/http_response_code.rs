@@ -1,20 +1,16 @@
 //! Purpose:
-//! Home of the PHP `http_response_code` builtin: its declaration and lowering.
+//! Home of the PHP `http_response_code` builtin: its declaration and semantic metadata.
 //!
 //! Called from:
-//! - The builtin registry (declaration) and the EIR backend (lower hook),
-//!   both via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through
+//!   `crate::builtins::registry`.
 //!
 //! Key details:
 //! - Pure-data builtin: return type (`Int`) is fully determined by the declaration.
 //! - `arity_error` overrides the default "takes at most 1 argument" message to match
 //!   the legacy phrasing "takes 0 or 1 arguments".
-//! - `lower` is a thin wrapper over `system::lower_http_response_code` in the EIR backend.
 
 use crate::builtins::spec::DefaultSpec;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
 
 builtin! {
     name: "http_response_code",
@@ -22,11 +18,8 @@ builtin! {
     params: [response_code: Int = DefaultSpec::Int(0)],
     arity_error: "http_response_code() takes 0 or 1 arguments",
     returns: Int,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::HttpResponseCode,
+    ),
     summary: "Gets or sets the HTTP response code.",
-}
-
-/// Lowers an `http_response_code` call by dispatching to the shared system emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::system::lower_http_response_code(ctx, inst)
 }

@@ -2,7 +2,7 @@
 //! Lowers string-returning scalar builtins for the EIR backend.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Runtime helpers keep owning returned string storage; this module only

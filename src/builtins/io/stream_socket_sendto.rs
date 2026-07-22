@@ -1,20 +1,15 @@
 //! Purpose:
-//! Home of the PHP `stream_socket_sendto` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `stream_socket_sendto` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - `check` validates arg[0] is a stream resource, then returns `Union(Int, Bool)`.
 //! - Arguments are pre-inferred by the registry before the hook runs.
-//! - `lower` dispatches to `io::lower_stream_socket_sendto` in the EIR backend.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -28,7 +23,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::StreamSocketSendto,
+    ),
     summary: "Sends a message to a socket, whether it is connected or not.",
     php_manual: "function.stream-socket-sendto",
 }
@@ -37,9 +34,4 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(cx.checker, cx.name, &cx.args[0], cx.env)?;
     Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
-}
-
-/// Lowers a `stream_socket_sendto` call by dispatching to the shared io emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::io::lower_stream_socket_sendto(ctx, inst)
 }

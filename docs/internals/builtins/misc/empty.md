@@ -2,7 +2,7 @@
 title: "empty() — internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 291
+  order: 293
 ---
 
 ## `empty()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1236](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1236) (`lower_empty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1077](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1077) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 
@@ -18,10 +18,14 @@ sidebar:
 
 - Lowers `empty()` for concrete scalar and array-like operands.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_mixed_is_empty`
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
+
+## EIR and runtime boundary
+
+- **Concrete helpers referenced directly by this lowering**:
+  - `__rt_mixed_is_empty`
 
 ## Signature summary
 

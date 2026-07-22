@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_map` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_map` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `variadic(&["callback","array"], "arrays")` (two
@@ -13,13 +12,12 @@
 //! - `check` validates that the second argument is an indexed array and infers the
 //!   callback return element type; the result preserves the input array element type
 //!   unless the callback returns Mixed.
-//! - `lower` is a thin wrapper over the shared `arrays::lower_array_map` emitter.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -31,10 +29,21 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
-    lazy_check: true,
-    lower: lower,
+    semantics: array_map_semantics(),
     summary: "Applies a callback to the elements of an array.",
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
+}
+
+/// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.
+const fn array_map_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns Mixed because a string or descriptor callback can select its result ABI at runtime.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::Mixed
 }
 
 /// Returns the mapped array type for an `array_map` call.
@@ -74,9 +83,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_map() second argument must be array",
         )),
     }
-}
-
-/// Lowers an `array_map` call by dispatching to the shared array emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_map(ctx, inst)
 }

@@ -2,7 +2,7 @@
 title: "cos()"
 description: "Returns the cosine of a number (radians)."
 sidebar:
-  order: 259
+  order: 261
 ---
 
 ## cos()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `cos` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/cos.md).
-
