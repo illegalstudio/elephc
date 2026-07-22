@@ -4,13 +4,13 @@
 //!
 //! Called from:
 //! - `crate::ir_lower::program` while deriving runtime feature requirements.
-//! - `crate::codegen_ir::lower_inst::builtins::eval` while lowering AOT fragments.
+//! - `crate::codegen::lower_inst::builtins::eval` while lowering AOT fragments.
 //!
 //! Key details:
 //! - Only exposes semantics that are fully target-independent.
 //! - Plans keep fallback and scope metadata alongside any fully static lowering.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::names::{php_symbol_key, Name};
@@ -69,8 +69,8 @@ where
 pub(crate) struct EvalAotPlan {
     function_name: Option<String>,
     eir_program: Option<Program>,
-    scope_read_function_name: Option<String>,
-    scope_read_eir_program: Option<Program>,
+    scope_function_name: Option<String>,
+    scope_eir_program: Option<Program>,
     reads: BTreeSet<String>,
     array_read_constraints: BTreeSet<String>,
     assoc_array_read_constraints: BTreeSet<String>,
@@ -82,7 +82,6 @@ pub(crate) struct EvalAotPlan {
     needs_eval_context: bool,
     needs_global_scope: bool,
     fallback_reason: Option<EvalAotFallbackReason>,
-    native_only_scalar: bool,
 }
 
 impl EvalAotPlan {
@@ -90,13 +89,13 @@ impl EvalAotPlan {
     pub(crate) fn is_fully_static_no_bridge(&self) -> bool {
         !self.needs_eval_context
             && self.fallback_reason.is_none()
-            && self.scope_read_eir_program.is_none()
-            && (self.eir_program.is_some() || self.native_only_scalar)
+            && self.scope_eir_program.is_none()
+            && self.eir_program.is_some()
     }
 
     /// Returns true when the scope-read EIR body can receive reads as direct parameters.
     pub(crate) fn uses_scope_read_params(&self) -> bool {
-        self.scope_read_eir_program.is_some()
+        self.scope_eir_program.is_some()
             && !self.reads.is_empty()
             && self.writes.is_empty()
             && self.scope_direct_writes.is_empty()
@@ -108,7 +107,7 @@ impl EvalAotPlan {
         if self.is_fully_static_no_bridge() {
             return false;
         }
-        if self.scope_read_eir_program.is_some() {
+        if self.scope_eir_program.is_some() {
             return false;
         }
         self.needs_eval_context
@@ -121,7 +120,7 @@ impl EvalAotPlan {
 
     /// Returns true when the fragment needs only core eval-scope runtime state.
     pub(crate) fn requires_runtime_eval_scope(&self) -> bool {
-        self.scope_read_eir_program.is_some() && !self.uses_scope_read_params()
+        self.scope_eir_program.is_some() && !self.uses_scope_read_params()
     }
 
     /// Takes the deterministic internal EIR function name, when one exists.
@@ -134,14 +133,14 @@ impl EvalAotPlan {
         self.eir_program.take()
     }
 
-    /// Takes the deterministic EIR function name for a scope-read AOT body.
-    pub(crate) fn take_scope_read_function_name(&mut self) -> Option<String> {
-        self.scope_read_function_name.take()
+    /// Takes the deterministic EIR function name for a scope-aware AOT body.
+    pub(crate) fn take_scope_function_name(&mut self) -> Option<String> {
+        self.scope_function_name.take()
     }
 
-    /// Takes the parsed and folded body for a scope-read EIR AOT function.
-    pub(crate) fn take_scope_read_eir_program(&mut self) -> Option<Program> {
-        self.scope_read_eir_program.take()
+    /// Takes the parsed and folded body for a scope-aware EIR AOT function.
+    pub(crate) fn take_scope_eir_program(&mut self) -> Option<Program> {
+        self.scope_eir_program.take()
     }
 
     /// Returns the statically known eval-scope reads for this fragment.
@@ -204,16 +203,6 @@ pub(crate) enum EvalAotFallbackReason {
     UnsupportedConstruct,
 }
 
-/// Static scalar category for a direct eval local-store candidate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DirectLocalStoreScalarKind {
-    Null,
-    Bool,
-    Int,
-    Float,
-    String,
-}
-
 impl EvalAotFallbackReason {
     /// Returns a stable assembly-marker description for this fallback reason.
     pub(crate) fn description(self) -> &'static str {
@@ -263,769 +252,6 @@ pub(crate) fn parse_literal_fragment_with_source_path(
         None => program,
     })
 }
-
-/// Returns the ordered static writes in a direct local-store eval candidate.
-pub(crate) fn literal_fragment_direct_local_store_writes(
-    fragment: &str,
-) -> Option<Vec<(String, DirectLocalStoreScalarKind)>> {
-    let program = parse_literal_fragment(fragment)?;
-    direct_local_store_candidate_writes(&program)
-}
-
-/// Returns scalar self-read writes that can avoid eval scope with direct caller locals.
-pub(crate) fn literal_fragment_direct_local_read_write_writes(
-    fragment: &str,
-) -> Option<BTreeMap<String, DirectLocalStoreScalarKind>> {
-    let program = parse_literal_fragment(fragment)?;
-    direct_local_read_write_candidate_writes(&program)
-}
-
-/// Checks the narrow read/write shape `target = f(target, literals)`.
-fn direct_local_read_write_candidate_writes(
-    program: &[Stmt],
-) -> Option<BTreeMap<String, DirectLocalStoreScalarKind>> {
-    let mut writes = BTreeMap::new();
-    let mut saw_store = false;
-    let mut terminated = false;
-    for stmt in program {
-        if terminated {
-            return None;
-        }
-        match &stmt.kind {
-            StmtKind::Assign { name, value } => {
-                let kind = direct_local_read_write_expr(value, name)?;
-                writes.insert(name.clone(), kind);
-                saw_store = true;
-            }
-            StmtKind::Return(Some(expr)) => {
-                direct_local_store_static_scalar_expr(expr)?;
-                terminated = true;
-            }
-            StmtKind::Return(None) => {
-                terminated = true;
-            }
-            StmtKind::ExprStmt(expr) => {
-                direct_local_store_static_scalar_expr(expr)?;
-            }
-            _ => return None,
-        }
-    }
-    saw_store.then_some(writes)
-}
-
-/// Checks scalar expressions whose only variable read is the target being assigned.
-fn direct_local_read_write_expr(
-    expr: &Expr,
-    target_name: &str,
-) -> Option<DirectLocalStoreScalarKind> {
-    match &expr.kind {
-        ExprKind::IntLiteral(_) => Some(DirectLocalStoreScalarKind::Int),
-        ExprKind::FloatLiteral(value) if value.is_finite() => {
-            Some(DirectLocalStoreScalarKind::Float)
-        }
-        ExprKind::Variable(name) if name == target_name => Some(DirectLocalStoreScalarKind::Int),
-        ExprKind::Negate(inner) => (direct_local_read_write_expr(inner, target_name)?
-            == DirectLocalStoreScalarKind::Int)
-            .then_some(DirectLocalStoreScalarKind::Int),
-        ExprKind::BinaryOp { left, op, right }
-            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) =>
-        {
-            (direct_local_read_write_expr(left, target_name)? == DirectLocalStoreScalarKind::Int
-                && direct_local_read_write_expr(right, target_name)?
-                    == DirectLocalStoreScalarKind::Int)
-                .then_some(DirectLocalStoreScalarKind::Int)
-        }
-        ExprKind::BinaryOp { left, op, right } if matches!(op, BinOp::Div | BinOp::Mod) => {
-            let left_kind = direct_local_read_write_expr(left, target_name)?;
-            let right_kind = direct_local_read_write_expr(right, target_name)?;
-            (local_scalar_numeric_kind(left_kind) && local_scalar_numeric_kind(right_kind))
-                .then_some(if *op == BinOp::Div {
-                    DirectLocalStoreScalarKind::Float
-                } else {
-                    DirectLocalStoreScalarKind::Int
-                })
-        }
-        _ => None,
-    }
-}
-
-/// Returns int/bool local writes for the legacy local-scalar AOT subset.
-pub(crate) fn literal_fragment_local_scalar_writes_with_static_calls<F>(
-    fragment: &str,
-    static_call_supported: F,
-) -> Option<BTreeMap<String, DirectLocalStoreScalarKind>>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let program = parse_literal_fragment(fragment)?;
-    let mut writes = BTreeMap::new();
-    let mut assigned = BTreeMap::new();
-    local_scalar_block_writes(
-        &program,
-        &mut writes,
-        &mut assigned,
-        0,
-        true,
-        &static_call_supported,
-    )?;
-    (!writes.is_empty()).then_some(writes)
-}
-
-/// Checks a statement block against the int/bool local-scalar AOT subset.
-fn local_scalar_block_writes<F>(
-    program: &[Stmt],
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    loop_depth: usize,
-    allow_type_changes: bool,
-    static_call_supported: &F,
-) -> Option<()>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let mut terminated = false;
-    for stmt in program {
-        if terminated {
-            break;
-        }
-        terminated = local_scalar_stmt_writes(
-            stmt,
-            writes,
-            assigned,
-            loop_depth,
-            allow_type_changes,
-            static_call_supported,
-        )?;
-    }
-    Some(())
-}
-
-/// Checks one statement against the int/bool local-scalar AOT subset.
-fn local_scalar_stmt_writes<F>(
-    stmt: &Stmt,
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    loop_depth: usize,
-    allow_type_changes: bool,
-    static_call_supported: &F,
-) -> Option<bool>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &stmt.kind {
-        StmtKind::Echo(expr) => {
-            local_scalar_echo_expr(expr, assigned, static_call_supported)?;
-            Some(false)
-        }
-        StmtKind::Assign { name, value } => {
-            let kind = local_scalar_value_expr(value, assigned, static_call_supported)?;
-            local_scalar_record_write(writes, assigned, name, kind, allow_type_changes)?;
-            Some(false)
-        }
-        StmtKind::If {
-            condition,
-            then_body,
-            elseif_clauses,
-            else_body,
-        } => {
-            local_scalar_condition_expr(condition, assigned, static_call_supported)?;
-            let mut then_assigned = assigned.clone();
-            local_scalar_block_writes(
-                then_body,
-                writes,
-                &mut then_assigned,
-                loop_depth,
-                false,
-                static_call_supported,
-            )?;
-            for (elseif_condition, elseif_body) in elseif_clauses {
-                local_scalar_condition_expr(elseif_condition, assigned, static_call_supported)?;
-                let mut elseif_assigned = assigned.clone();
-                local_scalar_block_writes(
-                    elseif_body,
-                    writes,
-                    &mut elseif_assigned,
-                    loop_depth,
-                    false,
-                    static_call_supported,
-                )?;
-            }
-            if let Some(else_body) = else_body {
-                let mut else_assigned = assigned.clone();
-                local_scalar_block_writes(
-                    else_body,
-                    writes,
-                    &mut else_assigned,
-                    loop_depth,
-                    false,
-                    static_call_supported,
-                )?;
-            }
-            Some(false)
-        }
-        StmtKind::While { condition, body } => {
-            local_scalar_condition_expr(condition, assigned, static_call_supported)?;
-            let mut body_assigned = assigned.clone();
-            local_scalar_block_writes(
-                body,
-                writes,
-                &mut body_assigned,
-                loop_depth + 1,
-                false,
-                static_call_supported,
-            )?;
-            Some(false)
-        }
-        StmtKind::DoWhile { body, condition } => {
-            let mut body_assigned = assigned.clone();
-            local_scalar_block_writes(
-                body,
-                writes,
-                &mut body_assigned,
-                loop_depth + 1,
-                false,
-                static_call_supported,
-            )?;
-            local_scalar_condition_expr(condition, &body_assigned, static_call_supported)?;
-            Some(false)
-        }
-        StmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(init) = init.as_deref() {
-                local_scalar_for_clause_writes(
-                    init,
-                    writes,
-                    assigned,
-                    allow_type_changes,
-                    static_call_supported,
-                )?;
-            }
-            if let Some(condition) = condition {
-                local_scalar_condition_expr(condition, assigned, static_call_supported)?;
-            }
-            let mut body_assigned = assigned.clone();
-            local_scalar_block_writes(
-                body,
-                writes,
-                &mut body_assigned,
-                loop_depth + 1,
-                false,
-                static_call_supported,
-            )?;
-            if let Some(update) = update.as_deref() {
-                local_scalar_for_clause_writes(
-                    update,
-                    writes,
-                    &mut body_assigned,
-                    false,
-                    static_call_supported,
-                )?;
-            }
-            Some(false)
-        }
-        StmtKind::Switch {
-            subject,
-            cases,
-            default,
-        } => {
-            local_scalar_switch_stmt_writes(
-                subject,
-                cases,
-                default.as_deref(),
-                writes,
-                assigned,
-                loop_depth,
-                static_call_supported,
-            )?;
-            Some(false)
-        }
-        StmtKind::Break(level) if *level > 0 && *level <= loop_depth => Some(true),
-        StmtKind::Continue(level) if *level > 0 && *level <= loop_depth => Some(true),
-        StmtKind::Return(Some(expr)) => {
-            local_scalar_value_expr(expr, assigned, static_call_supported)?;
-            Some(true)
-        }
-        StmtKind::Return(None) => Some(true),
-        StmtKind::ExprStmt(expr) => local_scalar_expr_stmt_writes(
-            expr,
-            writes,
-            assigned,
-            allow_type_changes,
-            static_call_supported,
-        ),
-        _ => None,
-    }
-}
-
-/// Checks a local-scalar switch while preserving conservative assignment facts.
-fn local_scalar_switch_stmt_writes<F>(
-    subject: &Expr,
-    cases: &[(Vec<Expr>, Vec<Stmt>)],
-    default: Option<&[Stmt]>,
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-    loop_depth: usize,
-    static_call_supported: &F,
-) -> Option<()>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let subject_kind = local_scalar_condition_expr(subject, assigned, static_call_supported)?;
-    for (conditions, body) in cases {
-        for condition in conditions {
-            (local_scalar_condition_expr(condition, assigned, static_call_supported)?
-                == subject_kind)
-                .then_some(())?;
-        }
-        let mut case_assigned = assigned.clone();
-        local_scalar_switch_block_writes(
-            body,
-            writes,
-            &mut case_assigned,
-            loop_depth + 1,
-            false,
-            static_call_supported,
-        )?;
-    }
-    if let Some(default) = default {
-        let mut default_assigned = assigned.clone();
-        local_scalar_switch_block_writes(
-            default,
-            writes,
-            &mut default_assigned,
-            loop_depth + 1,
-            false,
-            static_call_supported,
-        )?;
-    }
-    Some(())
-}
-
-/// Checks a switch case/default body against the local-scalar subset.
-fn local_scalar_switch_block_writes<F>(
-    statements: &[Stmt],
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    loop_depth: usize,
-    allow_type_changes: bool,
-    static_call_supported: &F,
-) -> Option<()>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    local_scalar_block_writes(
-        statements,
-        writes,
-        assigned,
-        loop_depth,
-        allow_type_changes,
-        static_call_supported,
-    )
-}
-
-/// Checks an inline `for` init/update statement against the local-scalar subset.
-fn local_scalar_for_clause_writes<F>(
-    stmt: &Stmt,
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    allow_type_changes: bool,
-    static_call_supported: &F,
-) -> Option<()>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &stmt.kind {
-        StmtKind::Assign { .. } | StmtKind::ExprStmt(_) => (!local_scalar_stmt_writes(
-            stmt,
-            writes,
-            assigned,
-            0,
-            allow_type_changes,
-            static_call_supported,
-        )?)
-        .then_some(()),
-        _ => None,
-    }
-}
-
-/// Checks one expression statement accepted by the local-scalar AOT subset.
-fn local_scalar_expr_stmt_writes<F>(
-    expr: &Expr,
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    allow_type_changes: bool,
-    static_call_supported: &F,
-) -> Option<bool>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &expr.kind {
-        ExprKind::Print(value) => {
-            local_scalar_echo_expr(value, assigned, static_call_supported)?;
-            Some(false)
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            let ExprKind::Variable(name) = &target.kind else {
-                return None;
-            };
-            let kind = local_scalar_value_expr(value, assigned, static_call_supported)?;
-            local_scalar_record_write(writes, assigned, name, kind, allow_type_changes)?;
-            Some(false)
-        }
-        ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name) => {
-            local_scalar_inc_dec_write(writes, assigned, name)?;
-            Some(false)
-        }
-        ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
-            local_scalar_inc_dec_write(writes, assigned, name)?;
-            Some(false)
-        }
-        _ => {
-            local_scalar_value_expr(expr, assigned, static_call_supported)?;
-            Some(false)
-        }
-    }
-}
-
-/// Records an increment/decrement write for an assigned integer local.
-fn local_scalar_inc_dec_write(
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    name: &str,
-) -> Option<()> {
-    (assigned.get(name) == Some(&DirectLocalStoreScalarKind::Int)).then_some(())?;
-    local_scalar_record_write(
-        writes,
-        assigned,
-        name,
-        DirectLocalStoreScalarKind::Int,
-        true,
-    )
-}
-
-/// Records one local-scalar write, allowing type changes only in linear statement flow.
-fn local_scalar_record_write(
-    writes: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    assigned: &mut BTreeMap<String, DirectLocalStoreScalarKind>,
-    name: &str,
-    kind: DirectLocalStoreScalarKind,
-    allow_type_change: bool,
-) -> Option<()> {
-    if crate::superglobals::is_superglobal(name) {
-        return None;
-    }
-    if let Some(existing) = assigned.get(name) {
-        (*existing == kind || allow_type_change).then_some(())?;
-    }
-    assigned.insert(name.to_string(), kind);
-    writes.insert(name.to_string(), kind);
-    Some(())
-}
-
-/// Checks a control-flow condition for the local-scalar AOT subset.
-fn local_scalar_condition_expr<F>(
-    expr: &Expr,
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-    static_call_supported: &F,
-) -> Option<DirectLocalStoreScalarKind>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let kind = local_scalar_value_expr(expr, assigned, static_call_supported)?;
-    matches!(
-        kind,
-        DirectLocalStoreScalarKind::Int | DirectLocalStoreScalarKind::Bool
-    )
-    .then_some(kind)
-}
-
-/// Checks an expression that can be emitted by local-scalar echo.
-fn local_scalar_echo_expr<F>(
-    expr: &Expr,
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-    static_call_supported: &F,
-) -> Option<DirectLocalStoreScalarKind>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &expr.kind {
-        ExprKind::StringLiteral(_) => Some(DirectLocalStoreScalarKind::String),
-        ExprKind::BinaryOp { left, op, right } if *op == BinOp::Concat => {
-            local_scalar_echo_expr(left, assigned, static_call_supported)?;
-            local_scalar_echo_expr(right, assigned, static_call_supported)?;
-            Some(DirectLocalStoreScalarKind::String)
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            local_scalar_condition_expr(condition, assigned, static_call_supported)?;
-            let then_kind = local_scalar_echo_expr(then_expr, assigned, static_call_supported)?;
-            let else_kind = local_scalar_echo_expr(else_expr, assigned, static_call_supported)?;
-            (then_kind == else_kind).then_some(then_kind)
-        }
-        _ => local_scalar_value_expr(expr, assigned, static_call_supported),
-    }
-}
-
-/// Checks an int/bool expression for the local-scalar AOT subset.
-fn local_scalar_value_expr<F>(
-    expr: &Expr,
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-    static_call_supported: &F,
-) -> Option<DirectLocalStoreScalarKind>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &expr.kind {
-        ExprKind::Null => Some(DirectLocalStoreScalarKind::Null),
-        ExprKind::IntLiteral(_) => Some(DirectLocalStoreScalarKind::Int),
-        ExprKind::FloatLiteral(value) if value.is_finite() => {
-            Some(DirectLocalStoreScalarKind::Float)
-        }
-        ExprKind::BoolLiteral(_) => Some(DirectLocalStoreScalarKind::Bool),
-        ExprKind::StringLiteral(_) => Some(DirectLocalStoreScalarKind::String),
-        ExprKind::Variable(name) => assigned.get(name).copied(),
-        ExprKind::Negate(inner) => {
-            (local_scalar_value_expr(inner, assigned, static_call_supported)?
-                == DirectLocalStoreScalarKind::Int)
-                .then_some(DirectLocalStoreScalarKind::Int)
-        }
-        ExprKind::BitNot(inner) => {
-            (local_scalar_value_expr(inner, assigned, static_call_supported)?
-                == DirectLocalStoreScalarKind::Int)
-                .then_some(DirectLocalStoreScalarKind::Int)
-        }
-        ExprKind::Not(inner) => {
-            local_scalar_condition_expr(inner, assigned, static_call_supported)?;
-            Some(DirectLocalStoreScalarKind::Bool)
-        }
-        ExprKind::ErrorSuppress(inner) => {
-            local_scalar_value_expr(inner, assigned, static_call_supported)
-        }
-        ExprKind::Print(inner) => {
-            local_scalar_echo_expr(inner, assigned, static_call_supported)?;
-            Some(DirectLocalStoreScalarKind::Int)
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            local_scalar_condition_expr(condition, assigned, static_call_supported)?;
-            let then_kind = local_scalar_value_expr(then_expr, assigned, static_call_supported)?;
-            let else_kind = local_scalar_value_expr(else_expr, assigned, static_call_supported)?;
-            (then_kind == else_kind).then_some(then_kind)
-        }
-        ExprKind::BinaryOp { left, op, right } => {
-            local_scalar_binary_expr(left, op.clone(), right, assigned, static_call_supported)
-        }
-        ExprKind::FunctionCall { name, args } => {
-            let function_name = name.to_string();
-            if let Some(kind) = local_scalar_construct_call_expr(&function_name, args, assigned) {
-                return Some(kind);
-            }
-            (fold_static_builtin_int_call(function_name.trim_start_matches('\\'), args).is_some()
-                || static_call_supported(&function_name, args))
-            .then_some(DirectLocalStoreScalarKind::Int)
-        }
-        _ => None,
-    }
-}
-
-/// Checks language-construct calls that local-scalar AOT can lower without scope reads.
-fn local_scalar_construct_call_expr(
-    name: &str,
-    args: &[Expr],
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-) -> Option<DirectLocalStoreScalarKind> {
-    if has_named_args(args)
-        || args
-            .iter()
-            .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-    {
-        return None;
-    }
-    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "isset" => (!args.is_empty()
-            && args.iter().all(
-                |arg| matches!(&arg.kind, ExprKind::Variable(name) if assigned.contains_key(name)),
-            ))
-        .then_some(DirectLocalStoreScalarKind::Bool),
-        "empty" if args.len() == 1 => match &args[0].kind {
-            ExprKind::Variable(name) if assigned.contains_key(name) => {
-                Some(DirectLocalStoreScalarKind::Bool)
-            }
-            _ => {
-                local_scalar_value_expr(args.first()?, assigned, &|_, _| false)?;
-                Some(DirectLocalStoreScalarKind::Bool)
-            }
-        },
-        _ => None,
-    }
-}
-
-/// Checks a binary expression for the local-scalar AOT subset.
-fn local_scalar_binary_expr<F>(
-    left: &Expr,
-    op: BinOp,
-    right: &Expr,
-    assigned: &BTreeMap<String, DirectLocalStoreScalarKind>,
-    static_call_supported: &F,
-) -> Option<DirectLocalStoreScalarKind>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let left_kind = local_scalar_value_expr(left, assigned, static_call_supported)?;
-    let right_kind = local_scalar_value_expr(right, assigned, static_call_supported)?;
-    match op {
-        BinOp::Add
-        | BinOp::Sub
-        | BinOp::Mul
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::ShiftLeft
-        | BinOp::ShiftRight
-            if left_kind == DirectLocalStoreScalarKind::Int
-                && right_kind == DirectLocalStoreScalarKind::Int =>
-        {
-            Some(DirectLocalStoreScalarKind::Int)
-        }
-        BinOp::Div
-            if local_scalar_numeric_kind(left_kind) && local_scalar_numeric_kind(right_kind) =>
-        {
-            Some(DirectLocalStoreScalarKind::Float)
-        }
-        BinOp::Mod
-            if local_scalar_numeric_kind(left_kind) && local_scalar_numeric_kind(right_kind) =>
-        {
-            Some(DirectLocalStoreScalarKind::Int)
-        }
-        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
-            if left_kind == DirectLocalStoreScalarKind::Int
-                && right_kind == DirectLocalStoreScalarKind::Int =>
-        {
-            Some(DirectLocalStoreScalarKind::Bool)
-        }
-        BinOp::Eq | BinOp::NotEq
-            if left_kind == right_kind
-                && matches!(
-                    left_kind,
-                    DirectLocalStoreScalarKind::Int | DirectLocalStoreScalarKind::Bool
-                ) =>
-        {
-            Some(DirectLocalStoreScalarKind::Bool)
-        }
-        BinOp::And | BinOp::Or
-            if matches!(
-                left_kind,
-                DirectLocalStoreScalarKind::Int | DirectLocalStoreScalarKind::Bool
-            ) && matches!(
-                right_kind,
-                DirectLocalStoreScalarKind::Int | DirectLocalStoreScalarKind::Bool
-            ) =>
-        {
-            Some(DirectLocalStoreScalarKind::Bool)
-        }
-        _ => None,
-    }
-}
-
-/// Returns true when the scalar kind participates in numeric-only local AOT operations.
-fn local_scalar_numeric_kind(kind: DirectLocalStoreScalarKind) -> bool {
-    matches!(
-        kind,
-        DirectLocalStoreScalarKind::Int | DirectLocalStoreScalarKind::Float
-    )
-}
-
-/// Checks the narrow write-only shape that codegen can store directly into caller locals.
-fn direct_local_store_candidate_writes(
-    program: &[Stmt],
-) -> Option<Vec<(String, DirectLocalStoreScalarKind)>> {
-    let mut writes = Vec::new();
-    let mut saw_store = false;
-    let mut terminated = false;
-    for stmt in program {
-        if terminated {
-            return None;
-        }
-        match &stmt.kind {
-            StmtKind::Assign { name, value } => {
-                let kind = direct_local_store_static_scalar_expr(value)?;
-                writes.push((name.clone(), kind));
-                saw_store = true;
-            }
-            StmtKind::Return(Some(expr)) => {
-                direct_local_store_static_scalar_expr(expr)?;
-                terminated = true;
-            }
-            StmtKind::Return(None) => {
-                terminated = true;
-            }
-            StmtKind::ExprStmt(expr) => {
-                direct_local_store_static_scalar_expr(expr)?;
-            }
-            _ => return None,
-        }
-    }
-    saw_store.then_some(writes)
-}
-
-/// Returns the scalar kind when an expression can be materialized by direct local-store codegen.
-fn direct_local_store_static_scalar_expr(expr: &Expr) -> Option<DirectLocalStoreScalarKind> {
-    match &expr.kind {
-        ExprKind::Null => Some(DirectLocalStoreScalarKind::Null),
-        ExprKind::BoolLiteral(_) => Some(DirectLocalStoreScalarKind::Bool),
-        ExprKind::IntLiteral(_) => Some(DirectLocalStoreScalarKind::Int),
-        ExprKind::StringLiteral(_) => Some(DirectLocalStoreScalarKind::String),
-        ExprKind::FloatLiteral(value) if value.is_finite() => {
-            Some(DirectLocalStoreScalarKind::Float)
-        }
-        ExprKind::Negate(inner) => direct_local_store_static_numeric_expr(inner),
-        ExprKind::Not(inner) => {
-            direct_local_store_static_scalar_expr(inner).map(|_| DirectLocalStoreScalarKind::Bool)
-        }
-        ExprKind::BinaryOp { left, op, right } => match op {
-            BinOp::Concat => {
-                direct_local_store_static_concat_operand(left)?;
-                direct_local_store_static_concat_operand(right)?;
-                Some(DirectLocalStoreScalarKind::String)
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Returns the scalar kind for a numeric expression accepted by unary minus.
-fn direct_local_store_static_numeric_expr(expr: &Expr) -> Option<DirectLocalStoreScalarKind> {
-    match &expr.kind {
-        ExprKind::IntLiteral(_) => Some(DirectLocalStoreScalarKind::Int),
-        ExprKind::FloatLiteral(value) if value.is_finite() => {
-            Some(DirectLocalStoreScalarKind::Float)
-        }
-        _ => None,
-    }
-}
-
-/// Returns true when an expression is safe for compile-time PHP string concatenation.
-fn direct_local_store_static_concat_operand(expr: &Expr) -> Option<()> {
-    match direct_local_store_static_scalar_expr(expr)? {
-        DirectLocalStoreScalarKind::Null
-        | DirectLocalStoreScalarKind::Bool
-        | DirectLocalStoreScalarKind::Int
-        | DirectLocalStoreScalarKind::String => Some(()),
-        DirectLocalStoreScalarKind::Float => None,
-    }
-}
-
 /// Returns a deterministic internal function name for a literal eval fragment.
 pub(crate) fn eir_function_name(fragment: &str) -> String {
     format!(
@@ -1035,8 +261,8 @@ pub(crate) fn eir_function_name(fragment: &str) -> String {
     )
 }
 
-/// Returns a deterministic internal function name for a scope-read eval fragment.
-pub(crate) fn eir_scope_read_function_name(fragment: &str) -> String {
+/// Returns a deterministic internal function name for a scope-aware eval fragment.
+pub(crate) fn eir_scope_function_name(fragment: &str) -> String {
     format!(
         "{}_scope_{:016x}",
         EIR_AOT_FUNCTION_PREFIX,
@@ -1107,8 +333,8 @@ fn parse_error_plan() -> EvalAotPlan {
     EvalAotPlan {
         function_name: None,
         eir_program: None,
-        scope_read_function_name: None,
-        scope_read_eir_program: None,
+        scope_function_name: None,
+        scope_eir_program: None,
         reads: BTreeSet::new(),
         array_read_constraints: BTreeSet::new(),
         assoc_array_read_constraints: BTreeSet::new(),
@@ -1120,7 +346,6 @@ fn parse_error_plan() -> EvalAotPlan {
         needs_eval_context: true,
         needs_global_scope: true,
         fallback_reason: Some(EvalAotFallbackReason::ParseError),
-        native_only_scalar: false,
     }
 }
 
@@ -1136,7 +361,6 @@ where
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
     let mut scope_access = collect_scope_accesses(&program);
-    let fragment_scope_reads = scope_access.reads.clone();
     scope_access.reads = collect_scope_reads_before_writes(&program);
     let folded_program = fold_static_builtin_calls_in_program(program.clone());
     let support = EirStaticCallPredicates {
@@ -1150,19 +374,13 @@ where
         .union(&scope_access.writes)
         .cloned()
         .collect::<BTreeSet<_>>();
-    let scope_write_only_linear = scope_access.reads.is_empty()
-        && fragment_scope_reads.is_empty()
-        && !scope_access.writes.is_empty()
-        && program_is_eir_scope_write_linear_function_safe(&folded_program, &support, &scope_names);
     let scope_eir_safe = eir_program.is_none()
         && !scope_names.is_empty()
         && !scope_access.creates_unknown_vars
-        && program_is_eir_scope_read_function_safe(&folded_program, &support, &scope_names);
+        && program_is_eir_scope_function_safe(&folded_program, &support, &scope_names);
     let scope_flush_local =
         scope_eir_safe && scope_access.reads.is_empty() && !scope_access.writes.is_empty();
-    let scope_direct = scope_eir_safe
-        && !scope_flush_local
-        && (!scope_access.reads.is_empty() || scope_write_only_linear);
+    let scope_direct = scope_eir_safe && !scope_access.reads.is_empty();
     let scope_direct_writes = if scope_direct {
         scope_access.writes.clone()
     } else {
@@ -1179,19 +397,18 @@ where
     let assoc_array_read_constraints = array_read_constraint_sets.assoc;
     let float_predicate_read_constraints =
         collect_float_predicate_scope_read_constraints(&folded_program, &scope_access.reads);
-    let scope_read_eir_program = (scope_direct || scope_flush_local).then_some(folded_program);
-    let native_only_scalar = program_is_native_only_scalar(&program, &static_call_supported);
-    let is_fully_static_no_bridge = eir_program.is_some() || native_only_scalar;
-    let has_scope_read_eir = scope_read_eir_program.is_some();
+    let scope_eir_program = (scope_direct || scope_flush_local).then_some(folded_program);
+    let is_fully_static_no_bridge = eir_program.is_some();
+    let has_scope_eir = scope_eir_program.is_some();
     let needs_global_scope =
-        !is_fully_static_no_bridge && !has_scope_read_eir && scope_access.has_scope_access();
+        !is_fully_static_no_bridge && !has_scope_eir && scope_access.has_scope_access();
     EvalAotPlan {
         function_name: eir_program.as_ref().map(|_| eir_function_name(fragment)),
         eir_program,
-        scope_read_function_name: scope_read_eir_program
+        scope_function_name: scope_eir_program
             .as_ref()
-            .map(|_| eir_scope_read_function_name(fragment)),
-        scope_read_eir_program,
+            .map(|_| eir_scope_function_name(fragment)),
+        scope_eir_program,
         reads: scope_access.reads,
         array_read_constraints,
         assoc_array_read_constraints,
@@ -1200,11 +417,10 @@ where
         scope_direct_writes,
         scope_flush_writes,
         creates_unknown_vars: scope_access.creates_unknown_vars,
-        needs_eval_context: !is_fully_static_no_bridge && !has_scope_read_eir,
+        needs_eval_context: !is_fully_static_no_bridge && !has_scope_eir,
         needs_global_scope,
-        fallback_reason: (!is_fully_static_no_bridge && !has_scope_read_eir)
+        fallback_reason: (!is_fully_static_no_bridge && !has_scope_eir)
             .then(|| classify_fallback_reason(&program)),
-        native_only_scalar,
     }
 }
 
@@ -1485,23 +701,6 @@ fn callable_target_fallback_reason(target: &CallableTarget) -> Option<EvalAotFal
     }
 }
 
-/// Returns true for the native-only scalar eval subset in an already parsed program.
-fn program_is_native_only_scalar<F>(program: &[Stmt], static_call_supported: &F) -> bool
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    let mut terminated = false;
-    for stmt in program {
-        if terminated {
-            return false;
-        }
-        let Some(done) = stmt_is_native_only_scalar(stmt, &static_call_supported) else {
-            return false;
-        };
-        terminated = done;
-    }
-    true
-}
 
 /// Variable read/write metadata collected from a parsed eval fragment.
 struct EvalScopeAccess {
@@ -2887,21 +2086,8 @@ where
     block_is_eir_function_safe(program, support, &mut facts, None, 0).is_some()
 }
 
-/// Returns true when a fragment can be lowered as an EIR function reading eval scope.
-fn program_is_eir_scope_read_function_safe<S>(
-    program: &[Stmt],
-    support: &S,
-    scope_reads: &BTreeSet<String>,
-) -> bool
-where
-    S: EirStaticCallSupport,
-{
-    let mut facts = EirLocalFacts::new();
-    block_is_eir_function_safe(program, support, &mut facts, Some(scope_reads), 0).is_some()
-}
-
-/// Returns true when a writes-only fragment can be an EIR eval-scope function.
-fn program_is_eir_scope_write_linear_function_safe<S>(
+/// Returns true when a fragment can be lowered as a scope-aware EIR function.
+fn program_is_eir_scope_function_safe<S>(
     program: &[Stmt],
     support: &S,
     scope_names: &BTreeSet<String>,
@@ -2910,69 +2096,7 @@ where
     S: EirStaticCallSupport,
 {
     let mut facts = EirLocalFacts::new();
-    let mut terminated = false;
-    for stmt in program {
-        if terminated {
-            return false;
-        }
-        let Some(done) =
-            stmt_is_eir_scope_write_linear_function_safe(stmt, support, scope_names, &mut facts)
-        else {
-            return false;
-        };
-        terminated = done;
-    }
-    true
-}
-
-/// Checks one statement for the linear writes-only EIR eval-scope subset.
-fn stmt_is_eir_scope_write_linear_function_safe<S>(
-    stmt: &Stmt,
-    support: &S,
-    scope_names: &BTreeSet<String>,
-    facts: &mut EirLocalFacts,
-) -> Option<bool>
-where
-    S: EirStaticCallSupport,
-{
-    match &stmt.kind {
-        StmtKind::Synthetic(body) => {
-            let mut terminated = false;
-            for stmt in body {
-                if terminated {
-                    return None;
-                }
-                terminated = stmt_is_eir_scope_write_linear_function_safe(
-                    stmt,
-                    support,
-                    scope_names,
-                    facts,
-                )?;
-            }
-            Some(terminated)
-        }
-        StmtKind::Assign { name, value } if scope_names.contains(name) => {
-            expr_is_eir_function_safe(value, support, facts, Some(scope_names)).then_some(())?;
-            facts.assign(name, value, support, Some(scope_names));
-            Some(false)
-        }
-        StmtKind::Echo(expr) => {
-            expr_is_eir_function_safe(expr, support, facts, Some(scope_names)).then_some(false)
-        }
-        StmtKind::Return(Some(expr)) => {
-            expr_is_eir_function_safe(expr, support, facts, Some(scope_names)).then_some(true)
-        }
-        StmtKind::Return(None) => Some(true),
-        StmtKind::ExprStmt(expr) => match &expr.kind {
-            ExprKind::Print(inner) => {
-                expr_is_eir_function_safe(inner, support, facts, Some(scope_names)).then_some(false)
-            }
-            _ => {
-                expr_is_eir_function_safe(expr, support, facts, Some(scope_names)).then_some(false)
-            }
-        },
-        _ => None,
-    }
+    block_is_eir_function_safe(program, support, &mut facts, Some(scope_names), 0).is_some()
 }
 
 /// Checks a statement block for the no-scope EIR-function eval subset.
@@ -4579,79 +3703,6 @@ fn fold_static_callback_call(callback: &Expr, callback_args: &[Expr]) -> Option<
     fold_static_builtin_call(callback_name.trim_start_matches('\\'), callback_args)
 }
 
-/// Checks one statement for the native-only literal eval runtime-feature subset.
-fn stmt_is_native_only_scalar<F>(stmt: &Stmt, static_call_supported: &F) -> Option<bool>
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &stmt.kind {
-        StmtKind::Echo(expr) => {
-            echo_expr_is_native_only_scalar(expr, static_call_supported).then_some(false)
-        }
-        StmtKind::Return(Some(expr)) => {
-            value_expr_is_native_only_scalar(expr, static_call_supported).then_some(true)
-        }
-        StmtKind::Return(None) => Some(true),
-        StmtKind::ExprStmt(expr) => match &expr.kind {
-            ExprKind::Print(inner) => {
-                echo_expr_is_native_only_scalar(inner, static_call_supported).then_some(false)
-            }
-            _ => value_expr_is_native_only_scalar(expr, static_call_supported).then_some(false),
-        },
-        _ => None,
-    }
-}
-
-/// Checks an echo expression for the native-only literal eval runtime-feature subset.
-fn echo_expr_is_native_only_scalar<F>(expr: &Expr, static_call_supported: &F) -> bool
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &expr.kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::BinaryOp { left, op, right } if *op == BinOp::Concat => {
-            echo_expr_is_native_only_scalar(left, static_call_supported)
-                && echo_expr_is_native_only_scalar(right, static_call_supported)
-        }
-        _ => value_expr_is_native_only_scalar(expr, static_call_supported),
-    }
-}
-
-/// Checks a value expression for the native-only literal eval runtime-feature subset.
-fn value_expr_is_native_only_scalar<F>(expr: &Expr, static_call_supported: &F) -> bool
-where
-    F: Fn(&str, &[Expr]) -> bool,
-{
-    match &expr.kind {
-        ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) => true,
-        ExprKind::Negate(inner) => value_expr_is_native_only_scalar(inner, static_call_supported),
-        ExprKind::Not(inner) => value_expr_is_native_only_scalar(inner, static_call_supported),
-        ExprKind::BinaryOp { left, op, right } => {
-            matches!(
-                op,
-                BinOp::Add
-                    | BinOp::Sub
-                    | BinOp::Mul
-                    | BinOp::Mod
-                    | BinOp::Lt
-                    | BinOp::Gt
-                    | BinOp::LtEq
-                    | BinOp::GtEq
-                    | BinOp::Eq
-                    | BinOp::NotEq
-                    | BinOp::And
-                    | BinOp::Or
-            ) && value_expr_is_native_only_scalar(left, static_call_supported)
-                && value_expr_is_native_only_scalar(right, static_call_supported)
-        }
-        ExprKind::FunctionCall { name, args } => {
-            let short_name = name.as_str().trim_start_matches('\\');
-            fold_static_builtin_int_call(short_name, args).is_some()
-                || static_call_supported(name.as_str(), args)
-        }
-        _ => false,
-    }
-}
 
 /// Folds pure static builtin calls whose integer result is fully known at compile time.
 pub(crate) fn fold_static_builtin_int_call(short_name: &str, args: &[Expr]) -> Option<i64> {

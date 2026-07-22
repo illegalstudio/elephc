@@ -293,3 +293,48 @@ echo gettype(assigned(0)), "|", gettype(assigned(1));
     );
     assert_eq!(out, "object|NULL|object|NULL");
 }
+
+/// Regression test for issue #549 (ternary sibling): branches producing
+/// indexed arrays with different element types must widen the merged temp to
+/// array-of-Mixed. `$argc` is 1 under the test runner, so the int branch is
+/// selected; before the fix the temp was typed array<string> and reading the
+/// int branch's scalar slots as string descriptors segfaulted.
+#[test]
+fn test_ternary_array_int_and_array_string_branches_selects_int_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = $argc == 1 ? [1, 2] : ["a", "b"];
+echo $r[0], "\n", $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Reverse branch order for issue #549: the string branch is selected while
+/// the int branch's element type won the merge before the fix, so the string
+/// slots were read back as raw pointer garbage.
+#[test]
+fn test_ternary_array_string_and_array_int_branches_selects_string_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = $argc == 1 ? ["a", "b"] : [1, 2];
+echo $r[0], "\n", $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "a\nb\n");
+}
+
+/// Short-ternary variant of issue #549: `$a ?: default` with mismatched array
+/// element types must widen the merge and copy-on-write the forwarded local,
+/// leaving `$a`'s own typed slots untouched after the expression.
+#[test]
+fn test_short_ternary_array_value_widens_against_string_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+$r = $a ?: ["x", "y"];
+echo $r[0], "\n", $r[1], "\n", $a[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n1\n");
+}

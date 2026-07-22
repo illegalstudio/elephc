@@ -29,8 +29,9 @@ elephc chooses the narrowest execution path it can prove safe:
 
 | Source shape | Execution path | Extra runtime state |
 |---|---|---|
-| Eligible string literal with fully static behavior | Parsed at compile time and lowered through AST -> EIR -> native code | No eval context and no Magician bridge |
-| Eligible string literal that needs only known scope reads/writes | AOT-lowered with direct locals or core eval-scope helpers | Eval scope only; no interpreter bridge |
+| Eligible string literal with no caller-scope access | Parsed at compile time and lowered as an internal EIR function | No eval scope, eval context, or Magician bridge |
+| Eligible string literal with read-only caller values | Lowered as an internal EIR function with boxed `Mixed` parameters | No eval scope, eval context, or Magician bridge |
+| Eligible string literal with known scope writes | Lowered as an internal scope-aware EIR function using `EvalScopeGet` / `EvalScopeSet` | Core eval scope only; no interpreter bridge |
 | Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR and interpreted at runtime | Persistent eval context, synchronized scopes, and `elephc_magician` |
 
 The compiler makes this decision per literal call. A program may therefore use
@@ -90,8 +91,9 @@ compiler flushes visible locals into a materialized eval scope before entering
 the bridge, then reloads locals that may have been read, written, created, or
 unset by the evaluated fragment. Runtime cells use elephc's boxed `Mixed`
 representation, so the eval interpreter does not introduce a second PHP value
-ABI. Fully native literal paths skip this materialization when their reads and
-writes can be represented directly in EIR.
+ABI. AOT literals without writes skip scope materialization when they need no
+caller values or can receive read-only values as direct EIR parameters. Known
+writes use the same core scope cells from an internal EIR function.
 
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval
@@ -990,7 +992,7 @@ labels, and eval property references when alias metadata is available.
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible
 literal fragments instead use the normal AST -> EIR -> native codegen pipeline,
-either with direct caller locals or with core eval-scope helpers. Unsupported
+either with direct read parameters or with core eval-scope helpers. Unsupported
 constructs that reach the interpreter, and missing class names during eval
 object construction, fail at runtime with an eval fatal diagnostic.
 

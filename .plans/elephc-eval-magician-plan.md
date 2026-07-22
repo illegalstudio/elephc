@@ -39,7 +39,7 @@
   fully AOT.
 - [x] Update parity tests to distinguish shared builtins, documented eval-only
   builtins, and static-only builtins not yet present in magician.
-- [ ] Reduce the remaining manual AOT mini-codegen and converge on internal EIR
+- [x] Reduce the remaining manual AOT mini-codegen and converge on internal EIR
   functions for supported literal fragments.
 - [ ] Add a shared PHP-fragment grammar corpus that must parse consistently on
   the main compiler frontend and on magician (and stay aligned with AOT
@@ -290,12 +290,13 @@ Completed:
 
 ## Open Work
 
-### 1. Converge AOT on Internal EIR Functions
+### 1. Converge AOT on Internal EIR Functions (completed)
 
-The main debt is reducing the manual mini-codegen in
-`src/codegen/lower_inst/builtins/eval.rs`.
+Literal AOT fragments now lower exclusively as deterministic internal EIR
+functions. The manual parser, local scalar IR, control-flow graph, and assembly
+emitters were removed from `src/codegen/lower_inst/builtins/eval.rs`.
 
-Direction:
+Implemented direction:
 
 - represent each AOT fragment as an internal EIR function with a special ABI;
 - declare fragment locals separately from caller locals;
@@ -308,9 +309,9 @@ Direction:
   and the target-aware backend;
 - keep magician fallback as the compatibility path.
 
-Done criteria:
+Completed criteria:
 
-- no further growth of the manual mini-backend for new constructs;
+- no manual mini-backend remains for new or existing literal AOT constructs;
 - existing AOT tests continue to pass;
 - the assembly marker remains explicit;
 - no regression on macOS ARM64, Linux ARM64, or Linux x86_64.
