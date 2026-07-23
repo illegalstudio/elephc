@@ -64,14 +64,10 @@ impl CompileTimings {
     ///
     /// Output is gated behind the `enabled` flag. The report includes all notes
     /// in insertion order, each phase with its duration in milliseconds, and a
-    /// total elapsed time from when the collector was constructed.
-    /// Prints the collected timing report to stderr.
-    ///
-    /// Output is gated behind the `enabled` flag. The report includes all notes
-    /// in insertion order, each phase with its duration in milliseconds and share
-    /// of the total, and a total elapsed time from when the collector was
-    /// constructed. Decorated runs (see `crate::progress::is_decorated`) bold the
-    /// header and total row; plain runs keep today's unstyled table.
+    /// total elapsed time from when the collector was constructed. Decorated
+    /// runs (see `crate::progress::is_decorated`) bold the header/total row and
+    /// add a per-phase percentage-of-total column; plain runs keep today's exact
+    /// unstyled, no-percentage table — byte-identical to before this task.
     pub(crate) fn report(&self) {
         if !self.enabled {
             return;
@@ -85,12 +81,7 @@ impl CompileTimings {
             eprintln!("  {}", note);
         }
         for (phase, duration) in &self.phases {
-            eprintln!(
-                "  {:<12} {:>8.2} ms {:>5.1}%",
-                phase,
-                duration.as_secs_f64() * 1000.0,
-                percentage(*duration, total),
-            );
+            eprintln!("{}", format_phase_line(phase, *duration, total, decorated));
         }
         let total_line = format!("  {:<12} {:>8.2} ms", "total", total.as_secs_f64() * 1000.0);
         eprintln!("{}", style_if(decorated, &total_line));
@@ -112,6 +103,23 @@ fn style_if(decorated: bool, text: &str) -> String {
         console::style(text).bold().to_string()
     } else {
         text.to_string()
+    }
+}
+
+/// Formats one phase's timing line. Decorated runs add a percentage-of-total
+/// column; plain runs keep today's exact two-column layout (phase + ms) with
+/// no percentage suffix, so plain-mode `--timings` output stays byte-identical
+/// to before this task.
+fn format_phase_line(phase: &str, duration: Duration, total: Duration, decorated: bool) -> String {
+    if decorated {
+        format!(
+            "  {:<12} {:>8.2} ms {:>5.1}%",
+            phase,
+            duration.as_secs_f64() * 1000.0,
+            percentage(duration, total),
+        )
+    } else {
+        format!("  {:<12} {:>8.2} ms", phase, duration.as_secs_f64() * 1000.0)
     }
 }
 
@@ -138,5 +146,20 @@ mod tests {
     #[test]
     fn style_if_decorated_contains_original_text() {
         assert!(style_if(true, "Compiler timings:").contains("Compiler timings:"));
+    }
+
+    #[test]
+    fn format_phase_line_plain_has_no_percentage() {
+        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), false);
+        assert!(!line.contains('%'));
+        assert!(line.contains("codegen"));
+        assert!(line.contains("10.00 ms"));
+    }
+
+    #[test]
+    fn format_phase_line_decorated_includes_percentage() {
+        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), true);
+        assert!(line.contains('%'));
+        assert!(line.contains("10.0%"));
     }
 }
