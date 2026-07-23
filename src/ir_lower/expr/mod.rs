@@ -388,6 +388,18 @@ fn lower_numeric_binary(
         };
         return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
     }
+    if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
+        let lhs = coerce_to_float(ctx, lhs, left);
+        let rhs = coerce_to_float(ctx, rhs, right);
+        return ctx.emit_value(
+            Op::FDiv,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Float,
+            Op::FDiv.default_effects(),
+            Some(expr.span),
+        );
+    }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
         // Check if the type checker promoted this to Mixed (non-constant int arithmetic
         // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
@@ -1277,8 +1289,28 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         return left;
     }
     match (&left, &right) {
-        (PhpType::Array(_), PhpType::Array(_)) => right.clone(),
-        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => right.clone(),
+        // Mismatched element types must widen elementwise (issue #549): letting
+        // one side win wholesale relabels the other side's runtime slots, so
+        // typed reads through the merged type misinterpret the payload bytes.
+        (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
+            PhpType::Array(Box::new(merge_ir_indexed_element_type(
+                left_elem.codegen_repr(),
+                right_elem.codegen_repr(),
+            )))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_ir_assoc_value_type(
+                left_key.codegen_repr(),
+                right_key.codegen_repr(),
+            )),
+            value: Box::new(merge_ir_assoc_value_type(
+                left_value.codegen_repr(),
+                right_value.codegen_repr(),
+            )),
+        },
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
@@ -1766,8 +1798,12 @@ fn lower_inc_dec(
             MixedNumericOp::Sub
         };
         let new = lower_mixed_numeric_binary(ctx, old, one, op, expr);
-        let stored = ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
-        return if post { return_old } else { stored };
+        ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+        return if post {
+            return_old
+        } else {
+            ctx.load_local(name, Some(expr.span))
+        };
     }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
@@ -1798,8 +1834,12 @@ fn lower_inc_dec(
         )
         .expect("integer inc/dec produces a value");
     let new = LoweredValue { value: new, ir_type: result_ir_type };
-    let stored = ctx.store_local(name, new, result_php_type, Some(expr.span));
-    if post { old } else { stored }
+    ctx.store_local(name, new, result_php_type, Some(expr.span));
+    if post {
+        old
+    } else {
+        ctx.load_local(name, Some(expr.span))
+    }
 }
 
 /// Lowers a direct function, builtin, or extern call.
@@ -2030,22 +2070,12 @@ fn emit_builtin_call_value(
     };
     if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
         ctx.mark_eval_executed();
-        if let Some(widen_targets) =
-            eval_literal.and_then(|fragment| eval_literal_direct_store_widen_targets(ctx, fragment))
-        {
-            // A direct store that changes a scalar slot's type keeps the
-            // native path by widening the slot to boxed Mixed storage first;
-            // codegen re-lowers every load/store with the final slot type.
-            for name in widen_targets {
-                ctx.set_local_type(&name, PhpType::Mixed);
-            }
-        }
         if eval_needs_barrier {
             ctx.apply_eval_barrier();
-        } else if eval_literal
-            .is_some_and(|fragment| eval_literal_needs_scope_barrier(ctx, fragment))
+        } else if let Some(write_names) = eval_literal
+            .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
         {
-            ctx.apply_eval_scope_barrier();
+            ctx.apply_eval_scope_barrier(&write_names);
         }
     }
     call
@@ -2097,18 +2127,6 @@ fn registry_builtin_result_type(
 
 /// Returns true when a literal `eval` call may still need runtime scope/interpreter state.
 fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
-    // Fragments fully handled by the direct-local AOT paths never touch runtime
-    // eval state; applying the barrier would declare eval locals and drag the
-    // whole bridge runtime (and magician staticlib) into native-only programs.
-    if eval_literal_direct_store_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)
     };
@@ -2147,19 +2165,11 @@ fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> 
     true
 }
 
-/// Returns true when a literal `eval` only needs materialized eval-scope state.
-fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> bool {
-    // Direct-local AOT fragments also skip the materialized scope: their reads
-    // and writes go straight to caller locals.
-    if eval_literal_direct_store_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_direct_read_write_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
-    if eval_literal_local_scalar_direct_sync_supported_by_lowering(ctx, fragment) {
-        return false;
-    }
+/// Returns the caller locals written by an EIR literal `eval` that only needs scope state.
+fn eval_literal_scope_barrier_writes(
+    ctx: &LoweringContext<'_, '_>,
+    fragment: &str,
+) -> Option<std::collections::BTreeSet<String>> {
     let static_call_supported = |name: &str, args: &[Expr]| {
         eval_literal_static_function_supported_by_lowering(ctx, name, args)
     };
@@ -2171,198 +2181,14 @@ fn eval_literal_needs_scope_barrier(ctx: &LoweringContext<'_, '_>, fragment: &st
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
         },
     );
-    plan.requires_runtime_eval_scope()
+    (plan.requires_runtime_eval_scope()
         && eval_literal_scope_constraints_supported_by_lowering(
             ctx,
             plan.array_read_constraints(),
             plan.assoc_array_read_constraints(),
             plan.float_predicate_read_constraints(),
-        )
-}
-
-/// Returns true when a direct-store eval fragment fits every caller slot type.
-fn eval_literal_direct_store_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    eval_literal_direct_store_widen_targets(ctx, fragment).is_some()
-}
-
-/// Classifies a direct-store eval fragment against caller slots. Returns the
-/// locals whose scalar slot must widen to Mixed because the store changes
-/// their runtime type (e.g. Int -> Str); `None` when any write target rules
-/// out the direct path entirely.
-fn eval_literal_direct_store_widen_targets(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> Option<Vec<String>> {
-    let writes = crate::eval_aot::literal_fragment_direct_local_store_writes(fragment)?;
-    let mut widen_targets = Vec::new();
-    for (name, kind) in &writes {
-        if crate::superglobals::is_superglobal(name)
-            || (ctx.in_main && ctx.all_global_var_names.contains(name))
-        {
-            return None;
-        }
-        if ctx.local_slots.get(name).is_none() {
-            continue;
-        }
-        if ctx.is_ref_bound_local(name)
-            || ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal)
-        {
-            return None;
-        }
-        let ty = ctx.local_types.get(name)?;
-        if eval_literal_direct_store_type_supported(ty, *kind) {
-            continue;
-        }
-        if eval_literal_direct_store_type_widenable(ty) {
-            widen_targets.push(name.clone());
-        } else {
-            return None;
-        }
-    }
-    Some(widen_targets)
-}
-
-/// Returns true when a scalar slot can widen to Mixed for a type-changing
-/// direct eval store. Containers and special storage keep the barrier path.
-fn eval_literal_direct_store_type_widenable(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::TaggedScalar
-    )
-}
-
-/// Returns true when a static scalar store kind fits an existing caller slot type.
-fn eval_literal_direct_store_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => true,
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Bool => kind == crate::eval_aot::DirectLocalStoreScalarKind::Bool,
-        PhpType::Str => kind == crate::eval_aot::DirectLocalStoreScalarKind::String,
-        PhpType::TaggedScalar => matches!(
-            kind,
-            crate::eval_aot::DirectLocalStoreScalarKind::Int
-                | crate::eval_aot::DirectLocalStoreScalarKind::Null
-        ),
-        _ => false,
-    }
-}
-
-/// Returns true when a boxed read/write eval can use direct caller locals.
-fn eval_literal_direct_read_write_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_direct_local_read_write_writes(fragment)
-    else {
-        return false;
-    };
-    writes
-        .iter()
-        .all(|(name, kind)| eval_literal_direct_read_write_name_supported(ctx, name, *kind))
-}
-
-/// Returns true when one direct read/write target is an initialized scalar local.
-fn eval_literal_direct_read_write_name_supported(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    if crate::superglobals::is_superglobal(name)
-        || (ctx.in_main && ctx.all_global_var_names.contains(name))
-    {
-        return false;
-    }
-    let Some(slot) = ctx.local_slots.get(name) else {
-        return false;
-    };
-    if ctx.is_ref_bound_local(name) {
-        return false;
-    }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
-        return false;
-    }
-    if !ctx.initialized_slots_snapshot().contains(slot) {
-        return false;
-    }
-    ctx.local_types
-        .get(name)
-        .is_some_and(|ty| eval_literal_direct_read_write_type_supported(ty, kind))
-}
-
-/// Returns true when a read/write eval result kind fits the caller local type.
-fn eval_literal_direct_read_write_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        _ => false,
-    }
-}
-
-/// Returns true when local-scalar eval writes can be synced without eval scope state.
-fn eval_literal_local_scalar_direct_sync_supported_by_lowering(
-    ctx: &LoweringContext<'_, '_>,
-    fragment: &str,
-) -> bool {
-    let Some(writes) = crate::eval_aot::literal_fragment_local_scalar_writes_with_static_calls(
-        fragment,
-        |name, args| eval_literal_static_function_supported_by_lowering(ctx, name, args),
-    ) else {
-        return false;
-    };
-    writes
-        .iter()
-        .all(|(name, kind)| eval_literal_local_scalar_direct_sync_name_supported(ctx, name, *kind))
-}
-
-/// Returns true when one local-scalar write can target caller storage directly or be ignored.
-fn eval_literal_local_scalar_direct_sync_name_supported(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    if crate::superglobals::is_superglobal(name)
-        || (ctx.in_main && ctx.all_global_var_names.contains(name))
-    {
-        return false;
-    }
-    let Some(_slot) = ctx.local_slots.get(name) else {
-        return true;
-    };
-    if ctx.is_ref_bound_local(name) {
-        return false;
-    }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
-        return false;
-    }
-    let Some(ty) = ctx.local_types.get(name) else {
-        return false;
-    };
-    eval_literal_local_scalar_direct_sync_type_supported(ty, kind)
-}
-
-/// Returns true when a local-scalar write kind fits the caller local type.
-fn eval_literal_local_scalar_direct_sync_type_supported(
-    ty: &PhpType,
-    kind: crate::eval_aot::DirectLocalStoreScalarKind,
-) -> bool {
-    match ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => true,
-        PhpType::Int => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        PhpType::Float => kind == crate::eval_aot::DirectLocalStoreScalarKind::Float,
-        PhpType::Bool => kind == crate::eval_aot::DirectLocalStoreScalarKind::Bool,
-        PhpType::TaggedScalar => kind == crate::eval_aot::DirectLocalStoreScalarKind::Int,
-        _ => false,
-    }
+        ))
+    .then(|| plan.writes().clone())
 }
 
 /// Returns true when all scope-read variables can be passed as direct Mixed params.
@@ -14809,15 +14635,129 @@ fn coerce_value_for_temp(
     if source_ty == target_ty {
         return value;
     }
-    match target_ty {
+    match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => value,
+        _ => widen_container_value_for_temp(ctx, value, &source_ty, &target_ty, span),
     }
+}
+
+/// Widens a typed container branch value to a hidden temp's boxed-Mixed
+/// element storage before it is stored.
+///
+/// Mismatched array/array (or assoc/assoc) branch merges declare the temp with
+/// `Mixed` element storage (`wider_type_for_merge`, issue #549), so each
+/// branch's concrete container must box its slots via `ArrayToMixed` /
+/// `HashToMixed`: storing the raw pointer would let Mixed-element reads
+/// misinterpret the typed slot bytes. Borrowed sources (live locals, container
+/// element reads) are retained first so the conversion's copy-on-write split
+/// rewrites a private copy instead of boxing the source's slots in place; the
+/// conversion consumes that reference, and owning temporaries transfer their
+/// reference into the converted result, so no release is emitted here
+/// (mirrors `coerce_container_to_return_type`).
+fn widen_container_value_for_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let target_has_mixed_payload = match target_ty {
+        PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !target_has_mixed_payload {
+        return value;
+    }
+    let op = match (source_ty, target_ty) {
+        (PhpType::Array(source_elem), PhpType::Array(_))
+            if source_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::ArrayToMixed
+        }
+        (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
+            if source_value.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::HashToMixed
+        }
+        (PhpType::Mixed | PhpType::Union(_), _)
+            if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            // Whole-boxed sources (a `?array` value flowing through `??`)
+            // unbox the cell payload and convert it with the same
+            // runtime-call coercion declared container returns use. The
+            // conversion borrows the cell and owns a fresh container
+            // reference, so an owning cell must be consumed here.
+            //
+            // The indexed conversion consumes one owned payload reference
+            // and rewrites sole-owner arrays in place, which is only sound
+            // when the cell owns its payload. A borrowed cell (a `?array`
+            // parameter or local) shares its payload with a live caller
+            // array, so it unboxes through the owned-payload coercion —
+            // which retains the payload — and the consuming `ArrayToMixed`
+            // copy-on-write-splits into a private converted copy. The
+            // associative helper returns a fresh hash without consuming the
+            // payload reference, so borrowed hash cells keep the
+            // single-call coercion.
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
+                let unboxed = ctx.emit_value(
+                    Op::RuntimeCall,
+                    vec![value.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Never)),
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![unboxed.value],
+                    None,
+                    target_ty.clone(),
+                    Op::ArrayToMixed.default_effects(),
+                    Some(span),
+                );
+            }
+            let converted = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return converted;
+        }
+        _ => return value,
+    };
+    // Local loads report as *provisional* owners (their compensating releases
+    // are pruned at builder finalization when the slot stays concrete), so
+    // they must be treated as borrowed here: without a real retain the
+    // conversion's copy-on-write split would never trigger and the local's
+    // own array would be boxed in place while its slot type stays concrete.
+    let source_is_consumable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let source = if source_is_consumable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.emit_value(
+        op,
+        vec![source.value],
+        None,
+        target_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    )
 }
 
 /// Emits a branch to a target block when the current block can still fall through.

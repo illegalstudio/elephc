@@ -438,6 +438,15 @@ fn test_error_list_unpack_non_array() {
     expect_error("<?php [$a, $b] = 42;", "List unpacking requires an array");
 }
 
+/// Verifies list unpacking rejects a nullable array when no guard removes the null member.
+#[test]
+fn test_error_list_unpack_nullable_array_without_guard() {
+    expect_error(
+        "<?php function row(): ?array { return null; } $entry = row(); [$a, $b] = $entry;",
+        "List unpacking requires an array",
+    );
+}
+
 // --- call_user_func_array errors ---
 
 /// Verifies that error call user func array wrong args.

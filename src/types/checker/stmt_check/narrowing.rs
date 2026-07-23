@@ -10,8 +10,8 @@
 //!   Class` guards, optionally negated with a leading `!`. Narrowing is applied to each clause in an
 //!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
 //!   from previous guards). For a chain with no else where *every* clause body always diverges
-//!   (return/throw/exit/die/never-function), the accumulated complement is applied to the statements
-//!   after the entire if construct.
+//!   (return/throw/break/continue/exit/die/never-function), the accumulated complement is applied
+//!   to the statements after the entire if construct.
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
@@ -184,22 +184,25 @@ impl Checker {
         }
     }
 
-    /// Returns true when a statement body always diverges.
+    /// Returns true when a statement body cannot fall through to the following statement.
     ///
-    /// A body is considered diverging if its last statement is:
-    /// - `return` or `throw`
+    /// A body cannot fall through if its last statement is:
+    /// - `return`, `throw`, `break`, or `continue`
     /// - a call to `exit()` or `die()`
     /// - a call to a user function whose declared return type is `never`
     ///
     /// This is used by type narrowing so that an `if (guard) { ... diverging ... }` (with no else)
     /// allows the statements *after* the if to be narrowed to the complement type.
-    pub(crate) fn body_always_diverges(&self, body: &[Stmt]) -> bool {
+    pub(crate) fn body_cannot_fall_through(&self, body: &[Stmt]) -> bool {
         let Some(last) = body.last() else {
             return false;
         };
 
         match &last.kind {
-            StmtKind::Return(_) | StmtKind::Throw(_) => true,
+            StmtKind::Return(_)
+            | StmtKind::Throw(_)
+            | StmtKind::Break(_)
+            | StmtKind::Continue(_) => true,
             StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
             _ => false,
         }

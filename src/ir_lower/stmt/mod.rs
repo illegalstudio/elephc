@@ -1915,6 +1915,7 @@ fn lower_try_catch(
         .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
+    let mut after_reachable = false;
 
     ctx.emit_void(
         Op::TryPushHandler,
@@ -1927,13 +1928,17 @@ fn lower_try_catch(
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
+        after_reachable = true;
     }
 
     ctx.builder.position_at_end(handler_block);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
-    lower_catch_dispatch(ctx, catches, after_block, span);
+    after_reachable |= lower_catch_dispatch(ctx, catches, after_block, span);
     ctx.builder.position_at_end(after_block);
+    if !after_reachable {
+        ctx.builder.terminate(Terminator::Unreachable);
+    }
     ctx.clear_static_callable_locals();
 }
 
@@ -1979,6 +1984,7 @@ fn lower_try_catch_finally(
         .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
+    let mut after_reachable = false;
 
     ctx.emit_void(
         Op::TryPushHandler,
@@ -1993,14 +1999,21 @@ fn lower_try_catch_finally(
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
-        branch_to(ctx, after_block);
+        if !ctx.builder.insertion_block_is_terminated() {
+            branch_to(ctx, after_block);
+            after_reachable = true;
+        }
     }
 
     ctx.builder.position_at_end(handler_block);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
-    lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
+    after_reachable |=
+        lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
     ctx.builder.position_at_end(after_block);
+    if !after_reachable {
+        ctx.builder.terminate(Terminator::Unreachable);
+    }
     ctx.clear_static_callable_locals();
 }
 
@@ -2015,13 +2028,14 @@ fn emit_try_pop_handler(ctx: &mut LoweringContext<'_, '_>, handler_token: i64, s
     );
 }
 
-/// Lowers ordered catch matching from the current exception handler block.
+/// Lowers ordered catch matching and reports whether any catch reaches the post-try join.
 fn lower_catch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     catches: &[CatchClause],
     after_block: BlockId,
     span: Span,
-) {
+) -> bool {
+    let mut after_reachable = false;
     for catch in catches {
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
@@ -2031,6 +2045,7 @@ fn lower_catch_dispatch(
         lower_block(ctx, &catch.body);
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
+            after_reachable = true;
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);
@@ -2040,16 +2055,18 @@ fn lower_catch_dispatch(
     ctx.builder.terminate(Terminator::Throw {
         value: current.value,
     });
+    after_reachable
 }
 
-/// Lowers catch dispatch for `try`/`catch`/`finally`.
+/// Lowers catch dispatch with finalizers and reports whether any catch reaches the post-try join.
 fn lower_catch_dispatch_with_finally(
     ctx: &mut LoweringContext<'_, '_>,
     catches: &[CatchClause],
     after_block: BlockId,
     finally_body: &[Stmt],
     span: Span,
-) {
+) -> bool {
+    let mut after_reachable = false;
     for catch in catches {
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
@@ -2061,7 +2078,10 @@ fn lower_catch_dispatch_with_finally(
         pop_finally_frame_if_active(ctx, depth);
         if !ctx.builder.insertion_block_is_terminated() {
             lower_block(ctx, finally_body);
-            branch_to(ctx, after_block);
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(ctx, after_block);
+                after_reachable = true;
+            }
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);
@@ -2074,6 +2094,7 @@ fn lower_catch_dispatch_with_finally(
             value: current.value,
         });
     }
+    after_reachable
 }
 
 /// Emits the match tests for one catch clause and branches to body or next clause.
