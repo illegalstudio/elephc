@@ -10,10 +10,14 @@
 //!   promotion before emitting the body).
 //!
 //! Key details:
-//! - Both passes are single-pass over loop bodies; without this scan an early write site
-//!   is typed/lowered against the pre-promotion element type and writes an unboxed
-//!   scalar into mixed-element storage on iterations >= 2, corrupting the heap.
-//! - Sites covered: `$name[] =`, `$name[$i] =`, and `array_push($name, ...)`.
+//! - Both passes are single-pass over loop bodies; without this scan an early write/read site
+//!   is typed/lowered against the pre-promotion element type and writes or reads an unboxed
+//!   scalar in mixed-element storage on iterations >= 2, corrupting the heap.
+//! - Growth/write sites covered by `loop_grown_mixed_array_pushes`: `$name[] =`, `$name[$i] =`,
+//!   and `array_push($name, ...)`.
+//! - Full reassignments `$name = [...]` are covered separately by `loop_reassigned_mixed_arrays`
+//!   (issue #594): a rebind that rebuilds a raw-scalar array with a boxed `mixed` or tagged
+//!   `int|null` element changes the read representation, so the local is widened before the body.
 //! - Only the widening-to-`mixed` transition is reported: it is the one that changes the
 //!   element representation (raw scalar slots vs boxed cells). Same-type growth and
 //!   `never -> T` keep their current lowering.
@@ -100,6 +104,85 @@ pub fn loop_grown_mixed_array_pushes(
         }
     }
     names
+}
+
+/// Returns the names of locals that hold a raw-scalar indexed array at loop entry and are
+/// *reassigned* inside the loop body (or the optional `for` update) to an array literal whose
+/// element storage stops being a raw scalar — a boxed `mixed` cell or the inline tagged
+/// `int|null` scalar (issue #594). Unlike `loop_grown_mixed_array_pushes`, this covers full
+/// rebinds `$name = [...]`, not in-place growth: a self-referential rebuild such as
+/// `$r = [$r[0] - 1, 0]` (mixed) or a `[$r[1], $r[0]]` swap (`int|null`) changes the element
+/// representation on the back edge, but a read of `$r[0]` at the top of the single-pass loop body
+/// is still typed against the entry `array<int>`, so it reads the promoted cell of iterations
+/// >= 2 as a raw scalar (a heap pointer surfaces as an int).
+///
+/// `lookup` supplies the local's type at loop entry; only names that currently hold an array of
+/// a raw *unboxed* scalar element (`int`/`float`/`string`/`bool`) are candidates, because those
+/// are the element representations that change shape when the storage becomes boxed/tagged.
+/// `infer_rhs` supplies the caller's array type for a reassignment RHS; a name is reported only
+/// when that type is an indexed array whose element lowers to a boxed/tagged cell. Same-
+/// representation rebinds (`array<int>` -> `array<int>`, e.g. `$r = [count($r), 0]`) and rebinds
+/// to a differently-typed raw scalar array are left untouched: the former needs no promotion, and
+/// the latter is a distinct representation gap that this boxed-storage widening does not model.
+pub fn loop_reassigned_mixed_arrays(
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    lookup: &dyn Fn(&str) -> Option<PhpType>,
+    infer_rhs: &mut dyn FnMut(&Expr) -> Option<PhpType>,
+) -> Vec<String> {
+    let mut assignments: Vec<(&str, AssignedValue<'_>)> = Vec::new();
+    collect_value_assignments(body, &mut assignments);
+    if let Some(stmt) = update {
+        collect_value_assignment_stmt(stmt, &mut assignments);
+    }
+    let mut names: Vec<String> = Vec::new();
+    for (name, source) in &assignments {
+        let AssignedValue::Expr(rhs) = source else {
+            continue;
+        };
+        if names.iter().any(|n| n == name) {
+            continue;
+        }
+        let Some(PhpType::Array(entry_elem)) = lookup(name) else {
+            continue;
+        };
+        if !is_raw_scalar_array_element(&entry_elem) {
+            continue;
+        }
+        let Some(PhpType::Array(new_elem)) = infer_rhs(rhs) else {
+            continue;
+        };
+        if rebind_element_changes_representation(&new_elem) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// Returns whether a reassignment's array element storage is a boxed `mixed` cell or the inline
+/// tagged `int|null` scalar. Both differ in shape from a raw unboxed scalar, so rebinding a
+/// raw-scalar array to one of them across a loop back edge makes a top-of-body read misread the
+/// element (issue #594). A raw scalar rebind (e.g. `$r = [count($r)]`, still `array<int>`) keeps
+/// the entry representation and must not be widened, so it is excluded here. A self-referential
+/// rebind reads `$r`'s own elements, so once `$r` is widened to `array<mixed>` the rebind's reads
+/// return `mixed` and the rebuilt literal is itself `array<mixed>` — no element coercion needed.
+fn rebind_element_changes_representation(new_elem: &PhpType) -> bool {
+    matches!(
+        new_elem.codegen_repr(),
+        PhpType::Mixed | PhpType::TaggedScalar
+    )
+}
+
+/// Returns whether a resolved array element type is a raw (unboxed) scalar in EIR array storage.
+/// These element representations are read as a direct machine value, so a loop back-edge that
+/// swaps them for boxed `mixed` cells makes an early read misinterpret a boxed pointer as a raw
+/// scalar (issue #594). Boxed (`mixed`), array, and object elements are already heap references
+/// and read consistently across the promotion, so they are not candidates for this widening.
+fn is_raw_scalar_array_element(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool
+    )
 }
 
 /// Resolves the evidence a pushed/written value contributes to the element join.

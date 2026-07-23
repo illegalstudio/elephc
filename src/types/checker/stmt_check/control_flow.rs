@@ -19,11 +19,12 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
-/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
-/// push sites (issue #452). Loop bodies are checked in a single pass, so without this the
-/// entry environment types an early push site against the pre-promotion element type even
-/// though the back edge brings the promoted array around; fixing the element type to
-/// `mixed` up front makes every push site see the fixed-point type.
+/// Widens locals whose indexed-array element representation changes to a boxed cell across the
+/// loop back edge, so the single-pass loop body types every read against the fixed-point type:
+/// growth/write sites that join the element to `mixed` (issue #452) and full reassignments that
+/// rebuild the array with a boxed `mixed` or tagged `int|null` element (issue #594). Without
+/// this, an early read is typed against the pre-promotion element type even though the back edge
+/// brings the promoted array around; fixing the type to `mixed` up front resolves both.
 fn widen_loop_grown_array_pushes(
     checker: &mut Checker,
     body: &[Stmt],
@@ -31,12 +32,22 @@ fn widen_loop_grown_array_pushes(
     env: &mut TypeEnv,
 ) {
     let snapshot = env.clone();
-    let names = crate::types::checker::loop_grown_mixed_array_pushes(
+    let mut names = crate::types::checker::loop_grown_mixed_array_pushes(
         body,
         update,
         &|name| snapshot.get(name).cloned(),
         &mut |expr| checker.infer_type(expr, &snapshot).ok(),
     );
+    // A full reassignment `$r = [...]` that rebuilds the array with a boxed `mixed` element is
+    // not a growth site, but a read of `$r` at the top of the single-pass loop body is still
+    // typed against the entry `array<int>` while the back edge brings the `array<mixed>` around
+    // (issue #594). Widen those locals too so the entry type sees the fixed-point representation.
+    names.extend(crate::types::checker::loop_reassigned_mixed_arrays(
+        body,
+        update,
+        &|name| snapshot.get(name).cloned(),
+        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
+    ));
     for name in names {
         env.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
     }

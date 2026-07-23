@@ -7537,7 +7537,7 @@ fn release_value_after_retaining_insert(
 }
 
 /// Returns the indexed-array type that the EIR backend can faithfully materialize.
-fn array_literal_type_for_ir(
+pub(crate) fn array_literal_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,

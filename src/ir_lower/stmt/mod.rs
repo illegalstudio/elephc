@@ -20,7 +20,8 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, array_access_expr_value_type_for_ir, call_return_type,
+    array_access_element_result_type, array_access_expr_value_type_for_ir,
+    array_literal_type_for_ir, call_return_type,
     coerce_to_int_at_span, index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
@@ -533,16 +534,18 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
-/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
-/// push sites (issue #452) and materializes the promotion once before the loop. Loop bodies
-/// are lowered in a single pass, so without this an early `$a[] = <scalar>` site is emitted
-/// as a raw push against the pre-promotion element type even though the back edge brings the
-/// promoted `array<mixed>` around, writing an unboxed scalar into boxed-cell storage on
-/// iterations >= 2. Converting the array up front (in place, same pointer) and fixing its
-/// type to `array<mixed>` makes every push site box its value. `overrides` supplies types
-/// for names bound by the loop itself (the `foreach` value/key variables) so a push of the
-/// loop variable joins with its real element type. Locals without a materialized slot yet
-/// (first assigned inside the body, hence fresh every iteration) are left untouched.
+/// Widens locals whose indexed-array element representation changes to a boxed cell across the
+/// loop back edge and materializes the promotion once before the loop. Two site kinds qualify:
+/// growth/write sites that join the element to `mixed` (issue #452), and full reassignments that
+/// rebuild the array with a boxed `mixed` or tagged `int|null` element (issue #594). Loop bodies
+/// are lowered in a single pass, so without this an early `$a[] = <scalar>` or a `$r[0]` read is
+/// emitted against the pre-promotion element type even though the back edge brings the promoted
+/// `array<mixed>` around, writing/reading a raw scalar in boxed-cell storage on iterations >= 2.
+/// Converting the array up front (in place, same pointer) and fixing its type to `array<mixed>`
+/// makes every site use the boxed representation. `overrides` supplies types for names bound by
+/// the loop itself (the `foreach` value/key variables) so a push of the loop variable joins with
+/// its real element type. Locals without a materialized slot yet (first assigned inside the body,
+/// hence fresh every iteration) are left untouched.
 fn widen_loop_grown_arrays(
     ctx: &mut LoweringContext<'_, '_>,
     body: &[Stmt],
@@ -564,12 +567,27 @@ fn widen_loop_grown_arrays(
             }
             Some(ctx.local_type(name))
         };
-        crate::types::checker::loop_grown_mixed_array_pushes(
+        let mut names = crate::types::checker::loop_grown_mixed_array_pushes(
             body,
             update,
             &lookup,
             &mut |expr| infer_loop_growth_value_type(ctx, expr),
-        )
+        );
+        // Full reassignments `$r = [...]` that rebuild the array with boxed `mixed` elements are
+        // not growth sites, so the push prescan above misses them; infer the rebind's array type
+        // with the same routine the literal lowering uses so the promotion is materialized before
+        // the body reads `$r` against the stale `array<int>` type (issue #594).
+        for name in crate::types::checker::loop_reassigned_mixed_arrays(
+            body,
+            update,
+            &lookup,
+            &mut |expr| reassignment_rebind_array_type(ctx, expr),
+        ) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
     };
     for name in names {
         if !ctx.local_slots.contains_key(&name) {
@@ -589,6 +607,20 @@ fn widen_loop_grown_arrays(
             span,
         );
         ctx.store_mutated_local(&name, converted, mixed_array_ty, span);
+    }
+}
+
+/// Returns the EIR array type a loop-body reassignment `$name = <expr>` would build, when the
+/// RHS is an indexed array literal. Uses the same `array_literal_type_for_ir` routine the actual
+/// literal lowering uses, so the prescan's `array<mixed>` decision matches the array that gets
+/// emitted. Non-literal RHS shapes return `None` (this widening only models literal rebinds).
+fn reassignment_rebind_array_type(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<PhpType> {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, expr)),
+        _ => None,
     }
 }
 

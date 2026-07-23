@@ -48,6 +48,7 @@ use crate::types::{
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_widening::loop_grown_mixed_array_pushes;
+pub(crate) use loop_widening::loop_reassigned_mixed_arrays;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
