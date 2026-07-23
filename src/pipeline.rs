@@ -280,7 +280,7 @@ pub(crate) fn compile(config: CliConfig) {
     if check_only {
         crate::progress::clear();
         timings.report();
-        println!("Checked '{}'", filename);
+        crate::progress::finish_ok(&format!("Checked '{}'", filename), timings.elapsed());
         return;
     }
 
@@ -477,10 +477,13 @@ pub(crate) fn compile(config: CliConfig) {
     if emit_asm {
         crate::progress::clear();
         timings.report();
-        println!(
-            "Emitted assembly '{}' -> '{}'",
-            filename,
-            output_paths.asm.display()
+        crate::progress::finish_ok(
+            &format!(
+                "Emitted assembly '{}' -> '{}'",
+                filename,
+                output_paths.asm.display()
+            ),
+            timings.elapsed(),
         );
         return;
     }
@@ -489,6 +492,15 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
     timings.record_since("assemble", phase_started);
+
+    for (lib_name, flag_name) in linker::bridges_in(&extra_link_libs) {
+        let detail = if forced_bridge_libs.iter().any(|l| l == lib_name) {
+            format!("{} (--with-{})", lib_name, flag_name)
+        } else {
+            format!("{} (auto-detected)", lib_name)
+        };
+        crate::progress::event("Linking", &detail);
+    }
 
     crate::progress::phase("link");
     let phase_started = Instant::now();
@@ -517,7 +529,10 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::clear();
     timings.report();
-    println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
+    crate::progress::finish_ok(
+        &format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()),
+        timings.elapsed(),
+    );
 }
 
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files

@@ -53,6 +53,13 @@ impl CompileTimings {
         }
     }
 
+    /// Returns elapsed time since this collector was constructed, regardless of
+    /// whether timing collection is enabled. Used for the final success line's
+    /// elapsed-seconds suffix even when `--timings` was not passed.
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
     /// Prints the collected timing report to stderr.
     ///
     /// Output is gated behind the `enabled` flag. The report includes all notes

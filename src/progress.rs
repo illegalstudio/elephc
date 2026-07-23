@@ -68,6 +68,47 @@ pub(crate) fn clear() {
     }
 }
 
+/// Whether this run is decorated (spinner/colors/symbols/event lines). Read by
+/// `errors::report` and `timings::CompileTimings::report` (Tasks 3/4) to match
+/// this switch.
+pub(crate) fn is_decorated() -> bool {
+    *DECORATED.get().unwrap_or(&false)
+}
+
+/// Prints a cargo-style static line (e.g. "Linking elephc_pdo (auto-detected)")
+/// above the live spinner without corrupting its animation. No-op when not
+/// decorated (the bar is `None`, so there is nothing to print above).
+pub(crate) fn event(verb: &str, detail: &str) {
+    if let Some(pb) = bar() {
+        pb.println(format_event(verb, detail));
+    }
+}
+
+/// Clears the spinner (if any) and prints the final success line. Decorated
+/// output adds a green checkmark and elapsed seconds; plain output is exactly
+/// `message`, matching today's `println!("Compiled '{}' -> '{}'", ...)` text.
+pub(crate) fn finish_ok(message: &str, elapsed: Duration) {
+    clear();
+    println!("{}", format_success(message, elapsed, is_decorated()));
+}
+
+fn format_event(verb: &str, detail: &str) -> String {
+    format!("{:>12} {}", console::style(verb).bold().cyan(), detail)
+}
+
+fn format_success(message: &str, elapsed: Duration, decorated: bool) -> String {
+    if decorated {
+        format!(
+            "{} {} ({:.2}s)",
+            console::style("\u{2713}").bold().green(),
+            message,
+            elapsed.as_secs_f64()
+        )
+    } else {
+        message.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +125,29 @@ mod tests {
     fn non_quiet_follows_terminal_detection() {
         assert!(compute_decorated(false, true));
         assert!(!compute_decorated(false, false));
+    }
+
+    /// Verifies plain-mode success text is byte-identical to the historical format.
+    #[test]
+    fn plain_success_message_is_unchanged() {
+        let msg = format_success("Compiled 'a.php' -> 'a'", Duration::from_millis(420), false);
+        assert_eq!(msg, "Compiled 'a.php' -> 'a'");
+    }
+
+    /// Verifies decorated success text keeps the original message intact and adds
+    /// a checkmark plus elapsed seconds.
+    #[test]
+    fn decorated_success_message_keeps_original_text() {
+        let msg = format_success("Compiled 'a.php' -> 'a'", Duration::from_millis(420), true);
+        assert!(msg.contains("Compiled 'a.php' -> 'a'"));
+        assert!(msg.contains("0.42s"));
+    }
+
+    /// Verifies the event line names the verb and detail text.
+    #[test]
+    fn event_line_contains_verb_and_detail() {
+        let line = format_event("Linking", "elephc_pdo (auto-detected)");
+        assert!(line.contains("Linking"));
+        assert!(line.contains("elephc_pdo (auto-detected)"));
     }
 }
