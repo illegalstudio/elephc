@@ -884,6 +884,14 @@ impl<'a> FunctionContext<'a> {
         Ok(matches!(
             inst.op,
             Op::Acquire
+                // Checked integer arithmetic and mixed numeric binops allocate a
+                // fresh, solely-owned boxed Mixed result. A Mixed-valued container
+                // (hash/array/object slot) steals that reference on insert instead
+                // of retaining it, so it must not be re-incref'd (issue #595).
+                | Op::ICheckedAdd
+                | Op::ICheckedSub
+                | Op::ICheckedMul
+                | Op::MixedNumericBinop
                 | Op::ArrayNew
                 | Op::HashNew
                 | Op::ArrayToMixed
