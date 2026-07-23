@@ -2,7 +2,7 @@
 title: "inet_pton() — internals"
 description: "Compiler internals for inet_pton(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 385
+  order: 392
 ---
 
 ## `inet_pton()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/inet_pton.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_pton.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

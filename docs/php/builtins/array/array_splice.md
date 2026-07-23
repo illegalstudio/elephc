@@ -8,7 +8,7 @@ sidebar:
 ## array_splice()
 
 ```php
-function array_splice(array $array, int $offset, int $length = null): array
+function array_splice(array &$array, int $offset, int $length = null): array
 ```
 
 Removes a portion of the array and replaces it with something else.

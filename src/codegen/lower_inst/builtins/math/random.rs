@@ -15,6 +15,7 @@ use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::super::context::FunctionContext;
+use super::super::super::load_value_to_first_int_arg;
 use super::super::{expect_operand, store_if_result};
 
 /// Lowers `rand()` and `mt_rand()` with either zero args or an inclusive range.
@@ -43,6 +44,34 @@ pub(crate) fn lower_random_int(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "random_int", 2)?;
     lower_random_range(ctx, inst, "random_int")?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `random_bytes()` into an owned CSPRNG binary string of the given length.
+///
+/// Materializes the single length operand as an integer, passes it to the
+/// `__rt_random_bytes` runtime helper (length in `x0` on AArch64, `rdi` on
+/// x86_64), and stores the returned owned string result (`x1`/`x2` on AArch64,
+/// `rax`/`rdx` on x86_64) into the instruction's result slot. The runtime helper
+/// owns allocation, the cryptographic fill, and the fatal paths for a length
+/// below 1 or an unavailable entropy source.
+pub(crate) fn lower_random_bytes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "random_bytes", 1)?;
+    let length = expect_operand(inst, 0)?;
+    load_numeric_as_int(ctx, length, "random_bytes")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // length already sits in the AArch64 integer result register (x0),
+            // which is exactly where __rt_random_bytes expects it.
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the requested byte length as the SysV first argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_random_bytes");
     store_if_result(ctx, inst)
 }
 
@@ -94,12 +123,21 @@ fn load_numeric_as_int(
 ) -> Result<()> {
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())
         }
         PhpType::Float => {
             abi::emit_float_result_to_int_result(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(

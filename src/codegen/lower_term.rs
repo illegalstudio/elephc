@@ -88,8 +88,19 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
-            abi::emit_jump(ctx.emitter, &else_edge);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    let else_landing = ctx.next_label("cond_else_landing");
+                    abi::emit_branch_if_int_result_zero(ctx.emitter, &else_landing);
+                    abi::emit_jump(ctx.emitter, &then_edge);
+                    ctx.emitter.label(&else_landing);
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+                Arch::X86_64 => {
+                    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())
@@ -194,8 +205,11 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
+                let miss_label = ctx.next_label("switch_case_miss");
                 ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
-                ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
+                ctx.emitter.instruction(&format!("b.ne {}", miss_label));       // keep the conditional edge within its limited AArch64 branch range
+                abi::emit_jump(ctx.emitter, &branch_label);
+                ctx.emitter.label(&miss_label);
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
@@ -401,13 +415,56 @@ mod tests {
         assert!(asm.contains("_eir_main_cond_else_args_1:"), "{asm}");
     }
 
+    /// Verifies AArch64 conditional terminators only use their range-limited
+    /// branch for a nearby landing pad before taking unrestricted block edges.
+    #[test]
+    fn aarch64_cond_br_uses_near_landing_pad() {
+        let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
+
+        assert!(
+            asm.contains("cbz x0, _eir_main_cond_else_landing_2"),
+            "{asm}"
+        );
+        assert!(
+            asm.contains("b _eir_main_cond_then_args_0")
+                && asm.contains("_eir_main_cond_else_landing_2:")
+                && asm.contains("b _eir_main_cond_else_args_1"),
+            "{asm}"
+        );
+        assert!(
+            !asm.contains("cbnz x0, _eir_main_cond_then_args_0"),
+            "{asm}"
+        );
+    }
+
     /// Verifies switch case and default arguments use per-edge copy stubs.
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
         let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
         assert!(asm.contains("_eir_main_switch_case_args_0:"), "{asm}");
-        assert!(asm.contains("_eir_main_switch_default_args_1:"), "{asm}");
+        assert!(asm.contains("_eir_main_switch_default_args_2:"), "{asm}");
+    }
+
+    /// Verifies AArch64 switch comparisons branch locally on misses before
+    /// taking an unrestricted jump to the matching case edge.
+    #[test]
+    fn aarch64_switch_uses_near_miss_landing_pad() {
+        let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
+
+        assert!(
+            asm.contains("b.ne _eir_main_switch_case_miss_1"),
+            "{asm}"
+        );
+        assert!(
+            asm.contains("b _eir_main_switch_case_args_0")
+                && asm.contains("_eir_main_switch_case_miss_1:"),
+            "{asm}"
+        );
+        assert!(
+            !asm.contains("b.eq _eir_main_switch_case_args_0"),
+            "{asm}"
+        );
     }
 
     /// Verifies throw terminators publish `_exc_value` and call the exception unwinder.

@@ -8,7 +8,7 @@ sidebar:
 ## stream_select()
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
+function stream_select(array &$read, array &$write, array &$except, int $seconds, int $microseconds = 0): int
 ```
 
 Runs the equivalent of the select() system call on the given arrays of streams.

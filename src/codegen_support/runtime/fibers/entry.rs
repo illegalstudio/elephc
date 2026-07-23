@@ -144,10 +144,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("push rbp");                                            // preserve a zero-equivalent caller frame pointer slot for walkers
     emitter.instruction("mov rbp, rsp");                                        // anchor the frame pointer at the new bottom of the fiber stack
-    emitter.instruction("sub rsp, 8");                                          // align the fresh stack for SysV calls after the synthetic entry jump
+    emitter.instruction(&format!("sub rsp, {}", TRY_HANDLER_SLOT_SIZE + 8));    // reserve the boundary handler and align calls in one fixed unwindable frame
+    emitter.instruction("sub rbp, 8");                                          // keep rbp at the PE-encodable rsp+224 frame offset
 
     // -- install a sentinel exception handler for exceptions escaping the callback --
-    emitter.instruction(&format!("sub rsp, {}", TRY_HANDLER_SLOT_SIZE));        // reserve TRY_HANDLER_SLOT_SIZE bytes for the boundary handler
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0); // r10 = previous head of the handler chain
     emitter.instruction("mov QWORD PTR [rsp], r10");                            // handler.next = previous chain head
     emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // handler.activation_record = NULL
@@ -179,7 +179,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- call through the generated Fiber wrapper --
     emitter.label("__rt_fiber_entry_call_wrapper");
     emitter.instruction("mov rdi, r12");                                        // pass Fiber* to the wrapper so it can load args and captures
-    emitter.instruction("call r13");                                            // call wrapper; rax returns a boxed Mixed terminal value
+    emitter.emit_platform_callback_call("r13", 1);
 
     // -- store the return value into transfer_value and mark Terminated --
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // reload r12 because the callback may have clobbered caller-saved registers

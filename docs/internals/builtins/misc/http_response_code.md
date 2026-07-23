@@ -2,7 +2,7 @@
 title: "http_response_code() — internals"
 description: "Compiler internals for http_response_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 295
+  order: 296
 ---
 
 ## `http_response_code()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/http_response_code.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/http_response_code.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

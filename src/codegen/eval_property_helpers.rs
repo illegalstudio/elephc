@@ -1248,7 +1248,8 @@ fn emit_aarch64_store_object_property_slot(
 ) {
     if !class_name.is_empty() {
         let (label, len) = data.add_string(class_name.as_bytes());
-        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        let is_a_symbol =
+            abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
         emitter.instruction("ldr x0, [sp, #24]");                               // reload the boxed eval value for object type validation
         abi::emit_symbol_address(emitter, "x1", &label);
         abi::emit_load_int_immediate(emitter, "x2", len as i64);
@@ -1289,7 +1290,8 @@ fn emit_x86_64_store_object_property_slot(
 ) {
     if !class_name.is_empty() {
         let (label, len) = data.add_string(class_name.as_bytes());
-        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        let is_a_symbol =
+            abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
         emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                   // reload the boxed eval value for object type validation
         abi::emit_symbol_address(emitter, "rsi", &label);
         abi::emit_load_int_immediate(emitter, "rdx", len as i64);
@@ -1435,6 +1437,6 @@ fn label_fragment(value: &str) -> String {
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

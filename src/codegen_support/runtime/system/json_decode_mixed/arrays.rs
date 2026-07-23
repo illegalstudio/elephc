@@ -267,7 +267,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   [rbp - 48] = after_comma flag
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned scratch
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned decoder scratch
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park slice_ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // park slice_len
 
@@ -306,18 +306,17 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   rax = slice_ptr (kept reloadable but we use [rbp-8] when needed)
     //   r10 = depth
     //   r11 = in_string flag
-    //   r12 = escape flag (callee-saved — we save before clobbering)
+    //   r9  = escape flag (volatile and call-free within the scanner)
     //   r8  = current byte
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore slice_len after the whitespace helper used an exclusive limit
-    emitter.instruction("push r12");                                            // preserve callee-saved (System V keeps r12)
     emitter.instruction("xor r10, r10");                                        // depth
     emitter.instruction("xor r11, r11");                                        // in_string
-    emitter.instruction("xor r12, r12");                                        // escape
+    emitter.instruction("xor r9, r9");                                          // clear the escape flag
     emitter.label("__rt_json_decode_array_real_scan_x");
     emitter.instruction("cmp rcx, rdx");                                        // hit slice end?
     emitter.instruction("jge __rt_json_decode_array_real_scan_done_x");         // branch on the current JSON decoder condition
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON decoder state
-    emitter.instruction("test r12, r12");                                       // check the current JSON decoder condition
+    emitter.instruction("test r9, r9");                                         // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_array_real_scan_after_escape_x"); // branch on the current JSON decoder condition
     emitter.instruction("test r11, r11");                                       // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_array_real_scan_in_string_x");    // branch on the current JSON decoder condition
@@ -356,15 +355,14 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r11, r11");                                        // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_array_real_scan_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_array_real_scan_set_escape_x");
-    emitter.instruction("mov r12, 1");                                          // load or prepare JSON decoder state
+    emitter.instruction("mov r9, 1");                                           // mark the next byte as escaped
     emitter.instruction("jmp __rt_json_decode_array_real_scan_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_array_real_scan_after_escape_x");
-    emitter.instruction("xor r12, r12");                                        // update the JSON decoder cursor or counter
+    emitter.instruction("xor r9, r9");                                          // clear the consumed escape flag
     emitter.label("__rt_json_decode_array_real_scan_advance_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_array_real_scan_x");              // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_array_real_scan_done_x");
-    emitter.instruction("pop r12");                                             // restore callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // cursor at separator
 
     // Recursively decode the element sub-slice.

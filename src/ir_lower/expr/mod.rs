@@ -25,7 +25,6 @@ use crate::parser::ast::{
     InstanceOfTarget, MagicConstant, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::span::Span;
-use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
     checker::infer_expr_type_syntactic, merge_array_key_types, normalized_array_key_type,
     ExternFunctionSig, FunctionSig, PhpType, ReturnArgAlias, ThrowAccessKind,
@@ -1964,7 +1963,11 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     }
     if ctx.has_eval_barrier()
         && plain_positional_call_args(args)
-        && canonical_builtin_function_name(canonical).is_none()
+        && crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+            canonical,
+            ctx.platform,
+        )
+        .is_none()
     {
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
@@ -1978,7 +1981,47 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         );
     }
     let eval_literal = eval_literal_fragment(canonical, args);
-    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    apply_builtin_output_type_flow(ctx, canonical, args);
+    call
+}
+
+/// Applies post-call local type facts for builtins with documented by-reference outputs.
+///
+/// Checker flow records the same facts while processing statement expressions.
+/// Lowering must mirror them because an earlier source assignment (for example,
+/// `$pipes = []`) replaces the final checker snapshot with its pre-call `never`
+/// element type as the EIR local is built. Only `proc_open` is modeled here: its
+/// plain-variable `$pipes` output is an integer-keyed map of stream resources.
+///
+/// Its EIR storage element is deliberately `Mixed`, rather than the checker-facing
+/// `resource<stream>` fact: `__rt_proc_open` creates resource boxes and publishes
+/// those boxes through `__rt_array_set_mixed_key` (hash value tag 7).  Keeping the
+/// physical entry type as `Mixed` makes `HashGet` retain the box and lets stream
+/// consumers unbox its `{ tag: resource, fd, kind }` payload.  Representing the
+/// same table as `Resource` would lower reads as raw integers because resources
+/// use the scalar codegen representation, turning a Mixed pointer into an fd.
+fn apply_builtin_output_type_flow(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) {
+    if php_symbol_key(name.trim_start_matches('\\')) != "proc_open" {
+        return;
+    }
+    let Some(pipes) = crate::builtins::proc_open_argument_at(args, 2, "pipes") else {
+        return;
+    };
+    let ExprKind::Variable(name) = &pipes.kind else {
+        return;
+    };
+    ctx.set_local_type(
+        name,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
 }
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
@@ -4554,7 +4597,12 @@ fn resolve_static_string_callable(
     if let Some(function_name) = lookup_folded_name(ctx.extern_functions.keys(), callback) {
         return Some(StaticCallableBinding::ExternFunction(function_name));
     }
-    if let Some(function_name) = canonical_builtin_function_name(callback) {
+    if let Some(function_name) =
+        crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+            callback,
+            ctx.platform,
+        )
+    {
         return Some(StaticCallableBinding::Builtin(function_name));
     }
     if let Some(function_name) = lookup_folded_name(ctx.functions.keys(), callback) {
@@ -5227,6 +5275,9 @@ fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::ProcOpen => {
+            lower_proc_open_args(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
@@ -5277,6 +5328,98 @@ fn lower_positional_builtin_args_with_signature(
             }
         })
         .collect()
+}
+
+/// Lowers the Windows-only static `proc_open` extensions into a compact runtime
+/// ABI: command arrays become a correctly quoted direct command line, environment
+/// maps become a counted double-NUL block, and the final integer packs the block
+/// byte length plus the direct-execution bit.
+fn lower_proc_open_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if args.iter().any(is_spread_arg) {
+        return lower_args_with_signature(ctx, sig, args);
+    }
+    if crate::types::call_args::has_named_args(args) {
+        let mut operands = lower_args_with_signature(ctx, sig, args);
+        let command = crate::builtins::proc_open_argument_at(args, 0, "command")
+            .expect("checked proc_open call has command");
+        let command_line = crate::builtins::static_windows_command_line(command);
+        let environment_expr = crate::builtins::proc_open_argument_at(args, 4, "env_vars");
+        let environment = environment_expr
+            .and_then(crate::builtins::static_windows_environment_block);
+        let option_flags = crate::builtins::proc_open_argument_at(args, 5, "options")
+            .and_then(crate::builtins::static_windows_options)
+            .unwrap_or(0);
+        if let Some(command_line) = command_line.as_ref() {
+            let synthetic = Expr::new(ExprKind::StringLiteral(command_line.clone()), command.span);
+            operands.push(lower_expr(ctx, &synthetic).value);
+        } else {
+            let null = Expr::new(ExprKind::Null, command.span);
+            operands.push(lower_expr(ctx, &null).value);
+        }
+        if let Some(environment) = environment.as_ref() {
+            let span = environment_expr.map_or(command.span, |expr| expr.span);
+            let synthetic = Expr::new(ExprKind::StringLiteral(environment.clone()), span);
+            operands.push(lower_expr(ctx, &synthetic).value);
+        } else {
+            let null = Expr::new(ExprKind::Null, command.span);
+            operands.push(lower_expr(ctx, &null).value);
+        }
+        let environment_len = environment.as_ref().map_or(0, String::len) as i64;
+        let flags = (environment_len << crate::builtins::WINDOWS_PROC_OPTION_BITS)
+            | option_flags
+            | i64::from(command_line.is_some());
+        let flags_expr = Expr::new(ExprKind::IntLiteral(flags), command.span);
+        operands.push(lower_expr(ctx, &flags_expr).value);
+        return operands;
+    }
+    let command_line = args
+        .first()
+        .and_then(crate::builtins::static_windows_command_line);
+    let environment = args
+        .get(4)
+        .and_then(crate::builtins::static_windows_environment_block);
+    let option_flags = args
+        .get(5)
+        .and_then(crate::builtins::static_windows_options)
+        .unwrap_or(0);
+    let direct = command_line.is_some();
+
+    let mut operands = Vec::with_capacity(9);
+    for index in 0..args.len().min(6) {
+        operands.push(match sig {
+            Some(sig) => lower_arg_with_signature(ctx, sig, index, &args[index]),
+            None => lower_expr(ctx, &args[index]).value,
+        });
+    }
+    while operands.len() < 6 {
+        let default = Expr::new(ExprKind::Null, args[0].span);
+        operands.push(lower_expr(ctx, &default).value);
+    }
+    if let Some(command_line) = command_line {
+        let synthetic = Expr::new(ExprKind::StringLiteral(command_line), args[0].span);
+        operands.push(lower_expr(ctx, &synthetic).value);
+    } else {
+        let null = Expr::new(ExprKind::Null, args[0].span);
+        operands.push(lower_expr(ctx, &null).value);
+    }
+    if let Some(environment) = environment.as_ref() {
+        let synthetic = Expr::new(ExprKind::StringLiteral(environment.clone()), args[4].span);
+        operands.push(lower_expr(ctx, &synthetic).value);
+    } else {
+        let null = Expr::new(ExprKind::Null, args[0].span);
+        operands.push(lower_expr(ctx, &null).value);
+    }
+    let environment_len = environment.as_ref().map_or(0, String::len) as i64;
+    let flags = (environment_len << crate::builtins::WINDOWS_PROC_OPTION_BITS)
+        | option_flags
+        | i64::from(direct);
+    let flags_expr = Expr::new(ExprKind::IntLiteral(flags), args[0].span);
+    operands.push(lower_expr(ctx, &flags_expr).value);
+    operands
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.
@@ -5713,7 +5856,7 @@ fn coerce_scalar_arg_to_param_storage(
         return coerce_to_float(ctx, value, arg);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    if param_ty == PhpType::Str && is_php_string_coercible_param_type(&source_ty) {
         return coerce_to_string(ctx, value, arg);
     }
     value
@@ -5748,9 +5891,7 @@ fn coerce_operands_to_params(
                 ir_type: IrType::I64,
             };
             operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
-        } else if param_ty == PhpType::Str
-            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
-        {
+        } else if param_ty == PhpType::Str && is_php_string_coercible_param_type(&operand_ty) {
             let lowered = LoweredValue {
                 value,
                 ir_type: ctx.builder.value_type(value),
@@ -5759,6 +5900,25 @@ fn coerce_operands_to_params(
         }
     }
     operands
+}
+
+/// Returns whether a declared PHP string parameter accepts this lowered scalar representation.
+///
+/// Arrays and objects deliberately remain excluded: PHP weak scalar coercion accepts numbers,
+/// booleans, null, and dynamic scalar unions, but not compound/object arguments for typed string
+/// internal functions such as `escapeshellarg()`.
+fn is_php_string_coercible_param_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
 }
 
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
@@ -12056,12 +12216,19 @@ fn resolve_known_reflection_function_name(
     function_name: &str,
 ) -> Option<String> {
     resolve_known_function_name(ctx, function_name)
-        .or_else(|| resolve_known_reflection_builtin_name(function_name))
+        .or_else(|| resolve_known_reflection_builtin_name(ctx, function_name))
 }
 
 /// Resolves a supported callable builtin name for `ReflectionFunction`.
-fn resolve_known_reflection_builtin_name(function_name: &str) -> Option<String> {
-    let canonical = canonical_builtin_function_name(function_name.trim_start_matches('\\'))?;
+fn resolve_known_reflection_builtin_name(
+    ctx: &LoweringContext<'_, '_>,
+    function_name: &str,
+) -> Option<String> {
+    let canonical =
+        crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+            function_name.trim_start_matches('\\'),
+            ctx.platform,
+        )?;
     first_class_builtin_signature(&canonical).map(|_| canonical)
 }
 
@@ -14555,6 +14722,16 @@ fn coerce_to_string_at_span(
             None,
             PhpType::Str,
             Op::ResourceToStr.default_effects(),
+            span,
+        );
+    }
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Bool {
+        return ctx.emit_value(
+            Op::BoolToStr,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::BoolToStr.default_effects(),
             span,
         );
     }

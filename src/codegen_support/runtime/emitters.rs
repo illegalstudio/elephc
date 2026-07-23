@@ -23,8 +23,9 @@ use super::pointers;
 use super::spl;
 use super::strings;
 use super::system;
-use super::zval;
+use super::win32;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Platform;
 use crate::codegen_support::RuntimeFeatures;
 
 /// Emits all runtime helper labels in dependency order for supported targets.
@@ -35,6 +36,15 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    if features.tls {
+        crate::codegen_support::tls::emit_tls_abi_adapters(emitter);
+    }
+    if emitter.platform == Platform::Windows {
+        win32::emit_win32_shims(emitter, features);
+        win32::emit_fd_to_handle(emitter);
+        win32::emit_main_wrapper(emitter);
+    }
+
     diagnostics::emit_diagnostics(emitter);
 
     // String runtime functions
@@ -42,6 +52,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
+    strings::emit_var_dump_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
@@ -49,6 +60,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
     strings::emit_str_loose_eq(emitter);
+    strings::emit_php_round(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
@@ -91,6 +103,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);
+    strings::emit_shell_escapes(emitter);
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
@@ -173,8 +186,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_throw_static_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    // Windows x86_64 only: emit elephc's SEH-free setjmp/longjmp. The MinGW C-library
+    // versions are SEH-based (they walk the stack and unwind via RtlUnwindEx) and read
+    // their arguments MSx64-style, both of which break every try/catch and Fiber on
+    // Windows; `bl_c` routes `setjmp`/`longjmp` to these labels on that target.
+    if emitter.platform == Platform::Windows {
+        exceptions::emit_setjmp_longjmp(emitter);
+    }
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);
@@ -205,6 +226,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_hash_union(emitter);
     arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);
+    arrays::emit_random_bytes(emitter);
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
@@ -414,6 +436,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_socket_pair(emitter);
     io::emit_popen(emitter);
     io::emit_pclose(emitter);
+    io::emit_proc_open(emitter);
+    io::emit_proc_open_marshalling(emitter);
+    io::emit_proc_pipe_registry(emitter);
+    io::emit_proc_status(emitter);
+    io::emit_proc_close(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
     io::emit_closedir(emitter);
@@ -432,6 +459,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_context_set_option_4(emitter);
     io::emit_get_string_context_option(emitter);
     io::emit_get_int_context_option(emitter);
+    io::emit_get_bool_context_option(emitter);
     io::emit_apply_socket_client_opts(emitter);
     io::emit_apply_socket_server_opts(emitter);
     io::emit_socket_backlog(emitter);
@@ -440,6 +468,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_http_build_request(emitter);
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
+    io::emit_tls_session_table(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
@@ -553,18 +582,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     pointers::emit_ptr_read_string(emitter);
     pointers::emit_ptr_write_string(emitter);
 
-    // zval pack/unpack bridge runtime functions
-    zval::emit_zval_string_new(emitter);
-    zval::emit_zval_djbx33a(emitter);
-    zval::emit_zval_pack(emitter);
-    zval::emit_zval_pack_array_packed(emitter);
-    zval::emit_zval_pack_array_hash(emitter);
-    zval::emit_zval_unpack(emitter);
-    zval::emit_zval_unpack_array(emitter);
-    zval::emit_zval_type(emitter);
-    zval::emit_zval_free_array(emitter);
-    zval::emit_zval_free(emitter);
-
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);
     fibers::emit_fiber_free_stack(emitter);
@@ -646,6 +663,28 @@ mod tests {
         assert!(included.output().contains("__rt_mb_strlen:"));
     }
 
+    /// Verifies Windows routes mb_strlen's libiconv calls through the SysV-to-MS x64 shims.
+    #[test]
+    fn test_windows_mb_strlen_uses_iconv_abi_shims() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_runtime(
+            &mut emitter,
+            RuntimeFeatures {
+                mb_strlen: true,
+                iconv: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        let asm = emitter.output();
+
+        assert!(asm.contains("call __rt_sys_iconv_open"));
+        assert!(asm.contains("call __rt_sys_iconv\n"));
+        assert!(asm.contains("call __rt_sys_iconv_close"));
+        assert!(!asm.contains("    call iconv_open\n"));
+        assert!(!asm.contains("    call iconv\n"));
+        assert!(!asm.contains("    call iconv_close\n"));
+    }
+
     /// Verifies that Linux x86_64 uses the shared runtime surface.
     #[test]
     fn test_linux_x86_64_runtime_uses_shared_surface() {
@@ -668,6 +707,51 @@ mod tests {
                 sym
             );
         }
+    }
+
+    /// Regression net for wiring the Windows syscall→shim transform into the
+    /// runtime build (FIX #1). Generates the full shared x86_64 runtime for a
+    /// Windows target and applies `transform_for_windows` exactly as the runtime
+    /// cache does, then asserts that no raw `syscall` instruction and no `int3`
+    /// (unmapped-syscall marker) survive. `int3` would only appear if the runtime
+    /// emits a syscall number missing from `linux_syscall_to_shim`, so this also
+    /// guards syscall→shim coverage. Needs no MinGW toolchain.
+    #[test]
+    fn test_windows_runtime_has_no_raw_syscalls_after_transform() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        let raw = crate::codegen::generate_runtime_with_features_pic(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures::all(),
+            false,
+        );
+
+        // Sanity: the untransformed shared x86_64 runtime really does emit raw
+        // syscalls, so a passing assertion below is not vacuous.
+        assert!(
+            raw.lines().any(|line| line.trim() == "syscall"),
+            "expected the raw x86_64 runtime to contain standalone syscall instructions"
+        );
+
+        let transformed = crate::codegen::platform::transform_for_windows(&raw);
+
+        let leftover: Vec<&str> = transformed
+            .lines()
+            .filter(|line| {
+                let t = line.trim();
+                t == "syscall" || t.starts_with("syscall ") || t.starts_with("syscall\t")
+            })
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "Windows runtime still contains raw syscall lines after transform: {:?}",
+            leftover
+        );
+        assert!(
+            !transformed.contains("int3"),
+            "Windows runtime transform produced int3 — an unmapped Linux syscall number \
+             is emitted by the runtime but missing from linux_syscall_to_shim"
+        );
     }
 
     /// Verifies the full macOS AArch64 runtime still assembles once per-symbol
@@ -739,11 +823,13 @@ mod tests {
         // A token is an internal helper label iff it is an `L`-localized `__rt_*`
         // name (what `label()` produces under dead stripping). `.alt_entry`
         // helpers stay bare `__rt_*`, so they never match here.
+        /// Reports whether a token names a localized internal runtime helper.
         fn is_internal(tok: &str) -> bool {
             tok.starts_with("L__rt_")
         }
         // True when `s` is a bare label definition body (no whitespace, label
         // characters only, not purely numeric → not an assembler-local `N:`).
+        /// Reports whether text is a valid non-numeric assembler label body.
         fn is_label_name(s: &str) -> bool {
             !s.is_empty()
                 && !s.bytes().all(|b| b.is_ascii_digit())

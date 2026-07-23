@@ -8,7 +8,7 @@ sidebar:
 ## array_multisort()
 
 ```php
-function array_multisort(array $array1, int $array2): bool
+function array_multisort(array &$array1, int &$array2): bool
 ```
 
 Sorts multiple arrays or multi-dimensional arrays.

@@ -11,9 +11,9 @@ sidebar:
 |---|---|---|:-:|:-:|
 | [`basename()`](./filesystem/basename.md) | `(string $path, string $suffix = ''): string` | `string` | ✓ | ✓ |
 | [`chdir()`](./filesystem/chdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
-| [`chgrp()`](./filesystem/chgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |
+| [`chgrp()`](./filesystem/chgrp.md) | `(string $filename, mixed $group): bool` | `bool` | ✓ | ✓ |
 | [`chmod()`](./filesystem/chmod.md) | `(string $filename, int $permissions): bool` | `bool` | ✓ | ✓ |
-| [`chown()`](./filesystem/chown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
+| [`chown()`](./filesystem/chown.md) | `(string $filename, mixed $user): bool` | `bool` | ✓ | ✓ |
 | [`clearstatcache()`](./filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
 | [`copy()`](./filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
@@ -40,8 +40,8 @@ sidebar:
 | [`is_readable()`](./filesystem/is_readable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_writable()`](./filesystem/is_writable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_writeable()`](./filesystem/is_writeable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
-| [`lchgrp()`](./filesystem/lchgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |
-| [`lchown()`](./filesystem/lchown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
+| [`lchgrp()`](./filesystem/lchgrp.md) | `(string $filename, mixed $group): bool` | `bool` | ✓ | ✓ |
+| [`lchown()`](./filesystem/lchown.md) | `(string $filename, mixed $user): bool` | `bool` | ✓ | ✓ |
 | [`link()`](./filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
@@ -59,7 +59,7 @@ sidebar:
 | [`stat()`](./filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |
-| [`tempnam()`](./filesystem/tempnam.md) | `(string $directory, string $prefix): string` | `string` | ✓ | ✓ |
+| [`tempnam()`](./filesystem/tempnam.md) | `(string $directory, string $prefix): mixed` | `mixed` | ✓ | ✓ |
 | [`tmpfile()`](./filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`touch()`](./filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |

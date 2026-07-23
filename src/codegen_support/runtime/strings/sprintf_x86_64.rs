@@ -9,6 +9,7 @@
 //! - Formatting helpers parse format strings and marshal values through target ABI calls or emitted formatting paths.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Platform;
 
 /// Emits the `__rt_sprintf` runtime helper for Linux x86_64.
 ///
@@ -167,6 +168,10 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_sprintf_call_float_linux_x86_64");             // dispatch to the float snprintf path when the terminal type character is '%e'
     emitter.instruction("cmp r8b, 103");                                        // is the terminal type character '%g'?
     emitter.instruction("je __rt_sprintf_call_float_linux_x86_64");             // dispatch to the float snprintf path when the terminal type character is '%g'
+    emitter.instruction("cmp r8b, 69");                                         // is the terminal type character '%E'?
+    emitter.instruction("je __rt_sprintf_call_float_linux_x86_64");             // dispatch to the float snprintf path when the terminal type character is '%E'
+    emitter.instruction("cmp r8b, 71");                                         // is the terminal type character '%G'?
+    emitter.instruction("je __rt_sprintf_call_float_linux_x86_64");             // dispatch to the float snprintf path when the terminal type character is '%G'
     emitter.instruction("cmp r8b, 115");                                        // is the terminal type character '%s'?
     emitter.instruction("je __rt_sprintf_call_string_linux_x86_64");            // dispatch to the string snprintf path when the terminal type character is '%s'
     emitter.instruction("cmp r8b, 99");                                         // is the terminal type character '%c'?
@@ -177,13 +182,115 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_done_linux_x86_64");                  // stop formatting when the format string ends partway through a specifier
 
     emitter.label("__rt_sprintf_call_float_linux_x86_64");
-    emitter.instruction("movq xmm0, QWORD PTR [r9]");                           // load the packed floating-point bits into xmm0 for the SysV variadic snprintf call
+    emitter.instruction("movq xmm0, QWORD PTR [r9]");                           // load the packed floating-point bits into xmm0 for the variadic snprintf call
     emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
     emitter.instruction("mov esi, 128");                                        // bound the local snprintf output scratch buffer to 128 bytes
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
-    emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register to the SysV variadic call ABI
-    emitter.bl_c("snprintf");                                                   // format the floating operand into the local snprintf output scratch buffer
-    emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted snprintf output into the concat buffer
+    if emitter.platform == Platform::Windows {
+        // This call has NO leading integer precision argument (the user's mini
+        // format string already embeds precision/width/flags), so the double is
+        // MSx64 positional argument 4 — `__rt_sys_snprintf` (register-shaped for
+        // __rt_ftoa's `snprintf(buf, size, "%.*e", precision, double)`, where the
+        // double is positional argument 5) would misroute it; call the
+        // dedicated `__rt_sys_snprintf_double` shim instead (WF10b BUG A fix).
+        emitter.instruction("call __rt_sys_snprintf_double");                   // route through the 3-fixed-arg + 1-variadic-double MSx64 shim
+    } else {
+        emitter.instruction("mov eax, 1");                                      // advertise one live SIMD variadic register to the SysV variadic call ABI
+        emitter.emit_call_c("snprintf");                                        // format the floating operand into the local snprintf output scratch buffer
+    }
+    // -- PHP parity: %e/%E (and any exponential-form %g/%G) exponent uses the
+    // -- minimum digit count (no leading zero), but CRT snprintf pads to at
+    // -- least 2 digits. A double's decimal exponent never exceeds 3 digits and
+    // -- 3-digit exponents are never zero-padded (they start at magnitude 100),
+    // -- so the only possible padding is a single leading '0' in a 2-digit
+    // -- exponent; strip it in place and shrink the byte count by one.
+    emitter.instruction("lea rsi, [rbp - 224]");                                // scan cursor over the freshly formatted snprintf output
+    emitter.instruction("mov rcx, rax");                                        // remaining bytes to scan for the 'e'/'E' exponent marker
+    emitter.label("__rt_sprintf_etrim_scan_linux_x86_64");
+    emitter.instruction("test rcx, rcx");                                       // scanned the whole output without finding an exponent marker?
+    emitter.instruction("jz __rt_sprintf_etrim_done_linux_x86_64");             // no exponent (e.g. %f) -> nothing to trim
+    emitter.instruction("movzx edx, BYTE PTR [rsi]");                           // load the next output byte
+    emitter.instruction("cmp dl, 101");                                         // is it 'e'?
+    emitter.instruction("je __rt_sprintf_etrim_found_linux_x86_64");            // found the exponent marker
+    emitter.instruction("cmp dl, 69");                                          // is it 'E'?
+    emitter.instruction("je __rt_sprintf_etrim_found_linux_x86_64");            // found the exponent marker
+    emitter.instruction("inc rsi");                                             // advance the scan cursor
+    emitter.instruction("dec rcx");                                             // decrement the remaining scan length
+    emitter.instruction("jmp __rt_sprintf_etrim_scan_linux_x86_64");            // keep scanning for the exponent marker
+    emitter.label("__rt_sprintf_etrim_found_linux_x86_64");
+    emitter.instruction("inc rsi");                                             // advance past the 'e'/'E' marker
+    emitter.instruction("dec rcx");                                             // decrement the remaining scan length
+    emitter.instruction("test rcx, rcx");                                       // malformed: exponent marker was the last byte?
+    emitter.instruction("jz __rt_sprintf_etrim_done_linux_x86_64");             // bail out defensively
+    emitter.instruction("movzx edx, BYTE PTR [rsi]");                           // load the byte after the exponent marker
+    emitter.instruction("cmp dl, 43");                                          // is it '+'?
+    emitter.instruction("je __rt_sprintf_etrim_sign_linux_x86_64");             // consume the exponent sign
+    emitter.instruction("cmp dl, 45");                                          // is it '-'?
+    emitter.instruction("jne __rt_sprintf_etrim_done_linux_x86_64");            // C99 always emits an exponent sign; bail defensively if absent
+    emitter.label("__rt_sprintf_etrim_sign_linux_x86_64");
+    emitter.instruction("inc rsi");                                             // advance past the exponent sign
+    emitter.instruction("dec rcx");                                             // decrement the remaining scan length
+    emitter.instruction("cmp rcx, 2");                                          // need at least two remaining bytes to test "0<digit>"
+    emitter.instruction("jl __rt_sprintf_etrim_done_linux_x86_64");             // too short to be a padded 2-digit exponent
+    emitter.instruction("movzx edx, BYTE PTR [rsi]");                           // load the first exponent digit
+    emitter.instruction("cmp dl, 48");                                          // is it '0'?
+    emitter.instruction("jne __rt_sprintf_etrim_done_linux_x86_64");            // not zero-padded -> nothing to strip
+    emitter.instruction("movzx edx, BYTE PTR [rsi + 1]");                       // load the next byte after the leading zero
+    emitter.instruction("cmp dl, 48");                                          // is it below '0'?
+    emitter.instruction("jl __rt_sprintf_etrim_done_linux_x86_64");             // not a digit -> the '0' was the only exponent digit, keep it
+    emitter.instruction("cmp dl, 57");                                          // is it above '9'?
+    emitter.instruction("jg __rt_sprintf_etrim_done_linux_x86_64");             // not a digit -> keep the only exponent digit
+    // -- guard: a right-justified WIDTH field pads BEFORE the sign/mantissa with
+    // -- ' ' or '0'. Stripping a byte from the exponent would shrink the total
+    // -- field width, so detect that padding and skip the strip entirely rather
+    // -- than corrupt the requested width (a documented, bounded residual gap;
+    // -- the no-width and left-justified-width cases below are fully handled).
+    emitter.instruction("lea r8, [rbp - 224]");                                 // buffer start
+    emitter.instruction("movzx edx, BYTE PTR [r8]");                            // first output byte
+    emitter.instruction("cmp dl, 32");                                          // is it a space (space-padded field)?
+    emitter.instruction("je __rt_sprintf_etrim_done_linux_x86_64");             // space padding present -> skip the strip
+    emitter.instruction("mov r10, r8");                                         // cursor for the (optional) leading '-'/'+' sign
+    emitter.instruction("cmp dl, 45");                                          // is the first byte a '-' sign?
+    emitter.instruction("je __rt_sprintf_etrim_lead_sign_linux_x86_64");        // yes -> skip past it before checking for zero-padding
+    emitter.instruction("cmp dl, 43");                                          // is the first byte a '+' sign (the '+' flag)?
+    emitter.instruction("jne __rt_sprintf_etrim_lead_check_linux_x86_64");      // no sign -> check directly
+    emitter.label("__rt_sprintf_etrim_lead_sign_linux_x86_64");
+    emitter.instruction("inc r10");                                             // skip past the sign before checking for zero-padding
+    emitter.label("__rt_sprintf_etrim_lead_check_linux_x86_64");
+    emitter.instruction("movzx edx, BYTE PTR [r10]");                           // byte after the optional sign
+    emitter.instruction("cmp dl, 48");                                          // is it '0'?
+    emitter.instruction("jne __rt_sprintf_etrim_shift_setup_linux_x86_64");     // not zero -> no zero-padding, safe to strip
+    emitter.instruction("movzx edx, BYTE PTR [r10 + 1]");                       // byte after that leading zero
+    emitter.instruction("cmp dl, 46");                                          // is it '.' (the leading zero IS the legitimate mantissa digit)?
+    emitter.instruction("je __rt_sprintf_etrim_shift_setup_linux_x86_64");      // legitimate "0.xxx" mantissa -> safe to strip the exponent
+    emitter.instruction("jmp __rt_sprintf_etrim_done_linux_x86_64");            // zero-padded width field -> skip the strip
+    // -- confirmed a padded 2-digit exponent ("0" + digit) with no right-justify padding: shift the tail left by one byte, dropping the leading zero --
+    emitter.label("__rt_sprintf_etrim_shift_setup_linux_x86_64");
+    emitter.instruction("lea r8, [rbp - 224]");                                 // recompute the scratch buffer base
+    emitter.instruction("add r8, rax");                                         // r8 = original buffer end (using the pre-trim snprintf byte count)
+    emitter.instruction("movzx edx, BYTE PTR [r8 - 1]");                        // last output byte (before this trim)
+    emitter.instruction("cmp dl, 32");                                          // was the field left-justify space-padded?
+    emitter.instruction("sete dil");                                            // dil = 1 when trailing-space padding is present
+    emitter.instruction("movzx edi, dil");                                      // zero-extend the trailing-padding flag
+    emitter.instruction("lea r9, [rsi + 1]");                                   // source cursor = byte after the leading zero
+    emitter.instruction("mov r10, rsi");                                        // dest cursor = the leading zero's position
+    emitter.label("__rt_sprintf_etrim_shift_linux_x86_64");
+    emitter.instruction("cmp r9, r8");                                          // reached the end of the original output?
+    emitter.instruction("jge __rt_sprintf_etrim_shift_done_linux_x86_64");      // shift complete
+    emitter.instruction("movzx r11d, BYTE PTR [r9]");                           // load the next byte to shift down
+    emitter.instruction("mov BYTE PTR [r10], r11b");                            // shift it left by one position
+    emitter.instruction("inc r9");                                              // advance the source cursor
+    emitter.instruction("inc r10");                                             // advance the dest cursor
+    emitter.instruction("jmp __rt_sprintf_etrim_shift_linux_x86_64");           // continue shifting
+    emitter.label("__rt_sprintf_etrim_shift_done_linux_x86_64");
+    emitter.instruction("test rdi, rdi");                                       // was trailing padding preserved?
+    emitter.instruction("jz __rt_sprintf_etrim_shrink_linux_x86_64");           // no padding -> just shrink the byte count
+    emitter.instruction("mov BYTE PTR [r10], 32");                              // restore the requested field width with one more trailing pad space
+    emitter.instruction("jmp __rt_sprintf_etrim_done_linux_x86_64");            // keep rax unchanged: total field width is preserved
+    emitter.label("__rt_sprintf_etrim_shrink_linux_x86_64");
+    emitter.instruction("dec rax");                                             // no padding to preserve -> one byte shorter after dropping the leading exponent zero
+    emitter.label("__rt_sprintf_etrim_done_linux_x86_64");
+    emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted (and exponent-trimmed) snprintf output into the concat buffer
 
     emitter.label("__rt_sprintf_call_int_linux_x86_64");
     emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
@@ -191,7 +298,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov rcx, QWORD PTR [r9]");                             // load the packed integer payload into the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the integer snprintf call
-    emitter.bl_c("snprintf");                                                   // format the integer-like operand into the local snprintf output scratch buffer
+    emitter.emit_call_c("snprintf");                                            // format the integer-like operand into the local snprintf output scratch buffer
     emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted snprintf output into the concat buffer
 
     emitter.label("__rt_sprintf_call_char_linux_x86_64");
@@ -200,7 +307,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov ecx, DWORD PTR [r9]");                             // load the packed character payload into the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the char snprintf call
-    emitter.bl_c("snprintf");                                                   // format the character operand into the local snprintf output scratch buffer
+    emitter.emit_call_c("snprintf");                                            // format the character operand into the local snprintf output scratch buffer
     emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted snprintf output into the concat buffer
 
     emitter.label("__rt_sprintf_call_string_linux_x86_64");
@@ -213,7 +320,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov rcx, rax");                                        // pass the null-terminated C string pointer in the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the string snprintf call
-    emitter.bl_c("snprintf");                                                   // format the string operand into the local snprintf output scratch buffer
+    emitter.emit_call_c("snprintf");                                            // format the string operand into the local snprintf output scratch buffer
 
     emitter.label("__rt_sprintf_copy_result_linux_x86_64");
     emitter.instruction("mov rcx, rax");                                        // copy the snprintf-written byte count before the result-copy loop consumes caller-saved registers
@@ -249,4 +356,128 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsp, [rsp + rcx + 16]");                           // advance past the saved frame pointer, return address, and tagged variadic records to the caller post-call stack top
     emitter.instruction("push r11");                                            // recreate the preserved return address at the top of the rethreaded stack so a plain ret lands back in generated code
     emitter.instruction("ret");                                                 // return the formatted string in the standard x86_64 string result registers while also discarding the caller-owned tagged arguments
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Regression test for the sprintf snprintf-call Class-1 ABI bug (WF2/F2): on
+    /// windows-x86_64, `bl_c("snprintf")` reached the raw msvcrt import with
+    /// SysV-staged arguments (rdi/rsi/rdx/rcx/xmm0) instead of the MSx64 ABI that
+    /// msvcrt `snprintf` expects (rcx/rdx/r8/r9), corrupting every sprintf-formatted
+    /// value. `emit_call_c("snprintf")` routes the call through the
+    /// `__rt_sys_snprintf` shim instead, which performs the SysV->MSx64 conversion.
+    #[test]
+    fn test_emit_sprintf_windows_x86_64_routes_snprintf_through_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call __rt_sys_snprintf\n"));
+        assert!(!asm.contains("call snprintf\n"));
+    }
+
+    /// Companion non-Windows control: on Linux x86_64 (and every other non-Windows
+    /// target), `emit_call_c` is byte-identical to `bl_c`, so the format-specifier
+    /// dispatch paths must still emit a bare `call snprintf` unchanged.
+    #[test]
+    fn test_emit_sprintf_linux_x86_64_still_calls_bare_snprintf() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("call snprintf\n"));
+        assert!(!asm.contains("__rt_sys_snprintf"));
+    }
+
+    /// Regression test for WF10b BUG A ("windows garbage output"): the `__rt_sprintf`
+    /// float path (`%f`/`%e`/`%g`/`%E`/`%G`) has NO leading integer precision
+    /// argument — its `snprintf(buf, size, fmt, double)` call shape differs from
+    /// `__rt_ftoa`'s `snprintf(buf, size, "%.*e", precision, double)` shape, so it
+    /// must route through the dedicated `__rt_sys_snprintf_double` shim on
+    /// windows-x86_64, NOT the generic `__rt_sys_snprintf` shim (which would stage
+    /// the double at the wrong argument position and produce garbage).
+    #[test]
+    fn test_emit_sprintf_windows_x86_64_float_path_routes_through_snprintf_double_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        let float_start = asm
+            .find("__rt_sprintf_call_float_linux_x86_64:\n")
+            .expect("float dispatch label missing");
+        let float_end = asm[float_start..]
+            .find("__rt_sprintf_call_int_linux_x86_64:\n")
+            .map(|offset| float_start + offset)
+            .expect("int dispatch label missing after float section");
+        let float_section = &asm[float_start..float_end];
+
+        assert!(
+            float_section.contains("call __rt_sys_snprintf_double\n"),
+            "the float path must call the dedicated double-arg4 shim"
+        );
+        assert!(
+            !float_section.contains("call __rt_sys_snprintf\n"),
+            "the float path must NOT reach the generic (precision-int-shaped) snprintf shim"
+        );
+    }
+
+    /// Companion non-Windows control: the float path's SysV variadic staging
+    /// (`mov eax, 1` then a bare `call snprintf`) must stay unchanged on Linux/macOS.
+    #[test]
+    fn test_emit_sprintf_linux_x86_64_float_path_still_calls_bare_snprintf() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        let float_start = asm
+            .find("__rt_sprintf_call_float_linux_x86_64:\n")
+            .expect("float dispatch label missing");
+        let float_end = asm[float_start..]
+            .find("__rt_sprintf_call_int_linux_x86_64:\n")
+            .map(|offset| float_start + offset)
+            .expect("int dispatch label missing after float section");
+        let float_section = &asm[float_start..float_end];
+
+        assert!(float_section.contains("mov eax, 1\n"));
+        assert!(float_section.contains("call snprintf\n"));
+        assert!(!float_section.contains("__rt_sys_snprintf_double"));
+    }
+
+    /// Verifies the `%E`/`%G` uppercase specifiers dispatch to the float path
+    /// alongside `%f`/`%e`/`%g` (a WF10b fix: they previously fell through to the
+    /// integer path, reinterpreting the double's raw bits as an integer and
+    /// producing garbage — e.g. `sprintf("%E", 1.0)` read the mantissa bit pattern
+    /// as an int64 instead of formatting the float).
+    #[test]
+    fn test_emit_sprintf_dispatches_uppercase_e_and_g_to_float_path() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp r8b, 69\n"), "'E' (69) must be checked");
+        assert!(asm.contains("cmp r8b, 71\n"), "'G' (71) must be checked");
+    }
+
+    /// Verifies the `%e`/`%E` exponent-trim: PHP's minimum-digit exponent
+    /// (`1.0e+4`, not CRT's `1.0e+04`) is produced by stripping a lone padded
+    /// leading zero from a 2-digit CRT exponent, guarded against corrupting an
+    /// explicit field WIDTH (see the padding-detection instructions before the
+    /// shift loop).
+    #[test]
+    fn test_emit_sprintf_float_path_has_exponent_trim_with_padding_guard() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_sprintf_linux_x86_64(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_sprintf_etrim_scan_linux_x86_64:\n"));
+        assert!(asm.contains("__rt_sprintf_etrim_shift_setup_linux_x86_64:\n"));
+        assert!(
+            asm.contains("cmp dl, 32\n"),
+            "must detect space-padded (right-justified) fields to guard the strip"
+        );
+    }
 }

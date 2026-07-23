@@ -128,6 +128,109 @@ mod tests {
         assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
     }
 
+    /// Verifies Windows rejects link-ownership builtins that php-src omits
+    /// when `HAVE_LCHOWN` is unavailable.
+    #[test]
+    fn windows_rejects_unavailable_lchown_builtins() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        for name in ["lchown", "lchgrp"] {
+            let program = parse_program(&format!("<?php {name}(\"link.txt\", -1);"));
+            let error = check_with_target(&program, target)
+                .expect_err("Windows must not expose lchown-family builtins");
+            assert!(
+                error.message.contains(&format!("Undefined function: {name}")),
+                "unexpected {name} diagnostic: {}",
+                error.message
+            );
+        }
+    }
+
+    /// Verifies Windows callable and Reflection surfaces cannot recover
+    /// link-ownership builtins after direct builtin lookup rejects them.
+    #[test]
+    fn windows_rejects_unavailable_lchown_callable_surfaces() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        for (source, expected) in [
+            (
+                r#"<?php call_user_func_array("lchown", ["link.txt", -1]);"#,
+                "Undefined function: lchown",
+            ),
+            (
+                r#"<?php $callback = lchgrp(...);"#,
+                "Undefined function for first-class callable: lchgrp",
+            ),
+            (
+                r#"<?php $reflection = new ReflectionFunction("lchown");"#,
+                "ReflectionFunction::__construct(): Function lchown() does not exist",
+            ),
+            (
+                r#"<?php
+class WindowsLinkOwnerIterator implements Iterator {
+    private int $index = 0;
+    public function current(): mixed { return $this->index; }
+    public function key(): mixed { return $this->index; }
+    public function next(): void { $this->index = $this->index + 1; }
+    public function rewind(): void { $this->index = 0; }
+    public function valid(): bool { return $this->index < 1; }
+}
+iterator_apply(
+    new WindowsLinkOwnerIterator(),
+    "lchgrp",
+    ["link.txt", -1],
+);
+"#,
+                "Undefined function: lchgrp",
+            ),
+        ] {
+            let program = parse_program(source);
+            let error = check_with_target(&program, target)
+                .expect_err("Windows callable surface must omit lchown-family builtins");
+            assert!(
+                error.message.contains(expected),
+                "unexpected Windows callable diagnostic: {}",
+                error.message
+            );
+        }
+    }
+
+    /// Verifies Windows may declare user functions whose names are only
+    /// reserved by php-src on platforms that provide `HAVE_LCHOWN`.
+    #[test]
+    fn windows_allows_user_lchown_function_declarations() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        for name in ["lchown", "lchgrp"] {
+            let program = parse_program(&format!(
+                "<?php function {name}(string $path, int $principal): bool {{ return true; }} \
+                 echo {name}(\"link.txt\", -1);"
+            ));
+            check_with_target(&program, target)
+                .expect("Windows must allow user declarations for unavailable builtins");
+        }
+    }
+
+    /// Verifies unavailable Windows builtin names still specialize untyped user callables.
+    #[test]
+    fn windows_specializes_untyped_user_lchown_callable_surfaces() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+        for source in [
+            r#"<?php
+function lchown($value) { return $value; }
+$callback = lchown(...);
+echo $callback("ok");
+"#,
+            r#"<?php
+function lchgrp($current, $key, $iterator) { return $current > 0; }
+$callback = lchgrp(...);
+$filter = new CallbackFilterIterator(new ArrayIterator([1]), $callback);
+foreach ($filter as $value) { echo $value; }
+"#,
+        ] {
+            let program = parse_program(source);
+            check_with_target(&program, target)
+                .expect("Windows must specialize user functions named after unavailable builtins");
+        }
+    }
+
     /// Verifies enum class metadata preserves flattened trait relation data for runtime reflection.
     #[test]
     fn test_enum_class_info_preserves_trait_metadata() {

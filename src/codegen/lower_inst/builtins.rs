@@ -16,7 +16,9 @@ use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, Op, PhpTypePredicate, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
-use crate::types::checker::builtins::is_php_visible_builtin_function;
+use crate::types::checker::builtins::{
+    builtin_available_on_platform, is_php_visible_builtin_function,
+};
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
@@ -554,7 +556,7 @@ pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instru
     } else {
         let exists = ctx.function_by_name(&function_name).is_some()
             || ctx.has_extern_function(&function_name)
-            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'))
+            || php_visible_builtin_exists_on_target(ctx, &function_name)
             || crate::name_resolver::is_date_procedural_alias(&function_name);
         emit_static_bool(ctx, exists);
     }
@@ -1554,7 +1556,14 @@ fn callable_name_exists(ctx: &FunctionContext<'_>, name: &str) -> bool {
     ctx.function_variant_group_name(name).is_some()
         || ctx.function_by_name(name).is_some()
         || ctx.has_extern_function(name)
-        || is_php_visible_builtin_function(name.trim_start_matches('\\'))
+        || php_visible_builtin_exists_on_target(ctx, name)
+}
+
+/// Returns whether a PHP-visible builtin is registered on the active target.
+fn php_visible_builtin_exists_on_target(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    let bare = name.trim_start_matches('\\');
+    is_php_visible_builtin_function(bare)
+        && builtin_available_on_platform(&php_symbol_key(bare), ctx.emitter.target.platform)
 }
 
 /// Checks whether a PHP symbol is present in an iterator of known names.

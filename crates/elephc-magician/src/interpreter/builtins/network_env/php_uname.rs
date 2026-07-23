@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - libc uname fields are copied into PHP strings before formatting the requested mode.
+//! - Platform uname fields are copied into PHP strings before formatting the requested mode.
 
 use super::*;
 
@@ -52,28 +52,20 @@ pub(in crate::interpreter) fn eval_php_uname_result(
         None => b'a',
     };
 
-    let mut utsname = std::mem::MaybeUninit::<libc::utsname>::zeroed();
-    let status = unsafe {
-        // libc writes all uname fields into the stack-owned utsname buffer.
-        libc::uname(utsname.as_mut_ptr())
-    };
-    if status != 0 {
+    let Some(uname) = eval_os_uname() else {
         return values.string("");
-    }
-    let utsname = unsafe {
-        // `uname` succeeded, so libc initialized the full `utsname` structure.
-        utsname.assume_init()
     };
-    let sysname = eval_uname_field_bytes(&utsname.sysname);
-    let nodename = eval_uname_field_bytes(&utsname.nodename);
-    let release = eval_uname_field_bytes(&utsname.release);
-    let version = eval_uname_field_bytes(&utsname.version);
-    let machine = eval_uname_field_bytes(&utsname.machine);
 
     match mode {
         b'a' => {
             let mut output = Vec::new();
-            for field in [&sysname, &nodename, &release, &version, &machine] {
+            for field in [
+                &uname.sysname,
+                &uname.nodename,
+                &uname.release,
+                &uname.version,
+                &uname.machine,
+            ] {
                 if !output.is_empty() {
                     output.push(b' ');
                 }
@@ -81,20 +73,11 @@ pub(in crate::interpreter) fn eval_php_uname_result(
             }
             values.string_bytes_value(&output)
         }
-        b's' => values.string_bytes_value(&sysname),
-        b'n' => values.string_bytes_value(&nodename),
-        b'r' => values.string_bytes_value(&release),
-        b'v' => values.string_bytes_value(&version),
-        b'm' => values.string_bytes_value(&machine),
+        b's' => values.string_bytes_value(&uname.sysname),
+        b'n' => values.string_bytes_value(&uname.nodename),
+        b'r' => values.string_bytes_value(&uname.release),
+        b'v' => values.string_bytes_value(&uname.version),
+        b'm' => values.string_bytes_value(&uname.machine),
         _ => Err(EvalStatus::RuntimeFatal),
     }
-}
-
-/// Copies one NUL-terminated `utsname` field into raw PHP string bytes.
-pub(in crate::interpreter) fn eval_uname_field_bytes(field: &[libc::c_char]) -> Vec<u8> {
-    let length = field
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(field.len());
-    field[..length].iter().map(|byte| *byte as u8).collect()
 }

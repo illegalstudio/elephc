@@ -275,9 +275,16 @@ $secureCall = call_user_func("random_int", 5, 5);
 echo ($secureCall === 5 ? "random-call" : "bad") . ":";
 $secureSpread = call_user_func_array("random_int", ["min" => 6, "max" => 6]);
 echo ($secureSpread === 6 ? "random-spread" : "bad") . ":";
+$bytes = random_bytes(length: 16);
+echo (strlen($bytes) === 16 ? "bytes" : "bad") . ":";
+$bytesCall = call_user_func("random_bytes", 8);
+echo (strlen($bytesCall) === 8 ? "bytes-call" : "bad") . ":";
+$bytesSpread = call_user_func_array("random_bytes", ["length" => 4]);
+echo (strlen($bytesSpread) === 4 ? "bytes-spread" : "bad") . ":";
 echo function_exists("rand");
 echo function_exists("mt_rand");
-return function_exists("random_int");"#,
+echo function_exists("random_int");
+return function_exists("random_bytes");"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -287,7 +294,8 @@ return function_exists("random_int");"#,
 
     assert_eq!(
         values.output,
-        "plain:range:same:swap:call:spread:random:random-call:random-spread:11"
+        "plain:range:same:swap:call:spread:random:random-call:random-spread:\
+bytes:bytes-call:bytes-spread:111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

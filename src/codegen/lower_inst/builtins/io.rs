@@ -10,7 +10,7 @@
 //!   string result registers expected by the shared runtime helpers.
 
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, NULL_SENTINEL};
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -64,16 +64,14 @@ pub(crate) fn lower_file_get_contents(
     store_if_result(ctx, inst)
 }
 
-/// Publishes bridge/decompressor entry points into runtime slots used by
-/// dynamic `phar://` reads.
+/// Publishes the pure-Rust bridge entry point used by dynamic `phar://` reads.
+///
+/// `elephc_phar_extract_url` handles native, tar, ZIP, gzip, and bzip2 itself;
+/// publishing system decompressor slots here would add unnecessary `-lz` and
+/// `-lbz2` dependencies to every dynamic filesystem path.
 fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'_>) {
-    const ENTRIES: &[(&str, &str)] = &[
-        ("elephc_phar_extract_url", "_elephc_phar_extract_url_fn"),
-        ("inflateInit2_", "_phar_zlib_inflate_init2_fn"),
-        ("inflate", "_phar_zlib_inflate_fn"),
-        ("inflateEnd", "_phar_zlib_inflate_end_fn"),
-        ("BZ2_bzBuffToBuffDecompress", "_phar_bz2_decompress_fn"),
-    ];
+    const ENTRIES: &[(&str, &str)] =
+        &[("elephc_phar_extract_url", "_elephc_phar_extract_url_fn")];
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             for (c_name, slot) in ENTRIES {
@@ -87,7 +85,7 @@ fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'_>) {
             for (c_name, slot) in ENTRIES {
                 let extern_sym = ctx.emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
-                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);     // publish the decompressor entry into its runtime slot
+                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);      // publish the decompressor entry into its runtime slot
             }
         }
     }
@@ -108,7 +106,7 @@ fn publish_phar_bridge_entries(ctx: &mut FunctionContext<'_>, entries: &[(&str, 
             for (c_name, slot) in entries {
                 let extern_sym = ctx.emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
-                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);     // publish the PHAR bridge entry into its runtime slot
+                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);      // publish the PHAR bridge entry into its runtime slot
             }
         }
     }
@@ -534,6 +532,13 @@ fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, fi
             ctx.emitter.instruction("cmp r9, 9");                               // test whether fopen returned a resource
             ctx.emitter.instruction(&format!("jne {}", done_label));            // leave false results unmodified
             ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");            // load the descriptor payload from the boxed resource
+            if ctx.emitter.target.platform == Platform::Windows {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("mov rdi, rcx");                        // pass the opaque descriptor to the bounded stream-state registry
+                abi::emit_call_label(ctx.emitter, "__rt_win_stream_slot");
+                ctx.emitter.instruction("mov rcx, rax");                        // index filter tables through the compact Windows slot
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
             if mode_bits & 1 != 0 {
                 abi::emit_symbol_address(ctx.emitter, "r8", "_stream_read_filters"); // read-filter table base
                 ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the read filter to this descriptor
@@ -1477,13 +1482,17 @@ pub(crate) fn lower_stream_get_transports(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_get_transports", 0)?;
-    emit_static_string_array(
-        ctx,
+    let transports: &[&str] = if ctx.emitter.target.platform == Platform::Windows {
         &[
-            "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3",
-            "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
-        ],
-    );
+            "tcp", "udp", "tls", "ssl", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
+        ]
+    } else {
+        &[
+            "tcp", "udp", "unix", "udg", "tls", "ssl", "tlsv1.0", "tlsv1.1",
+            "tlsv1.2", "tlsv1.3",
+        ]
+    };
+    emit_static_string_array(ctx, transports);
     store_if_result(ctx, inst)
 }
 
@@ -1954,6 +1963,10 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
         }
         Arch::X86_64 => {
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov rdi, rax");                        // map the opaque descriptor before clearing fixed filter tables
+                abi::emit_call_label(ctx.emitter, "__rt_win_stream_slot");
+            }
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the read-direction filter slot for this descriptor
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
@@ -2550,15 +2563,72 @@ pub(crate) fn lower_stream_socket_enable_crypto(
     let stream = expect_operand(inst, 0)?;
     let enable = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, stream, "stream_socket_enable_crypto")?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the descriptor beside crypto-method metadata
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the descriptor beside crypto-method metadata
+        }
+    }
     require_int_or_bool(
         ctx.load_value_to_result(enable)?.codegen_repr(),
         "stream_socket_enable_crypto enable",
     )?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    for index in 2..inst.operands.len() {
-        let operand = expect_operand(inst, index)?;
-        ctx.load_value_to_result(operand)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str xzr, [sp, #24]");                      // initialize the optional crypto-method value
+            ctx.emitter.instruction("str xzr, [sp, #32]");                      // mark the method argument absent or null
+            ctx.emitter.instruction("str xzr, [sp, #40]");                      // initialize the optional source TLS session handle
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], 0");             // initialize the optional crypto-method value
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 32], 0");             // mark the method argument absent or null
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 40], 0");             // initialize the optional source TLS session handle
+        }
+    }
+    if inst.operands.len() >= 3 {
+        let method = expect_operand(inst, 2)?;
+        if !is_nullish_value(ctx, method)? {
+            require_int(
+                ctx.load_value_to_result(method)?.codegen_repr(),
+                "stream_socket_enable_crypto crypto_method",
+            )?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("str x0, [sp, #24]");               // preserve the requested crypto method beside the descriptor
+                    ctx.emitter.instruction("mov x9, #1");                      // mark the explicit method argument present
+                    ctx.emitter.instruction("str x9, [sp, #32]");               // preserve explicit zero separately from absence
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");   // preserve the requested crypto method beside the descriptor
+                    ctx.emitter.instruction("mov QWORD PTR [rsp + 32], 1");     // preserve explicit zero separately from absence
+                }
+            }
+        }
+    }
+    if inst.operands.len() >= 4 {
+        let session_stream = expect_operand(inst, 3)?;
+        if !is_nullish_value(ctx, session_stream)? {
+            load_stream_fd_to_result(
+                ctx,
+                session_stream,
+                "stream_socket_enable_crypto session_stream",
+            )?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_call_label(ctx.emitter, "__rt_tls_session_get");
+                    ctx.emitter.instruction("str x0, [sp, #40]");               // preserve the reusable source TLS session handle
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the source descriptor to the TLS session table
+                    abi::emit_call_label(ctx.emitter, "__rt_tls_session_get");
+                    ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");   // preserve the reusable source TLS session handle
+                }
+            }
+        }
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x0"),
@@ -2571,7 +2641,7 @@ pub(crate) fn lower_stream_socket_enable_crypto(
             ctx.emitter.instruction(&format!("cbnz x0, {}", enable_label));     // enable=true enters the TLS attach path
             ctx.emitter.instruction("ldr x0, [sp]");                            // reload the stashed descriptor for TLS teardown
             emit_tls_session_teardown_for_current_fd(ctx);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("mov x0, #1");                              // disabling crypto succeeds even when no session exists
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the TLS attach path
             ctx.emitter.label(&enable_label);
@@ -2582,7 +2652,7 @@ pub(crate) fn lower_stream_socket_enable_crypto(
             ctx.emitter.instruction(&format!("jnz {}", enable_label));          // enable=true enters the TLS attach path
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the stashed descriptor for TLS teardown
             emit_tls_session_teardown_for_current_fd(ctx);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("mov eax, 1");                              // disabling crypto succeeds even when no session exists
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the TLS attach path
             ctx.emitter.label(&enable_label);
@@ -2590,6 +2660,7 @@ pub(crate) fn lower_stream_socket_enable_crypto(
         }
     }
     ctx.emitter.label(&done_label);
+    box_stream_socket_enable_crypto_status(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -2746,10 +2817,9 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);
     emit_tls_session_teardown_for_current_fd(ctx);
-    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
+    if ctx.emitter.target.platform != Platform::Windows {
+        abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
     }
-    abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
@@ -2765,10 +2835,12 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.instruction("mov x0, #1");                              // return true when the stream close succeeded
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any read filter before the descriptor can be reused
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any write filter before the descriptor can be reused
+            if ctx.emitter.target.platform != Platform::Windows {
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
+                ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");          // clear any read filter before the descriptor can be reused
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
+                ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");          // clear any write filter before the descriptor can be reused
+            }
             ctx.emitter.instruction("mov rdi, rax");                            // pass the stream fd to libc close()
             ctx.emitter.instruction("call close");                              // close the requested stream descriptor
             ctx.emitter.instruction("cmp rax, 0");                              // test whether close() reported success
@@ -3636,6 +3708,455 @@ pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers PHP's `proc_open(command, descriptor_spec, pipes, cwd?, env_vars?,
+/// options?)` and boxes the process as `resource|false`. The checker currently
+/// permits only a string command and null/omitted optional settings; this lowerer
+/// preserves the existing pipe runtime ABI while accepting the complete arity.
+///
+/// Runtime ABI: descriptor, command pointer/length, pipes, cwd pointer/length,
+/// environment-block pointer, and packed environment-length/direct flags.
+/// AArch64 uses `x0..x7`. x86_64 uses `rdi/rsi/rdx/rcx/r8/r9` plus the final
+/// two values in SysV stack-argument slots. Omitted values are transported as zero.
+pub(crate) fn lower_proc_open(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 9 {
+        ensure_arg_count_between(inst, "proc_open", 3, 6)?;
+    }
+    let public_command = expect_operand(inst, 0)?;
+    let command_override = inst.operands.get(6).copied();
+    let command = match command_override {
+        Some(value) if ctx.value_php_type(value)? == PhpType::Str => value,
+        _ => public_command,
+    };
+    let descriptor_spec = expect_operand(inst, 1)?;
+    let pipes = expect_operand(inst, 2)?;
+    // `__rt_proc_open` returns the possibly promoted/reallocated `$pipes`
+    // container beside the process result.  A direct ref parameter normally
+    // originates in a local load; keep that slot so the new pointer survives
+    // a sparse descriptor key (which promotes `[]` to hash storage).
+    let pipes_local = source_load_local_slot(ctx, pipes)?;
+    let cwd = inst.operands.get(3).copied();
+    let public_env_vars = inst.operands.get(4).copied();
+    let public_options = inst.operands.get(5).copied();
+    let env_vars = if inst.operands.len() == 9 {
+        inst.operands.get(7).copied()
+    } else {
+        public_env_vars
+    };
+    let packed_flags = if inst.operands.len() == 9 {
+        inst.operands.get(8).copied()
+    } else {
+        public_options
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- load and stack the descriptor_spec array pointer (x0) --
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            // -- load and stack the command string (x1 ptr, x2 len) --
+            load_string_to_result(ctx, command, "proc_open command")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            // -- stage pipes and every optional process setting --
+            ctx.load_value_to_result(pipes)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_optional_proc_open_string(ctx, cwd, "proc_open cwd")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_optional_proc_open_pointer(ctx, env_vars)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_optional_proc_open_pointer(ctx, packed_flags)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            // -- restore the complete x0..x7 runtime ABI in reverse order --
+            abi::emit_pop_reg(ctx.emitter, "x7");
+            abi::emit_pop_reg(ctx.emitter, "x6");
+            abi::emit_pop_reg_pair(ctx.emitter, "x4", "x5");
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 48");                             // reserve dynamic ownership, result, and validation slots
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // no owned command buffer unless runtime argv marshalling runs
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // no owned environment block unless runtime hash marshalling runs
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 32], 0");             // dynamic command marshalling has not failed
+            // -- load and stack the descriptor_spec array pointer (rax) --
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            // -- load and stack the command string (rax ptr, rdx len) --
+            if matches!(
+                ctx.value_php_type(command)?,
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                ctx.load_value_to_result(command)?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the runtime argv array to the Windows marshaller
+                abi::emit_call_label(ctx.emitter, "__rt_win_proc_command_array");
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");       // retain the allocation above the 16-byte staged descriptor slot
+                ctx.emitter.instruction("test rax, rax");                       // did argv marshalling succeed?
+                let command_valid = ctx.next_label("proc_open_command_valid");
+                ctx.emitter.instruction(&format!("jnz {command_valid}"));       // non-null buffer is a valid command line
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 48], 1");         // record failure in the fixed validation slot
+                ctx.emitter.label(&command_valid);
+            } else {
+                load_string_to_result(ctx, command, "proc_open command")?;
+            }
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            // -- stage pipes and every optional process setting --
+            ctx.load_value_to_result(pipes)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_optional_proc_open_string(ctx, cwd, "proc_open cwd")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            let dynamic_environment = public_env_vars
+                .filter(|_| inst.operands.len() == 9)
+                .filter(|value| {
+                    matches!(
+                        ctx.value_php_type(*value),
+                        Ok(PhpType::Array(_) | PhpType::AssocArray { .. })
+                    )
+                });
+            if let Some(environment) = dynamic_environment {
+                ctx.load_value_to_result(environment)?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass computed environment storage to the runtime marshaller
+                abi::emit_call_label(ctx.emitter, "__rt_win_proc_environment");
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 72], rax");       // retain the owned environment block above four staged ABI slots
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 88], rdx");       // preserve its counted byte length for packed flags
+            } else {
+                load_optional_proc_open_pointer(ctx, env_vars)?;
+            }
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_optional_proc_open_pointer(ctx, packed_flags)?;
+            if matches!(
+                ctx.value_php_type(command)?,
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                ctx.emitter.instruction("or rax, 1");                           // runtime command arrays always bypass cmd.exe wrapping
+            }
+            if dynamic_environment.is_some() {
+                ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 104]");      // reload dynamic environment byte length after stacking its pointer
+                ctx.emitter.instruction("cmp rdx, -1");                         // marshalling failure sentinel?
+                let environment_valid = ctx.next_label("proc_open_environment_valid");
+                let environment_flags_ready = ctx.next_label("proc_open_environment_flags_ready");
+                ctx.emitter.instruction(&format!("jne {environment_valid}"));   // valid length can be packed normally
+                ctx.emitter.instruction("bts rax, 63");                         // mark runtime ABI invalid while preserving helper errno
+                ctx.emitter.instruction(&format!("jmp {environment_flags_ready}")); // skip length packing after failure
+                ctx.emitter.label(&environment_valid);
+                ctx.emitter.instruction("and rax, 31");                         // retain all five Windows proc_open option bits
+                ctx.emitter.instruction("shl rdx, 5");                          // pack environment length above the option bits
+                ctx.emitter.instruction("or rax, rdx");                         // combine environment length and Windows options
+                ctx.emitter.label(&environment_flags_ready);
+            }
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 112], 0");            // did dynamic command marshalling fail before flags were loaded?
+            let command_flags_ready = ctx.next_label("proc_open_command_flags_ready");
+            ctx.emitter.instruction(&format!("je {command_flags_ready}"));      // valid/static commands leave flags unchanged
+            ctx.emitter.instruction("bts rax, 63");                             // propagate argv validation failure without overwriting errno
+            ctx.emitter.label(&command_flags_ready);
+            if let Some(options) = public_options.filter(|_| inst.operands.len() == 9) {
+                if matches!(
+                    ctx.value_php_type(options)?,
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                ) {
+                    abi::emit_push_reg(ctx.emitter, "rax");
+                    ctx.load_value_to_result(options)?;
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass computed proc_open options to the runtime validator
+                    abi::emit_call_label(ctx.emitter, "__rt_win_proc_options");
+                    ctx.emitter.instruction("mov r10, rax");                    // retain the dynamic Windows option-bit mask
+                    abi::emit_pop_reg(ctx.emitter, "rax");
+                    ctx.emitter.instruction("cmp r10, -1");                     // did runtime option validation fail?
+                    let options_valid = ctx.next_label("proc_open_options_valid");
+                    ctx.emitter.instruction(&format!("jne {options_valid}"));   // valid false/true values continue normally
+                    ctx.emitter.instruction("bts rax, 63");                     // mark the packed ABI invalid without losing errno
+                    ctx.emitter.label(&options_valid);
+                    ctx.emitter.instruction("or rax, r10");                     // merge recognized dynamic Windows options
+                }
+            }
+            abi::emit_push_reg(ctx.emitter, "rax");
+            // -- restore register args and retain env/options as SysV stack args --
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned SysV stack-argument slots 7 and 8
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // arg7 = env_vars array pointer (or null)
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");            // arg8 = options array pointer (or null)
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_open");
+    // Register the returned `$pipes` container before process result boxing.
+    // The runtime retains the container by refcount and, at proc_close time,
+    // marks/closes exactly its kind-1 pipe resources before waiting. This is
+    // required to avoid deadlock when a child fills an unread output pipe.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_proc_pipe_registry_register");
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");
+            load_string_to_result(ctx, command, "proc_open status command")?;
+            ctx.emitter.instruction("ldr x0, [sp]");                            // restore the raw process PID for status registration
+            abi::emit_call_label(ctx.emitter, "__rt_proc_status_register");
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the raw pid/process HANDLE to the pipe registry
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the paired final pipes container to the registry
+            abi::emit_call_label(ctx.emitter, "__rt_proc_pipe_registry_register");
+        }
+    }
+    if let Some(slot) = pipes_local {
+        // Every target returns the final container beside the process result.
+        // This matters for sparse descriptor keys: the generic keyed setter
+        // promotes an initially indexed `$pipes = []` to hash storage.
+        store_proc_open_pipes_result(ctx, slot)?;
+    }
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("add rsp, 16");                                 // release the two optional stack-argument slots
+        if matches!(
+            ctx.value_php_type(command)?,
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the raw process HANDLE to the Windows status registry
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");            // pass the still-owned marshalled argv command line
+                abi::emit_call_label(ctx.emitter, "__rt_proc_status_register_cstr");
+            } else {
+                return Err(CodegenIrError::unsupported(
+                    "proc_open() array commands require the Windows status registry",
+                ));
+            }
+        } else {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the process descriptor while loading its source command
+            load_string_to_result(ctx, command, "proc_open status command")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the command pointer to the status registry
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // restore the raw process descriptor after string materialization
+            abi::emit_call_label(ctx.emitter, "__rt_proc_status_register");
+        }
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");               // preserve the process result across marshalling-buffer cleanup
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                    // load the optional owned dynamic command buffer
+        ctx.emitter.instruction("test rax, rax");                               // did runtime argv marshalling allocate a command line?
+        let skip_dynamic_command_free = ctx.next_label("proc_open_command_free_done");
+        ctx.emitter.instruction(&format!("jz {skip_dynamic_command_free}"));    // static string commands own no staging buffer here
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        ctx.emitter.label(&skip_dynamic_command_free);
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // load the optional owned environment block
+        ctx.emitter.instruction("test rax, rax");                               // was a custom dynamic environment marshalled?
+        let skip_dynamic_environment_free = ctx.next_label("proc_open_environment_free_done");
+        ctx.emitter.instruction(&format!("jz {skip_dynamic_environment_free}")); // inherited/static environments own no block here
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+        ctx.emitter.label(&skip_dynamic_environment_free);
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // restore the process result
+        ctx.emitter.instruction("add rsp, 48");                                 // release dynamic marshalling ownership state
+    }
+    box_stream_fd_or_false_result_kind(ctx, "proc_open", 5);
+    store_if_result(ctx, inst)
+}
+
+/// Stores `proc_open`'s secondary container result through its by-reference
+/// `$pipes` local while preserving the primary process result.
+///
+/// The runtime returns the process descriptor in the normal integer result
+/// register and the final pipes container in the paired secondary register:
+/// `x0`/`x1` on AArch64 and `rax`/`rdx` on x86_64.  Using
+/// `store_current_result_to_local` makes raw locals, definite ref-cells, and
+/// dynamically promoted ref-cells share the established ownership-safe store
+/// path.
+fn store_proc_open_pipes_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, x1");                              // move the returned pipes container into the canonical local-store register
+            ctx.store_current_result_to_local(slot)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, rdx");                            // move the returned pipes container into the canonical local-store register
+            ctx.store_current_result_to_local(slot)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
+}
+
+/// Loads an optional proc_open string into the target string-result registers,
+/// using a null pointer/zero length for omitted or explicit-null arguments.
+fn load_optional_proc_open_string(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+    what: &str,
+) -> Result<()> {
+    let Some(value) = value else {
+        zero_proc_open_string_result(ctx);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(value)?, PhpType::Void | PhpType::Never) {
+        zero_proc_open_string_result(ctx);
+        return Ok(());
+    }
+    load_string_to_result(ctx, value, what)
+}
+
+/// Writes a null string pair into the target string-result registers.
+fn zero_proc_open_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // optional string pointer = null
+            ctx.emitter.instruction("mov x2, #0");                              // optional string length = zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor eax, eax");                            // optional string pointer = null
+            ctx.emitter.instruction("xor edx, edx");                            // optional string length = zero
+        }
+    }
+}
+
+/// Loads an optional array/settings pointer into the integer result register,
+/// using null for omitted or explicit-null arguments.
+fn load_optional_proc_open_pointer(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+) -> Result<()> {
+    let Some(value) = value else {
+        zero_proc_open_pointer_result(ctx);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(value)?, PhpType::Void | PhpType::Never) {
+        zero_proc_open_pointer_result(ctx);
+        return Ok(());
+    }
+    ctx.load_value_to_result(value).map(|_| ())
+}
+
+/// Writes a null optional-settings pointer into the integer result register.
+fn zero_proc_open_pointer_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),                 // optional settings pointer = null
+        Arch::X86_64 => ctx.emitter.instruction("xor eax, eax"),                // optional settings pointer = null
+    }
+}
+
+/// Lowers `proc_close(process)` and returns the child process exit status.
+pub(crate) fn lower_proc_close(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "proc_close", 1)?;
+    let handle = expect_operand(inst, 0)?;
+    let captured = capture_resource_box_for_release(ctx, handle)?;
+    load_stream_fd_to_result(ctx, handle, "proc_close")?;
+    apply_resource_release_sentinel(ctx, captured);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the process descriptor to the runtime close helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_close");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `proc_get_status(process)` through retained target process metadata.
+///
+/// The platform runtime preserves the process handle/PID and follows PHP's
+/// non-consuming status contract: Windows asks `GetExitCodeProcess`, while Unix
+/// caches a completed `wait4(WNOHANG|WUNTRACED)` observation for later queries.
+pub(crate) fn lower_proc_get_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "proc_get_status", 1)?;
+    let process = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, process, "proc_get_status")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the retained process descriptor to the status runtime
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_get_status");
+    box_stat_array_or_false_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `proc_terminate(process, signal = SIGTERM)` without consuming the process resource.
+///
+/// Unix forwards the requested signal to `kill(2)`.  Windows transports the
+/// argument for a common ABI but the runtime deliberately ignores it and uses
+/// php-src's `TerminateProcess(handle, 255)` behavior.
+pub(crate) fn lower_proc_terminate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "proc_terminate", 1, 2)?;
+    let process = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, process, "proc_terminate")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            if let Some(signal) = inst.operands.get(1).copied() {
+                load_proc_terminate_signal_as_int(ctx, signal, 16)?;
+            } else {
+                ctx.emitter.instruction("mov x0, #15");                         // default PHP signal is SIGTERM
+            }
+            ctx.emitter.instruction("mov x1, x0");                              // second runtime argument is the requested Unix signal
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // retain the HANDLE/PID while materializing the optional signal
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the process descriptor across value loading
+            if let Some(signal) = inst.operands.get(1).copied() {
+                load_proc_terminate_signal_as_int(ctx, signal, 16)?;
+            } else {
+                ctx.emitter.instruction("mov rax, 15");                         // default PHP signal is SIGTERM
+            }
+            ctx.emitter.instruction("mov rsi, rax");                            // second runtime argument is the requested Unix signal
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // first runtime argument is the process descriptor
+            ctx.emitter.instruction("add rsp, 16");                             // release the aligned staging slot before the call
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_terminate");
+    store_if_result(ctx, inst)
+}
+
+/// Loads a weakly typed PHP scalar as the integer signal expected by `proc_terminate`.
+fn load_proc_terminate_signal_as_int(
+    ctx: &mut FunctionContext<'_>,
+    signal: ValueId,
+    process_staging_bytes: usize,
+) -> Result<()> {
+    match ctx.load_value_to_result(signal)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        PhpType::Float => {
+            abi::emit_float_result_to_int_result(ctx.emitter);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Str => {
+            let invalid = ctx.next_label("proc_terminate_signal_type_error");
+            let done = ctx.next_label("proc_terminate_signal_coerced");
+            crate::codegen::lower_inst::enums::emit_string_result_to_int_checked(
+                ctx,
+                &invalid,
+            );
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&invalid);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, process_staging_bytes);
+            let (message_label, message_len) = ctx.data.add_string(
+                b"proc_terminate(): Argument #2 ($signal) must be of type int, string given",
+            );
+            crate::codegen::lower_inst::enums::emit_throw_static_type_error(
+                ctx,
+                &message_label,
+                message_len,
+            );
+            ctx.emitter.label(&done);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "proc_terminate signal for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
 pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fsockopen", 2, 5)?;
@@ -3838,7 +4359,7 @@ pub(crate) fn lower_elephc_phar_set_compression(
             );
             ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR compression bridge was published
             ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes compression control fail
-            ctx.emitter.instruction("call r10");                                // rewrite native-PHAR entry compression flags
+            ctx.emitter.emit_native_bridge_call("r10", 3);                    // rewrite native-PHAR entry compression flags through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
             ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
             ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
@@ -3942,7 +4463,7 @@ fn emit_phar_set_string_bridge(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
             ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR write bridge was published
             ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes the write fail
-            ctx.emitter.instruction("call r10");                                // rewrite the archive with the new metadata/stub
+            ctx.emitter.emit_native_bridge_call("r10", 4);                    // rewrite the archive through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
             ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
             ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
@@ -3993,7 +4514,7 @@ fn emit_phar_string_to_bool_bridge(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
             ctx.emitter.instruction("test r10, r10");                           // test whether the bridge was published
             ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge yields false
-            ctx.emitter.instruction("call r10");                                // call the bridge setter
+            ctx.emitter.emit_native_bridge_call("r10", 2);                    // call the bridge setter through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test the bridge return flag
             ctx.emitter.instruction("setne al");                                // normalize to a PHP bool
             ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
@@ -4050,7 +4571,7 @@ fn emit_phar_get_string_bridge(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
             ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR read bridge was published
             ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty string
-            ctx.emitter.instruction("call r10");                                // read the metadata/stub bytes into the global buffer
+            ctx.emitter.emit_native_bridge_call("r10", 3);                    // read metadata/stub bytes through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // a null result means the field is unset
             ctx.emitter.instruction(&format!("jz {}", empty));                  // fall back to an empty string
             ctx.emitter.instruction("mov rdi, rax");                            // str_persist source pointer = bridge buffer
@@ -4256,7 +4777,7 @@ fn emit_phar_path_int_to_bool_bridge(
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", slot, 0);
             ctx.emitter.instruction("test r10, r10");                           // test whether the bridge was published
             ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes the op fail
-            ctx.emitter.instruction("call r10");                                // invoke the bridge
+            ctx.emitter.emit_native_bridge_call("r10", 3);                    // invoke the bridge through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
             ctx.emitter.instruction("setne al");                                // normalize to PHP bool
             ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
@@ -4305,7 +4826,7 @@ pub(crate) fn lower_elephc_phar_list_entries(
             );
             ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR list bridge was published
             ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty entry list
-            ctx.emitter.instruction("call r10");                                // serialize archive entry names into the bridge buffer
+            ctx.emitter.emit_native_bridge_call("r10", 3);                    // serialize archive entry names through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test whether the bridge returned a serialized buffer
             ctx.emitter.instruction(&format!("jz {}", empty));                  // unreadable archives yield an empty entry list
             emit_phar_list_entries_buffer_to_array_x86_64(ctx);
@@ -4447,7 +4968,30 @@ pub(crate) fn lower_rename(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `tempnam(directory, prefix)` through the target-aware runtime helper.
 pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_binary_path_call(ctx, inst, "tempnam", "__rt_tempnam")
+    super::ensure_arg_count(inst, "tempnam", 2)?;
+    let directory = expect_operand(inst, 0)?;
+    let prefix = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, directory, "tempnam")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_string_to_result(ctx, prefix, "tempnam")?;
+            ctx.emitter.instruction("mov x3, x1");                              // pass the prefix pointer in the runtime helper's secondary string slot
+            ctx.emitter.instruction("mov x4, x2");                              // pass the prefix length in the runtime helper's secondary string slot
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, directory, "tempnam")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_to_result(ctx, prefix, "tempnam")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the prefix pointer while the directory remains on the stack
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the prefix length while the directory remains on the stack
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_tempnam");
+    box_owned_string_or_false_result(ctx, "tempnam");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
@@ -5395,16 +5939,24 @@ pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string.
+/// Lowers `sys_get_temp_dir()`. On Windows, calls the `__rt_sys_get_temp_dir`
+/// runtime helper (`GetTempPathW`-backed); on every other target, emits the
+/// project's hardcoded `/tmp` string, unchanged.
 pub(crate) fn lower_sys_get_temp_dir(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "sys_get_temp_dir", 0)?;
-    let (label, len) = ctx.data.add_string(b"/tmp");
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    if ctx.emitter.target.platform == Platform::Windows {
+        // __rt_sys_get_temp_dir already returns its owned string in
+        // abi::string_result_regs (rax/rdx on x86_64) — no register shuffle needed.
+        abi::emit_call_label(ctx.emitter, "__rt_sys_get_temp_dir");
+    } else {
+        let (label, len) = ctx.data.add_string(b"/tmp");
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -6009,7 +6561,7 @@ fn emit_unlink_maybe_phar_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jz {}", phar_fail));              // missing bridge makes PHAR unlink fail
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // bridge arg 0 = full phar:// URL pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // bridge arg 1 = full phar:// URL length
-            ctx.emitter.instruction("call r10");                                // delete the archive entry through elephc-phar
+            ctx.emitter.emit_native_bridge_call("r10", 2);                    // delete the archive entry through the platform C ABI
             ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
             ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
             ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
@@ -6184,7 +6736,7 @@ fn source_load_local_slot(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op == Op::LoadLocal {
+    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }
@@ -6599,7 +7151,16 @@ fn lower_builtin_stream_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match (ctx.emitter.target.arch, ctx.emitter.target.platform) {
+        (Arch::AArch64, _) => abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+        (Arch::X86_64, Platform::Windows) => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the real descriptor for the returned filter resource
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque descriptor to the bounded stream-state registry
+            abi::emit_call_label(ctx.emitter, "__rt_win_stream_slot");
+            abi::emit_push_reg(ctx.emitter, "rax");                             // retain the compact filter-table slot across mode evaluation
+        }
+        (Arch::X86_64, _) => abi::emit_push_reg(ctx.emitter, "rax"),
+    }
     materialize_stream_filter_mode(ctx, inst)?;
     let skip_read = ctx.next_label("sf_skip_read");
     let skip_write = ctx.next_label("sf_skip_write");
@@ -6632,7 +7193,11 @@ fn lower_builtin_stream_filter_attach(
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
             ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the write filter for this descriptor
             ctx.emitter.label(&skip_write);
-            ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
+            if ctx.emitter.target.platform == Platform::Windows {
+                abi::emit_pop_reg(ctx.emitter, "rax");                          // restore the real descriptor after compact-slot table writes
+            } else {
+                ctx.emitter.instruction("mov rax, rcx");                        // move the descriptor into the resource payload register
+            }
         }
     }
     emit_boxed_stream_resource(ctx);
@@ -6684,7 +7249,21 @@ fn lower_user_stream_filter_attach(
     let stream = expect_operand(inst, 0)?;
     let filter = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let raw_socket_label = ctx.next_label("sfau_raw_socket");
+    match (ctx.emitter.target.arch, ctx.emitter.target.platform) {
+        (Arch::AArch64, _) => abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+        (Arch::X86_64, Platform::Windows) => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdi, rax");                            // probe the opaque stream before user-filter registry indexing
+            abi::emit_call_label(ctx.emitter, "__rt_win_is_crt_fd");
+            ctx.emitter.instruction("mov r8, rax");                             // preserve predicate while restoring the descriptor
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("test r8, r8");                             // raw Winsock SOCKETs are not CRT fd-table keys
+            ctx.emitter.instruction(&format!("jz {}", raw_socket_label));       // return PHP false instead of indexing out of bounds
+            abi::emit_push_reg(ctx.emitter, "rax");
+        }
+        (Arch::X86_64, _) => abi::emit_push_reg(ctx.emitter, "rax"),
+    }
     load_string_to_result(ctx, filter, "stream_filter_append filter")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -6732,6 +7311,9 @@ fn lower_user_stream_filter_attach(
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the PHP false boxing path
             ctx.emitter.label(&fail);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
+            emit_boxed_bool(ctx, false);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // do not fall through to raw-socket rejection
+            ctx.emitter.label(&raw_socket_label);
             emit_boxed_bool(ctx, false);
             ctx.emitter.label(&done);
         }
@@ -6990,33 +7572,34 @@ fn lower_stream_bucket_append_x86_64(
 /// Tears down the TLS session attached to the current fd result, if one exists.
 fn emit_tls_session_teardown_for_current_fd(ctx: &mut FunctionContext<'_>) {
     let skip = ctx.next_label("tls_teardown_skip");
+    let no_session = ctx.next_label("tls_teardown_none");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
-            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // load the TLS session handle for this descriptor
-            ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // skip close_notify when no TLS session is attached
             abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.emitter.instruction("mov x0, x10");                             // pass the TLS handle to the close helper
+            abi::emit_call_label(ctx.emitter, "__rt_tls_session_clear");
+            ctx.emitter.instruction(&format!("cbz x0, {}", no_session));        // skip close_notify when no TLS session is attached
             abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_close_fn");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load the published TLS close function pointer
-            ctx.emitter.instruction("blr x9");                                  // close the TLS session and send close_notify
+            ctx.emitter.emit_published_bridge_call("x9");                      // close the TLS session through the published ABI entry
             abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
-            ctx.emitter.instruction("str xzr, [x9, x0, lsl #3]");               // clear the per-fd TLS session slot
+            ctx.emitter.instruction(&format!("b {}", skip));                    // descriptor is restored after closing the TLS session
+            ctx.emitter.label(&no_session);
+            abi::emit_pop_reg(ctx.emitter, "x0");
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load the TLS session handle for this descriptor
-            ctx.emitter.instruction("test r10, r10");                           // test whether a TLS session is attached
-            ctx.emitter.instruction(&format!("je {}", skip));                   // skip close_notify when no TLS session is attached
             abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov rdi, r10");                            // pass the TLS handle to the close helper
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the full-width descriptor to the bounded map clear
+            abi::emit_call_label(ctx.emitter, "__rt_tls_session_clear");
+            ctx.emitter.instruction("test rax, rax");                           // test whether a TLS session was attached
+            ctx.emitter.instruction(&format!("je {}", no_session));             // skip close_notify when no TLS session is attached
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the removed TLS handle to the close helper
             abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_close_fn", 0); // load the published TLS close function pointer
-            ctx.emitter.instruction("call r9");                                 // close the TLS session and send close_notify
+            ctx.emitter.emit_published_bridge_call("r9");                      // close the TLS session through the published ABI entry
             abi::emit_pop_reg(ctx.emitter, "rax");
-            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
-            ctx.emitter.instruction("mov QWORD PTR [r9 + rax*8], 0");           // clear the per-fd TLS session slot
+            ctx.emitter.instruction(&format!("jmp {}", skip));                  // descriptor is restored after closing the TLS session
+            ctx.emitter.label(&no_session);
+            abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.label(&skip);
         }
     }
@@ -7038,8 +7621,19 @@ fn emit_zlib_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
+            if ctx.emitter.target.platform == Platform::Windows {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("mov rdi, rax");                        // pass raw Windows descriptor to the bounded stream-slot registry
+                ctx.emitter.instruction("call __rt_win_stream_slot");           // map opaque SOCKET/CRT descriptor before table access
+                ctx.emitter.instruction("mov r11, rax");                        // retain compact slot for zlib-state lookup
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
             abi::emit_symbol_address(ctx.emitter, "r9", "_zstream_handles");    // zlib stream handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's zlib stream handle
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");     // load zlib state through the bounded Windows slot
+            } else {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");     // preserve established Linux descriptor indexing
+            }
             ctx.emitter.instruction("test r10, r10");                           // test whether a zlib filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip flush when no zlib filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -7068,8 +7662,19 @@ fn emit_bz2_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
+            if ctx.emitter.target.platform == Platform::Windows {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("mov rdi, rax");                        // pass raw Windows descriptor to the bounded stream-slot registry
+                ctx.emitter.instruction("call __rt_win_stream_slot");           // map opaque SOCKET/CRT descriptor before table access
+                ctx.emitter.instruction("mov r11, rax");                        // retain compact slot for bzip2-state lookup
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
             abi::emit_symbol_address(ctx.emitter, "r9", "_bzstream_handles");   // bzip2 stream handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's bzip2 stream handle
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");     // load bzip2 state through the bounded Windows slot
+            } else {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");     // preserve established Linux descriptor indexing
+            }
             ctx.emitter.instruction("test r10, r10");                           // test whether a bzip2 filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip flush when no bzip2 filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -7098,8 +7703,19 @@ fn emit_iconv_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&skip);
         }
         Arch::X86_64 => {
+            if ctx.emitter.target.platform == Platform::Windows {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("mov rdi, rax");                        // pass raw Windows descriptor to the bounded stream-slot registry
+                ctx.emitter.instruction("call __rt_win_stream_slot");           // map opaque SOCKET/CRT descriptor before table access
+                ctx.emitter.instruction("mov r11, rax");                        // retain compact slot for iconv-state lookup
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
             abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_handles");      // iconv transcoder handle table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load this descriptor's iconv transcoder handle
+            if ctx.emitter.target.platform == Platform::Windows {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");     // load iconv state through the bounded Windows slot
+            } else {
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");     // preserve established Linux descriptor indexing
+            }
             ctx.emitter.instruction("test r10, r10");                           // test whether an iconv write filter is attached
             ctx.emitter.instruction(&format!("je {}", skip));                   // skip close when no iconv write filter is attached
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -7112,6 +7728,206 @@ fn emit_iconv_flush_on_close_for_current_fd(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Reads one string-valued SSL context option into an AArch64 TLS options field.
+fn emit_tls_string_option_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key_symbol: &str,
+    key_len: usize,
+    ptr_offset: usize,
+    len_offset: usize,
+) {
+    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
+    ctx.emitter.instruction("mov x1, #3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "x2", key_symbol);
+    ctx.emitter.instruction(&format!("mov x3, #{}", key_len));                  // pass the SSL option-name length
+    ctx.emitter.instruction(&format!("add x4, sp, #{}", ptr_offset));           // pass the options pointer-field address
+    ctx.emitter.instruction(&format!("add x5, sp, #{}", len_offset));           // pass the options length-field address
+    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
+}
+
+/// Reads one boolean SSL context option into AArch64 scratch storage.
+fn emit_tls_bool_option_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key_symbol: &str,
+    key_len: usize,
+) {
+    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
+    ctx.emitter.instruction("mov x1, #3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "x2", key_symbol);
+    ctx.emitter.instruction(&format!("mov x3, #{}", key_len));                  // pass the SSL option-name length
+    ctx.emitter.instruction("add x4, sp, #104");                                // pass the reusable boolean scratch address
+    abi::emit_call_label(ctx.emitter, "__rt_get_bool_context_option");
+}
+
+/// Builds PHP-compatible TLS client options for AArch64 STARTTLS attachment.
+fn emit_stream_crypto_tls_options_aarch64(ctx: &mut FunctionContext<'_>) {
+    let peer_ok = ctx.next_label("ssec_peer_ok");
+    let verify_peer_done = ctx.next_label("ssec_verify_peer_done");
+    let verify_name_done = ctx.next_label("ssec_verify_name_done");
+    let allow_self_signed_done = ctx.next_label("ssec_allow_self_signed_done");
+    let crypto_method_done = ctx.next_label("ssec_crypto_method_done");
+
+    ctx.emitter.instruction("mov w9, #1");                                      // options ABI version one
+    ctx.emitter.instruction("str w9, [sp, #0]");                                // initialize the options ABI version
+    ctx.emitter.instruction("mov w9, #3");                                      // default to peer and peer-name verification
+    ctx.emitter.instruction("str w9, [sp, #4]");                                // initialize the independent TLS policy bits
+    for offset in [8usize, 24, 40, 56, 72] {
+        ctx.emitter.instruction(&format!("stp xzr, xzr, [sp, #{}]", offset));   // initialize one optional pointer/length pair
+    }
+
+    ctx.emitter.instruction("add x0, sp, #8");                                  // pass peer-name pointer-field address
+    ctx.emitter.instruction("add x1, sp, #16");                                 // pass peer-name length-field address
+    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
+    ctx.emitter.instruction(&format!("cbnz x0, {}", peer_ok));                  // use an explicit ssl.peer_name when present
+    ctx.emitter.instruction("ldr x0, [sp, #112]");                              // reload the full-width descriptor for host metadata lookup
+    abi::emit_call_label(ctx.emitter, "__rt_get_stashed_connect_host");
+    ctx.emitter.instruction(&format!("cbz x0, {}", peer_ok));                   // leave the peer name absent when no URL host is known
+    ctx.emitter.instruction("str x1, [sp, #8]");                                // use the stashed host as the TLS peer name
+    ctx.emitter.instruction("str x2, [sp, #16]");                               // store the stashed host byte length
+    ctx.emitter.label(&peer_ok);
+
+    emit_tls_string_option_aarch64(ctx, "_ssl_cafile_key_str", 6, 24, 32);
+    emit_tls_string_option_aarch64(ctx, "_ssl_capath_key_str", 6, 40, 48);
+    emit_tls_string_option_aarch64(ctx, "_ssl_local_cert_key_str", 10, 56, 64);
+    emit_tls_string_option_aarch64(ctx, "_ssl_local_pk_key_str", 8, 72, 80);
+
+    ctx.emitter.instruction("mov x9, #1");                                      // verify_peer defaults to true
+    ctx.emitter.instruction("str x9, [sp, #104]");                              // seed the boolean lookup default
+    emit_tls_bool_option_aarch64(ctx, "_ssl_verify_peer_key_str", 11);
+    ctx.emitter.instruction("ldr x9, [sp, #104]");                              // load the resolved verify_peer truth value
+    ctx.emitter.instruction(&format!("cbnz x9, {}", verify_peer_done));         // retain peer verification when truthy
+    ctx.emitter.instruction("ldr w10, [sp, #4]");                               // load the TLS policy bitmask
+    ctx.emitter.instruction("bic w10, w10, #1");                                // disable only certificate-chain verification
+    ctx.emitter.instruction("str w10, [sp, #4]");                               // store the updated TLS policy
+    ctx.emitter.label(&verify_peer_done);
+
+    ctx.emitter.instruction("mov x9, #1");                                      // verify_peer_name defaults to true
+    ctx.emitter.instruction("str x9, [sp, #104]");                              // seed the boolean lookup default
+    emit_tls_bool_option_aarch64(ctx, "_ssl_verify_peer_name_key_str", 16);
+    ctx.emitter.instruction("ldr x9, [sp, #104]");                              // load the resolved verify_peer_name truth value
+    ctx.emitter.instruction(&format!("cbnz x9, {}", verify_name_done));         // retain peer-name verification when truthy
+    ctx.emitter.instruction("ldr w10, [sp, #4]");                               // load the TLS policy bitmask
+    ctx.emitter.instruction("bic w10, w10, #2");                                // disable only peer-name verification
+    ctx.emitter.instruction("str w10, [sp, #4]");                               // store the updated TLS policy
+    ctx.emitter.label(&verify_name_done);
+
+    ctx.emitter.instruction("str xzr, [sp, #104]");                             // allow_self_signed defaults to false
+    emit_tls_bool_option_aarch64(ctx, "_ssl_allow_self_signed_key_str", 17);
+    ctx.emitter.instruction("ldr x9, [sp, #104]");                              // load the resolved allow_self_signed truth value
+    ctx.emitter.instruction(&format!("cbz x9, {}", allow_self_signed_done));    // leave the exception disabled when false
+    ctx.emitter.instruction("ldr w10, [sp, #4]");                               // load the TLS policy bitmask
+    ctx.emitter.instruction("orr w10, w10, #4");                                // permit only a depth-zero self-signed leaf
+    ctx.emitter.instruction("str w10, [sp, #4]");                               // store the updated TLS policy
+    ctx.emitter.label(&allow_self_signed_done);
+
+    ctx.emitter.instruction("ldr x9, [sp, #128]");                              // load the caller's crypto-method presence flag
+    ctx.emitter.instruction(&format!("cbnz x9, {}", crypto_method_done));       // explicit argument takes precedence over context
+    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
+    ctx.emitter.instruction("mov x1, #3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "x2", "_ssl_crypto_method_key_str");
+    ctx.emitter.instruction("mov x3, #13");                                     // pass strlen("crypto_method")
+    ctx.emitter.instruction("add x4, sp, #120");                                // write the resolved context crypto method
+    abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+    ctx.emitter.instruction("str x0, [sp, #128]");                              // retain whether ssl.crypto_method was found
+    ctx.emitter.label(&crypto_method_done);
+}
+
+/// Reads one string-valued SSL context option into an x86_64 TLS options field.
+fn emit_tls_string_option_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key_symbol: &str,
+    key_len: usize,
+    ptr_offset: usize,
+    len_offset: usize,
+) {
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
+    ctx.emitter.instruction("mov rsi, 3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "rdx", key_symbol);
+    ctx.emitter.instruction(&format!("mov rcx, {}", key_len));                  // pass the SSL option-name length
+    ctx.emitter.instruction(&format!("lea r8, [rsp + {}]", ptr_offset));        // pass the options pointer-field address
+    ctx.emitter.instruction(&format!("lea r9, [rsp + {}]", len_offset));        // pass the options length-field address
+    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
+}
+
+/// Reads one boolean SSL context option into x86_64 scratch storage.
+fn emit_tls_bool_option_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key_symbol: &str,
+    key_len: usize,
+) {
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
+    ctx.emitter.instruction("mov rsi, 3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "rdx", key_symbol);
+    ctx.emitter.instruction(&format!("mov rcx, {}", key_len));                  // pass the SSL option-name length
+    ctx.emitter.instruction("lea r8, [rsp + 104]");                             // pass the reusable boolean scratch address
+    abi::emit_call_label(ctx.emitter, "__rt_get_bool_context_option");
+}
+
+/// Builds PHP-compatible TLS client options for x86_64 STARTTLS attachment.
+fn emit_stream_crypto_tls_options_x86_64(ctx: &mut FunctionContext<'_>) {
+    let peer_ok = ctx.next_label("ssec_peer_ok");
+    let verify_peer_done = ctx.next_label("ssec_verify_peer_done");
+    let verify_name_done = ctx.next_label("ssec_verify_name_done");
+    let allow_self_signed_done = ctx.next_label("ssec_allow_self_signed_done");
+    let crypto_method_done = ctx.next_label("ssec_crypto_method_done");
+
+    ctx.emitter.instruction("mov DWORD PTR [rsp + 0], 1");                      // initialize options ABI version one
+    ctx.emitter.instruction("mov DWORD PTR [rsp + 4], 3");                      // default to peer and peer-name verification
+    for offset in [8usize, 16, 24, 32, 40, 48, 56, 64, 72, 80] {
+        ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", offset)); // initialize one optional options word
+    }
+
+    ctx.emitter.instruction("lea rdi, [rsp + 8]");                              // pass peer-name pointer-field address
+    ctx.emitter.instruction("lea rsi, [rsp + 16]");                             // pass peer-name length-field address
+    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
+    ctx.emitter.instruction("test rax, rax");                                   // did the context provide ssl.peer_name?
+    ctx.emitter.instruction(&format!("jnz {}", peer_ok));                       // use an explicit peer name when present
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                  // reload the full-width descriptor for host metadata lookup
+    abi::emit_call_label(ctx.emitter, "__rt_get_stashed_connect_host");
+    ctx.emitter.instruction("test rax, rax");                                   // is a connection host known for this descriptor?
+    ctx.emitter.instruction(&format!("jz {}", peer_ok));                        // leave the peer name absent when no URL host is known
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // use the stashed host as the TLS peer name
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // store the stashed host byte length
+    ctx.emitter.label(&peer_ok);
+
+    emit_tls_string_option_x86_64(ctx, "_ssl_cafile_key_str", 6, 24, 32);
+    emit_tls_string_option_x86_64(ctx, "_ssl_capath_key_str", 6, 40, 48);
+    emit_tls_string_option_x86_64(ctx, "_ssl_local_cert_key_str", 10, 56, 64);
+    emit_tls_string_option_x86_64(ctx, "_ssl_local_pk_key_str", 8, 72, 80);
+
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 104], 1");                    // verify_peer defaults to true
+    emit_tls_bool_option_x86_64(ctx, "_ssl_verify_peer_key_str", 11);
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 104], 0");                    // is peer verification enabled?
+    ctx.emitter.instruction(&format!("jne {}", verify_peer_done));              // retain peer verification when truthy
+    ctx.emitter.instruction("and DWORD PTR [rsp + 4], -2");                     // disable only certificate-chain verification
+    ctx.emitter.label(&verify_peer_done);
+
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 104], 1");                    // verify_peer_name defaults to true
+    emit_tls_bool_option_x86_64(ctx, "_ssl_verify_peer_name_key_str", 16);
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 104], 0");                    // is peer-name verification enabled?
+    ctx.emitter.instruction(&format!("jne {}", verify_name_done));              // retain peer-name verification when truthy
+    ctx.emitter.instruction("and DWORD PTR [rsp + 4], -3");                     // disable only peer-name verification
+    ctx.emitter.label(&verify_name_done);
+
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 104], 0");                    // allow_self_signed defaults to false
+    emit_tls_bool_option_x86_64(ctx, "_ssl_allow_self_signed_key_str", 17);
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 104], 0");                    // is the self-signed exception enabled?
+    ctx.emitter.instruction(&format!("je {}", allow_self_signed_done));         // leave the exception disabled when false
+    ctx.emitter.instruction("or DWORD PTR [rsp + 4], 4");                       // permit only a depth-zero self-signed leaf
+    ctx.emitter.label(&allow_self_signed_done);
+
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 128], 0");                    // did the caller pass a crypto method?
+    ctx.emitter.instruction(&format!("jne {}", crypto_method_done));            // explicit argument takes precedence over context
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
+    ctx.emitter.instruction("mov rsi, 3");                                      // pass strlen("ssl") to the context lookup
+    abi::emit_symbol_address(ctx.emitter, "rdx", "_ssl_crypto_method_key_str");
+    ctx.emitter.instruction("mov rcx, 13");                                     // pass strlen("crypto_method")
+    ctx.emitter.instruction("lea r8, [rsp + 120]");                             // write the resolved context crypto method
+    abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // retain whether ssl.crypto_method was found
+    ctx.emitter.label(&crypto_method_done);
+}
+
 /// Emits the AArch64 TLS attach path for `stream_socket_enable_crypto(true)`.
 fn lower_stream_socket_enable_crypto_attach_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -7119,78 +7935,63 @@ fn lower_stream_socket_enable_crypto_attach_aarch64(
 ) {
     crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     let fail_label = ctx.next_label("ssec_attach_fail");
-    let peer_ok = ctx.next_label("ssec_peer_ok");
-    let host_default = ctx.next_label("ssec_host_default");
-    let plain_attach = ctx.next_label("ssec_plain_attach");
-    let do_attach = ctx.next_label("ssec_do_attach");
-    ctx.emitter.instruction("sub sp, sp, #64");                                 // reserve peer-name and client-cert/key spill storage
-    ctx.emitter.instruction("add x0, sp, #0");                                  // pass peer-name out_ptr address
-    ctx.emitter.instruction("add x1, sp, #8");                                  // pass peer-name out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
-    ctx.emitter.instruction(&format!("cbnz x0, {}", peer_ok));                  // use ssl.peer_name when the context provides it
-    ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_connect_host");
-    ctx.emitter.instruction("add x9, x9, x10, lsl #4");                         // address this fd's saved host pointer/length pair
-    ctx.emitter.instruction("ldr x11, [x9, #8]");                               // load the saved connection-host byte length
-    ctx.emitter.instruction(&format!("cbz x11, {}", host_default));             // fall back to localhost when no connection host is known
-    ctx.emitter.instruction("ldr x12, [x9, #0]");                               // load the saved connection-host pointer
-    ctx.emitter.instruction("str x12, [sp, #0]");                               // use the connection host as peer_name pointer
-    ctx.emitter.instruction("str x11, [sp, #8]");                               // use the connection host as peer_name length
-    ctx.emitter.instruction(&format!("b {}", peer_ok));                         // skip the localhost fallback
-    ctx.emitter.label(&host_default);
-    abi::emit_symbol_address(ctx.emitter, "x9", "_tls_peer_name_default");
-    ctx.emitter.instruction("str x9, [sp, #0]");                                // use localhost as the fallback peer_name pointer
-    ctx.emitter.instruction("mov x9, #9");                                      // strlen("localhost")
-    ctx.emitter.instruction("str x9, [sp, #8]");                                // use localhost as the fallback peer_name length
-    ctx.emitter.label(&peer_ok);
-
-    ctx.emitter.instruction("str xzr, [sp, #24]");                              // default local_cert length to zero
-    ctx.emitter.instruction("str xzr, [sp, #40]");                              // default local_pk length to zero
-    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
-    ctx.emitter.instruction("mov x1, #3");                                      // strlen("ssl")
-    abi::emit_symbol_address(ctx.emitter, "x2", "_ssl_local_cert_key_str");
-    ctx.emitter.instruction("mov x3, #10");                                     // strlen("local_cert")
-    ctx.emitter.instruction("add x4, sp, #16");                                 // pass local_cert out_ptr address
-    ctx.emitter.instruction("add x5, sp, #24");                                 // pass local_cert out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
-    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
-    ctx.emitter.instruction("mov x1, #3");                                      // strlen("ssl")
-    abi::emit_symbol_address(ctx.emitter, "x2", "_ssl_local_pk_key_str");
-    ctx.emitter.instruction("mov x3, #8");                                      // strlen("local_pk")
-    ctx.emitter.instruction("add x4, sp, #32");                                 // pass local_pk out_ptr address
-    ctx.emitter.instruction("add x5, sp, #40");                                 // pass local_pk out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
-
-    ctx.emitter.instruction("ldr x0, [sp, #64]");                               // reload fd as the first TLS attach argument
-    ctx.emitter.instruction("ldr x1, [sp, #0]");                                // pass peer_name pointer
-    ctx.emitter.instruction("ldr x2, [sp, #8]");                                // pass peer_name byte length
-    ctx.emitter.instruction("ldr x9, [sp, #24]");                               // load local_cert byte length
-    ctx.emitter.instruction(&format!("cbz x9, {}", plain_attach));              // no client certificate selects plain TLS attach
-    ctx.emitter.instruction("ldr x9, [sp, #40]");                               // load local_pk byte length
-    ctx.emitter.instruction(&format!("cbz x9, {}", plain_attach));              // missing key selects plain TLS attach
-    ctx.emitter.instruction("ldr x3, [sp, #16]");                               // pass local_cert path pointer
-    ctx.emitter.instruction("ldr x4, [sp, #24]");                               // pass local_cert path length
-    ctx.emitter.instruction("ldr x5, [sp, #32]");                               // pass local_pk path pointer
-    ctx.emitter.instruction("ldr x6, [sp, #40]");                               // pass local_pk path length
-    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_attach_fd_client_cert_fn");
-    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the mutual-TLS attach function pointer
-    ctx.emitter.instruction(&format!("b {}", do_attach));                       // call the selected attach function
-    ctx.emitter.label(&plain_attach);
-    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_attach_fd_fn");
-    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the default TLS attach function pointer
-    ctx.emitter.label(&do_attach);
-    ctx.emitter.instruction("blr x9");                                          // attach TLS to the fd and return a session handle
-    ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd before releasing the spill storage
-    abi::emit_release_temporary_stack(ctx.emitter, 64);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let existing_session = ctx.next_label("ssec_existing_session");
+    let handshake = ctx.next_label("ssec_handshake");
+    let handshake_failed = ctx.next_label("ssec_handshake_failed");
+    let release_success = ctx.next_label("ssec_release_success");
+    let release_failure = ctx.next_label("ssec_release_failure");
+    ctx.emitter.instruction("sub sp, sp, #112");                                // reserve TLS options, session, status, and boolean scratch storage
+    ctx.emitter.instruction("ldr x0, [sp, #112]");                              // look up any TLS session already associated with this descriptor
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_get");
+    ctx.emitter.instruction(&format!("cbnz x0, {}", existing_session));         // resume an in-progress handshake instead of attaching twice
+    emit_stream_crypto_tls_options_aarch64(ctx);
+    ctx.emitter.instruction("ldr x0, [sp, #112]");                              // pass the descriptor to the options-aware TLS attach bridge
+    ctx.emitter.instruction("mov x1, sp");                                      // pass the complete TLS client options structure
+    ctx.emitter.instruction("ldr x2, [sp, #120]");                              // pass the requested PHP crypto method
+    ctx.emitter.instruction("ldr x3, [sp, #128]");                              // distinguish explicit zero from an absent method
+    ctx.emitter.instruction("ldr x4, [sp, #136]");                              // pass an optional source TLS session for resumption
+    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_attach_fd_with_options_fn");
+    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the options-aware TLS attach function pointer
+    ctx.emitter.emit_published_bridge_call("x9");                              // attach TLS with independent PHP verification policy
     ctx.emitter.instruction("cmp x0, #0");                                      // negative handles indicate TLS attach failure
-    ctx.emitter.instruction(&format!("b.lt {}", fail_label));                   // return false when attach failed
-    abi::emit_symbol_address(ctx.emitter, "x11", "_tls_sessions");
-    ctx.emitter.instruction("str x0, [x11, x10, lsl #3]");                      // store the TLS session handle for this fd
-    ctx.emitter.instruction("mov x0, #1");                                      // return true after successful TLS attach
+    ctx.emitter.instruction(&format!("b.lt {}", fail_label));                   // report attach failure after releasing storage
+    ctx.emitter.instruction("str x0, [sp, #88]");                               // preserve the new session across table insertion
+    ctx.emitter.instruction("mov x1, x0");                                      // pass the new session as the bounded-map value
+    ctx.emitter.instruction("ldr x0, [sp, #112]");                              // pass the full-width descriptor as the bounded-map key
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_set");
+    ctx.emitter.instruction(&format!("cbz x0, {}", fail_label));                // table exhaustion closes the session and reports false
+    ctx.emitter.instruction(&format!("b {}", handshake));                       // progress the newly attached TLS session
+    ctx.emitter.label(&existing_session);
+    ctx.emitter.instruction("str x0, [sp, #88]");                               // preserve the existing TLS session across handshake
+    ctx.emitter.label(&handshake);
+    ctx.emitter.instruction("ldr x0, [sp, #88]");                               // pass the persisted TLS session handle to rustls
+    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_handshake_fn");
+    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the published TLS handshake entry pointer
+    ctx.emitter.emit_published_bridge_call("x9");                              // complete or advance the TLS handshake through rustls
+    ctx.emitter.instruction("str x0, [sp, #96]");                               // retain the PHP tri-state result across frame cleanup
+    ctx.emitter.instruction("cmp x0, #0");                                      // terminal handshake failure is negative
+    ctx.emitter.instruction(&format!("b.lt {}", handshake_failed));             // clear and close the failed TLS session
+    ctx.emitter.instruction(&format!("b {}", release_success));                 // retain success or nonblocking progress
+    ctx.emitter.label(&release_success);
+    ctx.emitter.instruction("ldr x0, [sp, #96]");                               // reload the retained handshake status
+    abi::emit_release_temporary_stack(ctx.emitter, 112);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the failure result
+    ctx.emitter.label(&handshake_failed);
+    ctx.emitter.instruction("ldr x0, [sp, #112]");                              // clear the descriptor-to-session association
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_clear");
+    ctx.emitter.instruction("ldr x0, [sp, #88]");                               // close the failed rustls session
+    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_close_fn");
+    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the published TLS close entry pointer
+    ctx.emitter.emit_published_bridge_call("x9");                              // release the failed TLS session and duplicated socket
+    ctx.emitter.instruction("mov x0, #-1");                                     // normalize terminal TLS errors to PHP false
+    ctx.emitter.instruction(&format!("b {}", release_failure));                 // release temporary storage before returning
     ctx.emitter.label(&fail_label);
-    ctx.emitter.instruction("mov x0, #0");                                      // return false after TLS attach failure
+    ctx.emitter.instruction("mov x0, #-1");                                     // return false after TLS attach or table failure
+    ctx.emitter.label(&release_failure);
+    abi::emit_release_temporary_stack(ctx.emitter, 112);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // normalize failures through PHP return boxing
 }
 
 /// Emits the x86_64 TLS attach path for `stream_socket_enable_crypto(true)`.
@@ -7200,88 +8001,104 @@ fn lower_stream_socket_enable_crypto_attach_x86_64(
 ) {
     crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     let fail_label = ctx.next_label("ssec_attach_fail");
-    let peer_ok = ctx.next_label("ssec_peer_ok");
-    let host_default = ctx.next_label("ssec_host_default");
-    let plain_attach = ctx.next_label("ssec_plain_attach_x");
-    let after_attach = ctx.next_label("ssec_after_attach_x");
-    ctx.emitter.instruction("sub rsp, 64");                                     // reserve peer-name and client-cert/key spill storage
-    ctx.emitter.instruction("lea rdi, [rsp + 0]");                              // pass peer-name out_ptr address
-    ctx.emitter.instruction("lea rsi, [rsp + 8]");                              // pass peer-name out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
-    ctx.emitter.instruction("test rax, rax");                                   // did the context provide ssl.peer_name?
-    ctx.emitter.instruction(&format!("jnz {}", peer_ok));                       // use ssl.peer_name when present
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                   // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_connect_host");
-    ctx.emitter.instruction("shl r10, 4");                                      // fd * 16, the host table stride
-    ctx.emitter.instruction("add r9, r10");                                     // address this fd's saved host pointer/length pair
-    ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                     // load the saved connection-host byte length
-    ctx.emitter.instruction("test r11, r11");                                   // is a connection host known for this fd?
-    ctx.emitter.instruction(&format!("jz {}", host_default));                   // fall back to localhost when no host is known
-    ctx.emitter.instruction("mov r10, QWORD PTR [r9 + 0]");                     // load the saved connection-host pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r10");                    // use the connection host as peer_name pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");                    // use the connection host as peer_name length
-    ctx.emitter.instruction(&format!("jmp {}", peer_ok));                       // skip the localhost fallback
-    ctx.emitter.label(&host_default);
-    abi::emit_symbol_address(ctx.emitter, "r9", "_tls_peer_name_default");
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // use localhost as the fallback peer_name pointer
-    ctx.emitter.instruction("mov r9, 9");                                       // strlen("localhost")
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");                     // use localhost as the fallback peer_name length
-    ctx.emitter.label(&peer_ok);
-
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], 0");                     // default local_cert length to zero
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 40], 0");                     // default local_pk length to zero
-    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
-    ctx.emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
-    abi::emit_symbol_address(ctx.emitter, "rdx", "_ssl_local_cert_key_str");
-    ctx.emitter.instruction("mov rcx, 10");                                     // strlen("local_cert")
-    ctx.emitter.instruction("lea r8, [rsp + 16]");                              // pass local_cert out_ptr address
-    ctx.emitter.instruction("lea r9, [rsp + 24]");                              // pass local_cert out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
-    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
-    ctx.emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
-    abi::emit_symbol_address(ctx.emitter, "rdx", "_ssl_local_pk_key_str");
-    ctx.emitter.instruction("mov rcx, 8");                                      // strlen("local_pk")
-    ctx.emitter.instruction("lea r8, [rsp + 32]");                              // pass local_pk out_ptr address
-    ctx.emitter.instruction("lea r9, [rsp + 40]");                              // pass local_pk out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
-
-    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 64]");                   // reload fd as the first TLS attach argument
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                    // pass peer_name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // pass peer_name byte length
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                   // load local_cert byte length
-    ctx.emitter.instruction("test rax, rax");                                   // is a client certificate path present?
-    ctx.emitter.instruction(&format!("jz {}", plain_attach));                   // no client certificate selects plain TLS attach
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // load local_pk byte length
-    ctx.emitter.instruction("test rax, rax");                                   // is a client private key path present?
-    ctx.emitter.instruction(&format!("jz {}", plain_attach));                   // missing key selects plain TLS attach
-    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                   // pass local_cert path pointer
-    ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");                    // pass local_cert path length
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // stage local_pk path length for the stack argument
-    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 32]");                    // pass local_pk path pointer
-    ctx.emitter.instruction("sub rsp, 16");                                     // reserve the seventh stack argument plus padding
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");                    // pass local_pk path length as the seventh argument
-    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_elephc_tls_attach_fd_client_cert_fn", 0); // load the mutual-TLS attach function pointer
-    ctx.emitter.instruction("call r10");                                        // attach TLS with a client certificate
-    ctx.emitter.instruction("add rsp, 16");                                     // release the seventh stack argument
-    ctx.emitter.instruction(&format!("jmp {}", after_attach));                  // skip the default attach variant
-    ctx.emitter.label(&plain_attach);
-    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 64]");                   // reload fd as the first TLS attach argument
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                    // pass peer_name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // pass peer_name byte length
-    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_attach_fd_fn", 0); // load the default TLS attach function pointer
-    ctx.emitter.instruction("call r9");                                         // attach TLS and return a session handle
-    ctx.emitter.label(&after_attach);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                   // reload fd before releasing the spill storage
-    abi::emit_release_temporary_stack(ctx.emitter, 64);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let existing_session = ctx.next_label("ssec_existing_session_x");
+    let handshake = ctx.next_label("ssec_handshake_x");
+    let handshake_failed = ctx.next_label("ssec_handshake_failed_x");
+    let release_success = ctx.next_label("ssec_release_success_x");
+    let release_failure = ctx.next_label("ssec_release_failure_x");
+    ctx.emitter.instruction("sub rsp, 112");                                    // reserve TLS options, session, status, and boolean scratch storage
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                  // look up any TLS session already associated with this descriptor
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_get");
+    ctx.emitter.instruction("test rax, rax");                                   // does this descriptor already own a rustls session?
+    ctx.emitter.instruction(&format!("jnz {}", existing_session));              // resume an in-progress handshake instead of attaching twice
+    emit_stream_crypto_tls_options_x86_64(ctx);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                  // pass the descriptor to the options-aware TLS attach bridge
+    ctx.emitter.instruction("mov rsi, rsp");                                    // pass the complete TLS client options structure
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 120]");                  // pass the requested PHP crypto method
+    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 128]");                  // distinguish explicit zero from an absent method
+    ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 136]");                   // pass an optional source TLS session for resumption
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_attach_fd_with_options_fn", 0); // load the options-aware TLS attach pointer
+    ctx.emitter.emit_published_bridge_call("r9");                              // attach TLS with independent PHP verification policy
     ctx.emitter.instruction("cmp rax, 0");                                      // negative handles indicate TLS attach failure
-    ctx.emitter.instruction(&format!("jl {}", fail_label));                     // return false when attach failed
-    abi::emit_symbol_address(ctx.emitter, "r11", "_tls_sessions");
-    ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rax");              // store the TLS session handle for this fd
-    ctx.emitter.instruction("mov eax, 1");                                      // return true after successful TLS attach
+    ctx.emitter.instruction(&format!("jl {}", fail_label));                     // report attach failure after releasing storage
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 88], rax");                   // preserve the new session across table insertion
+    ctx.emitter.instruction("mov rsi, rax");                                    // pass the new session as the bounded-map value
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                  // pass the full-width descriptor as the bounded-map key
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_set");
+    ctx.emitter.instruction("test rax, rax");                                   // did the bounded table retain the new session?
+    ctx.emitter.instruction(&format!("jz {}", fail_label));                     // table exhaustion closes the session and reports false
+    ctx.emitter.instruction(&format!("jmp {}", handshake));                     // progress the newly attached TLS session
+    ctx.emitter.label(&existing_session);
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 88], rax");                   // preserve the existing TLS session across handshake
+    ctx.emitter.label(&handshake);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 88]");                   // pass the persisted TLS session handle to rustls
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_handshake_fn", 0);
+    ctx.emitter.emit_published_bridge_call("r9");                              // complete or advance the TLS handshake through rustls
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 96], rax");                   // retain the PHP tri-state result across cleanup
+    ctx.emitter.instruction("cmp rax, 0");                                      // terminal handshake failure is negative
+    ctx.emitter.instruction(&format!("jl {}", handshake_failed));               // clear and close the failed TLS session
+    ctx.emitter.instruction(&format!("jmp {}", release_success));               // retain success or nonblocking progress
+    ctx.emitter.label(&release_success);
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 96]");                   // reload the retained handshake status
+    abi::emit_release_temporary_stack(ctx.emitter, 112);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the failure result
+    ctx.emitter.label(&handshake_failed);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                  // clear the descriptor-to-session association
+    abi::emit_call_label(ctx.emitter, "__rt_tls_session_clear");
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 88]");                   // close the failed rustls session
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_close_fn", 0);
+    ctx.emitter.emit_published_bridge_call("r9");                              // release the failed TLS session and duplicated socket
+    ctx.emitter.instruction("mov rax, -1");                                     // normalize terminal TLS errors to PHP false
+    ctx.emitter.instruction(&format!("jmp {}", release_failure));               // release temporary storage before returning
     ctx.emitter.label(&fail_label);
-    ctx.emitter.instruction("xor eax, eax");                                    // return false after TLS attach failure
+    ctx.emitter.instruction("mov rax, -1");                                     // return false after TLS attach or table failure
+    ctx.emitter.label(&release_failure);
+    abi::emit_release_temporary_stack(ctx.emitter, 112);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // normalize failures through PHP return boxing
+}
+
+/// Boxes the raw TLS bridge status into PHP's `true` / `0` / `false` result.
+fn box_stream_socket_enable_crypto_status(ctx: &mut FunctionContext<'_>) {
+    let complete = ctx.next_label("ssec_status_complete");
+    let progress = ctx.next_label("ssec_status_progress");
+    let done = ctx.next_label("ssec_status_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // only a completed rustls handshake maps to PHP true
+            ctx.emitter.instruction(&format!("b.eq {}", complete));             // branch before treating zero as nonblocking progress
+            ctx.emitter.instruction(&format!("cbz x0, {}", progress));          // PHP uses integer zero while the handshake is still pending
+            ctx.emitter.instruction("mov x0, #0");                              // terminal bridge errors map to PHP false
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.instruction(&format!("b {}", done));                    // avoid boxing the false result again
+            ctx.emitter.label(&progress);
+            ctx.emitter.instruction("mov x0, #0");                              // preserve the integer-zero payload for PHP's retry signal
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            ctx.emitter.instruction(&format!("b {}", done));                    // preserve the boxed integer result
+            ctx.emitter.label(&complete);
+            ctx.emitter.instruction("mov x0, #1");                              // PHP true represents a fully authenticated TLS session
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // only a completed rustls handshake maps to PHP true
+            ctx.emitter.instruction(&format!("je {}", complete));               // branch before treating zero as nonblocking progress
+            ctx.emitter.instruction("test rax, rax");                           // raw zero is the bridge's retryable status
+            ctx.emitter.instruction(&format!("jz {}", progress));               // PHP uses integer zero while the handshake is still pending
+            ctx.emitter.instruction("xor eax, eax");                            // terminal bridge errors map to PHP false
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // avoid boxing the false result again
+            ctx.emitter.label(&progress);
+            ctx.emitter.instruction("xor eax, eax");                            // preserve the integer-zero payload for PHP's retry signal
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // preserve the boxed integer result
+            ctx.emitter.label(&complete);
+            ctx.emitter.instruction("mov eax, 1");                              // PHP true represents a fully authenticated TLS session
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.label(&done);
+        }
+    }
 }
 
 /// Reserves temporary storage for `stream_get_contents` fd and length operands.
@@ -8304,6 +9121,11 @@ fn lower_fseek_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed seek
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
+    if ctx.emitter.target.platform == Platform::Windows {
+        ctx.emitter.instruction("mov rdi, r10");                                // map the opaque CRT descriptor before indexing bounded stream state
+        abi::emit_call_label(ctx.emitter, "__rt_win_stream_slot");
+        ctx.emitter.instruction("mov r10, rax");                                // use the compact Windows stream-state slot for EOF reset
+    }
     ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
     ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state for the successfully repositioned stream
     ctx.emitter.instruction("xor eax, eax");                                    // fseek returns 0 after a successful seek
@@ -8376,6 +9198,11 @@ fn lower_rewind_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed rewind
     ctx.emitter.label(success_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
+    if ctx.emitter.target.platform == Platform::Windows {
+        ctx.emitter.instruction("mov rdi, r10");                                // map the opaque CRT descriptor before indexing bounded stream state
+        abi::emit_call_label(ctx.emitter, "__rt_win_stream_slot");
+        ctx.emitter.instruction("mov r10, rax");                                // use the compact Windows stream-state slot for EOF reset
+    }
     ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
     ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state after rewinding the stream
     ctx.emitter.instruction("mov rax, 1");                                      // rewind returns true after a successful seek

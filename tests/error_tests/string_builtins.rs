@@ -15,6 +15,51 @@ expect_builtin_arity_error!(
     "substr_replace() takes 3 or 4 arguments"
 );
 
+/// Verifies `escapeshellarg()` rejects an array instead of coercing it to a shell string.
+#[test]
+fn test_error_escapeshellarg_string_type() {
+    expect_error(
+        "<?php escapeshellarg([1]);",
+        "escapeshellarg() argument #1 ($arg) must be string",
+    );
+}
+
+/// Verifies `escapeshellcmd()` rejects an array instead of coercing it to a shell command.
+#[test]
+fn test_error_escapeshellcmd_string_type() {
+    expect_error(
+        "<?php escapeshellcmd([1]);",
+        "escapeshellcmd() argument #1 ($command) must be string",
+    );
+}
+
+/// Verifies `escapeshellarg()` rejects an object rather than applying scalar string coercion.
+#[test]
+fn test_error_escapeshellarg_object_type() {
+    expect_error(
+        "<?php escapeshellarg(new stdClass());",
+        "escapeshellarg() argument #1 ($arg) must be string",
+    );
+}
+
+/// Verifies `escapeshellarg()` rejects a heterogeneous-array read whose boxed value is an array.
+#[test]
+fn test_error_escapeshellarg_mixed_array_type() {
+    expect_error(
+        "<?php $values = ['scalar' => 1, 'compound' => []]; escapeshellarg($values['compound']);",
+        "escapeshellarg() argument #1 ($arg) must be string",
+    );
+}
+
+/// Verifies `escapeshellcmd()` rejects a declared union containing an object member.
+#[test]
+fn test_error_escapeshellcmd_compound_union_type() {
+    expect_error(
+        "<?php function shell_value(): stdClass|false { return new stdClass(); } escapeshellcmd(shell_value());",
+        "escapeshellcmd() argument #1 ($command) must be string",
+    );
+}
+
 expect_builtin_arity_error!(
     test_error_rawurlencode_wrong_args,
     "<?php rawurlencode();",
@@ -25,6 +70,18 @@ expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
     "base64_decode() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_escapeshellarg_wrong_args,
+    "<?php escapeshellarg();",
+    "escapeshellarg() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_escapeshellcmd_wrong_args,
+    "<?php escapeshellcmd();",
+    "escapeshellcmd() takes exactly 1 argument"
 );
 
 expect_builtin_arity_error!(

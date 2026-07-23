@@ -9,7 +9,10 @@
 //! - Symbol relocations differ by platform and refcounted stores must preserve ownership cleanup.
 
 use crate::codegen_support::NULL_SENTINEL;
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 use crate::types::PhpType;
 
 use super::calls::emit_call_label;
@@ -125,7 +128,18 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
 /// Resolves the symbol through the GOT on both targets: ADRP+GOT on AArch64
 /// and MOVQ with GOTPCREL on x86_64.  Used for symbols defined outside the
 /// current translation unit.
+///
+/// Windows x86_64 is the one exception: PE/COFF has no ELF/Mach-O-style
+/// GOTPCREL relocation, and MinGW's assembler treats `@GOTPCREL` as a literal
+/// name suffix rather than a relocation, so it fails to link. These "extern"
+/// symbols resolve against a statically-linked `.a` archive built into the
+/// same image rather than a DLL, so no `__imp_` indirection is needed either
+/// — a direct RIP-relative LEA is the correct, GOT-free form there.
 pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    if (emitter.target.platform, emitter.target.arch) == (Platform::Windows, Arch::X86_64) {
+        emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));      // GOT-free RIP-relative LEA (PE/COFF static-archive extern symbol)
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.adrp_got(dest, symbol); // load the GOT page that points at the requested extern symbol

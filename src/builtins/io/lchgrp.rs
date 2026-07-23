@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     name: "lchgrp",
     area: Io,
-    params: [filename: Str, group: Str],
+    params: [filename: Str, group: Mixed],
     returns: Bool,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

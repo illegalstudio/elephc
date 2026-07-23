@@ -258,7 +258,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // path ptr → string-arg pair
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // url_stat flags
-    emitter.instruction("call r11");                                            // invoke url_stat on the throwaway wrapper object
+    emitter.emit_platform_callback_call("r11", 4);
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // normalize the type-erased return into a boxed Mixed
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed result across the wrapper-instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object

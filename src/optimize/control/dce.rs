@@ -611,7 +611,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            if expr_is_observable(&expr) {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,

@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// Emits the `__rt_fread` runtime helper for reading bytes from a file descriptor.
@@ -66,24 +66,23 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for the TLS check
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
-    emitter.instruction("cbz x14, __rt_fread_do_syscall");                      // no TLS attached → fall through to read syscall
-    emitter.instruction("mov x0, x14");                                         // handle as first arg
-    emitter.instruction("mov x1, x12");                                         // buf ptr
+    emitter.instruction("bl __rt_tls_session_get");                             // resolve the full-width descriptor through the bounded TLS map
+    emitter.instruction("cbz x0, __rt_fread_do_syscall");                       // no TLS attached → fall through to read syscall
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the concat-buffer destination pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // len
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_tls_read_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_read entry pointer
-    emitter.instruction("blr x9");                                              // x0 = bytes read (>=0) or -1
-    emitter.instruction("cmp x0, #0");                                          // value-based check after the TLS call
-    emitter.instruction("b.ge __rt_fread_read_ok");                             // continue when TLS read returned >= 0
-    emitter.instruction("str xzr, [sp, #24]");                                  // TLS error: zero-length result
-    emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream exhausted
+    emitter.emit_published_bridge_call("x9");                                  // x0 = bytes, EOF, or one documented TLS v2 sentinel
+    emitter.instruction("cmp x0, #-1");                                         // terminal TLS failures alone retain the existing EOF behavior
+    emitter.instruction("b.eq __rt_fread_mark_eof");                            // terminal TLS failure: report an empty exhausted stream
+    emitter.instruction("cmp x0, #0");                                          // distinguish EOF/bytes from retryable TLS sentinels
+    emitter.instruction("b.ge __rt_fread_read_ok");                             // bytes and TLS EOF use the normal read-result path
+    emitter.instruction("b __rt_fread_would_block");                            // WouldBlock/TimedOut return empty without marking EOF
 
     emitter.label("__rt_fread_do_syscall");
     // -- perform read syscall --
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd for read syscall
-    emitter.instruction("mov x1, x12");                                         // buffer pointer for read
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the buffer pointer after the TLS lookup helper
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
     emitter.syscall(3);
     if emitter.platform.needs_cmp_before_error_branch() {
@@ -173,21 +172,34 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
 
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque descriptor before starting a new read operation
+        emitter.instruction("call __rt_win_stream_clear_timed_out");            // every read begins with timed_out=false, including TLS-dispatched reads
+    }
+
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd for the TLS table lookup
-    abi::emit_symbol_address(emitter, "r11", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
-    emitter.instruction("test r12, r12");                                       // check whether the runtime value is zero
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the full-width descriptor for the TLS map lookup
+    emitter.instruction("call __rt_tls_session_get");                           // resolve the descriptor without using it as a raw array index
+    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_fread_do_syscall_x86");                        // no TLS attached → use libc read
-    emitter.instruction("mov rdi, r12");                                        // handle as first arg
+    emitter.instruction("mov rdi, rax");                                        // handle as first arg
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // buf ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // prepare SysV call argument
-    emitter.instruction("call r9");                                             // rax = bytes read (>=0) or -1
-    emitter.instruction("cmp rax, 0");                                          // did the TLS bridge return bytes?
-    emitter.instruction("jle __rt_fread_eof_x86");                              // TLS errors and EOF still mark the stream as exhausted
-    emitter.instruction("jmp __rt_fread_read_ok_x86");                          // publish the successful TLS read
+    emitter.emit_published_bridge_call("r9");                                  // rax = bytes, EOF, or one documented TLS v2 sentinel
+    emitter.instruction("cmp rax, -1");                                         // terminal TLS failure alone retains the existing EOF behavior
+    emitter.instruction("je __rt_fread_eof_x86");                               // terminal TLS failure: report an empty exhausted stream
+    emitter.instruction("cmp rax, 0");                                          // distinguish EOF/bytes from retryable TLS sentinels
+    emitter.instruction("jg __rt_fread_read_ok_x86");                           // publish a positive TLS read
+    emitter.instruction("je __rt_fread_eof_x86");                               // a zero-byte TLS read is genuine EOF
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("cmp rax, -3");                                     // TLS v2 TimedOut needs PHP-visible Windows stream metadata
+        emitter.instruction("jne __rt_fread_would_block_x86");                  // TLS WouldBlock remains an empty non-EOF read
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record TimedOut without mutating EOF state
+    }
+    emitter.instruction("jmp __rt_fread_would_block_x86");                      // retryable TLS sentinels return an empty non-EOF read
     emitter.label("__rt_fread_do_syscall_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
@@ -205,13 +217,21 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                   // preserve the successful byte count across the slot-registry call
+        emitter.instruction("mov rdi, r10");                                    // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded filter-table slot
+        emitter.instruction("mov r10, rax");                                    // table indexing uses the compact slot, never a raw SOCKET
+        emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // restore the fread result pointer clobbered by the slot lookup
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                   // restore the fread result length clobbered by the slot lookup
+    }
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this bounded stream slot
     emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
     emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
     emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
     emitter.instruction("jl __rt_fread_builtin_filter_x86");                    // built-in filter: in-place transform
-    emitter.instruction("mov rdi, r10");                                        // fd into the user-filter dispatcher's first arg
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // retain the real descriptor for user-filter dispatch
     emitter.instruction("mov rsi, rax");                                        // buf ptr into the dispatcher's second arg
     // rdx already holds the byte count
     emitter.instruction("xor ecx, ecx");                                        // direction = 0 (read) for the user-filter dispatch
@@ -229,6 +249,13 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_fread_would_block_x86");                       // transient nonblocking miss returns empty without EOF
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("cmp r10d, 110");                                   // ETIMEDOUT is retryable stream timeout, not EOF
+        emitter.instruction("jne __rt_fread_eof_x86");                          // only genuine non-timeout failures preserve the old EOF behavior
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record timed_out without touching EOF state
+        emitter.instruction("jmp __rt_fread_would_block_x86");                  // return an empty non-EOF read after timeout
+    }
     emitter.instruction("jmp __rt_fread_eof_x86");                              // other read failures behave like an exhausted stream
 
     emitter.label("__rt_fread_would_block_x86");
@@ -240,11 +267,58 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fread_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, r10");                                    // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r10, rax");                                    // table indexing uses the compact slot, never a raw SOCKET
+    }
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the compact stream slot as EOF-reached after the zero-byte or failed read
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+
+    /// Verifies TLS v2 retry sentinels reach the non-EOF path on both active
+    /// runtime architectures, while only the terminal sentinel reaches EOF.
+    #[test]
+    fn tls_retry_sentinels_do_not_emit_eof_branches() {
+        let mut arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_fread(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains("cmp x0, #-1"));
+        assert!(arm_asm.contains("b.eq __rt_fread_mark_eof"));
+        assert!(arm_asm.contains("b __rt_fread_would_block"));
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_fread(&mut x86);
+        let x86_asm = x86.output();
+        assert!(x86_asm.contains("cmp rax, -1"));
+        assert!(x86_asm.contains("je __rt_fread_eof_x86"));
+        assert!(x86_asm.contains("jmp __rt_fread_would_block_x86"));
+    }
+
+    /// Verifies Windows keeps the successful fread string result intact while
+    /// mapping an opaque descriptor to its bounded filter-table slot.
+    #[test]
+    fn windows_filter_slot_lookup_preserves_fread_result() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_fread(&mut emitter);
+        let asm = emitter.output();
+        let slot_call = asm.find("call __rt_win_stream_slot").expect("missing slot lookup");
+        let restore_ptr = asm[slot_call..]
+            .find("mov rax, QWORD PTR [rbp - 24]")
+            .expect("missing fread pointer restore");
+        let restore_len = asm[slot_call..]
+            .find("mov rdx, QWORD PTR [rbp - 32]")
+            .expect("missing fread length restore");
+        assert!(restore_ptr < restore_len);
+    }
 }

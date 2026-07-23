@@ -78,6 +78,21 @@ pub(in crate::interpreter) fn eval_chmod_result(
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
+    #[cfg(unix)]
     let permissions = std::fs::Permissions::from_mode(mode);
-    values.bool_value(std::fs::set_permissions(path, permissions).is_ok())
+    #[cfg(windows)]
+    let permissions = {
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            return values.bool_value(false);
+        };
+        let mut permissions = metadata.permissions();
+        permissions.set_readonly(mode & 0o222 == 0);
+        permissions
+    };
+    let changed = std::fs::set_permissions(&path, permissions).is_ok();
+    #[cfg(windows)]
+    if changed {
+        context.remember_local_file_mode(path, mode);
+    }
+    values.bool_value(changed)
 }

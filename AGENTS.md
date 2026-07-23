@@ -10,7 +10,7 @@ Before contributing, read `CONTRIBUTING.md` in full. It holds the complete step-
 
 ## Supported target policy
 
-All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
+All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`. `windows-x86_64` is an experimental PE/MinGW target with dedicated native/Wine execution and a strict 16-shard native codegen gate. Promotion requires one same-revision green native gate plus the target-policy review documented in `docs/compiling/targets.md`; the legacy Wine allow-list files are historical snapshots, not acceptance baselines.
 
 Do not design or land codegen/runtime features as ARM64-first with x86_64 treated as a later port. New features, builtins, runtime helpers, optimizer assumptions that affect emitted code, ABI behavior, and ownership/GC paths must either support every supported target in the same change or clearly isolate an intentionally unsupported path with diagnostics, tests, and documentation. A feature is not considered done while any supported target has a missing runtime symbol, reduced semantics, stale documentation, or an untested target-specific lowering path.
 
@@ -423,6 +423,49 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 - **ABI helpers**: `src/codegen_support/abi/` centralizes load/store/write per type
 - **Labels**: use `ctx.next_label("prefix")` — global counter prevents collisions across functions
 - **Mixed values**: `PhpType::Mixed` is an internal boxed runtime shape used for heterogeneous associative-array values; codegen/runtime must preserve the boxed cell contract instead of treating it like a plain scalar
+
+### Windows x86_64 (MSx64) ABI reference
+
+Generated Windows functions and C-facing calls use the Microsoft x64 ABI. Much
+of the handwritten x86_64 runtime retains its internal SysV-shaped convention,
+so calls crossing that boundary use per-symbol shims under
+`src/codegen_support/runtime/win32/`. Rust bridge calls and published bridge
+function pointers must go through the centralized adapters in
+`src/codegen_support/emit.rs`; do not call them as if they were internal runtime
+symbols.
+When writing or reviewing a Win32 shim, hold these rules:
+
+- **Integer args**: `rcx`, `rdx`, `r8`, `r9`, then the stack. Every call reserves a
+  32-byte **shadow space** the callee owns; the 5th and later integer args go at
+  `[rsp+32]`, `[rsp+40]`, … (above the shadow), never in more registers.
+- **Callee-saved**: `rbx`, `rbp`, `rdi`, `rsi`, `r12`–`r15`. Note `rsi`/`rdi` are
+  **non-volatile** on MSx64 (unlike SysV), so a shim can stage the incoming SysV
+  path/buffer pointer in `rsi`/`rdi` and rely on it surviving every nested Win32 call.
+- **Stack alignment**: a shim is entered at `rsp ≡ 8 (mod 16)` (the `call` pushed the
+  return address). Re-align with `sub rsp, N` where `N ≡ 8 (mod 16)` — i.e. **40 or 56**,
+  not 32 — so `rsp ≡ 0 (mod 16)` at the nested `call`. The unit test
+  `test_stack_alignment_16_bytes` enforces this; the only legitimate `sub rsp, 32` is
+  the exit shim, which first forces alignment with `and rsp, -16`.
+- **Struct / out-param layout is UPWARD (C layout)**: the pointer you pass to an API is
+  the struct's **lowest** address, and a field at byte offset `F` lives at `base + F` —
+  higher offset ⇒ higher address ⇒ *less-negative* `rbp`/`rsp` offset. Never lay a struct
+  downward (`base − F`); a downward layout is invisible to the macOS/Linux tests and only
+  fails under wine. Canonical reference: the `pselect6` fd_set shim (`fd_count@base+0`,
+  `fd_array@base+8`). Zero a struct fully before filling it. This class of bug bit us on
+  the proc_open `STARTUPINFOA`/`PROCESS_INFORMATION` layout and on the `statfs`/`utsname`/
+  `FILETIME`/`BY_HANDLE_FILE_INFORMATION` fills.
+- **Status-convention translation**: many Win32 APIs return a `BOOL` (nonzero = success).
+  A shim standing in for a POSIX C symbol whose consumer tests `== 0` for success
+  (`link`, `rename`, …) **must** translate the `BOOL` to POSIX (`0` = success,
+  `-1` = failure) inside the shim, or success and failure are reported inverted. Mirror
+  the `link`/`rename` shims: `test eax, eax; jz .Lfail; xor rax, rax` / `.Lfail: mov rax, -1`.
+- **32-bit int-status sign extension (Class-3)**: a shim returning a 32-bit C `int` status
+  that a consumer sign-tests must `cdqe` before returning, so a negative status is not read
+  as a large positive `rax`.
+- **Adding a shim**: declare the Win32 import in `WIN32_IMPORTS`, add the `emit_shim_*` and
+  its call in `emit_win32_shims`, and keep non-Windows emitters byte-identical (only the
+  Windows arm and `WIN32_IMPORTS` change). `ntdll`-only APIs (e.g. `RtlGetVersion`) are
+  **not** in the link set — do not import them; use a documented fallback instead.
 
 ### Assembly comment policy
 

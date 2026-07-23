@@ -416,9 +416,7 @@ pub extern "C" fn elephc_cairo_identity_matrix(ctx: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_cairo_get_current_point_x(ctx: i64) -> i64 {
     ffi_guard(-1, move || {
-        contexts()
-            .lock()
-            .unwrap()
+        lock_recover(contexts())
             .get(&ctx)
             .map_or(0, |c| (c.cur.x * 1000.0).round() as i64)
     })
@@ -428,9 +426,7 @@ pub extern "C" fn elephc_cairo_get_current_point_x(ctx: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_cairo_get_current_point_y(ctx: i64) -> i64 {
     ffi_guard(-1, move || {
-        contexts()
-            .lock()
-            .unwrap()
+        lock_recover(contexts())
             .get(&ctx)
             .map_or(0, |c| (c.cur.y * 1000.0).round() as i64)
     })

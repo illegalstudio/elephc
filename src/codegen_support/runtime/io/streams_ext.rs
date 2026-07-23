@@ -16,6 +16,10 @@
 //!   while preserving the `LOCK_NB` flag bit.
 //! - `__rt_tmpfile` returns the raw fd in x0/rax (-1 on failure); the codegen
 //!   wrapper boxes it as resource/false via `__rt_mixed_from_value`.
+//! - Unix `__rt_tmpfile` routes `mkstemp` through `Emitter::emit_call_c` and
+//!   immediately unlinks the path. Windows instead uses the system temp
+//!   directory plus `GetTempFileNameW` and reopens with
+//!   `FILE_FLAG_DELETE_ON_CLOSE`, matching php-src's close-time deletion.
 
 use crate::codegen_support::{
     abi,
@@ -225,12 +229,12 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     let errno_func = match emitter.platform {
         Platform::MacOS => "__error",
         Platform::Linux => "__errno_location",
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => "__errno_location", // Windows shims against msvcrt errno
     };
     let would_block_errno = match emitter.platform {
         Platform::MacOS => 35,
         Platform::Linux => 11,
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => 11, // EAGAIN — msvcrt uses the POSIX value via the shim
     };
     emitter.bl_c(errno_func);                                                    // fetch thread-local errno storage after flock() failure
     emitter.instruction("ldr w9, [x0]");                                        // load errno value set by libc flock()
@@ -366,6 +370,10 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // total bytes copied = 0
 
     emitter.label("__rt_fpassthru_loop_x86");
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque descriptor before resetting timeout metadata
+        emitter.instruction("call __rt_win_stream_clear_timed_out");            // each new passthru read starts with timed_out=false
+    }
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
     emitter.instruction(&format!("mov rdx, {}", buf_size));                     // count
@@ -381,17 +389,39 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_done_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes that passthru reached EOF
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, r10");                                    // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r10, rax");                                    // table indexing uses the compact slot, never a raw SOCKET
+    }
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table for fpassthru completion
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after consuming the stream
+    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set EOF on the compact stream slot after consuming the stream
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return total
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return total
 
     emitter.label("__rt_fpassthru_read_error_x86");
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("call __errno_location");                           // inspect the POSIX-mapped Winsock failure before setting EOF
+        emitter.instruction("cmp DWORD PTR [rax], 110");                        // ETIMEDOUT is a retryable stream timeout, not EOF
+        emitter.instruction("jne __rt_fpassthru_error_eof_x86");                // preserve legacy EOF behavior for non-timeout failures
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // expose the timeout without changing EOF state
+        emitter.instruction("mov rax, -1");                                     // retain fpassthru's failure sentinel after a timeout
+        emitter.instruction(&format!("add rsp, {}", buf_size + 16));            // release the passthru frame without touching EOF
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return the timeout failure sentinel
+        emitter.label("__rt_fpassthru_error_eof_x86");
+    }
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes the exhausted error state
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, r10");                                    // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r10, rax");                                    // table indexing uses the compact slot, never a raw SOCKET
+    }
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table after fpassthru read failure
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after a failed read
+    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set EOF on the compact stream slot after a failed read
     emitter.instruction("mov rax, -1");                                         // read failure sentinel, matching PHP's -1 byte count
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -430,6 +460,11 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate
 
+    if emitter.target.platform == Platform::Windows {
+        emit_tmpfile_windows_x86_64(emitter);
+        return;
+    }
+
     // -- tmpfile --
     emitter.blank();
     emitter.comment("--- runtime: tmpfile ---");
@@ -445,7 +480,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rsi + 16]");                       // load remainder
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // store remainder
     emitter.instruction("lea rdi, [rbp - 32]");                                 // mkstemp template arg
-    emitter.instruction("call mkstemp");                                        // libc mkstemp
+    emitter.emit_call_c("mkstemp");                                             // Windows: exclusive CreateFileW-backed temporary-file shim
     emitter.instruction("cmp eax, 0");                                          // did mkstemp return a negative C int?
     emitter.instruction("jl __rt_tmpfile_fail_x86");                            // mkstemp failed
     emitter.instruction("cdqe");                                                // normalize the C int fd into the runtime's 64-bit descriptor value
@@ -453,8 +488,17 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the temporary descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, rax");                                    // pass temporary CRT descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r11, rax");                                    // retain compact slot for state initialization
+        abi::emit_symbol_address(emitter, "r10", "_eof_flags");                 // materialize the eof-flag table for the temporary descriptor slot
+        emitter.instruction("mov BYTE PTR [r10 + r11], 0");                     // clear stale EOF state without raw descriptor indexing
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // return the original temporary CRT descriptor
+    } else {
+        abi::emit_symbol_address(emitter, "r10", "_eof_flags");                 // materialize the eof-flag table for the temporary descriptor
+        emitter.instruction("mov BYTE PTR [r10 + rax], 0");                     // clear stale EOF state before returning the descriptor
+    }
     emitter.instruction("add rsp, 48");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return fd
@@ -464,4 +508,117 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
     emitter.instruction("ret");                                                 // return -1
+}
+
+/// Emits the Windows x86_64 `tmpfile()` path using the configured system temp
+/// directory and a delete-on-close Win32 handle adopted by the CRT.
+fn emit_tmpfile_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: tmpfile (Windows delete-on-close) ---");
+    emitter.label_global("__rt_tmpfile");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for wide path buffers
+    emitter.instruction("sub rsp, 8320");                                       // Win64 call area below two php-src-sized UTF-16 path buffers and spill slots
+    emitter.instruction("mov DWORD PTR [rbp - 32], 0x006c0065");                // UTF-16 prefix bytes for "el"
+    emitter.instruction("mov DWORD PTR [rbp - 28], 0x00000070");                // UTF-16 prefix tail "p" plus terminator
+    emitter.instruction("mov ecx, 2048");                                       // PHP_WIN32_IOUTIL_MAXPATHLEN UTF-16 code units
+    emitter.instruction("lea rdx, [rbp - 4128]");                               // writable php-src-sized temp-directory buffer
+    emitter.instruction("call GetTempPathW");                                   // resolve TMP/TEMP or the Windows directory fallback
+    emitter.instruction("test eax, eax");                                       // did Windows return a temp directory?
+    emitter.instruction("jz __rt_tmpfile_native_fail_win");                     // publish GetLastError and return false
+    emitter.instruction("cmp eax, 2048");                                       // did the configured path exceed the php-src-sized buffer?
+    emitter.instruction("jae __rt_tmpfile_range_fail_win");                     // reject truncation with ERANGE
+    emitter.instruction("lea rcx, [rbp - 4128]");                               // existing system temp directory
+    emitter.instruction("lea rdx, [rbp - 32]");                                 // three-character UTF-16 prefix
+    emitter.instruction("xor r8d, r8d");                                        // let Windows choose a unique numeric suffix
+    emitter.instruction("lea r9, [rbp - 8224]");                                // receive the created temporary path
+    emitter.instruction("call GetTempFileNameW");                               // create a unique file in the configured temp directory
+    emitter.instruction("test eax, eax");                                       // did unique-file creation succeed?
+    emitter.instruction("jz __rt_tmpfile_native_fail_win");                     // publish GetLastError and return false
+
+    // -- reopen the named file with delete-on-close ownership --
+    emitter.instruction("lea rcx, [rbp - 8224]");                               // unique UTF-16 temporary path
+    emitter.instruction("mov rdx, 0xC0010000");                                 // GENERIC_READ | GENERIC_WRITE | DELETE
+    emitter.instruction("mov r8d, 7");                                          // share read, write, and delete while the stream is alive
+    emitter.instruction("xor r9d, r9d");                                        // default security and non-inheritable handle
+    emitter.instruction("mov QWORD PTR [rsp + 32], 3");                         // OPEN_EXISTING file created by GetTempFileNameW
+    emitter.instruction("mov QWORD PTR [rsp + 40], 0x04000100");                // FILE_FLAG_DELETE_ON_CLOSE | FILE_ATTRIBUTE_TEMPORARY
+    emitter.instruction("mov QWORD PTR [rsp + 48], 0");                         // no template handle
+    emitter.instruction("call CreateFileW");                                    // acquire the stream handle with close-time deletion
+    emitter.instruction("cmp rax, -1");                                         // INVALID_HANDLE_VALUE?
+    emitter.instruction("je __rt_tmpfile_open_fail_win");                       // remove the named file and publish the native error
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the owned Win32 handle until CRT adoption
+    emitter.instruction("mov rcx, rax");                                        // handle transferred to _open_osfhandle on success
+    emitter.instruction("mov edx, 0x8002");                                     // _O_BINARY | _O_RDWR
+    emitter.instruction("call _open_osfhandle");                                // expose the delete-on-close handle as a CRT descriptor
+    emitter.instruction("cmp eax, -1");                                         // did CRT descriptor allocation fail?
+    emitter.instruction("je __rt_tmpfile_crt_fail_win");                        // close the still-owned handle and report EMFILE
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the CRT descriptor across slot lookup
+    emitter.instruction("mov rdi, rax");                                        // opaque descriptor for bounded stream state
+    emitter.instruction("call __rt_win_stream_slot");                           // allocate or recover the compact stream-state slot
+    emitter.instruction("mov r11, rax");                                        // retain the slot while materializing the EOF table
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                    // bounded EOF-state table
+    emitter.instruction("mov BYTE PTR [r10 + r11], 0");                         // a fresh temporary stream starts before EOF
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the adopted CRT descriptor
+    emitter.instruction("add rsp, 8320");                                       // release wide buffers and Win32 call staging
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the writable temporary resource descriptor
+
+    emitter.label("__rt_tmpfile_open_fail_win");
+    emitter.instruction("call GetLastError");                                   // preserve CreateFileW failure before cleanup
+    emitter.instruction("mov DWORD PTR [rbp - 24], eax");                       // native open error
+    emitter.instruction("lea rcx, [rbp - 8224]");                               // named file created by GetTempFileNameW
+    emitter.instruction("call DeleteFileW");                                    // avoid leaking a failed temporary-file path
+    emitter.instruction("mov eax, DWORD PTR [rbp - 24]");                       // restore the original CreateFileW error
+    emitter.instruction("jmp __rt_tmpfile_translate_fail_win");                 // publish the preserved error
+
+    emitter.label("__rt_tmpfile_crt_fail_win");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // handle remains owned when CRT adoption fails
+    emitter.instruction("call CloseHandle");                                    // close and trigger FILE_FLAG_DELETE_ON_CLOSE
+    emitter.instruction("mov DWORD PTR [rip + __rt_errno], 24");                // EMFILE: CRT descriptor table exhausted
+    emitter.instruction("jmp __rt_tmpfile_fail_win");                           // return the failure sentinel
+
+    emitter.label("__rt_tmpfile_native_fail_win");
+    emitter.instruction("call GetLastError");                                   // obtain the failed temp-path API error
+    emitter.label("__rt_tmpfile_translate_fail_win");
+    emitter.instruction("mov DWORD PTR [rip + __rt_win32_last_error], eax");    // retain the native diagnostic code
+    emitter.instruction("call __rt_win32_errno_from_code");                     // map the Win32 error into POSIX errno space
+    emitter.instruction("mov DWORD PTR [rip + __rt_errno], eax");               // publish the temporary-file failure
+    emitter.instruction("jmp __rt_tmpfile_fail_win");                           // return false
+
+    emitter.label("__rt_tmpfile_range_fail_win");
+    emitter.instruction("mov DWORD PTR [rip + __rt_errno], 34");                // ERANGE: configured temp path exceeds MAX_PATH
+    emitter.label("__rt_tmpfile_fail_win");
+    emitter.instruction("mov rax, -1");                                         // tmpfile failure sentinel
+    emitter.instruction("add rsp, 8320");                                       // release wide buffers and Win32 call staging
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return false through the builtin boxing path
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies Windows temp files use the configured system directory and
+    /// delete-on-close ownership instead of the Unix `/tmp` unlink strategy.
+    #[test]
+    fn windows_tmpfile_uses_system_temp_and_delete_on_close() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_streams_ext(&mut emitter);
+        let asm = emitter.output();
+        let section = asm
+            .split("__rt_tmpfile:\n")
+            .nth(1)
+            .expect("missing Windows tmpfile helper");
+        assert!(section.contains("call GetTempPathW"));
+        assert!(section.contains("call GetTempFileNameW"));
+        assert!(section.contains("sub rsp, 8320"));
+        assert!(section.contains("mov QWORD PTR [rsp + 40], 0x04000100"));
+        assert!(section.contains("call _open_osfhandle"));
+        assert!(section.contains("cmp eax, -1"));
+        assert!(!section.contains("call __rt_sys_mkstemp"));
+        assert!(!section.contains("call unlink"));
+    }
 }

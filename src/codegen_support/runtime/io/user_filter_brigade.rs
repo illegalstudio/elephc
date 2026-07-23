@@ -382,7 +382,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // consumed mixed
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing mixed
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // method ptr
-    emitter.instruction("call r11");                                            // call selected function pointer
+    emitter.emit_platform_callback_call("r11", 5);
 
     // -- Walk out_brigade._buckets, concatenate data --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // prepare SysV call argument
@@ -467,4 +467,51 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_user_filter_brigade_invoke` call site
+    /// stages the 5th int arg (closing) on the stack above the MSx64 shadow
+    /// space before the indirect `call r11` into the user filter's
+    /// `filter($in, $out, &$consumed, $closing)` method (finding F1, wide
+    /// reverse-ABI variant): without this staging the generated method would
+    /// read $this/in/out/consumed/closing from the wrong registers and slots
+    /// on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_user_filter_brigade_invoke_stages_stack_arg_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_filter_brigade_invoke(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rdi, QWORD PTR [rbp - 8]").expect("expected SysV $this staging");
+        let stack_idx = asm.find("mov QWORD PTR [rsp + 32], r8").expect("expected 5th-arg stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(stack_idx < call_idx, "5th-arg stack store must precede the indirect call");
+        assert!(asm.contains("sub rsp, 48"), "expected the windows call-site shadow-space sub");
+        assert!(asm.contains("add rsp, 48"), "expected the windows call-site shadow-space add");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_user_filter_brigade_invoke`
+    /// stays byte-identical to before the reverse-ABI staging was introduced:
+    /// the MSx64 stack staging is windows-x86_64-only, so a linux-x86_64 build
+    /// must keep the plain 5-register SysV call sequence.
+    #[test]
+    fn test_linux_x86_64_user_filter_brigade_invoke_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_filter_brigade_invoke(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rbp - 8]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rax"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rbp - 8]"));
+        assert!(!asm.contains("sub rsp, 48"));
+        assert!(!asm.contains("add rsp, 48"));
+    }
 }

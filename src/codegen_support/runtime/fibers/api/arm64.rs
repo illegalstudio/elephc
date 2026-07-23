@@ -62,8 +62,8 @@ pub(super) fn emit_throw_state_error(emitter: &mut Emitter) {
 ///         x2 = wrapper entry that adapts Fiber Mixed traffic to the callable ABI
 /// Output: x0 = pointer to the new Fiber object (16-byte heap header sits at -8)
 pub(super) fn emit_construct(emitter: &mut Emitter) {
-    let initial_frame_bytes = fiber_initial_stack_frame_bytes(emitter.target.arch);
-    let initial_entry_offset = fiber_initial_entry_offset(emitter.target.arch);
+    let initial_frame_bytes = fiber_initial_stack_frame_bytes(emitter.target);
+    let initial_entry_offset = fiber_initial_entry_offset(emitter.target);
 
     emitter.blank();
     emitter.comment("--- runtime: fiber_construct ---");

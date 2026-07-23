@@ -2,7 +2,7 @@
 title: "ptr_write16() — internals"
 description: "Compiler internals for ptr_write16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 316
 ---
 
 ## `ptr_write16()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write16.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write16.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

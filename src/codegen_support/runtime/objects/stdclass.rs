@@ -464,8 +464,8 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
 
-    emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots (mixed_from_value first arg)
-    emitter.instruction("mov rdi, 7");                                          // value_type = 7 (boxed Mixed)
+    emitter.instruction("mov rdi, 8");                                          // initial capacity = 8 slots
+    emitter.instruction("mov rsi, 7");                                          // value_type = 7 (boxed Mixed)
     emitter.instruction("call __rt_hash_new");                                  // rax = empty hash pointer
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the saved obj pointer
@@ -678,8 +678,8 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // already allocated?
     emitter.instruction("jne __rt_stdclass_set_have_hash");                     // skip lazy init when present
 
-    emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots
-    emitter.instruction("mov rdi, 7");                                          // value_type = 7 (boxed Mixed)
+    emitter.instruction("mov rdi, 8");                                          // initial capacity = 8 slots
+    emitter.instruction("mov rsi, 7");                                          // value_type = 7 (boxed Mixed)
     emitter.instruction("call __rt_hash_new");                                  // rax = empty hash pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the new hash_ptr at obj+8
@@ -701,4 +701,28 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return (no return value)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::{
+        emit::Emitter,
+        platform::{Arch, Platform, Target},
+    };
+
+    use super::emit_stdclass_new_x86_64;
+
+    /// Verifies stdClass seeds hash capacity and value type in the internal SysV argument registers.
+    #[test]
+    fn x86_64_stdclass_new_stages_hash_new_arguments_in_runtime_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_stdclass_new_x86_64(&mut emitter);
+        let asm = emitter.output();
+        let call = asm
+            .find("    call __rt_hash_new\n")
+            .expect("stdClass constructor should allocate its dynamic-property hash");
+        let setup = &asm[..call];
+
+        assert!(setup.ends_with("    mov rdi, 8\n    mov rsi, 7\n"));
+    }
 }

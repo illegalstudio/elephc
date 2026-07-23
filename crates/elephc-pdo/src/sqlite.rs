@@ -11,6 +11,10 @@
 //! - SQLite is statically bundled (`libsqlite3-sys`'s `bundled` feature), so a
 //!   compiled PHP binary that links this staticlib has no system SQLite runtime
 //!   dependency.
+//! - Paths stay UTF-8 at the bridge boundary. SQLite's Windows VFS converts its
+//!   UTF-8 filename API to native UTF-16, preserving non-ASCII DSN paths.
+//! - Connections use FULLMUTEX and a bounded busy timeout so concurrent Windows
+//!   file locks report a real SQLite error instead of a false success or spin.
 //! - Column type codes match SQLite's: 1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB,
 //!   5=NULL — the same codes the PDO prelude's `columnValue()` reads.
 
@@ -51,7 +55,7 @@ impl SqliteConn {
             return Err("invalid database path".to_string());
         };
         let mut db: *mut ffi::sqlite3 = ptr::null_mut();
-        let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE;
+        let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE | ffi::SQLITE_OPEN_FULLMUTEX;
         let rc = unsafe { ffi::sqlite3_open_v2(c_path.as_ptr(), &mut db, flags, ptr::null()) };
         if rc != ffi::SQLITE_OK {
             let msg = if db.is_null() {
@@ -64,6 +68,13 @@ impl SqliteConn {
             }
             return Err(msg);
         }
+        let timeout_rc = unsafe { ffi::sqlite3_busy_timeout(db, 5_000) };
+        if timeout_rc != ffi::SQLITE_OK {
+            let msg = unsafe { read_errmsg(db) };
+            unsafe { ffi::sqlite3_close(db) };
+            return Err(msg);
+        }
+        unsafe { ffi::sqlite3_extended_result_codes(db, 1) };
         Ok(SqliteConn { db })
     }
 

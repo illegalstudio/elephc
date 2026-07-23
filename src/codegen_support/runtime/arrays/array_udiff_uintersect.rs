@@ -137,7 +137,7 @@ fn emit_array_udiff_uintersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_udiff_uintersect_cmp");                  // no environment keeps the two-argument comparator ABI
     emitter.instruction("mov rdx, r13");                                        // pass the environment as the third comparator argument
     emitter.label("__rt_array_udiff_uintersect_cmp");
-    emitter.instruction("call r12");                                            // call cmp(a, b [, env]); zero result means equal
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("test rax, rax");                                       // did the comparator report equality?
     emitter.instruction("jz __rt_array_udiff_uintersect_present");              // a zero comparator result means the element is in arr2
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload inner index j

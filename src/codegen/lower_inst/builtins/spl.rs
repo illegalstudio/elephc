@@ -944,8 +944,8 @@ fn emit_loaded_hash_as_mixed(ctx: &mut FunctionContext<'_>) {
 
 /// Allocates an indexed array whose slots store boxed Mixed values.
 fn emit_new_mixed_indexed_array(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 8);
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
@@ -956,10 +956,10 @@ fn emit_new_mixed_indexed_array(ctx: &mut FunctionContext<'_>) {
 
 /// Allocates an associative array whose values are boxed Mixed cells.
 fn emit_new_mixed_hash(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0), 16);
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         runtime_value_tag(&PhpType::Mixed) as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_new");
@@ -1571,10 +1571,16 @@ fn emit_branch_if_saved_receiver_implements(
 }
 
 /// Moves the loaded object result into the ABI receiver register for method dispatch.
+/// Targets the platform receiver register (rdi SysV, rcx MSx64) so the resolved interface
+/// method — a codegen-emitted callee — finds $this where it expects it.
 fn move_result_to_receiver_arg(ctx: &mut FunctionContext<'_>) {
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the object result as the interface method receiver
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if result_reg == arg_reg {
+        return;
     }
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the object result as the interface method receiver
 }
 
 /// Reloads the saved iterator receiver from the top temporary stack slot.
@@ -1584,7 +1590,9 @@ fn reload_saved_iterator_receiver(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("ldr x0, [sp]");                            // reload iterator receiver before the next protocol call
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload iterator receiver before the next protocol call
+            let receiver_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);    // platform receiver register (rdi SysV, rcx MSx64)
+            ctx.emitter
+                .instruction(&format!("mov {}, QWORD PTR [rsp]", receiver_reg)); // reload iterator receiver before the next protocol call
         }
     }
 }
@@ -1599,7 +1607,11 @@ fn reload_saved_iterator_receiver_at_offset(
             ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", offset));     // reload iterator receiver from below preserved key state
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", offset)); // reload iterator receiver from below preserved key state
+            let receiver_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);    // platform receiver register (rdi SysV, rcx MSx64)
+            ctx.emitter.instruction(&format!(                                   // reload the iterator receiver beneath preserved key state
+                "mov {}, QWORD PTR [rsp + {}]",
+                receiver_reg, offset
+            ));
         }
     }
 }

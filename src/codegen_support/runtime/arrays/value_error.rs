@@ -50,22 +50,8 @@ pub(in crate::codegen_support::runtime) fn emit_throw_value_error_x86_64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
-    emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
-    emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
-    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static ValueError message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
-    emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
-    emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_spl_value_error_class_id", 0); // pass ValueError's runtime class id
+    abi::emit_symbol_address(emitter, "rsi", message_symbol);                   // pass the static ValueError message pointer
+    emitter.instruction(&format!("mov rdx, {}", message_len));                  // pass the static ValueError message length
+    emitter.instruction("jmp __rt_throw_static_exception");                     // allocate and publish through an independent unwind frame
 }

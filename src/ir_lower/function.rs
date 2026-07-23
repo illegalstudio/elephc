@@ -64,6 +64,7 @@ pub(crate) fn lower_main(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         program,
         top_level_env.clone(),
         top_level_env,
@@ -256,6 +257,7 @@ pub(crate) fn lower_user_function(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         body,
         env_from_signature(&eir_signature, web),
         web_gated_global_env(&check_result.global_env, web),
@@ -354,6 +356,7 @@ pub(crate) fn lower_class_method(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         body,
         env,
         web_gated_global_env(&check_result.global_env, web),
@@ -417,6 +420,7 @@ pub(crate) fn lower_eval_aot_function(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         body,
         TypeEnv::new(),
         check_result.global_env.clone(),
@@ -520,6 +524,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         body,
         env,
         check_result.global_env.clone(),
@@ -617,6 +622,7 @@ pub(crate) fn lower_property_init_thunk(
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
+        module.target.platform,
         &body,
         env,
         web_gated_global_env(&check_result.global_env, web),
@@ -805,6 +811,7 @@ fn lower_closure_function_with_signature(
     let closures = lower_body_into_function(
         &mut function,
         parent.data,
+        parent.platform,
         body,
         env,
         parent.top_level_env.clone(),
@@ -839,6 +846,7 @@ fn lower_closure_function_with_signature(
 fn lower_body_into_function(
     function: &mut Function,
     data: &mut crate::ir::DataPool,
+    platform: crate::codegen_support::platform::Platform,
     body: &[Stmt],
     env: TypeEnv,
     top_level_env: TypeEnv,
@@ -884,6 +892,7 @@ fn lower_body_into_function(
     let mut ctx = LoweringContext::new(
         builder,
         data,
+        platform,
         env,
         functions,
         extern_functions,

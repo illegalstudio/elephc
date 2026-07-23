@@ -173,6 +173,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. |
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
+| `escapeshellarg()` | `escapeshellarg($arg): string` | Quote one argument for safe shell use. Uses POSIX single quotes on macOS/Linux and PHP's Windows command-line quoting rule on Windows; NUL bytes throw `ValueError`. Weak scalar strings are accepted only when their type is statically known to exclude arrays and objects. |
+| `escapeshellcmd()` | `escapeshellcmd($command): string` | Escape shell metacharacters in a command. Uses POSIX backslashes on macOS/Linux and cmd.exe carets on Windows; NUL bytes throw `ValueError`. Weak scalar strings are accepted only when their type is statically known to exclude arrays and objects. |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |

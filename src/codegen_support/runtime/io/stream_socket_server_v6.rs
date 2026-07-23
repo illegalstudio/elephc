@@ -167,7 +167,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
         let (sol_socket, so_reuseaddr): (i64, i64) = match plat {
             Platform::MacOS => (0xffff, 4),
             Platform::Linux => (1, 2),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => (1, 15),
         };
         emitter.instruction("mov w11, #1");                                     // SO_REUSEADDR option value = 1
         emitter.instruction("str w11, [sp, #84]");                              // stash the option value in stack scratch

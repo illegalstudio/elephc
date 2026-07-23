@@ -9,6 +9,9 @@
 //! - The `DIR*` recorded by `__rt_opendir` in `_dir_handles` is handed to libc
 //!   `rewinddir`; the handle stays registered so later `readdir()` calls reuse it.
 //! - A descriptor with no recorded `DIR*` is a no-op.
+//! - The x86_64 `rewinddir` call site routes through `Emitter::emit_call_c`. On
+//!   Windows, `__rt_sys_rewinddir` closes and reopens the `FindFirstFileExW`
+//!   search against its retained pattern. Other targets continue to use libc.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -73,7 +76,7 @@ fn emit_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // was a DIR* recorded for this descriptor?
     emitter.instruction("jz __rt_rewinddir_done_x86");                          // nothing recorded: nothing to rewind
     emitter.instruction("mov rdi, r10");                                        // DIR* argument for rewinddir
-    emitter.bl_c("rewinddir");
+    emitter.emit_call_c("rewinddir");                                           // Windows: close and reopen the retained FindFirstFileExW search
 
     emitter.label("__rt_rewinddir_done_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

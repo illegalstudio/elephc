@@ -47,12 +47,12 @@ pub(crate) fn emit_prepare_regex_locale(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction(&format!("mov edi, {}", emitter.platform.lc_ctype())); // select LC_CTYPE so character classes use the environment locale
             abi::emit_symbol_address(emitter, "rsi", "_locale_utf8_name");
-            emitter.bl_c("setlocale");                                          // activate the UTF-8 locale category before compiling regex
+            emitter.emit_call_c("setlocale");                                   // activate the UTF-8 locale category before compiling regex
             emitter.instruction("test rax, rax");                               // check whether the explicit UTF-8 locale was accepted
             emitter.instruction("jnz 1f");                                      // skip fallback when the explicit UTF-8 locale is available
             emitter.instruction(&format!("mov edi, {}", emitter.platform.lc_ctype())); // reselect LC_CTYPE for the environment-locale fallback
             abi::emit_symbol_address(emitter, "rsi", "_locale_env_name");
-            emitter.bl_c("setlocale");                                          // try the environment locale when C.UTF-8 is unavailable
+            emitter.emit_call_c("setlocale");                                   // try the environment locale when C.UTF-8 is unavailable
             emitter.label("1");
         }
     }

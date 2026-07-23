@@ -8,7 +8,7 @@ sidebar:
 ## asort()
 
 ```php
-function asort(array $array): bool
+function asort(array &$array): bool
 ```
 
 Sorts an array and maintains index association.

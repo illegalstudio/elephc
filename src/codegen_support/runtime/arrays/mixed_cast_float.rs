@@ -107,7 +107,7 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the x86_64 string-result pointer register
     abi::emit_call_label(emitter, "__rt_cstr");                                 // materialize a null-terminated copy of the unboxed elefant string payload
     emitter.instruction("mov rdi, rax");                                        // pass the temporary C string through the SysV first integer argument register before atof()
-    emitter.instruction("call atof");                                           // parse the current C string payload as double
+    emitter.emit_call_c("atof");                                                // parse the current C string payload as double
     emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the parsed floating-point string payload
 
     emitter.label("__rt_mixed_cast_float_from_float_linux_x86_64");

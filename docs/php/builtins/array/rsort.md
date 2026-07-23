@@ -8,7 +8,7 @@ sidebar:
 ## rsort()
 
 ```php
-function rsort(array $array): bool
+function rsort(array &$array): bool
 ```
 
 Sorts an array in descending order.

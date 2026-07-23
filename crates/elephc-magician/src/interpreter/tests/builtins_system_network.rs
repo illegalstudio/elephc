@@ -215,12 +215,12 @@ fn execute_program_dispatches_stream_introspection_builtins() {
 $transports = stream_get_transports();
 $filters = stream_get_filters();
 echo count($wrappers) . ":" . $wrappers[0] . ":" . $wrappers[5] . ":";
-echo count($transports) . ":" . $transports[0] . ":" . $transports[8] . ":";
+echo count($transports) . ":" . $transports[0] . ":" . $transports[6] . ":";
 echo count($filters) . ":" . $filters[2] . ":";
 $call_wrappers = call_user_func("stream_get_wrappers");
 echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
-echo $call_transports[11] . ":";
+echo $call_transports[9] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
 echo $call_filters[13] . ":";
 echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports");
@@ -234,7 +234,7 @@ return function_exists("stream_get_filters");"#,
 
     assert_eq!(
         values.output,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
+        "11:file:https:10:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

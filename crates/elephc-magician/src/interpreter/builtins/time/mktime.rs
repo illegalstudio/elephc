@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - `gmmktime` and `strtotime` reuse the timestamp conversion helpers from this file.
+//! - Windows uses the CRT's explicit 64-bit timestamp entry points.
 
 use super::super::*;
 use super::*;
@@ -16,6 +17,17 @@ eval_builtin! {
     params: [hour, minute, second, month, day, year],
     direct: Time,
     values: Time,
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    /// Converts local broken-down time into a 64-bit Unix timestamp through the Windows CRT.
+    #[link_name = "_mktime64"]
+    fn windows_mktime64(time: *mut libc::tm) -> i64;
+
+    /// Converts UTC broken-down time into a 64-bit Unix timestamp through the Windows CRT.
+    #[link_name = "_mkgmtime64"]
+    fn windows_mkgmtime64(time: *mut libc::tm) -> i64;
 }
 
 /// Evaluates PHP `mktime(hour, minute, second, month, day, year)`.
@@ -110,7 +122,10 @@ pub(in crate::interpreter) fn eval_mktime_timestamp(
     tm.tm_mday = day;
     tm.tm_year = year - 1900;
     tm.tm_isdst = -1;
+    #[cfg(unix)]
     let timestamp = unsafe { libc::mktime(&mut tm) };
+    #[cfg(windows)]
+    let timestamp = unsafe { windows_mktime64(&mut tm) };
     i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
@@ -133,7 +148,10 @@ pub(in crate::interpreter) fn eval_gmmktime_timestamp(
     tm.tm_mday = args.4;
     tm.tm_year = args.5 - 1900;
     tm.tm_isdst = 0;
+    #[cfg(unix)]
     let timestamp = unsafe { libc::timegm(&mut tm) };
+    #[cfg(windows)]
+    let timestamp = unsafe { windows_mkgmtime64(&mut tm) };
     i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
 }
 

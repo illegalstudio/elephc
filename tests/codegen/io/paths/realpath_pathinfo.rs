@@ -40,6 +40,28 @@ echo $resolved === $direct ? "match" : "differ";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies Windows `realpath()` follows a symbolic link to its physical target.
+#[test]
+fn test_windows_realpath_resolves_symbolic_link_target() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("real-target.txt", "x");
+if (!symlink("real-target.txt", "real-link.txt")) {
+    echo "symlink-failed";
+} else {
+    echo realpath("real-link.txt") === realpath("real-target.txt") ? "resolved" : "lexical";
+    unlink("real-link.txt");
+}
+unlink("real-target.txt");
+"#,
+    );
+    assert_eq!(out, "resolved");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `realpath()` returns `false` when the path does not exist.
 /// Fixture: `/definitely/does/not/exist/anywhere/12345` → expects `false`.
 #[test]

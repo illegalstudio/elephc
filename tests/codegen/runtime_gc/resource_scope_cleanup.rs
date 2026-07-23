@@ -153,14 +153,20 @@ echo ($got === hash("sha256", "ab")) ? "ok\n" : "bad\n";
 /// FILE* and reaps the child) without crashing.
 #[test]
 fn test_popen_auto_closed_on_scope_exit() {
-    let out = compile_and_run(
+    let command = if target().platform == Platform::Windows {
+        "echo|set /p=abc& exit /b 0"
+    } else {
+        "printf abc"
+    };
+    let source = format!(
         r#"<?php
-$p = popen("printf abc", "r");
+$p = popen("{command}", "r");
 echo fread($p, 16);
 // No pclose() — the pipe is auto-closed and the child reaped at scope exit.
 echo "|done\n";
 "#,
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "abc|done\n");
 }
 
@@ -168,9 +174,14 @@ echo "|done\n";
 /// release sentinel marks the box) so the child is not reaped / fd closed twice.
 #[test]
 fn test_popen_explicit_pclose_then_scope_exit() {
-    let out = compile_and_run(
+    let command = if target().platform == Platform::Windows {
+        "echo|set /p=xyz& exit /b 0"
+    } else {
+        "printf xyz"
+    };
+    let source = format!(
         r#"<?php
-$p = popen("printf xyz", "r");
+$p = popen("{command}", "r");
 echo fread($p, 16);
 echo "|";
 echo pclose($p);
@@ -178,6 +189,7 @@ echo "\n";
 // $p leaves scope sentinel-marked — scope cleanup does not pclose again.
 "#,
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "xyz|0\n");
 }
 

@@ -22,10 +22,10 @@ use super::{namespace_string, qualify, TRAIT_CLASS_PLACEHOLDER};
 ///
 /// Canonicalizes the file path and delegates to `substitute_scope_constants_with_file`.
 pub(super) fn substitute_scope_constants_in_file(program: Program, file_path: &Path) -> Program {
-    let canonical = file_path
-        .canonicalize()
-        .unwrap_or_else(|_| file_path.to_path_buf());
-    substitute_scope_constants_with_file(program, Some(canonical.display().to_string()))
+    substitute_scope_constants_with_file(
+        program,
+        Some(crate::source_path::canonical_source_path(file_path)),
+    )
 }
 
 /// Inner implementation that accepts an optional already-canonicalized file string.

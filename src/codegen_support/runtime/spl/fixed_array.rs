@@ -748,11 +748,11 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
     emitter.instruction("mov rbp, rsp");                                        // establish constructor frame
-    emitter.instruction("sub rsp, 24");                                         // reserve class id, size, and object spills
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned class id, size, and object spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SplFixedArray class id
     emitter.instruction("cmp rsi, 0");                                          // reject negative sizes
     emitter.instruction("jge __rt_spl_fixed_new_size_ok");                      // keep non-negative sizes
-    emitter.instruction("add rsp, 24");                                         // release constructor spills before throwing
+    emitter.instruction("add rsp, 32");                                         // release constructor spills before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -789,7 +789,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload object pointer
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
     emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
-    emitter.instruction("add rsp, 24");                                         // release constructor spills
+    emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer
 }
@@ -1403,7 +1403,7 @@ fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the aarch64 exception-throw sequence for SplFixedArray runtime errors.
-/// Allocates a 32-byte Throwable payload, stamps it as heap kind 6 (object), stores the
+/// Allocates a 56-byte Throwable payload, stamps it as heap kind 6 (object), stores the
 /// class id from `class_id_symbol`, the static message pointer, the message length,
 /// zero exception code, publishes the exception to `_exc_value`, and branches to `__rt_throw_current`.
 /// Clobbers: x0, x1, x2, x9.
@@ -1432,7 +1432,7 @@ fn emit_throw_exception_aarch64(
 }
 
 /// Emits the x86_64 exception-throw sequence for SplFixedArray runtime errors.
-/// Allocates a 32-byte Throwable payload, stamps it with the x86_64 heap-kind word (HEAP_MAGIC_LO
+/// Allocates a 56-byte Throwable payload, stamps it with the x86_64 heap-kind word (HEAP_MAGIC_LO
 /// + kind 6), stores the class id via RIP-relative Lea, the static message pointer,
 /// the message length, zero exception code, publishes the exception to `_exc_value`,
 /// and jumps to `__rt_throw_current`. Preserves rbp, keeps stack 16-byte aligned.
@@ -1442,22 +1442,8 @@ fn emit_throw_exception_x86_64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
-    emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
-    emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the exception object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the exception class id for this program
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
-    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static exception message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static exception message pointer
-    emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
-    emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
-    emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
+    abi::emit_load_symbol_to_reg(emitter, "rdi", class_id_symbol, 0);           // pass the runtime exception class id
+    abi::emit_symbol_address(emitter, "rsi", message_symbol);                   // pass the static exception message pointer
+    emitter.instruction(&format!("mov rdx, {}", message_len));                  // pass the static exception message length
+    emitter.instruction("jmp __rt_throw_static_exception");                     // allocate and publish through an independent unwind frame
 }

@@ -551,7 +551,9 @@ fn runtime_builtin_descriptor_cases(
     candidate_names: Option<&[String]>,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
-    for name in crate::types::checker::builtins::supported_builtin_function_names() {
+    for name in crate::types::checker::builtins::supported_builtin_function_names_on_platform(
+        ctx.emitter.target.platform,
+    ) {
         if !runtime_callable_name_is_reachable(name, candidate_names)
             || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
             || ctx
@@ -2060,7 +2062,7 @@ pub(super) fn emit_descriptor_reg_invoker_mixed_result_with_args(
         invoker_reg,
         descriptor_reg,
     );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
+    emit_descriptor_invoker_reg_call(ctx.emitter, invoker_reg);
     release_invoker_arg_preserving_result(ctx);
     if release_runtime_descriptor {
         release_saved_runtime_descriptor_preserving_result(ctx);
@@ -2144,7 +2146,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_prebuilt_mixed_arg(
         invoker_reg,
         descriptor_reg,
     );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
+    emit_descriptor_invoker_reg_call(ctx.emitter, invoker_reg);
     if release_runtime_descriptor {
         release_saved_runtime_descriptor_preserving_result(ctx);
     }
@@ -2183,10 +2185,18 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
         invoker_reg,
         descriptor_reg,
     );
-    abi::emit_call_reg(ctx.emitter, invoker_reg);
+    emit_descriptor_invoker_reg_call(ctx.emitter, invoker_reg);
     release_invoker_arg_preserving_result(ctx);
     release_saved_descriptor_after_normalized_arg(ctx, release_runtime_descriptor);
     Ok(())
+}
+
+/// Calls a generated descriptor invoker with the platform-required caller stack area.
+fn emit_descriptor_invoker_reg_call(emitter: &mut crate::codegen::emit::Emitter, invoker_reg: &str) {
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
+    abi::emit_call_reg(emitter, invoker_reg);
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
 }
 
 /// Returns the branch-ready label name for a descriptor invoker callsite.

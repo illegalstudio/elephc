@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - The libc hostname buffer is stack-owned and copied into a PHP string.
+//! - The OS hostname buffer is copied into a PHP string before returning.
 
 use super::*;
 
@@ -28,25 +28,12 @@ pub(in crate::interpreter) fn eval_builtin_gethostname(
     eval_gethostname_result(values)
 }
 
-/// Reads the current host name through libc and returns an empty string on failure.
+/// Reads the current host name through the platform API and returns an empty string on failure.
 pub(in crate::interpreter) fn eval_gethostname_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut buffer = [0 as libc::c_char; 256];
-    let status = unsafe {
-        // libc writes at most buffer.len() bytes into this stack buffer.
-        libc::gethostname(buffer.as_mut_ptr(), buffer.len())
-    };
-    if status != 0 {
-        return values.string("");
+    match eval_os_hostname() {
+        Some(hostname) => values.string_bytes_value(&hostname),
+        None => values.string(""),
     }
-    let length = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    let hostname = buffer[..length]
-        .iter()
-        .map(|byte| *byte as u8)
-        .collect::<Vec<_>>();
-    values.string_bytes_value(&hostname)
 }

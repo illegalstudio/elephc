@@ -337,7 +337,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rsi", "_phar_write_path_len", 0);    // bridge arg 1 = archive path length
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_phar_write_entry_ptr", 0);   // bridge arg 2 = entry name pointer
     abi::emit_load_symbol_to_reg(emitter, "rcx", "_phar_write_entry_len", 0);   // bridge arg 3 = entry name length
-    emitter.instruction("call r10");                                            // allocate a buffered PHAR write stream descriptor
+    emitter.emit_native_bridge_call("r10", 4);                                  // allocate a buffered PHAR write stream descriptor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
     emitter.label("__rt_phar_write_open_asm_x86");
@@ -367,7 +367,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_phar_write_open_url_asm_x86");                 // no bridge published: use the assembly fallback
     emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the bridge call frame
-    emitter.instruction("call r10");                                            // allocate a buffered runtime-URL PHAR write stream
+    emitter.emit_native_bridge_call("r10", 2);                                  // allocate a buffered runtime-URL PHAR write stream
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
     emitter.label("__rt_phar_write_open_url_asm_x86");
@@ -392,7 +392,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_phar_write_append_asm_x86");                   // no bridge published: append to the assembly fallback buffer
     emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the bridge call frame
-    emitter.instruction("call r10");                                            // append to the selected buffered PHAR stream
+    emitter.emit_native_bridge_call("r10", 3);                                  // append to the selected buffered PHAR stream
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return bytes consumed or the failure sentinel
     emitter.label("__rt_phar_write_append_asm_x86");
@@ -422,7 +422,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_stream_finalize_fn", 0); // load the optional buffered PHAR stream finalizer
     emitter.instruction("test r10, r10");                                       // was the stream finalizer bridge published?
     emitter.instruction("jz __rt_phar_write_finalize_asm_state_x86");           // no bridge published: use the assembly fallback state
-    emitter.instruction("call r10");                                            // flush and release the selected buffered PHAR stream
+    emitter.emit_native_bridge_call("r10", 1);                                  // flush the selected descriptor through the platform C ABI
     emitter.instruction("jmp __rt_phar_write_finalize_return_x86");             // restore the frame and return the bridge result
     emitter.label("__rt_phar_write_finalize_asm_state_x86");
     // -- compute the content length and the entry anchor --
@@ -447,7 +447,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_phar_write_url_ptr", 0);     // bridge arg 0 = full phar:// URL pointer
     emitter.instruction("mov rdx, r8");                                         // bridge arg 2 = buffered entry payload pointer
     emitter.instruction("mov rcx, r9");                                         // bridge arg 3 = buffered entry payload length
-    emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR URL bridge
+    emitter.emit_native_bridge_call("r10", 4);                                  // insert/update the entry through the Rust PHAR URL bridge
     emitter.instruction("cmp rax, -1");                                         // did the bridge report usize::MAX failure?
     emitter.instruction("je __rt_phar_write_finalize_bridge_fail_x86");         // bridge failure makes fclose() false
     emitter.instruction("mov eax, 1");                                          // fclose() returns true after a successful bridge write
@@ -463,7 +463,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "rsi", "_phar_write_path_len", 0);    // bridge arg 1 = archive path length
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_phar_write_entry_ptr", 0);   // bridge arg 2 = entry name pointer
     abi::emit_load_symbol_to_reg(emitter, "rcx", "_phar_write_entry_len", 0);   // bridge arg 3 = entry name length
-    emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR bridge
+    emitter.emit_native_bridge_call("r10", 6);                                  // insert/update the entry through the Rust PHAR bridge
     emitter.instruction("cmp rax, -1");                                         // did the bridge report usize::MAX failure?
     emitter.instruction("je __rt_phar_write_finalize_bridge_fail_x86");         // bridge failure makes fclose() false
     emitter.instruction("mov eax, 1");                                          // fclose() returns true after a successful bridge write
@@ -495,7 +495,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // elephc_crypto_hash out base = archive buffer base ...
     emitter.instruction("add r8, rcx");                                         // ... + length (raw 20 bytes past the data)
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_hash_fn", 0);   // load the elephc-crypto hash entry pointer
-    emitter.instruction("call r9");                                             // compute the raw 20-byte SHA1 digest in place
+    emitter.emit_native_bridge_call("r9", 5);                                   // compute the raw 20-byte SHA1 digest in place
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload length (the hash call clobbered caller-saved regs)
     abi::emit_symbol_address(emitter, "r9", "_phar_write_out");                 // buffer base
@@ -558,7 +558,7 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // bridge arg 1 = full phar:// URL length
     emitter.instruction("mov rdx, r8");                                         // bridge arg 2 = payload pointer
     emitter.instruction("mov rcx, r9");                                         // bridge arg 3 = payload length
-    emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR bridge
+    emitter.emit_native_bridge_call("r10", 4);                                  // insert/update the entry through the Rust PHAR bridge
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bridge byte count or -1 failure
     emitter.label("__rt_fpc_maybe_phar_fail_x86");
@@ -566,4 +566,48 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_fpc_maybe_phar_plain_x86");
     emitter.instruction("jmp __rt_file_put_contents");                          // tail-call the ordinary filesystem writer
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies every windows-x86_64 native-bridge fn-ptr call in the phar
+    /// write helpers (the buffered stream open/append/finalize bridges, the
+    /// PHAR URL/entry writers, and the in-place SHA1 signature via
+    /// `elephc_crypto_hash` — all REAL MSx64-ABI callees reached through
+    /// pointer slots) routes through the F46 `emit_native_bridge_call` shim
+    /// instead of a bare `call r9`/`call r10`. The shim is the ONLY producer
+    /// of `call r11`, so an exact count of eight proves all eight sites were
+    /// converted; no bare register-indirect native call may remain, or the
+    /// MSx64 callee would read the SysV registers.
+    #[test]
+    fn test_windows_x86_64_phar_write_native_bridge_calls_use_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_phar_write(&mut emitter);
+        let asm = emitter.output();
+
+        assert_eq!(asm.matches("call r11").count(), 8, "all eight phar-write native-bridge calls must route through the F46 shim");
+        assert!(!asm.contains("call r9\n"), "no bare call r9 may remain (MSx64 callee reading SysV registers)");
+        assert!(!asm.contains("call r10\n"), "no bare call r10 may remain (MSx64 callee reading SysV registers)");
+        assert!(asm.contains("mov r11, r10"), "expected an r10 fn-ptr relocated off the MSx64 arg registers");
+        assert!(asm.contains("mov r11, r9"), "expected the r9 crypto-hash fn-ptr relocated off the MSx64 arg registers");
+    }
+
+    /// Verifies linux-x86_64 phar-write emission stays byte-identical to before
+    /// the F46 shim: the MSx64 relocation/shadow staging is windows-x86_64-only,
+    /// so linux must keep the plain bare `call r9`/`call r10` and emit no shim.
+    #[test]
+    fn test_linux_x86_64_phar_write_calls_stay_bare() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_phar_write(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("    call r9\n"), "linux keeps the byte-identical bare call r9");
+        assert!(asm.contains("    call r10\n"), "linux keeps the byte-identical bare call r10");
+        assert!(!asm.contains("call r11"), "linux must not emit the windows native-bridge shim");
+    }
 }

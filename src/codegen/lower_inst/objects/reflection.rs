@@ -779,7 +779,7 @@ fn emit_reflection_owner_object(
         }
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
-        let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
+        let is_internal = reflection_function_or_method_is_internal(ctx, class_name, &metadata);
         emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -1361,7 +1361,7 @@ fn reflection_function_metadata(
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
     let Some(function) = ctx.function_by_name(&function_name) else {
         if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
+            reflection_builtin_function_signature(ctx, &function_name)
         {
             return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
         }
@@ -1438,14 +1438,24 @@ fn reflection_builtin_function_metadata(
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.
-fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
+fn reflection_builtin_function_signature(
+    ctx: &FunctionContext<'_>,
+    function_name: &str,
+) -> Option<(String, FunctionSig)> {
     let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
+    if !crate::types::checker::builtins::builtin_available_on_platform(
+        &builtin_key,
+        ctx.emitter.target.platform,
+    ) {
+        return None;
+    }
     crate::types::first_class_callable_builtin_sig(&builtin_key)
         .map(|signature| (builtin_key, signature))
 }
 
 /// Returns whether a reflected function or method represents compiler builtin metadata.
 fn reflection_function_or_method_is_internal(
+    ctx: &FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> bool {
@@ -1453,7 +1463,7 @@ fn reflection_function_or_method_is_internal(
         return metadata
             .reflected_name
             .as_deref()
-            .and_then(reflection_builtin_function_signature)
+            .and_then(|name| reflection_builtin_function_signature(ctx, name))
             .is_some();
     }
     metadata
@@ -1684,7 +1694,7 @@ fn reflection_function_parameter_metadata(
     let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
     let Some(function) = ctx.function_by_name(&function_name) else {
         if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
+            reflection_builtin_function_signature(ctx, &function_name)
         {
             let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
             let Some(parameter) =

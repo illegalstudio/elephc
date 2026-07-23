@@ -8,14 +8,14 @@ sidebar:
 ## chgrp()
 
 ```php
-function chgrp(string $filename, string $group): bool
+function chgrp(string $filename, mixed $group): bool
 ```
 
 Changes file group.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$group` (`string`)
+- `$group` (`mixed`)
 
 **Returns**: `bool`
 

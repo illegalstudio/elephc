@@ -141,7 +141,7 @@ fn emit_array_find_any_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_array_find_any_all_call");                     // no environment keeps the one-argument callback ABI
     emitter.instruction("mov rsi, r14");                                        // pass the environment as the second callback argument
     emitter.label("__rt_array_find_any_all_call");
-    emitter.instruction("call r12");                                            // call the predicate callback; truthy result in rax
+    emitter.emit_platform_callback_call("r12", 2);
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the mode selector
     emitter.instruction("test r11, r11");                                       // mode 0 is find?
     emitter.instruction("jz __rt_array_find_any_all_find");                     // handle the find mode

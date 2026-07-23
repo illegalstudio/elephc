@@ -169,6 +169,132 @@ fn test_materialize_outgoing_float_overflow_uses_volatile_scratch() {
     assert!(!out.contains("d15"));
 }
 
+/// Verifies Windows calls always reserve the mandatory four-slot caller home area.
+#[test]
+fn test_windows_outgoing_call_stack_pad_reserves_shadow_space_without_overflow() {
+    let target = Target::new(Platform::Windows, Arch::X86_64);
+    assert_eq!(outgoing_call_stack_pad_bytes(target, 0), 32);
+}
+
+/// Verifies Windows overflow arguments remain positioned after the fixed shadow area.
+#[test]
+fn test_windows_outgoing_call_stack_pad_precedes_overflow_slots() {
+    let target = Target::new(Platform::Windows, Arch::X86_64);
+    assert_eq!(outgoing_call_stack_pad_bytes(target, 32), 32);
+}
+
+/// Verifies that native Windows C arguments share four positional register slots.
+#[test]
+fn test_windows_c_abi_mixed_arguments_use_positional_register_slots() {
+    let assignments = build_c_abi_outgoing_arg_assignments_for_target(
+        Target::new(Platform::Windows, Arch::X86_64),
+        &[
+            PhpType::Int,
+            PhpType::Float,
+            PhpType::Int,
+            PhpType::Float,
+            PhpType::Int,
+        ],
+    );
+
+    assert_eq!(assignments[0].start_reg, 0);
+    assert_eq!(assignments[1].start_reg, 1);
+    assert_eq!(assignments[2].start_reg, 2);
+    assert_eq!(assignments[3].start_reg, 3);
+    assert_eq!(assignments[4].start_reg, crate::codegen_support::abi::registers::STACK_ARG_SENTINEL);
+    assert!(!assignments[0].is_float);
+    assert!(assignments[1].is_float);
+}
+
+/// Verifies that non-Windows native C calls retain the regular target ABI plan.
+#[test]
+fn test_non_windows_c_abi_plan_matches_regular_plan() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let types = [PhpType::Int, PhpType::Float, PhpType::Int];
+
+    assert_eq!(
+        build_c_abi_outgoing_arg_assignments_for_target(target, &types),
+        build_outgoing_arg_assignments_for_target(target, &types, 0)
+    );
+}
+
+/// Verifies that MSx64 overflow slots are compacted from PHP's 16-byte staging layout.
+#[test]
+fn test_windows_c_abi_compacts_overflow_to_eight_byte_slots() {
+    let target = Target::new(Platform::Windows, Arch::X86_64);
+    let mut emitter = Emitter::new(target);
+    let assignments = build_c_abi_outgoing_arg_assignments_for_target(
+        target,
+        &[
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Int,
+            PhpType::Float,
+            PhpType::Int,
+        ],
+    );
+
+    compact_windows_c_abi_stack_args(&mut emitter, &assignments);
+    let out = emitter.output();
+
+    assert!(out.contains("movsd xmm15, QWORD PTR [rsp + 16]"));
+    assert!(out.contains("movsd QWORD PTR [rsp + 8], xmm15"));
+    assert!(out.contains("mov r10, QWORD PTR [rsp + 32]"));
+    assert!(out.contains("mov QWORD PTR [rsp + 16], r10"));
+}
+
+/// Verifies elephc's Windows callee reads owned overflow shapes after the full
+/// MSx64 shadow/return-address/saved-rbp prefix and advances in 16-byte slots.
+#[test]
+fn test_windows_incoming_owned_overflow_shapes_use_internal_stack_slots() {
+    let target = Target::new(Platform::Windows, Arch::X86_64);
+    let mut emitter = Emitter::new(target);
+    let mut cursor = IncomingArgCursor::for_target(target, 0);
+    for (index, name) in ["a", "b", "c", "d"].iter().enumerate() {
+        emit_store_incoming_param(
+            &mut emitter,
+            name,
+            &PhpType::Int,
+            (index + 1) * 16,
+            false,
+            &mut cursor,
+        );
+    }
+    emit_store_incoming_param(
+        &mut emitter,
+        "label",
+        &PhpType::Str,
+        80,
+        false,
+        &mut cursor,
+    );
+    emit_store_incoming_param(
+        &mut emitter,
+        "object",
+        &PhpType::Object("Payload".to_string()),
+        96,
+        false,
+        &mut cursor,
+    );
+    emit_store_incoming_param(
+        &mut emitter,
+        "mixed",
+        &PhpType::Mixed,
+        112,
+        false,
+        &mut cursor,
+    );
+
+    let out = emitter.output();
+    assert!(out.contains("param $label from caller stack +48"));
+    assert!(out.contains("mov r10, QWORD PTR [rbp + 48]"), "{out}");
+    assert!(out.contains("mov rcx, QWORD PTR [rbp + 56]"), "{out}");
+    assert!(out.contains("param $object from caller stack +64"));
+    assert!(out.contains("param $mixed from caller stack +80"));
+}
+
 /// Tests that `emit_store_local_slot_to_symbol` handles string slots with large
 /// offsets (>4095) by emitting the necessary adrp/add page calculations and
 /// decomposed sub instructions to reach the slot, then stores both x10 and x11

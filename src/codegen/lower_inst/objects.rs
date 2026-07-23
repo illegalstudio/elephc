@@ -366,7 +366,7 @@ fn lower_spl_doubly_linked_list_new(
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
@@ -392,17 +392,17 @@ fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+        abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
     } else {
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
     store_if_result(ctx, inst)
@@ -880,10 +880,18 @@ fn emit_branch_if_saved_traversable_implements(
 }
 
 /// Moves the object result into the receiver ABI slot before an interface method call.
+/// Targets the platform receiver register (rdi SysV, rcx MSx64) so the resolved interface
+/// method — a codegen-emitted callee that reads $this per-target — finds it where expected.
+/// No-op on AArch64 and on non-Windows x86_64, where the result register already IS the
+/// receiver register.
 fn move_result_to_receiver_arg(ctx: &mut FunctionContext<'_>) {
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the normalized object result as the method receiver
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if result_reg == arg_reg {
+        return;
     }
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the normalized object result as the method receiver
 }
 
 /// Writes the normalized Iterator pointer into IteratorIterator::$inner.
@@ -1208,7 +1216,7 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         .get("Fiber")
         .map(|class| class.class_id)
         .unwrap_or(0);
-    let callable_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let callable_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if let Some(callable) = inst.operands.first().copied() {
         let callable_ty = ctx.value_php_type(callable)?.codegen_repr();
         if callable_ty == PhpType::Str {
@@ -1248,10 +1256,10 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
     }
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         class_id as i64,
     );
-    let wrapper_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let wrapper_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 2);
     if let Some(wrapper) = fibers::wrapper_for_fiber_new(ctx.module, ctx.function, inst) {
         abi::emit_symbol_address(ctx.emitter, wrapper_arg, &wrapper.label);
     } else {
@@ -1778,17 +1786,17 @@ fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+        abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
     } else {
         abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             class_id as i64,
         );
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object("SplFixedArray".to_string()));
@@ -1803,7 +1811,7 @@ fn emit_dynamic_new_mixed_spl_dll_candidate(
 ) -> Result<()> {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
@@ -2778,18 +2786,12 @@ fn emit_magic_get_args(
     property: &str,
 ) -> Result<()> {
     let (label, len) = ctx.data.add_string(property.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(object, "x0")?;
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(object, "rdi")?;
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
-        }
-    }
+    let receiver_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let name_ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let name_len_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    ctx.load_value_to_reg(object, receiver_reg)?;
+    abi::emit_symbol_address(ctx.emitter, name_ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, name_len_reg, len as i64);
     Ok(())
 }
 
@@ -4385,11 +4387,11 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
     };
     match value_ty {
         PhpType::Object(_) => {
-            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            ctx.load_value_to_reg(value, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            ctx.load_value_to_reg(value, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
             emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
         }
         _ => emit_false(ctx),
@@ -4604,7 +4606,7 @@ fn emit_clone_dynamic_property_hash(
     }
     abi::emit_push_reg(ctx.emitter, source_reg);
     abi::emit_push_reg(ctx.emitter, dest_reg);
-    let hash_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let hash_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if hash_arg != result_reg {
         abi::emit_reg_move(ctx.emitter, hash_arg, result_reg);
     }
@@ -6229,6 +6231,7 @@ fn emit_normalized_dynamic_instanceof_value(
     Ok(())
 }
 
+/// Converts a boxed Mixed object payload to its object pointer and every other tag to null.
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
     let object_label = ctx.next_label("instanceof_dynamic_value_object");
     let done = ctx.next_label("instanceof_dynamic_value_done");
@@ -6370,9 +6373,9 @@ fn emit_dynamic_match_call(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rdx");
         }
     }
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2));
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 2));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1));
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0));
     abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
 }
 
@@ -6385,12 +6388,12 @@ fn emit_invalid_dynamic_target_fatal(ctx: &mut FunctionContext<'_>) {
 fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64, helper: &str) {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         target_id as i64,
     );
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 2),
         target_kind,
     );
     abi::emit_call_label(ctx.emitter, helper);

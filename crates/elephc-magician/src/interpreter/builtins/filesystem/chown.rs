@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+#[cfg(unix)]
 use std::ffi::CString;
 use crate::stream_wrappers;
 use super::*;
@@ -79,6 +80,17 @@ pub(in crate::interpreter) fn eval_chown_like_result(
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
+    eval_local_chown(name, &path, principal, values)
+}
+
+/// Applies Unix owner/group changes to a local filesystem path.
+#[cfg(unix)]
+fn eval_local_chown(
+    name: &str,
+    path: &str,
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(path) = eval_c_string(&path) else {
         return values.bool_value(false);
     };
@@ -93,6 +105,23 @@ pub(in crate::interpreter) fn eval_chown_like_result(
         }
     };
     values.bool_value(status == 0)
+}
+
+/// Reports unsupported Windows owner/group changes without claiming success.
+#[cfg(windows)]
+fn eval_local_chown(
+    name: &str,
+    _path: &str,
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match (name, values.type_tag(principal)?) {
+        ("chown" | "chgrp" | "lchown" | "lchgrp", EVAL_TAG_INT | EVAL_TAG_STRING) => {
+            values.bool_value(false)
+        }
+        ("chown" | "chgrp" | "lchown" | "lchgrp", _) => Err(EvalStatus::RuntimeFatal),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Builds the wrapper metadata option and value for `chown()` or `chgrp()`.
@@ -118,6 +147,7 @@ fn eval_chown_metadata_arg(
 }
 
 /// Resolves one PHP owner/group argument into libc uid/gid slots.
+#[cfg(unix)]
 fn eval_chown_principal_ids(
     name: &str,
     principal: RuntimeCellHandle,
@@ -148,6 +178,7 @@ fn eval_chown_principal_ids(
 }
 
 /// Resolves a PHP user-name cell to a libc uid.
+#[cfg(unix)]
 fn eval_owner_name_id(
     principal: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -165,6 +196,7 @@ fn eval_owner_name_id(
 }
 
 /// Resolves a PHP group-name cell to a libc gid.
+#[cfg(unix)]
 fn eval_group_name_id(
     principal: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -182,11 +214,13 @@ fn eval_group_name_id(
 }
 
 /// Converts a Rust path string into a C string, rejecting embedded NUL bytes.
+#[cfg(unix)]
 fn eval_c_string(value: &str) -> Option<CString> {
     CString::new(value).ok()
 }
 
 /// Converts raw PHP bytes into a C string, rejecting embedded NUL bytes.
+#[cfg(unix)]
 fn eval_c_bytes(value: &[u8]) -> Option<CString> {
     CString::new(value).ok()
 }

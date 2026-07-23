@@ -788,6 +788,15 @@ impl Checker {
             }
         };
         let class_name = resolved_class_name.as_str();
+        // Static factories (`DateTime::createFromFormat`, `DateTimeImmutable::
+        // createFromTimestamp`, `DatePeriod::createFromISO8601String`, ...)
+        // construct one of the OOP datetime classes without ever going through
+        // `infer_new_object_type`'s `new` path, so the windows-only elephc-tz
+        // bridge requirement is recorded here too (see
+        // `require_datetime_tz_bridge_if_needed` for why this call-site gate
+        // exists instead of the synthetic method bodies triggering it
+        // themselves).
+        self.require_datetime_tz_bridge_if_needed(class_name);
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         // `$scope` is accepted and ignored (closed-world visibility).

@@ -15,7 +15,7 @@ use crate::codegen_support::platform::{Arch, Platform};
 /// stack. Set to 16 KB so the guard fully covers a single page on every
 /// supported target — macOS aarch64 uses 16 KB pages, Linux aarch64 typically
 /// uses 4 KB but accepts oversized protection ranges silently.
-const FIBER_GUARD_PAGE_SIZE: i32 = 16384;
+pub(super) const FIBER_GUARD_PAGE_SIZE: i32 = 16384;
 
 /// Returns the platform-specific flag word for `MAP_PRIVATE | MAP_ANONYMOUS`.
 /// - macOS: `0x1002` (MAP_PRIVATE | MAP_ANON)
@@ -24,7 +24,7 @@ fn map_anon_private_flags(platform: Platform) -> i32 {
     match platform {
         Platform::MacOS => 0x1002, // MAP_PRIVATE | MAP_ANON
         Platform::Linux => 0x22,   // MAP_PRIVATE | MAP_ANONYMOUS
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => 0x22, // MAP_PRIVATE | MAP_ANONYMOUS — ignored by __rt_sys_mmap/VirtualAlloc shim
     }
 }
 

@@ -14,13 +14,26 @@ use crate::support::*;
 // synthetic main path, so __FILE__ ends with "test.php" and __DIR__ is the
 // canonical temp directory.
 
+/// Returns whether a PHP-visible path is absolute for the selected codegen target.
+fn is_target_absolute_path(path: &str) -> bool {
+    if target().platform == Platform::Windows {
+        let bytes = path.as_bytes();
+        return (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+            || path.starts_with(r"\\");
+    }
+    std::path::Path::new(path).is_absolute()
+}
+
 /// Verifies `__FILE__` is an absolute path ending in `test.php`. The temp
 /// directory provides an absolute path; __FILE__ is substituted at lowering.
 #[test]
 fn test_dunder_file_is_absolute_path_ending_in_test_php() {
     let out = compile_and_run("<?php echo __FILE__;");
     assert!(
-        out.starts_with('/'),
+        is_target_absolute_path(&out),
         "__FILE__ should be absolute, got {:?}",
         out
     );
@@ -36,9 +49,13 @@ fn test_dunder_file_is_absolute_path_ending_in_test_php() {
 #[test]
 fn test_dunder_dir_is_absolute_path_with_no_trailing_slash() {
     let out = compile_and_run("<?php echo __DIR__;");
-    assert!(out.starts_with('/'), "__DIR__ should be absolute, got {:?}", out);
     assert!(
-        !out.ends_with('/'),
+        is_target_absolute_path(&out),
+        "__DIR__ should be absolute, got {:?}",
+        out
+    );
+    assert!(
+        !out.ends_with('/') && !out.ends_with('\\'),
         "__DIR__ should not end with a separator, got {:?}",
         out
     );
@@ -51,7 +68,7 @@ fn test_dunder_dir_is_absolute_path_with_no_trailing_slash() {
 fn test_dunder_dir_concat_produces_single_folded_string() {
     // The optimizer should fold `__DIR__ . '/sub'` into a single literal.
     let out = compile_and_run("<?php echo __DIR__ . '/sub/file.php';");
-    assert!(out.starts_with('/'));
+    assert!(is_target_absolute_path(&out));
     assert!(out.ends_with("/sub/file.php"));
 }
 
@@ -60,8 +77,13 @@ fn test_dunder_dir_concat_produces_single_folded_string() {
 #[test]
 fn test_magic_constants_are_case_insensitive() {
     let out = compile_and_run("<?php echo __dir__ . '|'; echo __LiNe__;");
-    assert!(out.starts_with('/'), "__dir__ should resolve to a path, got {:?}", out);
-    assert!(out.ends_with("|1"), "__LiNe__ should resolve to line 1, got {:?}", out);
+    let (dir, line) = out.rsplit_once('|').expect("magic constant separator");
+    assert!(
+        is_target_absolute_path(dir),
+        "__dir__ should resolve to an absolute path, got {:?}",
+        out
+    );
+    assert_eq!(line, "1", "__LiNe__ should resolve to line 1, got {:?}", out);
 }
 
 // `__LINE__` is substituted at parse time using the span line.
@@ -316,8 +338,9 @@ fn test_dunder_file_inside_include_uses_included_files_path() {
         ],
         "main.php",
     );
+    let normalized = out.replace('\\', "/");
     assert!(
-        out.ends_with("/lib/inner.php"),
+        normalized.ends_with("/lib/inner.php"),
         "expected included file's __FILE__, got {:?}",
         out
     );
@@ -341,8 +364,9 @@ fn test_dunder_dir_inside_include_uses_included_files_dir() {
         ],
         "main.php",
     );
+    let normalized = out.replace('\\', "/");
     assert!(
-        out.ends_with("/lib"),
+        normalized.ends_with("/lib"),
         "expected included file's __DIR__ (ending in /lib), got {:?}",
         out
     );

@@ -22,6 +22,8 @@ pub mod ctype_alnum;
 pub mod ctype_alpha;
 pub mod ctype_digit;
 pub mod ctype_space;
+pub mod escapeshellarg;
+pub mod escapeshellcmd;
 pub mod explode;
 pub mod grapheme_strrev;
 pub mod gzcompress;

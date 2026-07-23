@@ -233,6 +233,10 @@ pub enum RuntimeFnId {
     Pclose,
     Pfsockopen,
     Popen,
+    ProcClose,
+    ProcGetStatus,
+    ProcOpen,
+    ProcTerminate,
     PrintR,
     Readdir,
     Readfile,
@@ -326,6 +330,7 @@ pub enum RuntimeFnId {
     Pow,
     Rad2deg,
     Rand,
+    RandomBytes,
     RandomInt,
     Round,
     Sin,
@@ -488,12 +493,21 @@ pub enum RuntimeFnId {
 impl RuntimeFnId {
     /// Returns the central logical ABI and backend contract for this runtime function.
     pub fn descriptor(self) -> RuntimeFnDescriptor {
-        let logical_signature = crate::builtins::registry::runtime_fn_arity_bounds(self).map(
-            |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
-                min_operands,
-                max_operands,
-            },
-        );
+        let logical_signature = if self == RuntimeFnId::ProcOpen {
+            // `proc_open` appends command-line, environment-block, and flag operands
+            // after normalizing the six caller-visible PHP parameters.
+            Some(crate::ir::RuntimeCallSignature::Polymorphic {
+                min_operands: 9,
+                max_operands: Some(9),
+            })
+        } else {
+            crate::builtins::registry::runtime_fn_arity_bounds(self).map(
+                |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
+                    min_operands,
+                    max_operands,
+                },
+            )
+        };
         RuntimeFnDescriptor {
             id: self,
             eir_name: self.as_eir(),
@@ -768,7 +782,10 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashInit => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashUpdate => &[BuiltinRequirement::Bridge("elephc_crypto")],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbStrlen => &[
+                BuiltinRequirement::MacOsLibrary("iconv"),
+                BuiltinRequirement::WindowsLibrary("iconv"),
+            ],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -825,6 +842,21 @@ impl RuntimeFnId {
     /// Returns whether this operation requires the optional multibyte-length runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
         matches!(self, RuntimeFnId::MbStrlen)
+    }
+
+    /// Returns whether this operation needs Windows timezone-offset publication.
+    pub const fn uses_windows_timezone_bridge(self) -> bool {
+        matches!(
+            self,
+            RuntimeFnId::Date
+                | RuntimeFnId::Gmdate
+                | RuntimeFnId::Mktime
+                | RuntimeFnId::Gmmktime
+                | RuntimeFnId::Strtotime
+                | RuntimeFnId::ElephcMktimeRaw
+                | RuntimeFnId::ElephcGmmktimeRaw
+                | RuntimeFnId::ElephcStrtotimeRaw
+        )
     }
 
     /// Returns whether this operation can publish PHAR bridge helper symbols.
@@ -1138,6 +1170,10 @@ impl RuntimeFnId {
             RuntimeFnId::Pclose => "pclose",
             RuntimeFnId::Pfsockopen => "pfsockopen",
             RuntimeFnId::Popen => "popen",
+            RuntimeFnId::ProcClose => "proc_close",
+            RuntimeFnId::ProcGetStatus => "proc_get_status",
+            RuntimeFnId::ProcOpen => "proc_open",
+            RuntimeFnId::ProcTerminate => "proc_terminate",
             RuntimeFnId::PrintR => "print_r",
             RuntimeFnId::Readdir => "readdir",
             RuntimeFnId::Readfile => "readfile",
@@ -1231,6 +1267,7 @@ impl RuntimeFnId {
             RuntimeFnId::Pow => "pow",
             RuntimeFnId::Rad2deg => "rad2deg",
             RuntimeFnId::Rand => "rand",
+            RuntimeFnId::RandomBytes => "random_bytes",
             RuntimeFnId::RandomInt => "random_int",
             RuntimeFnId::Round => "round",
             RuntimeFnId::Sin => "sin",

@@ -134,4 +134,40 @@ fn test_error_number_format_wrong_args() {
     );
 }
 
+/// Verifies random_bytes() rejects a missing argument. Input: `random_bytes()`.
+#[test]
+fn test_error_random_bytes_no_args() {
+    expect_error(
+        "<?php random_bytes();",
+        "random_bytes() takes exactly 1 argument",
+    );
+}
+
+/// Verifies random_bytes() rejects excess arguments. Input: `random_bytes(1, 2)`.
+#[test]
+fn test_error_random_bytes_too_many_args() {
+    expect_error(
+        "<?php random_bytes(1, 2);",
+        "random_bytes() takes exactly 1 argument",
+    );
+}
+
+/// Verifies random_bytes() rejects a constant length of 0 at compile time. Input: `random_bytes(0)`.
+#[test]
+fn test_error_random_bytes_zero_length() {
+    expect_error(
+        "<?php random_bytes(0);",
+        "random_bytes(): Argument #1 ($length) must be greater than 0",
+    );
+}
+
+/// Verifies random_bytes() rejects a constant negative length at compile time. Input: `random_bytes(-1)`.
+#[test]
+fn test_error_random_bytes_negative_length() {
+    expect_error(
+        "<?php random_bytes(-1);",
+        "random_bytes(): Argument #1 ($length) must be greater than 0",
+    );
+}
+
 // --- String function errors ---

@@ -30,6 +30,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::platform::Platform;
 
 /// Size of the libbz2 `bz_stream` struct on LP64 targets, in bytes.
 const BZ_STREAM_SIZE: i64 = 80;
@@ -96,7 +97,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("str w12, [x10, #32]");                                 // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = bz_stream pointer
     emitter.instruction("mov w1, #0");                                          // arg 1 = BZ_RUN (0)
-    emitter.bl_c("BZ2_bzCompress"); // run one compress step over the input window
+    emitter.bl_c("BZ2_bzCompress");                                             // run one compress step over the input window
                                     // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the bz_stream pointer after the compress call
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this compress step
@@ -145,7 +146,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("str w12, [x10, #32]");                                 // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = bz_stream pointer
     emitter.instruction("mov w1, #2");                                          // arg 1 = BZ_FINISH (2)
-    emitter.bl_c("BZ2_bzCompress"); // flush a chunk of the compressed tail
+    emitter.bl_c("BZ2_bzCompress");                                             // flush a chunk of the compressed tail
     emitter.instruction("str x0, [sp, #16]");                                   // save the compress return code (4 = BZ_STREAM_END)
                                               // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the bz_stream pointer
@@ -163,7 +164,7 @@ pub(crate) fn emit_compress_arm64(
 
     // -- end the compress stream and drop the per-descriptor handle --
     emitter.instruction("ldr x0, [sp, #8]");                                    // arg 0 = bz_stream pointer
-    emitter.bl_c("BZ2_bzCompressEnd"); // release libbz2's internal compress state
+    emitter.bl_c("BZ2_bzCompressEnd");                                          // release libbz2's internal compress state
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
     abi::emit_symbol_address(emitter, "x9", "_bzstream_handles");
     emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear this descriptor's bz_stream handle
@@ -199,7 +200,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction(&format!("mov x1, #{}", block_size));                   // arg 1 = blockSize100k ($params 'blocks', default 9 = max)
     emitter.instruction("mov x2, #0");                                          // arg 2 = verbosity = 0
     emitter.instruction(&format!("mov x3, #{}", work_factor));                  // arg 3 = workFactor ($params 'work', default 0 = libbz2 default)
-    emitter.bl_c("BZ2_bzCompressInit"); // initialize the bzip2 compress stream
+    emitter.bl_c("BZ2_bzCompressInit");                                         // initialize the bzip2 compress stream
 
     // -- register the handle and mark the descriptor's write filter as bzip2 --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
@@ -254,8 +255,10 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the payload length as the return value
 
     // -- load this descriptor's bz_stream handle and seed the input window --
+    emit_x86_stream_slot(emitter, "r11");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore payload length clobbered by the Windows slot registry
     abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = bz_stream pointer for this descriptor
+    emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");                     // r10 = bz_stream pointer for this compact/legacy descriptor slot
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the bz_stream pointer
     emitter.instruction("mov QWORD PTR [r10 + 0], rsi");                        // bz_stream.next_in = payload pointer
     emitter.instruction("mov DWORD PTR [r10 + 8], edx");                        // bz_stream.avail_in = payload length
@@ -268,7 +271,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
     emitter.instruction("xor esi, esi");                                        // arg 1 = BZ_RUN (0)
-    emitter.instruction("call BZ2_bzCompress");                                 // run one compress step over the input window
+    emitter.emit_call_c("BZ2_bzCompress");                                      // run one compress step over the input window
                                                 // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the bz_stream pointer
     emitter.instruction(&format!("mov eax, {}", FILTER_BUF_SIZE));              // scratch window capacity
@@ -297,8 +300,9 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // frame: [-8]=fd [-16]=bz_stream [-24]=ret code
+    emit_x86_stream_slot(emitter, "r11");
     abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = bz_stream pointer for this descriptor
+    emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");                     // r10 = bz_stream pointer for this compact/legacy descriptor slot
     emitter.instruction("test r10, r10");                                       // is a compress stream attached to this descriptor?
     emitter.instruction(&format!("jz {}_done", close_label));                   // nothing to flush when no filter is attached
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor across compress calls
@@ -314,7 +318,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
     emitter.instruction("mov esi, 2");                                          // arg 1 = BZ_FINISH (2)
-    emitter.instruction("call BZ2_bzCompress");                                 // flush a chunk of the compressed tail
+    emitter.emit_call_c("BZ2_bzCompress");                                      // flush a chunk of the compressed tail
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the compress return code (4 = BZ_STREAM_END)
                                                           // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
@@ -329,10 +333,11 @@ pub(crate) fn emit_compress_x86_64(
 
     // -- end the compress stream and drop the per-descriptor handle --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = bz_stream pointer
-    emitter.instruction("call BZ2_bzCompressEnd");                              // release libbz2's internal compress state
+    emitter.emit_call_c("BZ2_bzCompressEnd");                                   // release libbz2's internal compress state
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
+    emit_x86_stream_slot(emitter, "r11");
     abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], 0");                       // clear this descriptor's bz_stream handle
+    emitter.instruction("mov QWORD PTR [r9 + r11*8], 0");                       // clear this compact/legacy descriptor slot's bz_stream handle
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -371,15 +376,16 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction(&format!("mov esi, {}", block_size));                   // arg 1 = blockSize100k ($params 'blocks', default 9 = max)
     emitter.instruction("xor edx, edx");                                        // arg 2 = verbosity = 0
     emitter.instruction(&format!("mov ecx, {}", work_factor));                  // arg 3 = workFactor ($params 'work', default 0 = libbz2 default)
-    emitter.instruction("call BZ2_bzCompressInit");                             // initialize the bzip2 compress stream
+    emitter.emit_call_c("BZ2_bzCompressInit");                                  // initialize the bzip2 compress stream
 
     // -- register the handle and mark the descriptor's write filter as bzip2 --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
+    emit_x86_stream_slot(emitter, "r11");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer after the Windows slot lookup
     abi::emit_symbol_address(emitter, "r9", "_bzstream_handles"); // bz_stream handle table base
-    emitter.instruction("mov QWORD PTR [r9 + rdi*8], r10");                     // store the bz_stream handle for this descriptor
+    emitter.instruction("mov QWORD PTR [r9 + r11*8], r10");                     // store the bz_stream handle for this compact/legacy descriptor slot
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
-    emitter.instruction("mov BYTE PTR [r9 + rdi], 10");                         // write-filter id 10 = bzip2.compress
+    emitter.instruction("mov BYTE PTR [r9 + r11], 10");                         // write-filter id 10 = bzip2.compress
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the compress fwrite helper
@@ -396,4 +402,75 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("xor esi, esi");                                        // resource mixed payloads have no high word
     emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource
     abi::emit_call_label(emitter, "__rt_mixed_from_value"); // re-box the stream as the filter resource
+}
+
+/// Emits the x86_64 compact stream slot used by bzip2 filter state tables.
+fn emit_x86_stream_slot(emitter: &mut Emitter, slot_reg: &str) {
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_win_stream_slot");                       // map raw Windows descriptor to a bounded stream-state slot
+        emitter.instruction(&format!("mov {}, rax", slot_reg));                 // retain compact slot for table access
+    } else {
+        emitter.instruction(&format!("mov {}, rdi", slot_reg));                 // preserve Linux descriptor indexing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Regression tests for Windows bzip2 stream-filter assembly emission.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - The Windows compact-slot registry uses `rdx` as scratch, so the
+    //!   compressor must restore its saved PHP payload length before seeding
+    //!   `bz_stream.avail_in`.
+
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_compress_x86_64;
+
+    /// Verifies the Windows bzip2 write helper restores its saved payload
+    /// length after compact-slot lookup before initializing `avail_in`.
+    #[test]
+    fn windows_bzip2_write_restores_length_after_stream_slot_lookup() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_compress_x86_64(&mut emitter, "bz_write", "bz_close", "after_bz", 9, 0);
+        let asm = emitter.output();
+        let slot_lookup = asm
+            .find("call __rt_win_stream_slot")
+            .expect("Windows bzip2 helper must use a compact stream slot");
+        let restore = asm[slot_lookup..]
+            .find("mov rdx, QWORD PTR [rbp - 16]")
+            .map(|offset| slot_lookup + offset)
+            .expect("slot lookup must not leak its rdx scratch value into bz_stream.avail_in");
+        let seed = asm[restore..]
+            .find("mov DWORD PTR [r10 + 8], edx")
+            .map(|offset| restore + offset)
+            .expect("bzip2 helper must seed avail_in from the restored length");
+        assert!(slot_lookup < restore && restore < seed);
+    }
+
+    /// Verifies Windows reloads the allocated bzip2 stream after compact-slot
+    /// lookup before publishing the per-descriptor handle.
+    #[test]
+    fn windows_bzip2_attach_restores_handle_after_stream_slot_lookup() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_compress_x86_64(&mut emitter, "bz_write", "bz_close", "after_bz", 9, 0);
+        let asm = emitter.output();
+        let slot_lookup = asm
+            .rfind("call __rt_win_stream_slot")
+            .expect("Windows bzip2 attach must use a compact stream slot");
+        let restore = asm[slot_lookup..]
+            .find("mov r10, QWORD PTR [rbp - 16]")
+            .map(|offset| slot_lookup + offset)
+            .expect("slot lookup must not replace the allocated bzip2 stream");
+        let store = asm[restore..]
+            .find("mov QWORD PTR [r9 + r11*8], r10")
+            .map(|offset| restore + offset)
+            .expect("bzip2 attach must publish the restored stream handle");
+        assert!(slot_lookup < restore && restore < store);
+    }
 }

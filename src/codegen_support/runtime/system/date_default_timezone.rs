@@ -153,8 +153,8 @@ fn emit_set_x86_64(emitter: &mut Emitter) {
 
     // -- apply via libc and re-read the zone --
     emit_symbol_address(emitter, "rdi", "_php_tz_env");
-    emitter.instruction("call putenv");                                         // putenv("TZ=<id>")
-    emitter.instruction("call tzset");                                          // re-read TZ so localtime uses it
+    emitter.emit_call_c("putenv");                                              // putenv("TZ=<id>")
+    emitter.emit_call_c("tzset");                                               // re-read TZ so localtime uses it
 
     // -- record the identifier length for date_default_timezone_get and return true --
     emit_symbol_address(emitter, "rsi", "_php_default_tz_len");
@@ -271,8 +271,8 @@ fn emit_tz_init_utc_x86_64(emitter: &mut Emitter) {
 
     // -- apply via libc --
     emit_symbol_address(emitter, "rdi", "_php_tz_env");
-    emitter.instruction("call putenv");                                         // putenv("TZ=UTC")
-    emitter.instruction("call tzset");                                          // re-read TZ so localtime resolves UTC
+    emitter.emit_call_c("putenv");                                              // putenv("TZ=UTC")
+    emitter.emit_call_c("tzset");                                               // re-read TZ so localtime resolves UTC
     emitter.instruction("add rsp, 16");                                         // undo the alignment padding
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.label("__rt_tz_init_utc_done");

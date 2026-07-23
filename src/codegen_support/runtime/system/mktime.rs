@@ -123,7 +123,7 @@ fn emit_mktime_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_tz_init_utc");                               // default the timezone to UTC on first use (PHP-compatible) unless already set
 
     emitter.instruction("mov rdi, rsp");                                        // pass the temporary struct tm as the first SysV integer argument to libc mktime()
-    emitter.instruction("call mktime");                                         // ask libc to convert the PHP date/time components into a Unix timestamp
+    emitter.emit_call_c("mktime");                                              // ask libc to convert the PHP date/time components into a Unix timestamp
 
     emit_pre1900_shift_epilogue(emitter);
 
@@ -357,7 +357,7 @@ pub fn emit_mktime_shifted(emitter: &mut Emitter) {
         emitter.label("__rt_mkts_skip_x86");
         emitter.instruction("mov QWORD PTR [rsp + 16], r10");                   // save the cycle count across the libc call
         emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // rdi = struct tm pointer
-        emitter.bl_c("mktime");                                                 // call libc mktime on the (possibly shifted) struct tm
+        emitter.emit_call_c("mktime");                                          // call libc mktime on the (possibly shifted) struct tm
         emitter.instruction("mov rcx, QWORD PTR [rsp + 0]");                    // reload the struct tm pointer
         emitter.instruction("mov edx, DWORD PTR [rcx + 20]");                   // mktime normalized tm_year for the shifted year
         emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // reload the cycle count

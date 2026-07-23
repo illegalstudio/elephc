@@ -1400,7 +1400,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it so method scratch can be rewound away
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver for the method call
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __serialize target
-    emitter.instruction("call r10");                                            // __serialize($this) -> rax = array (bare pointer)
+    emitter.emit_platform_callback_call("r10", 1);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the returned array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
@@ -1433,7 +1433,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it for the scratch rewind
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __sleep target
-    emitter.instruction("call r10");                                            // __sleep($this) -> rax = names array (indexed)
+    emitter.emit_platform_callback_call("r10", 1);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the names array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset

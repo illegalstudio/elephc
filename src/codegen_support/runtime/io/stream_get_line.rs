@@ -11,7 +11,7 @@
 //!   (which is consumed and stripped). EOF/read failure sets `_eof_flags`.
 
 use crate::codegen_support::abi::emit_symbol_address;
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
@@ -217,6 +217,11 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
 
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque descriptor before resetting timeout metadata
+        emitter.instruction("call __rt_win_stream_clear_timed_out");            // each new line-read operation starts with timed_out=false
+    }
+
     abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea rsi, [r10 + r9]");                                 // single-byte write pointer
@@ -270,6 +275,13 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_stream_get_line_done_x86");                    // transient nonblocking miss returns without setting EOF
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction("cmp r10d, 110");                                   // ETIMEDOUT is retryable stream timeout, not EOF
+        emitter.instruction("jne __rt_stream_get_line_eof_x86");                // only non-timeout failures set EOF
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record timed_out without touching EOF state
+        emitter.instruction("jmp __rt_stream_get_line_done_x86");               // return the partial line without EOF
+    }
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
@@ -326,8 +338,13 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, r9");                                     // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r9, rax");                                     // table indexing uses the compact slot, never a raw SOCKET
+    }
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
-    emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
+    emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this compact stream slot
 
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer

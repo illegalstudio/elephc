@@ -223,6 +223,10 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
 
     // -- fatal error: heap memory exhausted --
+    // The shared entry preserves this atom for unconditional fatal tails from
+    // other runtime helpers under macOS `-dead_strip`; local conditional
+    // branches above still target the following localized label.
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
@@ -420,6 +424,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
 
     // -- fatal error: heap memory exhausted --
+    // The shared entry preserves this atom for unconditional fatal tails from
+    // other runtime helpers under macOS `-dead_strip`; local conditional
+    // branches above still target the following localized label.
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");

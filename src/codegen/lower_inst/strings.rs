@@ -163,11 +163,28 @@ fn emit_eval_native_frame_called_class_override_probe_x86_64(
 ) {
     let no_override = ctx.next_label("static_class_no_eval_override");
     let (class_label, class_len) = ctx.data.add_string(frame_class.as_bytes());
-    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
-    abi::emit_symbol_address(ctx.emitter, "rdi", &class_label);
-    abi::emit_load_int_immediate(ctx.emitter, "rsi", class_len as i64);
-    abi::emit_temporary_stack_address(ctx.emitter, "rdx", 0);
-    abi::emit_temporary_stack_address(ctx.emitter, "rcx", 8);
+    let call_pad = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32 + call_pad);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &class_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_len as i64,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        call_pad,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        call_pad + 8,
+    );
     let symbol = ctx
         .emitter
         .target
@@ -175,12 +192,12 @@ fn emit_eval_native_frame_called_class_override_probe_x86_64(
     abi::emit_call_label(ctx.emitter, &symbol);
     ctx.emitter.instruction("cmp rax, 0");                                      // check whether eval has a late-static class override for this AOT frame
     ctx.emitter.instruction(&format!("je {}", no_override));                    // fall back to the emitted class-id metadata when no override is active
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // load the eval called-class name pointer into the string result
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // load the eval called-class name length into the string result
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", call_pad);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", call_pad + 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + call_pad);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the AOT class-id metadata path after using the eval override
     ctx.emitter.label(&no_override);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + call_pad);
 }
 
 /// Returns the generated/AOT class encoded in the current method frame name.

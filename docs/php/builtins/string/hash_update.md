@@ -2,7 +2,7 @@
 title: "hash_update()"
 description: "Pumps data into an active incremental hashing context."
 sidebar:
-  order: 378
+  order: 385
 ---
 
 ## hash_update()

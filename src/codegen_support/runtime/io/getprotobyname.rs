@@ -11,13 +11,17 @@
 //! - Returns the protocol number, or -1 when no entry matches; the builtin
 //!   emitter boxes -1 as PHP `false`.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// getprotobyname: look up a protocol number by name.
 /// Input:  AArch64 x0 = query pointer, x1 = query length
 ///         x86_64  rdi = query pointer, rsi = query length
 /// Output: protocol number, or -1 when no entry matches
 pub fn emit_getprotobyname(emitter: &mut Emitter) {
+    if emitter.platform == Platform::Windows {
+        emit_getprotobyname_windows_x86_64(emitter);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_getprotobyname_linux_x86_64(emitter);
         return;
@@ -185,6 +189,32 @@ pub fn emit_getprotobyname(emitter: &mut Emitter) {
     emitter.label("__rt_gpbn_return");
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return the protocol number or -1
+}
+
+/// Emits the Windows x86_64 protocol lookup through Winsock `getprotobyname`.
+///
+/// The compiler string is converted to a bounded C scratch string before the
+/// Winsock call; `protoent.p_proto` is a signed 16-bit integer at offset 16.
+fn emit_getprotobyname_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: getprotobyname ---");
+    emitter.label_global("__rt_getprotobyname");
+    emitter.instruction("sub rsp, 8");                                          // align nested SysV and MSx64-shim calls from the function-entry stack
+    emitter.instruction("mov rax, rdi");                                        // move the counted elephc name into the C-string conversion input
+    emitter.instruction("mov rdx, rsi");                                        // move the counted elephc name length into the conversion input
+    emitter.instruction("call __rt_cstr");                                      // copy and NUL-terminate the name in bounded scratch storage
+    emitter.instruction("mov rdi, rax");                                        // pass the C string to the Winsock ABI shim
+    emitter.instruction("call __rt_sys_getprotobyname");                        // return a transient protoent pointer or null
+    emitter.instruction("test rax, rax");                                       // did Winsock find a protocol entry?
+    emitter.instruction("jz __rt_gpbn_windows_missing");                        // return PHP's -1 missing sentinel on lookup failure
+    emitter.instruction("movsx rax, WORD PTR [rax + 16]");                      // load MinGW/Winsock's signed short protoent.p_proto
+    emitter.instruction("add rsp, 8");                                          // release the alignment slot before returning to the builtin lowering
+    emitter.instruction("ret");                                                 // return the protocol number to the builtin lowering
+    emitter.label("__rt_gpbn_windows_missing");
+    emitter.instruction("mov rax, -1");                                         // use the existing PHP false sentinel for a missing entry
+    emitter.instruction("add rsp, 8");                                          // release the alignment slot before returning the failure sentinel
+    emitter.instruction("ret");                                                 // return the lookup failure sentinel
+    emitter.blank();
 }
 
 /// Emits the Linux x86_64 stream runtime helper for getprotobyname.

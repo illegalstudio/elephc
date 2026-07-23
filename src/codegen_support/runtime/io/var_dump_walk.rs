@@ -527,6 +527,11 @@ pub fn emit_var_dump_array_bool(emitter: &mut Emitter) {
 
 /// `__rt_var_dump_emit_float_line`: emit `  float(VAL)\n` for a single
 /// f64. Input: AArch64 d0 / x86_64 xmm0 = value.
+///
+/// `var_dump` renders floats at PHP's `serialize_precision = -1` (shortest
+/// round-trip) rather than the `precision = 14` setting `__rt_ftoa`
+/// implements for `echo`/`(string)`, so this calls the Inf/NaN-safe
+/// `__rt_var_dump_ftoa` wrapper instead of `__rt_ftoa`.
 pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_var_dump_emit_float_line_linux_x86_64(emitter);
@@ -546,8 +551,8 @@ pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #8");                                          // len("  float(") = 8
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
-    // ftoa(d0) → x1=ptr, x2=len
-    emitter.instruction("bl __rt_ftoa");                                        // call runtime helper
+    // var_dump_ftoa(d0) → x1=ptr, x2=len (serialize_precision=-1, Inf/NaN-safe)
+    emitter.instruction("bl __rt_var_dump_ftoa");                               // call runtime helper
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ")\n"
@@ -575,8 +580,8 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 8");                                          // prepare SysV call argument
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
-    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload xmm0 for ftoa
-    emitter.instruction("call __rt_ftoa");                                      // rax=ptr, rdx=len
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload xmm0 for var_dump_ftoa
+    emitter.instruction("call __rt_var_dump_ftoa");                             // rax=ptr, rdx=len
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 

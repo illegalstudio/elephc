@@ -1018,6 +1018,10 @@ fn emit_object_iterator_method_call(
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     if let Some(helper) = target.runtime_helper {
+        super::remap_platform_args_to_runtime_helper_regs(
+            ctx.emitter,
+            super::int_register_arg_count(&[PhpType::Object(class_name.to_string())]),
+        );
         abi::emit_call_label(ctx.emitter, helper);
     } else {
         abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &method_key));
@@ -1034,6 +1038,8 @@ fn emit_interface_iterator_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<PhpType> {
+    // Platform receiver register (rdi SysV, rcx MSx64) — feeds emit_interface_dispatch_call's
+    // scan and, via emit_generator_interface_fast_path's own remap, the SysV __rt_gen_* helper.
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     let method_key = php_symbol_key(method_name);
@@ -1069,10 +1075,14 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.label(&not_generator);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id before checking for the built-in Generator
+            // Platform receiver register (rdi SysV, rcx MSx64) — matches how the caller staged $this.
+            let receiver_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.emitter
+                .instruction(&format!("mov r10, QWORD PTR [{}]", receiver_reg)); // load receiver class id before checking for the built-in Generator
             abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_generator_class_id", 0);
             ctx.emitter.instruction("cmp r10, r11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("jne {}", not_generator));         // fall back to interface dispatch for non-Generator iterators
+            super::remap_platform_args_to_runtime_helper_regs(ctx.emitter, 1);  // MSx64 receiver -> SysV receiver for the hand-written __rt_gen_* helper
             abi::emit_call_label(ctx.emitter, helper);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
@@ -1138,17 +1148,27 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("mov x0, #0");                              // defensive fallback for invalid interface metadata
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load receiver class id for interface metadata lookup
+            // Platform receiver register (rdi SysV, rcx MSx64) — the resolved callee reads $this from the same register.
+            let receiver_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.emitter
+                .instruction(&format!("mov r10, QWORD PTR [{}]", receiver_reg)); // load receiver class id for interface metadata lookup
             abi::emit_symbol_address(ctx.emitter, "r11", "_class_interface_ptrs");
             ctx.emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");      // select this class's interface metadata block
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load implemented interface count
             ctx.emitter.instruction("add r11, 8");                              // move to first [interface id, table] pair
-            abi::emit_load_int_immediate(ctx.emitter, "r9", interface_id);
             ctx.emitter.label(&scan_loop);
             ctx.emitter.instruction("test r10, r10");                           // check whether implemented interfaces remain
             ctx.emitter.instruction(&format!("je {}", missing));                // stop when no implemented interface matched
-            ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // load current implemented interface id
-            ctx.emitter.instruction("cmp r8, r9");                              // compare with target interface id
+            // Compare the current entry's interface id directly against the target as a
+            // memory-immediate `cmp`, instead of loading each side into r8/r9: those are live
+            // MSx64 arg2/arg3 registers for THIS call's already-staged arguments (e.g. the
+            // pointer/length pair of a `format($fmt)`-style string argument) on windows-x86_64,
+            // and SysV arg5/arg6 on linux/macos-x86_64 for a 5+ arg interface call — clobbering
+            // either silently corrupts an argument the resolved callee reads right after `call
+            // r11` below (surfaced as a truncated/garbled `DateTimeInterface::format()` result
+            // when chaining a call through an interface-typed receiver, e.g.
+            // `$period->getStartDate()->format($fmt)`).
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [r11], {}", interface_id)); // compare current implemented interface id with target
             ctx.emitter.instruction(&format!("je {}", found));                  // dispatch through this table when matched
             ctx.emitter.instruction("add r11, 16");                             // advance to next interface metadata entry
             ctx.emitter.instruction("sub r10, 1");                              // consume one interface entry
@@ -1202,7 +1222,7 @@ fn emit_generator_iterator_runtime_call(
     offset: usize,
     helper: &str,
 ) {
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
 }

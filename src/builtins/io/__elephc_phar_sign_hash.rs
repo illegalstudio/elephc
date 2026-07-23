@@ -15,7 +15,7 @@
 builtin! {
     name: "__elephc_phar_sign_hash",
     area: Io,
-    params: [path: Str, algo: Str],
+    params: [path: Str, algo: Int],
     returns: Bool,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSignHash,

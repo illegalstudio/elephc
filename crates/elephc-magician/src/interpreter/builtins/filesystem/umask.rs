@@ -67,13 +67,13 @@ pub(in crate::interpreter) fn eval_umask_result(
     let previous = match mask {
         Some(mask) => {
             let mask = eval_int_value(mask, values)? as u32;
-            unsafe { umask(mask) }
+            eval_os_umask(mask)
         }
-        None => unsafe {
-            let current = umask(0);
-            umask(current);
+        None => {
+            let current = eval_os_umask(0);
+            eval_os_umask(current);
             current
-        },
+        }
     };
     values.int(i64::from(previous))
 }

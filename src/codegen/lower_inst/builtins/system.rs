@@ -59,8 +59,26 @@ fn lower_date_like(
     stage_date_string_regs(ctx);
     load_date_timestamp(ctx, timestamp)?;
     unstage_date_string_regs(ctx);
+    publish_windows_tz_offset_bridge(ctx);
     abi::emit_call_label(ctx.emitter, runtime_symbol);
     store_if_result(ctx, inst)
+}
+
+/// Publishes the windows-only elephc-tz offset bridge fn pointer immediately
+/// before a runtime call that may resolve local time on windows
+/// (`__rt_date`/`__rt_mktime`/`__rt_gmmktime`/`__rt_strtotime`, transitively
+/// `__rt_sys_localtime`/`__rt_sys_mktime`). No-op off windows-x86_64. Shared by
+/// `lower_date_like`, `lower_mktime_like`, and `emit_strtotime_marshal` so the
+/// windows-only `__rt_sys_localtime`/`__rt_sys_mktime` shims
+/// (`codegen_support/runtime/win32/shims_time.rs`) can resolve the active
+/// default timezone's IANA offset instead of falling back to msvcrt's
+/// TZ-only/no-zoneinfo `localtime`/`mktime`. Harmless to publish before the
+/// UTC-only counterparts (`gmdate`/`gmmktime` share this call site / never read
+/// the slot) — publishing costs a few extra instructions, not correctness.
+fn publish_windows_tz_offset_bridge(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.platform == Platform::Windows {
+        crate::codegen_support::tz_bridge::publish_elephc_tz_offset_function_pointer(ctx.emitter);
+    }
 }
 
 /// Lowers `date_default_timezone_get()` through the shared runtime helper.
@@ -231,7 +249,7 @@ pub(crate) fn lower_localtime(
     }
     emit_store_result_to_scratch(ctx, 8);
     emit_load_scratch_to_reg(ctx, abi::int_result_reg(ctx.emitter), 0);
-    emit_load_scratch_to_reg(ctx, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+    emit_load_scratch_to_reg(ctx, abi::runtime_helper_int_arg_reg(ctx.emitter, 1), 8);
     emit_scratch_release(ctx, 16);
     abi::emit_call_label(ctx.emitter, "__rt_localtime");
     emit_box_hash_pointer_as_assoc_mixed(ctx);
@@ -272,7 +290,7 @@ pub(crate) fn lower_http_response_code(
         }
         None => abi::emit_load_int_immediate(
             ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
             0,
         ),
     }
@@ -338,6 +356,11 @@ fn lower_mktime_like(
     runtime_symbol: &str,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 6)?;
+    // Publish BEFORE marshaling the integer args, not after: the publish call's
+    // r9 scratch use (see `publish_windows_tz_offset_bridge`) would otherwise
+    // clobber r9d, which is `__rt_mktime`'s/`__rt_gmmktime`'s 6th ABI argument
+    // (year) once `marshal_integer_args` has loaded it.
+    publish_windows_tz_offset_bridge(ctx);
     marshal_integer_args(ctx, inst, &MKTIME_ARG_LABELS)?;
     abi::emit_call_label(ctx.emitter, runtime_symbol);
     store_if_result(ctx, inst)
@@ -452,7 +475,7 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
 
 /// Loads the staged integer at scratch `offset` into the `index`-th integer argument register.
 fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, offset: usize) {
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, index);
     emit_load_scratch_to_reg(ctx, arg_reg, offset);
 }
 
@@ -585,6 +608,7 @@ fn emit_strtotime_marshal(
             }
         }
     }
+    publish_windows_tz_offset_bridge(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_strtotime");
     Ok(())
 }
@@ -745,7 +769,7 @@ fn lower_direct_system_call(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the null-terminated shell command to libc system()
     }
-    ctx.emitter.bl_c("system");
+    ctx.emitter.emit_call_c("system");
     if returns_empty_string {
         emit_empty_string_result(ctx);
     }
@@ -779,8 +803,15 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::X86_64) => {
             panic!("exit() is not implemented yet for target macos-x86_64");
         }
-        (Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        (Platform::Windows, Arch::X86_64) => {
+            ctx.emitter.instruction("mov rbx, rax");                            // preserve the computed exit code across output-buffer shutdown
+            ctx.emitter.instruction("and rsp, -16");                            // realign the terminal path before calling runtime helpers
+            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers before terminating
+            ctx.emitter.instruction("mov rdi, rbx");                            // restore the exit code into the shim's SysV-style argument register
+            ctx.emitter.instruction("call __rt_sys_exit");                      // call Win32 ExitProcess shim after the shutdown drain
+        }
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)");
         }
     }
 }
@@ -835,7 +866,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&copy_done);
     ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");                      // append the C null terminator required by putenv()
     ctx.emitter.instruction("mov rdi, r9");                                     // pass the persistent environment buffer to putenv()
-    ctx.emitter.bl_c("putenv");
+    ctx.emitter.emit_call_c("putenv");
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register

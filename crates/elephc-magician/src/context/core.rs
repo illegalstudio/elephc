@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Stable lookup key for emulated POSIX permission bits on local files.
+#[cfg(any(windows, test))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum LocalFileModeKey {
+    /// Host filesystem identity, shared by every hard-link alias.
+    FileId { volume: u64, index: u64 },
+    /// Canonical, platform-normalized path used when file identity is unavailable.
+    Path(String),
+}
+
+/// Permission metadata captured before a filesystem mutation changes path reachability.
+#[cfg(any(windows, test))]
+#[derive(Clone, Debug)]
+pub(crate) struct LocalFileModeToken {
+    pub(super) key: LocalFileModeKey,
+    pub(super) mode: u32,
+    pub(super) last_link: bool,
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -74,6 +93,8 @@ pub struct ElephcEvalContext {
     pub(super) pending_throw: Option<RuntimeCellHandle>,
     pub(super) spl_autoload_extensions: String,
     pub(super) streams: EvalStreamResources,
+    #[cfg(any(windows, test))]
+    pub(super) local_file_modes: HashMap<LocalFileModeKey, u32>,
     pub(super) json_last_error: i64,
     pub(super) json_last_error_msg: String,
     pub(super) default_timezone: String,
@@ -147,6 +168,8 @@ impl ElephcEvalContext {
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
+            #[cfg(any(windows, test))]
+            local_file_modes: HashMap::new(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
             default_timezone: String::from("UTC"),
@@ -221,6 +244,8 @@ impl ElephcEvalContext {
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
+            #[cfg(any(windows, test))]
+            local_file_modes: HashMap::new(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
             default_timezone: String::from("UTC"),

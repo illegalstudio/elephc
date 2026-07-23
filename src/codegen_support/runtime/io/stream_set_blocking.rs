@@ -17,7 +17,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Output: x0 = 1 on success, 0 on failure
 pub fn emit_stream_set_blocking(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_stream_set_blocking_linux_x86_64(emitter);
+        emit_stream_set_blocking_x86_64(emitter);
         return;
     }
 
@@ -72,8 +72,12 @@ pub fn emit_stream_set_blocking(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the failure result
 }
 
-/// Emits the Linux x86_64 stream runtime helper for stream set blocking.
-fn emit_stream_set_blocking_linux_x86_64(emitter: &mut Emitter) {
+/// Emits the x86_64 stream runtime helper for toggling descriptor blocking mode.
+///
+/// Windows post-processing rewrites both fcntl syscalls to `__rt_sys_fcntl`,
+/// which applies `FIONBIO` to sockets and retains cache-only semantics for CRT
+/// descriptors such as the standard streams.
+fn emit_stream_set_blocking_x86_64(emitter: &mut Emitter) {
     let plat = emitter.platform;
     emitter.blank();
     emitter.comment("--- runtime: stream_set_blocking ---");
@@ -123,4 +127,33 @@ fn emit_stream_set_blocking_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the scratch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target, transform_for_windows};
+
+    /// Verifies Windows rewrites both x86_64 fcntl operations through the shim
+    /// that applies `FIONBIO` to sockets while preserving CRT descriptor state.
+    #[test]
+    fn test_stream_set_blocking_windows_uses_fcntl_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_stream_set_blocking(&mut emitter);
+        let asm = transform_for_windows(&emitter.output());
+        assert_eq!(asm.matches("call __rt_sys_fcntl").count(), 2);
+        assert!(asm.contains("mov r9d, 2048"), "missing Windows O_NONBLOCK mask");
+        assert!(!asm.contains("syscall"), "Windows output must not retain raw fcntl syscalls");
+    }
+
+    /// Verifies that the Linux x86_64 dispatch is unaffected by the Windows
+    /// branch and still routes through the `fcntl(F_GETFL/F_SETFL)` path.
+    #[test]
+    fn test_stream_set_blocking_linux_still_uses_fcntl() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_stream_set_blocking(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_stream_set_blocking\n"), "missing global label");
+        assert!(asm.contains("mov eax, 72"), "Linux helper must still use the fcntl syscall number");
+    }
 }

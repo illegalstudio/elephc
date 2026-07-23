@@ -2,7 +2,7 @@
 title: "mb_strlen() — internals"
 description: "Compiler internals for mb_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 390
+  order: 397
 ---
 
 ## `mb_strlen()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strlen.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -27,7 +27,7 @@ sidebar:
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (1 requirements)`
+- **Requirements**: `static (2 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_strlen(string $string, string $encoding = null): int
+function mb_strlen(string $string, mixed $encoding = null): int
 ```
 
 ## What the type checker enforces

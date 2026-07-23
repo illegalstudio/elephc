@@ -840,6 +840,124 @@ fn test_error_pclose_requires_resource() {
     );
 }
 
+/// Verifies proc_open rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_open_wrong_args() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open("echo hi", []);
+"#,
+        "proc_open() takes 3 to 6 arguments",
+    );
+}
+
+/// Verifies proc_open reports array-command support as an explicit runtime gap.
+#[test]
+fn test_error_proc_open_array_command_not_yet_supported() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open(["php", "-v"], [], $pipes);
+"#,
+        "proc_open() array commands are currently supported only for the Windows target",
+    );
+}
+
+/// Verifies non-null optional settings are rejected instead of silently ignored.
+#[test]
+fn test_error_proc_open_non_null_cwd_not_yet_supported() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open("echo hi", [], $pipes, ".");
+"#,
+        "proc_open() non-null $cwd is currently supported only for the Windows target",
+    );
+}
+
+/// Verifies a custom environment receives the precise runtime-marshalling gap
+/// instead of being silently ignored by the native process launcher.
+#[test]
+fn test_error_proc_open_non_null_env_not_yet_supported() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open("echo hi", [], $pipes, null, ["LANG" => "C"]);
+"#,
+        "proc_open() non-null $env_vars is currently supported only for the Windows target",
+    );
+}
+
+/// Verifies non-null Windows/process options receive the precise marshalling
+/// gap instead of being accepted and then discarded.
+#[test]
+fn test_error_proc_open_non_null_options_not_yet_supported() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open("echo hi", [], $pipes, null, null, ["bypass_shell" => true]);
+"#,
+        "proc_open() non-null $options is currently supported only for the Windows target",
+    );
+}
+
+/// Verifies proc_close rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_close_wrong_args() {
+    expect_error("<?php proc_close();", "proc_close() takes exactly 1 argument");
+}
+
+/// Verifies proc_terminate rejects a non-integer Unix signal before lowering.
+#[test]
+fn test_error_proc_terminate_signal_must_be_int() {
+    expect_error(
+        "<?php proc_terminate(1, \"x\");",
+        "proc_terminate() signal must be int",
+    );
+}
+
+/// Verifies proc_terminate does not apply scalar integer coercion to arrays.
+#[test]
+fn test_error_proc_terminate_signal_rejects_array() {
+    expect_error(
+        "<?php proc_terminate(1, []);",
+        "proc_terminate() signal must be int",
+    );
+}
+
+/// Verifies proc_terminate does not apply scalar integer coercion to objects.
+#[test]
+fn test_error_proc_terminate_signal_rejects_object() {
+    expect_error(
+        "<?php proc_terminate(1, new stdClass());",
+        "proc_terminate() signal must be int",
+    );
+}
+
+/// Verifies statically Mixed signals cannot reach permissive explicit-cast codegen.
+#[test]
+fn test_error_proc_terminate_signal_rejects_mixed() {
+    expect_error(
+        "<?php function process_signal(): mixed { return []; } proc_terminate(1, process_signal());",
+        "proc_terminate() signal must be int",
+    );
+}
+
+/// Verifies non-tagged scalar unions cannot reach the boxed Mixed signal path.
+#[test]
+fn test_error_proc_terminate_signal_rejects_mixed_codegen_union() {
+    expect_error(
+        r#"<?php
+function process_signal(bool $string): int|string {
+    return $string ? "15" : 15;
+}
+proc_terminate(1, process_signal(true));
+"#,
+        "proc_terminate() signal must be int",
+    );
+}
+
 /// Verifies the invalid-call diagnostic for error opendir wrong args.
 #[test]
 fn test_error_opendir_wrong_args() {

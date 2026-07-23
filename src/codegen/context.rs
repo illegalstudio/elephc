@@ -632,7 +632,7 @@ impl<'a> FunctionContext<'a> {
             && matches!(source_ty.codegen_repr(), PhpType::Mixed)
         {
             let result_reg = abi::int_result_reg(self.emitter);
-            let arg_reg = abi::int_arg_reg_name(self.emitter.target, 0);
+            let arg_reg = abi::runtime_helper_int_arg_reg(self.emitter, 0);
             if result_reg != arg_reg {
                 abi::emit_reg_move(self.emitter, arg_reg, result_reg);
             }

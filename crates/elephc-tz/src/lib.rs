@@ -206,6 +206,29 @@ pub fn zone_location(name: &str) -> Option<Location> {
     })
 }
 
+/// Resolves `name`'s UTC offset (seconds) and DST flag at Unix timestamp `ts`, for
+/// the windows-only local-time bridge (`elephc_tz_offset` in the `abi` module).
+/// Binary-searches [`zone_transitions`] for the last transition with
+/// `transition.ts <= ts` (rows are ascending by construction — see
+/// `data/generate.php`); before the zone's first transition, timelib/PHP falls
+/// back to that first row's data (the synthetic LMT/earliest-known-offset row,
+/// e.g. Europe/Paris row 0 at `i64::MIN`), matching `getTransitions()`'s own row 0
+/// semantics. Returns `None` for an unknown zone or a false-zone (no transition
+/// data), mirroring `zone_transitions` — callers fall back to their own
+/// (non-bridge) offset resolution in that case.
+///
+/// The abbreviation is returned as an owned `String` (not `&'static str`, unlike
+/// [`TzTransition::abbr`]'s field which borrows from the embedded static table)
+/// purely so this function can build its result independently of the borrowed
+/// `Vec<TzTransition>` it searches, which is dropped on return; the offset/DST
+/// bridge caller does not currently consume it.
+pub fn zone_offset_at(name: &str, ts: i64) -> Option<(i32, bool, String)> {
+    let rows = zone_transitions(name)?;
+    let idx = rows.partition_point(|row| row.ts <= ts);
+    let row = if idx == 0 { rows.first()? } else { &rows[idx - 1] };
+    Some((row.offset as i32, row.isdst, row.abbr.clone()))
+}
+
 /// Returns the full `listAbbreviations()` table in PHP's exact key and row order,
 /// parsed once from the embedded data. An empty id field decodes to `None` (PHP's
 /// null `timezone_id`); PHP never emits an empty-string id.
@@ -354,5 +377,53 @@ mod tests {
     fn tables_cover_all_zones() {
         assert_eq!(LOCATIONS.lines().count(), 598);
         assert_eq!(TRANSITIONS.lines().count(), 598);
+    }
+
+    /// Europe/Paris resolves to standard time (CET, +3600, no DST) at a known
+    /// winter instant (2024-01-15 12:00:00 UTC).
+    #[test]
+    fn zone_offset_at_paris_winter() {
+        let (offset, isdst, abbr) = zone_offset_at("Europe/Paris", 1_705_320_000)
+            .expect("Europe/Paris resolves in winter");
+        assert_eq!(offset, 3600);
+        assert!(!isdst);
+        assert_eq!(abbr, "CET");
+    }
+
+    /// Europe/Paris resolves to daylight time (CEST, +7200, DST) at a known
+    /// summer instant (2024-07-15 12:00:00 UTC).
+    #[test]
+    fn zone_offset_at_paris_summer() {
+        let (offset, isdst, abbr) = zone_offset_at("Europe/Paris", 1_721_044_800)
+            .expect("Europe/Paris resolves in summer");
+        assert_eq!(offset, 7200);
+        assert!(isdst);
+        assert_eq!(abbr, "CEST");
+    }
+
+    /// Before Europe/Paris's first real transition, resolution falls back to the
+    /// synthetic LMT row 0 (561-second offset), matching `getTransitions()`'s own
+    /// row 0 semantics — exercised with a deeply negative pre-1900 timestamp.
+    #[test]
+    fn zone_offset_at_pre_first_transition_uses_lmt_row() {
+        let (offset, isdst, abbr) =
+            zone_offset_at("Europe/Paris", -2_840_140_800).expect("resolves before row 1 (1880)");
+        assert_eq!(offset, 561);
+        assert!(!isdst);
+        assert_eq!(abbr, "LMT");
+    }
+
+    /// UTC always resolves to a zero offset, unaffected by the query timestamp.
+    #[test]
+    fn zone_offset_at_utc_is_always_zero() {
+        let (offset, isdst, _) = zone_offset_at("UTC", 0).expect("UTC resolves");
+        assert_eq!(offset, 0);
+        assert!(!isdst);
+    }
+
+    /// An unknown zone name resolves to `None`, mirroring `zone_transitions`.
+    #[test]
+    fn zone_offset_at_unknown_zone_is_none() {
+        assert!(zone_offset_at("Not/AZone", 0).is_none());
     }
 }

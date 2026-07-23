@@ -78,6 +78,7 @@ mod stream_wrapper_unregister;
 mod http_build_request;
 mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
+mod stream_context_get_bool_option;
 mod stream_context_get_int_option;
 mod stream_context_get_string_option;
 mod stream_context_set_option_4;
@@ -89,6 +90,11 @@ mod stream_socket_accept;
 mod stream_socket_client;
 mod pclose;
 mod popen;
+mod proc_close;
+mod proc_open;
+mod proc_open_marshal;
+mod proc_pipe_registry;
+mod proc_status;
 mod opendir;
 mod readdir;
 mod closedir;
@@ -109,6 +115,7 @@ mod stream_set_timeout;
 mod streams_ext;
 mod symlink;
 mod tempnam;
+mod tls_session_table;
 mod path_is_wrapper;
 mod readfile_wrapper;
 mod user_filter;
@@ -194,6 +201,7 @@ pub(crate) use stream_context_get_ssl_peer_name::emit_get_ssl_peer_name;
 pub(crate) use apply_socket_opts::{
     emit_apply_socket_bindto, emit_apply_socket_client_opts, emit_apply_socket_server_opts,
 };
+pub(crate) use stream_context_get_bool_option::emit_get_bool_context_option;
 pub(crate) use stream_context_get_int_option::emit_get_int_context_option;
 pub(crate) use stream_context_get_string_option::emit_get_string_context_option;
 pub(crate) use stream_context_set_option_4::emit_stream_context_set_option_4;
@@ -205,6 +213,11 @@ pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use pclose::emit_pclose;
 pub(crate) use popen::emit_popen;
+pub(crate) use proc_close::emit_proc_close;
+pub(crate) use proc_pipe_registry::emit_proc_pipe_registry;
+pub(crate) use proc_status::emit_proc_status;
+pub(crate) use proc_open::emit_proc_open;
+pub(crate) use proc_open_marshal::emit_proc_open_marshalling;
 pub(crate) use opendir::emit_opendir;
 pub(crate) use readdir::emit_readdir;
 pub(crate) use closedir::emit_closedir;
@@ -225,6 +238,7 @@ pub(crate) use stream_set_timeout::emit_stream_set_timeout;
 pub(crate) use streams_ext::emit_streams_ext;
 pub(crate) use symlink::emit_symlink;
 pub(crate) use tempnam::emit_tempnam;
+pub(crate) use tls_session_table::emit_tls_session_table;
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
     emit_stream_filter_attach_user, emit_stream_filter_register,

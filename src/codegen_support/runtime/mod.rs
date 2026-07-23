@@ -28,8 +28,7 @@ mod pointers;
 pub(crate) mod spl;
 mod strings;
 mod system;
-/// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
-mod zval;
+mod win32;
 
 pub(crate) use data::emit_runtime_data_fixed;
 pub(crate) use data::{
@@ -49,3 +48,5 @@ pub(crate) use fibers::{
     FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
     FIBER_USER_ARG_MAX_OFFSET,
 };
+/// Windows C-shim registry lookup, consulted by `Emitter::emit_call_c`.
+pub(crate) use win32::windows_c_shim_name;

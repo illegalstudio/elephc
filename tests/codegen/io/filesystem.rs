@@ -99,8 +99,11 @@ if (strlen($cwd) > 0) { echo "ok"; }
     assert_eq!(out, "ok");
 }
 
-/// Verifies sys_get_temp_dir returns a path containing "tmp" (case-insensitive
-/// check to cover Linux, macOS, and Windows temp naming).
+/// Verifies sys_get_temp_dir returns a temp-named path. The check is genuinely
+/// case-insensitive and accepts both the POSIX `tmp` spelling (Linux/macOS
+/// `/tmp`) and the Windows `Temp` spelling: on Windows the runtime returns the
+/// real `GetTempPathW` result (e.g. `C:\Users\...\Temp`), whose lowercased form
+/// contains `temp`, not `tmp`.
 #[test]
 fn test_sys_get_temp_dir() {
     let out = compile_and_run(
@@ -109,7 +112,12 @@ $tmp = sys_get_temp_dir();
 echo $tmp;
 "#,
     );
-    assert!(out.contains("tmp") || out.contains("Tmp"));
+    let lower = out.to_lowercase();
+    assert!(
+        lower.contains("tmp") || lower.contains("temp"),
+        "sys_get_temp_dir returned {:?}",
+        out
+    );
 }
 
 /// Verifies chdir changes the working directory and getcwd reflects the new
@@ -227,6 +235,42 @@ unlink($tmp);
     );
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `tempnam` keeps only the basename of a long prefix and applies PHP's 63-byte limit.
+#[test]
+fn test_tempnam_normalizes_and_limits_prefix() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$tmp = tempnam(".", "ignored/path/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+if ($tmp === false) {
+    echo "fail";
+} else {
+    echo strlen(basename($tmp));
+    unlink($tmp);
+}
+"#,
+    );
+    assert_eq!(out, "69");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows retries `tempnam()` in the system directory after an explicit-dir failure.
+#[test]
+fn test_tempnam_windows_falls_back_to_system_directory() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$tmp = @tempnam("Z:\\elephc\\missing\\directory", "fallback");
+echo is_string($tmp) && file_exists($tmp) ? "ok" : "fail";
+if (is_string($tmp)) {
+    unlink($tmp);
+}
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies compiled PHP output for disk space positive and ordered.

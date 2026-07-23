@@ -149,7 +149,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // arg 2: service = NULL
     emitter.instruction("lea rdx, [rbp - 48]");                                 // arg 3: &hints
     emitter.instruction("lea rcx, [rbp - 56]");                                 // arg 4: &res
-    emitter.instruction("call getaddrinfo");                                    // call external helper
+    emitter.emit_call_c("getaddrinfo");                                         // call external helper
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_rhv6_fail_x86");                              // non-zero return = error
 
@@ -168,7 +168,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
 
     // -- freeaddrinfo(res) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("call freeaddrinfo");                                   // call external helper
+    emitter.emit_call_c("freeaddrinfo");                                        // call external helper
 
     emitter.instruction("mov eax, 1");                                          // success
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
@@ -177,7 +177,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_rhv6_free_fail_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("call freeaddrinfo");                                   // call external helper
+    emitter.emit_call_c("freeaddrinfo");                                        // call external helper
     // fall through
     emitter.label("__rt_rhv6_fail_x86");
     emitter.instruction("xor eax, eax");                                        // failure

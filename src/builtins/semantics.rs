@@ -22,8 +22,8 @@ use crate::types::PhpType;
 
 pub use crate::builtins::requirements::{
     file_get_contents_requirements, file_put_contents_requirements, fopen_requirements,
-    stream_filter_requirements, unlink_requirements, BuiltinRequirement,
-    BuiltinRequirementInput, BuiltinRequirements, RequirementsFn,
+    stream_filter_requirements, unlink_requirements, windows_timezone_requirements,
+    BuiltinRequirement, BuiltinRequirementInput, BuiltinRequirements, RequirementsFn,
 };
 
 /// Inputs shared by backend-neutral validation, result-type, and effect resolvers.
@@ -155,6 +155,8 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
+    /// Marshal Windows `proc_open` command and environment extensions.
+    ProcOpen,
     /// Lower a statically known callback descriptor before its subject.
     PregReplaceCallback,
     /// Keep positional regex operands in raw source order.

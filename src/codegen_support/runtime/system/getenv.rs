@@ -78,7 +78,7 @@ fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_call_label(emitter, "__rt_cstr");                                 // convert the elephc string result regs into a null-terminated C string in the scratch buffer
     emitter.instruction("mov rdi, rax");                                        // pass the null-terminated environment variable name in the SysV first-argument register
-    emitter.bl_c("getenv");                                                     // getenv(name) → rax=value ptr or NULL
+    emitter.emit_call_c("getenv");                                              // getenv(name) → rax=value ptr or NULL
 
     emitter.instruction("test rax, rax");                                       // did libc return a real environment-value pointer?
     emitter.instruction("je __rt_getenv_empty");                                // missing environment variables map to the empty PHP string

@@ -16,6 +16,7 @@ mod str_loose_eq;
 mod str_to_number;
 mod str_to_int;
 mod number_format;
+mod php_round;
 mod atoi;
 mod grapheme_strrev;
 mod strcopy;
@@ -58,6 +59,7 @@ mod html_entity_decode;
 mod urlencode;
 mod urldecode;
 mod rawurlencode;
+mod shell_escape;
 mod base64_encode;
 mod base64_decode;
 mod sprintf;
@@ -86,6 +88,8 @@ pub use concat::emit_concat;
 /// Emit string concatenation helper.
 pub use ftoa::emit_ftoa;
 /// Emit float-to-string conversion helper.
+pub use ftoa::emit_var_dump_ftoa;
+/// Emit the var_dump-precision (serialize_precision=-1, Inf/NaN-safe) float-to-string helper.
 pub use str_eq::emit_str_eq;
 /// Emit case-sensitive string equality check.
 pub use str_loose_eq::emit_str_loose_eq;
@@ -98,6 +102,8 @@ pub use str_to_int::emit_str_to_int;
 /// Emit PHP string-to-integer cast helper.
 pub use number_format::emit_number_format;
 /// Emit number formatting helper.
+pub use php_round::emit_php_round;
+/// Emit the PHP-parity `_php_math_round` (HALF_UP) helper shared by `round()` and `number_format()`.
 pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
 pub use strcopy::emit_strcopy;
@@ -182,6 +188,8 @@ pub use urldecode::emit_urldecode;
 /// Emit URL decoding helper.
 pub use rawurlencode::emit_rawurlencode;
 /// Emit raw URL encoding helper.
+pub use shell_escape::emit_shell_escapes;
+/// Emit PHP shell argument and command escaping helpers.
 pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;

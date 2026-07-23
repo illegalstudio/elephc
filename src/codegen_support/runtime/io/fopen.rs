@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::{Arch, Platform}};
 
 /// The fixed warning text emitted when `fopen()` fails to open a file.
 const FOPEN_FAILED_WARNING: &str = "Warning: fopen(): Failed to open stream\n";
@@ -99,32 +99,77 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cmp w9, #0x72");                                       // compare with 'r'
     emitter.instruction("b.ne __rt_fopen_check_w");                             // if not 'r', check for 'w'
     emitter.instruction("mov x1, #0");                                          // O_RDONLY = 0
-    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+    emitter.instruction("b __rt_fopen_scan_modifiers");                         // scan every PHP fopen modifier
 
     // -- check for 'w' mode --
     emitter.label("__rt_fopen_check_w");
     emitter.instruction("cmp w9, #0x77");                                       // compare with 'w'
     emitter.instruction("b.ne __rt_fopen_check_a");                             // if not 'w', check for 'a'
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
-    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+    emitter.instruction("b __rt_fopen_scan_modifiers");                         // scan every PHP fopen modifier
 
     // -- check for 'a' mode (append) --
     emitter.label("__rt_fopen_check_a");
     emitter.instruction("cmp w9, #0x61");                                       // compare with 'a'
-    emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
+    emitter.instruction("b.ne __rt_fopen_check_x");                             // if not 'a', check for 'x'
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
-    // fall through to check_plus
+    emitter.instruction("b __rt_fopen_scan_modifiers");                         // scan every PHP fopen modifier
 
-    // -- check if second char is '+' to enable read+write --
-    emitter.label("__rt_fopen_check_plus");
-    emitter.instruction("cmp x4, #1");                                          // check if mode string has more than 1 char
-    emitter.instruction("b.le __rt_fopen_do_open");                             // if only 1 char, skip '+' check
-    emitter.instruction("ldrb w10, [x3, #1]");                                  // load second character of mode string
-    emitter.instruction("cmp w10, #0x2B");                                      // compare with '+'
-    emitter.instruction("b.ne __rt_fopen_do_open");                             // if not '+', keep original flags
+    // -- check for 'x' mode (exclusive create) --
+    emitter.label("__rt_fopen_check_x");
+    emitter.instruction("cmp w9, #0x78");                                       // compare with 'x'
+    emitter.instruction("b.ne __rt_fopen_check_c");                             // if not 'x', check for 'c'
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat() | emitter.platform.o_excl())); // O_WRONLY|O_CREAT|O_EXCL
+    emitter.instruction("b __rt_fopen_scan_modifiers");                         // scan every PHP fopen modifier
+
+    // -- check for 'c' mode (create without truncation) --
+    emitter.label("__rt_fopen_check_c");
+    emitter.instruction("cmp w9, #0x63");                                       // compare with 'c'
+    emitter.instruction("b.ne __rt_fopen_fail");                                // reject an unsupported base mode
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat())); // O_WRONLY|O_CREAT without truncation
+
+    // -- scan PHP fopen modifiers in every suffix position --
+    emitter.label("__rt_fopen_scan_modifiers");
+    emitter.instruction("mov x5, #1");                                          // begin after the base mode character
+    emitter.label("__rt_fopen_modifier_next");
+    emitter.instruction("cmp x5, x4");                                          // consumed every mode suffix byte?
+    emitter.instruction("b.ge __rt_fopen_do_open");                             // complete mode scan; open with accumulated flags
+    emitter.instruction("ldrb w6, [x3, x5]");                                   // load the next mode modifier
+    emitter.instruction("cmp w6, #0x2B");                                       // is this '+'?
+    emitter.instruction("b.ne __rt_fopen_modifier_e");                          // check the next supported modifier
     // -- upgrade to O_RDWR: clear O_RDONLY/O_WRONLY bits, set O_RDWR --
     emitter.instruction("and x1, x1, #0xFFFFFFFFFFFFFFFC");                     // clear lowest 2 bits (O_RDONLY/O_WRONLY)
     emitter.instruction("orr x1, x1, #0x2");                                    // set O_RDWR flag
+    emitter.instruction("b __rt_fopen_modifier_advance");                       // continue scanning after '+'
+    emitter.label("__rt_fopen_modifier_e");
+    emitter.instruction("cmp w6, #0x65");                                       // is this close-on-exec 'e'?
+    if let Some(cloexec) = emitter.platform.o_cloexec() {
+        emitter.instruction("b.ne __rt_fopen_modifier_n");                      // only supported targets add O_CLOEXEC
+        emitter.instruction(&format!("mov x7, #0x{:X}", cloexec));              // materialize target O_CLOEXEC
+        emitter.instruction("orr x1, x1, x7");                                  // preserve it in the open flags
+        emitter.instruction("b __rt_fopen_modifier_advance");                   // continue scanning after 'e'
+    } else {
+        emitter.instruction("b.ne __rt_fopen_modifier_n");                      // Windows accepts but cannot encode O_CLOEXEC
+        emitter.instruction("b __rt_fopen_modifier_advance");                   // Win32 inheritance is configured separately
+    }
+    emitter.label("__rt_fopen_modifier_n");
+    emitter.instruction("cmp w6, #0x6E");                                       // is this nonblocking 'n'?
+    emitter.instruction("b.ne __rt_fopen_modifier_t");                          // check whether Windows text mode was requested
+    emitter.instruction(&format!("mov x7, #0x{:X}", emitter.platform.o_nonblock())); // materialize target O_NONBLOCK
+    emitter.instruction("orr x1, x1, x7");                                      // retain nonblocking state for the runtime
+    emitter.instruction("b __rt_fopen_modifier_advance");                       // continue scanning after 'n'
+    emitter.label("__rt_fopen_modifier_t");
+    emitter.instruction("cmp w6, #0x74");                                       // is this text-mode 't'?
+    if let Some(text) = emitter.platform.o_text() {
+        emitter.instruction("b.ne __rt_fopen_modifier_advance");                // b and other tolerated suffixes retain binary mode
+        emitter.instruction(&format!("mov x7, #0x{:X}", text));                 // materialize Windows _O_TEXT
+        emitter.instruction("orr x1, x1, x7");                                  // let the Win32 shim configure CRT text mode
+    } else {
+        emitter.instruction("b __rt_fopen_modifier_advance");                   // non-Windows targets have no CRT text-mode bit
+    }
+    emitter.label("__rt_fopen_modifier_advance");
+    emitter.instruction("add x5, x5, #1");                                      // advance to the following suffix byte
+    emitter.instruction("b __rt_fopen_modifier_next");                          // keep scanning the complete mode string
 
     // -- perform the open syscall --
     emitter.label("__rt_fopen_do_open");
@@ -321,24 +366,69 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11b, 0x72");                                      // does the mode string start with 'r' for read-only access?
     emitter.instruction("jne __rt_fopen_check_w_x86");                          // if not, fall through to the write-mode checks
     emitter.instruction("xor esi, esi");                                        // O_RDONLY = 0 for the Linux read-only fopen() path
-    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
+    emitter.instruction("jmp __rt_fopen_scan_modifiers_x86");                   // scan every PHP fopen modifier after selecting base flags
 
     emitter.label("__rt_fopen_check_w_x86");
     emitter.instruction("cmp r11b, 0x77");                                      // does the mode string start with 'w' for truncate-on-open writes?
     emitter.instruction("jne __rt_fopen_check_a_x86");                          // if not, fall through to the append-mode check
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // select O_WRONLY|O_CREAT|O_TRUNC for the Linux write-mode fopen() path
-    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
+    emitter.instruction("jmp __rt_fopen_scan_modifiers_x86");                   // scan every PHP fopen modifier after selecting base flags
 
     emitter.label("__rt_fopen_check_a_x86");
     emitter.instruction("cmp r11b, 0x61");                                      // does the mode string start with 'a' for append writes?
-    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
+    emitter.instruction("jne __rt_fopen_check_x_x86");                          // if not 'a', check for exclusive-create mode
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // select O_WRONLY|O_CREAT|O_APPEND for the Linux append-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_scan_modifiers_x86");                   // scan every PHP fopen modifier after selecting base flags
 
-    emitter.label("__rt_fopen_check_plus_x86");
-    emitter.instruction("cmp BYTE PTR [r10 + 1], 0x2B");                        // does the mode string request the read-write '+' fopen() upgrade?
-    emitter.instruction("jne __rt_fopen_do_open_x86");                          // keep the base flags when the mode string does not contain '+'
+    emitter.label("__rt_fopen_check_x_x86");
+    emitter.instruction("cmp r11b, 0x78");                                      // does the mode string start with 'x' for exclusive creation?
+    emitter.instruction("jne __rt_fopen_check_c_x86");                          // if not, check create-without-truncation mode
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat() | emitter.platform.o_excl())); // select O_WRONLY|O_CREAT|O_EXCL
+    emitter.instruction("jmp __rt_fopen_scan_modifiers_x86");                   // scan every PHP fopen modifier after selecting base flags
+
+    emitter.label("__rt_fopen_check_c_x86");
+    emitter.instruction("cmp r11b, 0x63");                                      // does the mode string start with 'c' without truncation?
+    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject an unsupported base fopen mode
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat())); // select O_WRONLY|O_CREAT without truncation
+
+    // -- scan PHP fopen modifiers in every suffix position --
+    emitter.label("__rt_fopen_scan_modifiers_x86");
+    emitter.instruction("mov rcx, 1");                                          // begin after the base mode character
+    emitter.label("__rt_fopen_modifier_next_x86");
+    emitter.instruction("cmp BYTE PTR [r10 + rcx], 0");                         // reached the null terminator of the mode string?
+    emitter.instruction("je __rt_fopen_do_open_x86");                           // complete mode scan; open with accumulated flags
+    emitter.instruction("movzx edx, BYTE PTR [r10 + rcx]");                     // load the next mode modifier
+    emitter.instruction("cmp dl, 0x2B");                                        // is this '+'?
+    emitter.instruction("jne __rt_fopen_modifier_e_x86");                       // check the next supported modifier
     emitter.instruction("and esi, 0xFFFFFFFC");                                 // clear the low access-mode bits before upgrading the Linux fopen() flags to O_RDWR
     emitter.instruction("or esi, 0x2");                                         // set O_RDWR so 'r+'/'w+'/'a+' open the file for both reading and writing
+    emitter.instruction("jmp __rt_fopen_modifier_advance_x86");                 // continue scanning after '+'
+    emitter.label("__rt_fopen_modifier_e_x86");
+    emitter.instruction("cmp dl, 0x65");                                        // is this close-on-exec 'e'?
+    if let Some(cloexec) = emitter.platform.o_cloexec() {
+        emitter.instruction("jne __rt_fopen_modifier_n_x86");                   // only supported targets add O_CLOEXEC
+        emitter.instruction(&format!("or esi, 0x{:X}", cloexec));               // preserve target O_CLOEXEC in open flags
+        emitter.instruction("jmp __rt_fopen_modifier_advance_x86");             // continue scanning after 'e'
+    } else {
+        emitter.instruction("jne __rt_fopen_modifier_n_x86");                   // Windows accepts but cannot encode O_CLOEXEC
+        emitter.instruction("jmp __rt_fopen_modifier_advance_x86");             // Win32 inheritance is configured separately
+    }
+    emitter.label("__rt_fopen_modifier_n_x86");
+    emitter.instruction("cmp dl, 0x6E");                                        // is this nonblocking 'n'?
+    emitter.instruction("jne __rt_fopen_modifier_t_x86");                       // check whether Windows text mode was requested
+    emitter.instruction(&format!("or esi, 0x{:X}", emitter.platform.o_nonblock())); // retain target O_NONBLOCK in the open flags
+    emitter.instruction("jmp __rt_fopen_modifier_advance_x86");                 // continue scanning after 'n'
+    emitter.label("__rt_fopen_modifier_t_x86");
+    emitter.instruction("cmp dl, 0x74");                                        // is this text-mode 't'?
+    if let Some(text) = emitter.platform.o_text() {
+        emitter.instruction("jne __rt_fopen_modifier_advance_x86");             // b and other tolerated suffixes retain binary mode
+        emitter.instruction(&format!("or esi, 0x{:X}", text));                  // let the Win32 shim configure CRT text mode
+    } else {
+        emitter.instruction("jmp __rt_fopen_modifier_advance_x86");             // non-Windows targets have no CRT text-mode bit
+    }
+    emitter.label("__rt_fopen_modifier_advance_x86");
+    emitter.instruction("inc rcx");                                             // advance to the following suffix byte
+    emitter.instruction("jmp __rt_fopen_modifier_next_x86");                    // keep scanning the complete mode string
 
     emitter.label("__rt_fopen_do_open_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the converted C pathname as the first libc open() argument
@@ -410,20 +500,43 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     //    shifts the dispatch scratch frame by +16 only across the call;
     //    we load r11 (stream_open ptr) BEFORE the sub so its [rsp+48]
     //    reference is still valid.
-    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // $this = wrapper object
-    emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr
-    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // path len
-    emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                       // mode ptr
-    emitter.instruction("mov r8,  QWORD PTR [rsp + 24]");                       // mode len
-    emitter.instruction("xor r9d, r9d");                                        // options = 0 (PHP STREAM_USE_PATH/REPORT_ERRORS unused in v1)
-    emitter.instruction("mov r11, QWORD PTR [rsp + 48]");                       // reload stream_open method pointer before the stack shift
-    abi::emit_symbol_address(emitter, "r10", "_stream_open_opened_path_scratch"); // address of the 16-byte opened_path scratch slot
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // zero the opened_path low half before the call
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // zero the opened_path high half before the call
-    emitter.instruction("sub rsp, 16");                                         // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
-    emitter.instruction("mov QWORD PTR [rsp], r10");                            // 7th arg (opened_path address) at [rsp+0]
-    emitter.instruction("call r11");                                            // invoke stream_open on the wrapper object
-    emitter.instruction("add rsp, 16");                                         // release the stack-arg slot
+    if emitter.target.platform == Platform::Windows && emitter.target.arch == Arch::X86_64 {
+        // windows-x86_64 (MSx64): the pre-shift [rsp+N] slots below are loaded
+        // BEFORE `sub rsp, 64` (they shift by 64 after the sub). args 0-3 go
+        // in rcx/rdx/r8/r9; args 4-6 (mode len, options, opened_path addr)
+        // are staged on the stack above the mandatory 32-byte shadow space
+        // (finding F1, wide reverse-ABI variant, 7-int-arg case).
+        emitter.instruction("mov rcx, QWORD PTR [rsp + 32]");                   // $this (arg0)
+        emitter.instruction("mov rdx, QWORD PTR [rsp + 0]");                    // path ptr (arg1)
+        emitter.instruction("mov r8,  QWORD PTR [rsp + 8]");                    // path len (arg2)
+        emitter.instruction("mov r9,  QWORD PTR [rsp + 16]");                   // mode ptr (arg3)
+        emitter.instruction("mov r11, QWORD PTR [rsp + 48]");                   // stream_open ptr (call target) -- load before the shift
+        emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                   // mode len (arg4 scratch) -- load before the shift
+        abi::emit_symbol_address(emitter, "r10", "_stream_open_opened_path_scratch"); // opened_path addr (arg6) -- same call the SysV path uses (windows)
+        emitter.instruction("mov QWORD PTR [r10], 0");                          // zero opened_path low half
+        emitter.instruction("mov QWORD PTR [r10 + 8], 0");                      // zero opened_path high half
+        emitter.instruction("sub rsp, 64");                                     // 32B shadow + 3 stack args(24) + 8 pad (16-aligned)
+        emitter.instruction("mov QWORD PTR [rsp + 32], rax");                   // arg4 = mode len
+        emitter.instruction("mov QWORD PTR [rsp + 40], 0");                     // arg5 = options = 0
+        emitter.instruction("mov QWORD PTR [rsp + 48], r10");                   // arg6 = opened_path addr
+        emitter.instruction("call r11");                                        // invoke stream_open on the wrapper object (windows-x86_64 MSx64 stack-staged call)
+        emitter.instruction("add rsp, 64");                                     // release the windows arg-staging scratch
+    } else {
+        emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                   // $this = wrapper object
+        emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                    // path ptr
+        emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // path len
+        emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                   // mode ptr
+        emitter.instruction("mov r8,  QWORD PTR [rsp + 24]");                   // mode len
+        emitter.instruction("xor r9d, r9d");                                    // options = 0 (PHP STREAM_USE_PATH/REPORT_ERRORS unused in v1)
+        emitter.instruction("mov r11, QWORD PTR [rsp + 48]");                   // reload stream_open method pointer before the stack shift
+        abi::emit_symbol_address(emitter, "r10", "_stream_open_opened_path_scratch"); // address of the 16-byte opened_path scratch slot
+        emitter.instruction("mov QWORD PTR [r10], 0");                          // zero the opened_path low half before the call
+        emitter.instruction("mov QWORD PTR [r10 + 8], 0");                      // zero the opened_path high half before the call
+        emitter.instruction("sub rsp, 16");                                     // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
+        emitter.instruction("mov QWORD PTR [rsp], r10");                        // 7th arg (opened_path address) at [rsp+0]
+        emitter.instruction("call r11");                                        // invoke stream_open on the wrapper object
+        emitter.instruction("add rsp, 16");                                     // release the stack-arg slot
+    }
     emitter.instruction("test rax, rax");                                       // did stream_open return false?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // stream_open returned false → silent fail (obj is freed on the shared fail path)
 
@@ -448,8 +561,18 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_opened_x86");
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov QWORD PTR [rbp - 32], rax");                   // preserve the returned CRT descriptor across slot lookup
+        emitter.instruction("mov rdi, rax");                                    // pass the descriptor to the opaque-handle registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r11, rax");                                    // retain compact slot while materializing the table base
+        abi::emit_symbol_address(emitter, "r10", "_eof_flags");                 // materialize the eof-flag table for the compact Windows slot
+        emitter.instruction("mov BYTE PTR [r10 + r11], 0");                     // clear stale EOF state without raw descriptor indexing
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // return the original CRT descriptor to PHP code
+    } else {
+        abi::emit_symbol_address(emitter, "r10", "_eof_flags");                 // materialize the eof-flag table for the newly opened descriptor
+        emitter.instruction("mov BYTE PTR [r10 + rax], 0");                     // clear stale EOF state before returning the descriptor
+    }
     emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor
@@ -473,5 +596,68 @@ fn emit_fopen_failed_warning(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov esi, {}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
             emitter.instruction("call __rt_diag_warning");                      // emit or suppress the fopen() failure warning
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_fopen` user-wrapper `stream_open` call
+    /// site stages the 7-int-arg MSx64 sequence (4 register args plus 3 stack
+    /// args: mode len, options, opened_path addr) above the mandatory 32-byte
+    /// shadow space before the indirect `call r11` (finding F1, wide reverse-ABI
+    /// variant, 7-int-arg case): without this staging the generated
+    /// `stream_open($this, $path, $mode, $options, &$opened_path)` method would
+    /// read its arguments from the wrong registers and stack slots on
+    /// windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_fopen_stream_open_stages_stack_args_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_fopen(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rcx, QWORD PTR [rsp + 32]").expect("expected MSx64 $this load");
+        let opened_path_idx = asm
+            .find("mov QWORD PTR [rsp + 48], r10")
+            .expect("expected opened_path stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(opened_path_idx < call_idx, "opened_path stack store must precede the indirect call");
+        assert!(asm.contains("sub rsp, 64"), "expected the windows call-site stack-arg sub");
+        assert_eq!(
+            asm.matches("add rsp, 64").count(),
+            3,
+            "expected the windows call-site add plus the two shared wrapper-dispatch releases"
+        );
+    }
+
+    /// Verifies linux-x86_64 emission for the `__rt_fopen` user-wrapper
+    /// `stream_open` call site stays byte-identical to before the reverse-ABI
+    /// staging was introduced: the MSx64 stack staging is windows-x86_64-only,
+    /// so a linux-x86_64 build must keep the plain SysV 7-arg sequence (6 in
+    /// registers, the 7th on a 16-byte-aligned stack slot).
+    #[test]
+    fn test_linux_x86_64_fopen_stream_open_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_fopen(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rsp + 32]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 48], r10"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rsp + 32]"));
+        assert_eq!(
+            asm.matches("sub rsp, 64").count(),
+            1,
+            "expected only the shared wrapper-dispatch scratch sub on linux-x86_64"
+        );
+        assert_eq!(
+            asm.matches("add rsp, 64").count(),
+            2,
+            "expected only the two shared wrapper-dispatch releases on linux-x86_64"
+        );
     }
 }

@@ -86,7 +86,9 @@ pub(crate) fn default_link_paths() -> Vec<String> {
             }
         }
         Platform::Windows => {
-            panic!("Windows target is not yet supported (see issue #379)");
+            // MinGW's `x86_64-w64-mingw32-gcc` resolves its own import libraries
+            // (kernel32, msvcrt, ...), so the windows-x86_64 measurement target
+            // needs no extra `-L` search paths threaded through here.
         }
     }
     // The elephc-tls / elephc-pdo bridge staticlib directory is added directly by
@@ -136,9 +138,100 @@ pub(crate) fn qemu_sysroot() -> Option<&'static str> {
                 None
             }
             Platform::MacOS => None,
+            // Windows binaries run under Wine, not qemu, so there is no sysroot.
             Platform::Windows => None,
         })
         .as_deref()
+}
+
+/// Reports whether the MinGW-w64 x86_64 cross toolchain is installed, by probing
+/// `x86_64-w64-mingw32-gcc --version`. Required to assemble and link the
+/// windows-x86_64 measurement target's `.exe`. Mirrors the probe used by the
+/// dedicated `windows_pe` tests.
+pub(crate) fn has_mingw() -> bool {
+    Command::new("x86_64-w64-mingw32-gcc")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Reports whether Wine is installed, by probing `wine64` first (the native 64-bit
+/// loader) then falling back to `wine`. Required to execute a cross-compiled
+/// windows-x86_64 `.exe`. Mirrors the probe used by the `windows_pe` tests.
+pub(crate) fn has_wine() -> bool {
+    Command::new("wine64")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+        || Command::new("wine")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+}
+
+/// Returns the preferred Wine binary name: `wine64` when present, else `wine`.
+/// Both run PE32+ binaries on modern distros; `wine64` is tried first to match the
+/// selection the `windows_pe` execution tests use.
+pub(crate) fn wine_binary() -> &'static str {
+    if Command::new("wine64")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        "wine64"
+    } else {
+        "wine"
+    }
+}
+
+/// Reports whether the windows-x86_64 test toolchain can build and execute PE files.
+///
+/// MinGW-w64 is always required to assemble/link the GNU-target executable.
+/// A native Windows host executes that PE directly; cross-host runs additionally
+/// require Wine. The result is cached because every fixture probes this guard.
+pub(crate) fn windows_toolchain_available() -> bool {
+    static WINDOWS_TOOLCHAIN_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WINDOWS_TOOLCHAIN_AVAILABLE.get_or_init(|| has_mingw() && (cfg!(windows) || has_wine()))
+}
+
+/// Gracefully skips the current codegen fixture when it targets windows-x86_64 but
+/// its host-appropriate execution toolchain is missing (e.g. a macOS dev host
+/// without Wine, or a native Windows host without MinGW-w64).
+///
+/// Exits the test process with success. Under `cargo nextest` each test runs in its
+/// own process, so this reports the individual test as passed/skipped rather than
+/// failing it — the same "guard and return" outcome the dedicated `windows_pe`
+/// tests use, adapted to helpers that cannot early-return through the caller's
+/// assertion. On every non-Windows target this is a no-op, so the native suite is
+/// completely unaffected.
+pub(crate) fn ensure_windows_runnable_or_skip() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    if !windows_toolchain_available() {
+        eprintln!(
+            "skipping windows-x86_64 codegen fixture: MinGW-w64/native-or-Wine execution toolchain unavailable"
+        );
+        std::process::exit(0);
+    }
+}
+
+/// Applies the target's final assembly rewrite before assembling. For
+/// windows-x86_64 this rewrites the shared x86_64 backend's raw Linux syscall
+/// sequences into `__rt_sys_*` shim calls, exactly as the CLI pipeline
+/// (`src/pipeline.rs`) and runtime cache (`src/runtime_cache.rs`) do before
+/// assembling. For every other target it returns the assembly unchanged, so the
+/// native suite stays byte-identical.
+pub(crate) fn finalize_asm_for_target(asm: &str) -> String {
+    if target().platform == Platform::Windows {
+        elephc::codegen::platform::transform_for_windows(asm)
+    } else {
+        asm.to_string()
+    }
 }
 
 /// Verifies `effective_link_libs` filters out "System" from the library list.
