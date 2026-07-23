@@ -3801,3 +3801,134 @@ echo "Total: " . $total . "\n";
         out.stderr
     );
 }
+
+/// Regression test for #601: `implode()` over an indexed array held in a boxed
+/// `mixed` cell must release the persisted string produced when each boxed element
+/// is cast to a string. The ternary widens the two literal arms to a boxed mixed
+/// array and the string appends land as mixed elements; before the fix each
+/// stringified element leaked one heap block. Verifies correct output and a clean heap.
+#[test]
+fn test_implode_mixed_array_releases_boxed_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = $argc == 1 ? [1] : ["a"];
+$r[] = "x"; $r[] = "y"; $r[] = "z";
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,x,y,z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode over a boxed-mixed array to release its cast string elements, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: a heterogeneous array literal is a boxed mixed cell, so
+/// each of its string elements is stringified through the persisting mixed-string cast.
+/// The three string elements after the leading bool must each be released by implode.
+#[test]
+fn test_implode_mixed_literal_releases_multiple_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = [true, "x", "y", "z"];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,x,y,z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode to release every persisted mixed string element, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: integer elements of a boxed mixed array are stringified
+/// into shared scratch storage (no heap allocation), so implode's per-element release
+/// must be a safe no-op for them while still freeing the persisted string element.
+/// Guards against a spurious double-free when a mixed array interleaves int and string.
+#[test]
+fn test_implode_mixed_array_with_int_elements_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = ["a", 1, 2, 3];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a,1,2,3\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode to free the string element while ignoring int scratch pointers, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: repeatedly imploding a boxed-mixed array in a loop must
+/// not accumulate leaked blocks. Before the fix this leaked three blocks per iteration
+/// (60 total); a partial or missing release would still leave a growing heap here.
+#[test]
+fn test_implode_mixed_array_in_loop_does_not_accumulate_leaks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = $argc == 1 ? [1] : ["a"];
+    $r[] = "x"; $r[] = "y"; $r[] = "z";
+    $n += strlen(implode(",", $r));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected repeated implode over a boxed-mixed array to stay leak-free, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601 (control): a homogeneous string array is a typed indexed
+/// array whose elements are borrowed slots, not boxed mixed cells. implode must copy
+/// those borrowed strings without releasing them (they are owned by the array). This
+/// path was already clean and must stay clean — a wrongful release here would double-free.
+#[test]
+fn test_implode_typed_string_array_borrowed_elements_stay_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = ["a", "b", "c"];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a,b,c\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode over a typed string array to leave borrowed elements untouched, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: joining a boxed-mixed array with an empty separator still
+/// stringifies every element through the persisting mixed-string cast, so the release
+/// path must run even when no glue bytes are copied between elements.
+#[test]
+fn test_implode_mixed_array_empty_separator_releases_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = $argc == 1 ? [1] : ["a"];
+$r[] = "x"; $r[] = "y"; $r[] = "z";
+echo implode("", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1xyz\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected empty-separator implode to still release its cast string elements, got: {}",
+        out.stderr
+    );
+}
