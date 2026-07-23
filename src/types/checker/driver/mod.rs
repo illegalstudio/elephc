@@ -308,7 +308,22 @@ pub(super) fn check_types_impl(
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
     methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
-    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
+    // Method bodies seed their base environment from the top-level env. A top-level
+    // local that error recovery poisoned as `Mixed` (its initializer failed to type)
+    // must not leak into that seed: merged with a same-named method local it would
+    // stay `Mixed` and spawn a spurious follow-on error (e.g. a bogus return-type
+    // mismatch). Drop those poisoned names so recovery never adds noise to an already
+    // failing program's method diagnostics.
+    let method_seed_env = if checker.failed_assignment_targets.is_empty() {
+        global_env.clone()
+    } else {
+        global_env
+            .iter()
+            .filter(|(name, _)| !checker.failed_assignment_targets.contains(*name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect()
+    };
+    checker.type_check_methods_until_stable(&methods_to_check, &method_seed_env, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 

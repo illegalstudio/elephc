@@ -180,7 +180,21 @@ pub(super) fn check_assign(
             }
         }
     }
-    let ty = ty_result?;
+    let ty = match ty_result {
+        Ok(ty) => ty,
+        Err(error) => {
+            // Error recovery: the initializer failed to type, but the assignment
+            // still names `$name`, so register it before propagating the real RHS
+            // error. Without this, every later use of `$name` produces a
+            // misleading follow-on `Undefined variable: $name` that buries the one
+            // genuine diagnostic. Poison it as `Mixed` (unknown) only when it is
+            // not already bound, so a valid earlier binding is preserved and no new
+            // false diagnostics appear downstream.
+            env.entry(name.to_string()).or_insert(PhpType::Mixed);
+            checker.failed_assignment_targets.insert(name.to_string());
+            return Err(error);
+        }
+    };
     metadata_result?;
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     merge_local_assignment_type(checker, name, &ty, span, env)
@@ -766,8 +780,27 @@ pub(super) fn check_typed_assign(
         span,
         &format!("Typed local ${}", name),
     )?;
-    let value_ty = checker.infer_type(value, env)?;
+    let value_ty = match checker.infer_type(value, env) {
+        Ok(value_ty) => value_ty,
+        Err(error) => {
+            // Error recovery: the initializer failed to type. Bind `$name` before
+            // propagating the real RHS error so later uses do not cascade into
+            // misleading `Undefined variable: $name` diagnostics. Poison it as
+            // `Mixed` (unknown) rather than the declared type: a poisoned target
+            // must not spawn new follow-on type errors downstream (e.g. a declared
+            // `int` would make a later `count($name)` a spurious second error).
+            // Only bind when unbound so a valid earlier binding is preserved.
+            env.entry(name.to_string()).or_insert(PhpType::Mixed);
+            checker.failed_assignment_targets.insert(name.to_string());
+            return Err(error);
+        }
+    };
     if !checker.type_accepts(&declared_ty, &value_ty) {
+        // The initializer typed successfully but violates the declared type. Poison
+        // `$name` as `Mixed` for recovery so later uses do not cascade, then report
+        // the initialization mismatch as the one real diagnostic.
+        env.entry(name.to_string()).or_insert(PhpType::Mixed);
+        checker.failed_assignment_targets.insert(name.to_string());
         return Err(CompileError::new(
             span,
             &format!(
