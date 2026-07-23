@@ -511,7 +511,8 @@ the key when `USE_KEY` is set. It supports `MATCH`, `GET_MATCH`, `ALL_MATCHES`,
 `SPLIT`, and `REPLACE` modes, `INVERT_MATCH`, mutable `replacement`, and the
 accessor/mutator methods listed above. Regex execution uses the same
 PCRE2-backed runtime as the `preg_*` functions documented in
-[Regex](regex.md). `GET_MATCH` supports
+[Regex](regex.md); a project using either regex iterator declares the managed
+package with `elephc native add pcre2`. `GET_MATCH` supports
 `PREG_OFFSET_CAPTURE`; `ALL_MATCHES` supports `PREG_SET_ORDER` and
 `PREG_OFFSET_CAPTURE`; `SPLIT` supports `PREG_SPLIT_NO_EMPTY`,
 `PREG_SPLIT_DELIM_CAPTURE`, and `PREG_SPLIT_OFFSET_CAPTURE`. Capture

@@ -212,4 +212,4 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 
 Regex functions are documented separately in [Regex](regex.md), including the
-PCRE2 build requirements for programs that use `preg_*`.
+managed `pcre2` declaration required when a `preg_*` program is finally linked.

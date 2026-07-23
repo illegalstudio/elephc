@@ -11,7 +11,28 @@ which compile-time branches are taken.
 ## Linking native libraries
 
 When a program calls into C libraries through [extern/FFI](../beyond-php/extern.md),
-those libraries must be linked into the binary.
+those libraries must be linked into the binary. Raw link flags, managed native
+packages, and Rust bridge crates are distinct mechanisms.
+
+### Managed native packages
+
+Curated C/C++ dependencies are declared and installed with `elephc native`, not
+with raw linker flags. During a final link, the compiler resolves logical
+requirements against the nearest project's `elephc.toml`, deterministic
+`elephc.lock`, and verified target/toolchain cache receipt. It passes exact
+static archive paths to the linker; compilation never downloads or builds them.
+
+PCRE2 is the initial package. Regex use links its managed archives in the fixed
+shim/POSIX/8-bit order and has no production system-library fallback:
+
+```bash
+elephc native add pcre2
+elephc app.php
+```
+
+Declaring PCRE2 does not force it into a program that does not use regex. Exact
+managed archives remain compatible with Linux's static-link preference. See
+[Native dependencies](native-dependencies.md) for the full workflow.
 
 ### `--link` / `-l`
 
@@ -43,6 +64,8 @@ elephc app.php --framework Cocoa --framework Metal
 
 `extern "libname" { ... }` blocks in source add their own `-l` flags
 automatically; the flags above are for libraries not already named in the source.
+They do not override or satisfy a missing managed-package requirement such as
+PCRE2.
 See [FFI & Extern](../beyond-php/extern.md).
 
 ## Bridge crates and `--with-CRATE`
@@ -84,6 +107,11 @@ decision and scope ABI.
 mode, which owns the program entry point). An unknown crate name is rejected with
 the list of valid crates. Forcing a crate increases binary size, since the whole
 archive is included.
+
+Bridge crates are Elephc's optional Rust workspace components. They are not
+installed or versioned by `elephc native`, and `--with-CRATE` is not a native
+package command. Composer dependencies are PHP source handled by the compile-time
+autoload pipeline; they are separate from both mechanisms.
 
 ## Heap size
 

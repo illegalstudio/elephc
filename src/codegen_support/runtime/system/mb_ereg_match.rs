@@ -15,8 +15,8 @@
 //!   materialize it verbatim as a C string (no `__rt_preg_strip` / `__rt_pcre_to_posix`). PCRE2's
 //!   POSIX wrapper always compiles with Perl semantics, so `\z` and friends work. The optional
 //!   options string currently maps `i` to the same PCRE2 POSIX `REG_ICASE` bit used by preg helpers.
-//! - Start-anchoring is enforced by checking `regmatch[0].rm_so == 0` after a successful
-//!   `pcre2_regexec` (PCRE2 returns the leftmost match, so `rm_so == 0` iff it matches at the start).
+//! - Start-anchoring is enforced by checking the shim's first signed-64-bit start offset after a
+//!   successful execution (PCRE2 returns the leftmost match, so zero means it matched at the start).
 //! - Input: x1/x2=pattern, x3/x4=subject, x5/x6=options (AArch64) /
 //!   rdi/rsi=pattern, rdx/rcx=subject, r8/r9=options (x86_64). Output: 1 if matched at start.
 
@@ -31,9 +31,10 @@ pub(crate) fn emit_mb_ereg_match(emitter: &mut Emitter) {
         return;
     }
 
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regmatch_off = regex_t_size;
-    let pattern_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let handle_off = 0;
+    let match_slot_count_off = handle_off + 8;
+    let match_pair_off = match_slot_count_off + 8;
+    let pattern_ptr_off = match_pair_off + 16;
     let pattern_len_off = pattern_ptr_off + 8;
     let subject_ptr_off = pattern_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
@@ -87,10 +88,11 @@ pub(crate) fn emit_mb_ereg_match(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_mb_ereg_match_flags_loop");                  // keep scanning while bytes remain
     emitter.label("__rt_mb_ereg_match_flags_ready");
 
-    // -- compile regex: pcre2_regcomp(&regex_t, pattern, flags) --
-    emitter.instruction("mov x0, sp");                                          // pass local regex_t storage as regcomp argument 1
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass pattern C string as regcomp argument 2
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    // -- compile regex through the opaque Elephc shim --
+    emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated pattern
+    emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_mb_ereg_match_no");                      // compile failure produces no match
 
     // -- null-terminate subject --
@@ -99,25 +101,25 @@ pub(crate) fn emit_mb_ereg_match(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr2");                                       // materialize subject C string in x0
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
 
-    // -- execute regex: pcre2_regexec(&regex_t, subject, 1, &regmatch_t, 0) --
-    emitter.instruction("mov x0, sp");                                          // pass compiled regex_t storage to regexec
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass subject C string to regexec
-    emitter.instruction("mov x2, #1");                                          // request one regmatch slot for rm_so
-    emitter.instruction(&format!("add x3, sp, #{}", regmatch_off));             // pass local regmatch_t output buffer
-    emitter.instruction("mov x4, #0");                                          // use default regexec flags
-    emitter.bl_c("pcre2_regexec");                                              // execute regex through PCRE2
+    // -- execute regex through the opaque Elephc shim --
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass null-terminated subject
+    emitter.instruction("mov x2, #1");                                          // request only the full-match pair
+    emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
+    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
 
     // -- free compiled regex --
-    emitter.instruction("mov x0, sp");                                          // reload compiled regex_t storage for regfree
-    emitter.bl_c("pcre2_regfree");                                              // release compiled regex resources
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
 
     // -- no match if regexec != 0 --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regexec_result_off));     // reload regexec status after regfree
     emitter.instruction("cbnz x0, __rt_mb_ereg_match_no");                      // nonzero regexec status means no match
 
-    // -- anchored-at-start: require regmatch[0].rm_so == 0 --
-    emitter.instruction(&emitter.platform.regoff_load_instr("x9", "sp", regmatch_off)); // load rm_so with the native regoff_t width
+    // -- anchored-at-start: require match pair zero to start at offset zero --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", match_pair_off));         // load fixed signed-64-bit match start
     emitter.instruction("cbnz x9, __rt_mb_ereg_match_no");                      // reject matches that begin after offset zero
     emitter.instruction("mov x0, #1");                                          // return true for a start-anchored match
     emitter.instruction("b __rt_mb_ereg_match_ret");                            // share the common epilogue
@@ -133,9 +135,10 @@ pub(crate) fn emit_mb_ereg_match(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_mb_ereg_match`.
 fn emit_mb_ereg_match_linux_x86_64(emitter: &mut Emitter) {
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regmatch_off = regex_t_size;
-    let pattern_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let handle_off = 0;
+    let match_slot_count_off = handle_off + 8;
+    let match_pair_off = match_slot_count_off + 8;
+    let pattern_ptr_off = match_pair_off + 16;
     let pattern_len_off = pattern_ptr_off + 8;
     let subject_ptr_off = pattern_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
@@ -191,10 +194,11 @@ fn emit_mb_ereg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_mb_ereg_match_flags_loop_x86");                // keep scanning while bytes remain
     emitter.label("__rt_mb_ereg_match_flags_ready_x86");
 
-    // -- pcre2_regcomp(&regex_t, pattern, flags) --
-    emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage as regcomp argument 1
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass pattern C string as regcomp argument 2
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    // -- compile regex through the opaque Elephc shim --
+    emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated pattern
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_mb_ereg_match_no_x86");                       // compile failure produces no match
 
@@ -204,26 +208,26 @@ fn emit_mb_ereg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_cstr2");                                     // materialize subject C string in rax
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string
 
-    // -- pcre2_regexec(&regex_t, subject, 1, &regmatch_t, 0) --
-    emitter.instruction("lea rdi, [rsp]");                                      // pass compiled regex_t storage to regexec
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
-    emitter.instruction("mov edx, 1");                                          // request one regmatch slot for rm_so
-    emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass local regmatch_t output buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default regexec flags
-    emitter.bl_c("pcre2_regexec");                                              // execute regex through PCRE2
+    // -- execute regex through the opaque Elephc shim --
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass null-terminated subject
+    emitter.instruction("mov edx, 1");                                          // request only the full-match pair
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
+    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across cleanup
 
     // -- free compiled regex --
-    emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage for regfree
-    emitter.bl_c("pcre2_regfree");                                              // release compiled regex resources
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
 
     // -- no match if regexec != 0 --
     emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload regexec status after regfree
     emitter.instruction("test eax, eax");                                       // interpret zero regexec status as a match
     emitter.instruction("jnz __rt_mb_ereg_match_no_x86");                       // nonzero regexec status means no match
 
-    // -- anchored-at-start: require regmatch[0].rm_so == 0 (signed 32-bit regoff_t) --
-    emitter.instruction(&format!("movsxd rax, DWORD PTR [rsp + {}]", regmatch_off)); // load rm_so with the native regoff_t width
+    // -- anchored-at-start: require match pair zero to start at offset zero --
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_pair_off)); // load fixed signed-64-bit match start
     emitter.instruction("test rax, rax");                                       // did the match start at offset zero?
     emitter.instruction("jnz __rt_mb_ereg_match_no_x86");                       // reject matches that begin after offset zero
     emitter.instruction("mov eax, 1");                                          // return true for a start-anchored match

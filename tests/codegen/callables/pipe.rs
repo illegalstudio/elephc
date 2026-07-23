@@ -259,9 +259,11 @@ echo (3 |> double(...)) + 4;
 
 /// Compiles a PHP source string to assembly in an isolated temp directory.
 ///
-/// Returns `(user_asm, libs, dir)` where `user_asm` is the compiled user code assembly,
-/// `libs` are required runtime libraries, and `dir` is the temp directory to clean up.
-fn compile_pipe_fixture(source: &str, label: &str) -> (String, Vec<String>, std::path::PathBuf) {
+/// Returns user assembly, typed linker requirements, and the fixture directory to clean up.
+fn compile_pipe_fixture(
+    source: &str,
+    label: &str,
+) -> (String, TestLinkRequirements, std::path::PathBuf) {
     let dir = make_cli_test_dir(label);
     let (user_asm, _runtime_asm, libs) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);

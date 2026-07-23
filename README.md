@@ -130,6 +130,10 @@ So elephc is not a drop-in replacement for an entire dynamic framework today. Th
 - A native assembler and linker for your host/target
 - On macOS: Xcode Command Line Tools (`xcode-select --install`)
 - On Linux: a standard native toolchain (`as`, `ld`, libc development files)
+- To install curated native packages: a POSIX shell, Make, target `cc`, `ar`, and `ranlib`
+
+Native packages such as PCRE2 are built from Elephc's pinned catalog; a system
+PCRE2 package is not a production prerequisite.
 
 ## Install
 
@@ -205,6 +209,13 @@ elephc app.php --with-pdo --with-crypto
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
 
+# Declare, lock, and install the managed PCRE2 package for a regex project
+elephc native add pcre2
+elephc regex.php
+
+# Reproduce committed native state in CI (add --offline when already cached)
+elephc native install --locked
+
 # Explicit target selection
 # Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
 elephc --target linux-aarch64 hello.php
@@ -215,6 +226,12 @@ elephc --web app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 ```
+
+`elephc native` manages a curated set of external C/C++ packages, initially
+PCRE2 10.47. It is separate from Composer's PHP source packages, Elephc's Rust
+bridge crates (`--with-<crate>`), and the user-installed compiler/SDK toolchain.
+Ordinary compilation never downloads or builds a native package. See [Native
+dependencies](docs/compiling/native-dependencies.md).
 
 Or via cargo:
 
@@ -385,7 +402,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -463,7 +480,10 @@ src/
 ├── main.rs              # CLI binary entry point
 ├── cli.rs               # Command-line argument parsing and options
 ├── pipeline.rs          # Frontend/backend compilation pipeline
-├── linker.rs            # Assembler + linker invocation
+├── link_plan.rs         # Ordered typed archives/libraries and Linux link mode
+├── link_planning.rs     # Compiler inputs to one final ordered link plan
+├── linker/              # Assembler/linker rendering, bridges, SDK, archive handling
+├── native_deps/         # Curated native CLI/catalog/cache/recipe/resolver
 ├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional/         # Build-time `ifdef` pass driven by --define

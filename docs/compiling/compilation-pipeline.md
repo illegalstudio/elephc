@@ -100,14 +100,20 @@ behind a flag.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
-- **codegen-ir** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend.
   See [The Code Generator](../internals/the-codegen.md).
 
 ## Tail: assemble and link
 
-The generated assembly is written out, assembled into an object file, and linked
-together with the cached runtime object (and any
-[extra libraries](linking-and-conditional-compilation.md)) into the final binary.
+The generated assembly is written out and assembled into an object file. Only
+on a final-link path, logical [managed native
+requirements](native-dependencies.md) are resolved read-only from the project
+lock and verified cache receipts. Those exact archives, the cached runtime
+object, bridge inputs, and any [extra
+libraries](linking-and-conditional-compilation.md) become one typed ordered link
+plan for the final binary. This resolution does not install or repair packages
+and is folded into the untimed setup immediately before the `assemble`/`link`
+timing labels.
 
 ## Inspecting intermediate stages
 

@@ -52,7 +52,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies
+      - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Check (no warnings)
@@ -223,7 +223,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies
+      - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Download test archive
@@ -412,7 +412,7 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies
+      - name: Install test-only native providers
         run: brew install pcre2
 
       - name: Download test archive
@@ -689,6 +689,85 @@ jobs:
             exit 1
           fi
 
+  managed-native-pcre2-smoke:
+    name: Managed PCRE2 Smoke (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: macos-14
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+    env:
+      # This cache is deliberately isolated from actions/cache and starts empty.
+      # Only the explicit native command below may fetch/build into it.
+      ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-managed-native-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-managed-native-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-managed-native-${{ matrix.target }}-
+
+      - name: Install Linux source-build tools
+        if: startsWith(matrix.target, 'linux-')
+        # Deliberately omit system PCRE2 packages: this smoke must use only the
+        # exact shim/POSIX/8-bit archives materialized by `elephc native`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils build-essential file
+
+      - name: Build elephc
+        run: cargo build --bin elephc
+
+      - name: Verify isolated native cache starts empty
+        shell: bash
+        run: test ! -e "$ELEPHC_NATIVE_CACHE"
+
+      - name: Materialize catalog PCRE2 from verified source
+        shell: bash
+        run: |
+          ./target/debug/elephc native add pcre2 \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/date-json-regex/elephc.toml
+          git diff --exit-code -- \
+            examples/date-json-regex/elephc.toml \
+            examples/date-json-regex/elephc.lock
+
+      - name: Compile and run regex through the production resolver
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/date-json-regex/main.php
+          ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"
+          grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
+          grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
+
+      - name: Reinstall locked state offline
+        shell: bash
+        run: |
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/date-json-regex/elephc.toml
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -707,6 +786,7 @@ jobs:
       - codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - managed-native-pcre2-smoke
     if: always()
     steps:
       - name: Verify test jobs
@@ -725,6 +805,7 @@ jobs:
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
+          test "${{ needs.managed-native-pcre2-smoke.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
@@ -737,9 +818,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install native benchmark dependencies
-        run: brew install pcre2
 
       - name: Build release binary
         run: cargo build --release

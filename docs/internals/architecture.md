@@ -143,9 +143,10 @@ PHP source (.php)
      │
      ▼
 ┌───────────────┐
-│ Tooling glue  │  src/runtime_cache.rs, src/source_map.rs
-│               │  Reuses cached runtime objects, optionally emits
-│               │  sidecar source maps, and feeds timing output in CLI mode.
+│ Tooling glue  │  runtime_cache.rs, native_deps/, link_plan.rs, link_planning.rs
+│               │  Reuses cached runtime objects, resolves required managed
+│               │  artifacts read-only for final links, and builds a typed
+│               │  link plan. Source maps/timings remain optional outputs.
 └─────┬─────────┘
       │
       ▼
@@ -181,7 +182,10 @@ src/
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
-├── linker.rs                  Assembler and linker invocation
+├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
+├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
+├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
+├── native_deps/               Curated native CLI, catalog, project/lock, cache, toolchain, recipe, and read-only resolver
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects

@@ -22,11 +22,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
         return;
     }
 
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regex_re_nsub_off = emitter.platform.regex_re_nsub_offset();
-    let regmatch_size = emitter.platform.regmatch_t_size();
-    let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();
-    let regmatches_ptr_off = regex_t_size;
+    let handle_off = 0;
+    let regmatches_ptr_off = handle_off + 8;
     let nmatch_off = regmatches_ptr_off + 8;
     let pattern_ptr_off = nmatch_off + 8;
     let pattern_len_off = pattern_ptr_off + 8;
@@ -74,24 +71,21 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save regex flags from the stripped pattern
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
-    emitter.instruction("mov x0, sp");                                          // pass regex_t storage at the bottom of this frame
+    emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_fail");            // return the original subject when regex compilation fails
 
-    // -- allocate a reusable capture buffer sized from regex_t.re_nsub --
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", regex_re_nsub_off));      // load regex_t.re_nsub after successful compilation
-    emitter.instruction("add x9, x9, #1");                                      // include the full-match slot in the regmatch count
-    emitter.instruction(&format!("str x9, [sp, #{}]", nmatch_off));             // save dynamic regmatch count for loops and array sizing
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x0, x9, #4");                                  // malloc bytes = nmatch * 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("lsl x0, x9, #3");                                  // malloc bytes = nmatch * 8-byte regmatch_t slots
-    }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
-    emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees regex_t and returns the original subject
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic regmatch_t buffer pointer
+    // -- allocate a reusable fixed offset-pair buffer --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
+    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
+    emitter.instruction("cbnz x10, __rt_preg_replace_callback_malloc_fail");    // free the handle instead of allocating a wrapped size
+    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
+    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
+    emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees the handle and returns the original subject
+    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
     // -- materialize subject as a C string for repeated regexec calls --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload subject pointer for C-string conversion
@@ -114,32 +108,26 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // load current subject cursor
     emitter.instruction("ldrb w9, [x1]");                                       // read the current subject byte
     emitter.instruction("cbz w9, __rt_preg_replace_callback_done");             // finish when the cursor reaches the null terminator
-    emit_init_dynamic_regmatches_arm64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
-    emitter.instruction("mov x0, sp");                                          // pass regex_t storage to regexec
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic regmatch_t capture buffer
-    emitter.instruction("mov x4, #0");                                          // use default regexec execution flags
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex at the current subject cursor
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
+    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_tail");            // copy the remaining subject when there are no more matches
 
     // -- remember unmatched prefix length before this match --
-    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic capture buffer base before reading full-match offsets
-    emit_arm_load_regoff_from_ptr(emitter, "x9", "x14", 0, regmatch_size);
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
+    emitter.instruction("ldr x9, [x14]");                                       // load full-match signed-64-bit start
     emitter.instruction(&format!("str x9, [sp, #{}]", prefix_len_off));         // save prefix byte count until callback scratch work is done
 
     // -- find highest populated capture so trailing unmatched captures are omitted --
     emitter.instruction(&format!("ldr x12, [sp, #{}]", nmatch_off));            // reload dynamic regmatch count
     emitter.instruction("sub x12, x12, #1");                                    // start scanning from the last compiled capture slot
     emitter.label("__rt_preg_replace_callback_scan");
-    emitter.instruction("mov x14, x12");                                        // copy capture index before scaling to regmatch offset
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x14, x14, #4");                                // scale capture index by 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("lsl x14, x14, #3");                                // scale capture index by compact 8-byte regmatch_t slots
-    }
-    emitter.instruction(&format!("ldr x15, [sp, #{}]", regmatches_ptr_off));    // load dynamic capture buffer base
-    emitter.instruction("add x14, x15, x14");                                   // compute address of this capture slot
-    emit_arm_load_regoff_from_ptr(emitter, "x13", "x14", 0, regmatch_size);
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
+    emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x13, [x14]");                                      // load signed-64-bit capture start
     emitter.instruction("cmp x13, #0");                                         // check whether this capture participated
     emitter.instruction("b.ge __rt_preg_replace_callback_scan_found");          // use this as the last emitted capture
     emitter.instruction("cbz x12, __rt_preg_replace_callback_scan_found");      // keep at least the full-match slot
@@ -161,15 +149,11 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
     emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
     emitter.instruction("b.gt __rt_preg_replace_callback_call");                // invoke callback after the highest populated capture
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x14, x12, #4");                                // scale capture index by native regmatch_t size
-    } else {
-        emitter.instruction("lsl x14, x12, #3");                                // scale capture index by compact regmatch_t size
-    }
-    emitter.instruction(&format!("ldr x17, [sp, #{}]", regmatches_ptr_off));    // load dynamic capture buffer base
-    emitter.instruction("add x14, x17, x14");                                   // compute address of this capture slot
-    emit_arm_load_regoff_from_ptr(emitter, "x15", "x14", 0, regmatch_size);
-    emit_arm_load_regoff_from_ptr(emitter, "x16", "x14", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x17, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
+    emitter.instruction("add x14, x17, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
+    emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
     emitter.instruction("cmp x15, #0");                                         // check whether this capture was populated
     emitter.instruction("b.lt __rt_preg_replace_callback_empty_capture");       // emit an empty string for interior unmatched captures
     emitter.instruction("sub x2, x16, x15");                                    // compute capture byte length
@@ -254,8 +238,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pointer after callback copy
     publish_concat_offset(emitter, output_write_off);
-    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match slot before advancing cursor
-    emit_arm_load_regoff_from_ptr(emitter, "x9", "x14", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair before advancing cursor
+    emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
     emitter.instruction("cmp x9, #0");                                          // detect zero-length regex matches
     emitter.instruction("b.gt __rt_preg_replace_callback_advance_ok");          // use native rm_eo when the match consumed bytes
     emitter.instruction("mov x9, #1");                                          // force progress for zero-length matches
@@ -280,10 +264,10 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
-    emitter.instruction("mov x0, sp");                                          // pass regex_t storage to regfree
-    emitter.bl_c("pcre2_regfree");                                                    // release compiled regex resources
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_start_off));       // return output start pointer
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload output end pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute output byte length
@@ -297,8 +281,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_replace_callback_ret");                    // return through the common epilogue
 
     emitter.label("__rt_preg_replace_callback_malloc_fail");
-    emitter.instruction("mov x0, sp");                                          // reload regex_t storage after capture-buffer allocation failed
-    emitter.bl_c("pcre2_regfree");                                                    // free compiled regex resources before returning the subject
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after capture-buffer allocation failed
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning the subject
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // return original subject pointer after allocation failure
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // return original subject length after allocation failure
 
@@ -325,65 +309,14 @@ fn publish_concat_offset(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction("str x10, [x9]");                                       // publish concat offset before a nested callback writes strings
 }
 
-/// Emits ARM64 code that initializes every dynamic regmatch slot to unmatched.
-fn emit_init_dynamic_regmatches_arm64(
-    emitter: &mut Emitter,
-    regmatches_ptr_off: usize,
-    nmatch_off: usize,
-    regmatch_size: usize,
-) {
-    emitter.instruction("mov x9, #-1");                                         // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", regmatches_ptr_off));    // load dynamic regmatch_t buffer base
-    emitter.instruction(&format!("ldr x11, [sp, #{}]", nmatch_off));            // load dynamic regmatch slot count
-    emitter.instruction("mov x12, #0");                                         // initialize regmatch initialization index
-    emitter.label("__rt_preg_replace_callback_init_loop");
-    emitter.instruction("cmp x12, x11");                                        // have all dynamic regmatch slots been initialized?
-    emitter.instruction("b.ge __rt_preg_replace_callback_init_done");           // stop once every slot has an unmatched sentinel
-    emitter.instruction("mov x13, x12");                                        // copy index before scaling to native regmatch_t size
-    if regmatch_size == 16 {
-        emitter.instruction("lsl x13, x13, #4");                                // scale index by 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("lsl x13, x13, #3");                                // scale index by compact 8-byte regmatch_t slots
-    }
-    emitter.instruction("add x13, x10, x13");                                   // compute the current dynamic regmatch slot address
-    emitter.instruction("str x9, [x13]");                                       // mark capture start offset as unmatched before regexec
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next capture slot
-    emitter.instruction("b __rt_preg_replace_callback_init_loop");              // continue initializing dynamic capture slots
-    emitter.label("__rt_preg_replace_callback_init_done");
-}
-
-/// Emits ARM64 code that loads a regoff_t field from a computed regmatch slot.
-fn emit_arm_load_regoff_from_ptr(
-    emitter: &mut Emitter,
-    dst: &str,
-    addr: &str,
-    field_off: usize,
-    regmatch_size: usize,
-) {
-    if field_off == 0 {
-        if regmatch_size == 16 {
-            emitter.instruction(&format!("ldr {dst}, [{addr}]"));               // load native 64-bit regoff_t from computed regmatch slot
-        } else {
-            emitter.instruction(&format!("ldrsw {dst}, [{addr}]"));             // sign-extend native 32-bit regoff_t from computed regmatch slot
-        }
-    } else if regmatch_size == 16 {
-        emitter.instruction(&format!("ldr {dst}, [{addr}, #{}]", field_off));   // load native 64-bit regoff_t field from computed regmatch slot
-    } else {
-        emitter.instruction(&format!("ldrsw {dst}, [{addr}, #{}]", field_off)); // sign-extend native 32-bit regoff_t field from computed slot
-    }
-}
-
 /// x86_64 Linux implementation of `__rt_preg_replace_callback`.
 ///
 /// Identical in behavior to the ARM64 variant but emits x86_64 System V ABI
 /// assembly. Stack frame layout, register usage, and calling conventions all
 /// differ to match the target platform.
 fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
-    let regex_t_size = emitter.platform.regex_t_size();
-    let regex_re_nsub_off = emitter.platform.regex_re_nsub_offset();
-    let regmatch_size = emitter.platform.regmatch_t_size();
-    let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();
-    let regmatches_ptr_off = regex_t_size;
+    let handle_off = 0;
+    let regmatches_ptr_off = handle_off + 8;
     let nmatch_off = regmatches_ptr_off + 8;
     let pattern_ptr_off = nmatch_off + 8;
     let pattern_len_off = pattern_ptr_off + 8;
@@ -414,7 +347,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- set up stack frame --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex callback scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex callback spill slots
-    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch_t, and callback bookkeeping
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the handle, offset pairs, and callback state
 
     // -- save all inputs --
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", pattern_ptr_off)); // preserve pattern pointer across regex helper calls
@@ -431,26 +364,23 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve delimiter-strip flags for regcomp
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern across compilation
-    emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to regcomp
+    emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
+    emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_replace_callback_fail_linux_x86_64");    // return original subject when regex compilation fails
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); // load regex_t.re_nsub after successful compilation
-    emitter.instruction("add r9, 1");                                           // include the full-match slot in the regmatch count
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // save dynamic regmatch count for loops and array sizing
-    emitter.instruction("mov rdi, r9");                                         // copy nmatch before scaling it to a malloc byte count
-    if regmatch_size == 16 {
-        emitter.instruction("shl rdi, 4");                                      // malloc bytes = nmatch * 16-byte regmatch_t slots
-    } else {
-        emitter.instruction("shl rdi, 3");                                      // malloc bytes = nmatch * 8-byte regmatch_t slots
-    }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
+    emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
+    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
+    emitter.instruction("jnz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
+    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
+    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees regex_t and returns the subject
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
+    emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns the subject
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
 
     // -- materialize subject as a C string for repeated regexec calls --
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer for C-string conversion
@@ -474,28 +404,27 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // read the current subject byte
     emitter.instruction("test r9d, r9d");                                       // check whether the cursor reached the null terminator
     emitter.instruction("jz __rt_preg_replace_callback_done_linux_x86_64");     // finish when the full subject has been consumed
-    emit_init_dynamic_regmatches_x86_64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
-    emitter.instruction("lea rdi, [rsp]");                                      // pass regex_t storage to regexec
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default regexec execution flags
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex at the current subject cursor
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
+    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 
     // -- remember unmatched prefix length before this match --
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base before reading full-match offsets
-    emit_x86_load_regoff_from_ptr(emitter, "r9", "r10", 0, regmatch_size);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction("mov r9, QWORD PTR [r10]");                             // load full-match signed-64-bit start
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", prefix_len_off)); // save prefix byte count until callback scratch work is done
 
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload dynamic regmatch count
     emitter.instruction("sub r9, 1");                                           // start scanning from the last compiled capture slot
     emitter.label("__rt_preg_replace_callback_scan_linux_x86_64");
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
-    emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
-    emitter.instruction("add r10, r12");                                        // compute address of this capture slot
-    emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction("add r10, r12");                                        // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
     emitter.instruction("cmp r11, 0");                                          // check whether this capture participated
     emitter.instruction("jge __rt_preg_replace_callback_scan_found_linux_x86_64"); // use this as the highest emitted capture
     emitter.instruction("test r9, r9");                                         // have we reached the full-match slot?
@@ -516,15 +445,11 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
     emitter.instruction("cmp r10, r9");                                         // have all required captures been materialized?
     emitter.instruction("jg __rt_preg_replace_callback_call_linux_x86_64");     // invoke callback after highest populated capture
-    if regmatch_size == 16 {
-        emitter.instruction("shl r10, 4");                                      // scale capture index by native regmatch_t size
-    } else {
-        emitter.instruction("shl r10, 3");                                      // scale capture index by compact regmatch_t size
-    }
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
-    emitter.instruction("add r10, r12");                                        // compute address of this capture slot
-    emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
-    emit_x86_load_regoff_from_ptr(emitter, "rcx", "r10", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction("add r10, r12");                                        // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
     emitter.instruction("cmp r11, 0");                                          // check whether this capture was populated
     emitter.instruction("jl __rt_preg_replace_callback_empty_capture_linux_x86_64"); // emit an empty string for interior unmatched captures
     emitter.instruction("sub rcx, r11");                                        // compute capture byte length
@@ -612,8 +537,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save output write pointer after callback copy
     publish_concat_offset_x86_64(emitter, output_write_off);
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot before advancing cursor
-    emit_x86_load_regoff_from_ptr(emitter, "r9", "r10", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair before advancing cursor
+    emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load full-match signed-64-bit end
     emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches
     emitter.instruction("jg __rt_preg_replace_callback_advance_ok_linux_x86_64"); // use native rm_eo when the match consumed bytes
     emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
@@ -639,10 +564,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
-    emitter.instruction("lea rdi, [rsp]");                                      // pass regex_t storage to regfree
-    emitter.bl_c("pcre2_regfree");                                                    // release compiled regex resources
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
@@ -656,8 +581,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_callback_ret_linux_x86_64");     // return through the common epilogue
 
     emitter.label("__rt_preg_replace_callback_malloc_fail_linux_x86_64");
-    emitter.instruction("lea rdi, [rsp]");                                      // reload regex_t storage after capture-buffer allocation failed
-    emitter.bl_c("pcre2_regfree");                                                    // free compiled regex resources before returning the subject
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after capture-buffer allocation failed
+    emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning the subject
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer after allocation failure
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length after allocation failure
 
@@ -676,47 +601,4 @@ fn publish_concat_offset_x86_64(emitter: &mut Emitter, output_write_off: usize) 
     emitter.instruction("sub r10, r9");                                         // compute current absolute concat-buffer offset
     abi::emit_symbol_address(emitter, "r9", "_concat_off");
     emitter.instruction("mov QWORD PTR [r9], r10");                             // publish concat offset before a nested callback writes strings
-}
-
-/// Emits x86_64 code that initializes every dynamic regmatch slot to unmatched.
-fn emit_init_dynamic_regmatches_x86_64(
-    emitter: &mut Emitter,
-    regmatches_ptr_off: usize,
-    nmatch_off: usize,
-    regmatch_size: usize,
-) {
-    emitter.instruction("mov r9, -1");                                          // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch_t buffer base
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", nmatch_off)); // load dynamic regmatch slot count
-    emitter.instruction("xor r12d, r12d");                                      // initialize regmatch initialization index
-    emitter.label("__rt_preg_replace_callback_init_loop_linux_x86_64");
-    emitter.instruction("cmp r12, r11");                                        // have all dynamic regmatch slots been initialized?
-    emitter.instruction("jge __rt_preg_replace_callback_init_done_linux_x86_64"); // stop once every slot has an unmatched sentinel
-    emitter.instruction("mov r13, r12");                                        // copy index before scaling to native regmatch_t size
-    emitter.instruction(&format!("imul r13, {}", regmatch_size));               // scale index by the target regmatch_t stride
-    emitter.instruction("add r13, r10");                                        // compute the current dynamic regmatch slot address
-    emitter.instruction("mov QWORD PTR [r13], r9");                             // mark capture start offset as unmatched before regexec
-    emitter.instruction("add r12, 1");                                          // advance to the next capture slot
-    emitter.instruction("jmp __rt_preg_replace_callback_init_loop_linux_x86_64"); // continue initializing dynamic capture slots
-    emitter.label("__rt_preg_replace_callback_init_done_linux_x86_64");
-}
-
-/// Emits x86_64 code that loads a regoff_t field from a computed regmatch slot.
-fn emit_x86_load_regoff_from_ptr(
-    emitter: &mut Emitter,
-    dst: &str,
-    addr: &str,
-    field_off: usize,
-    regmatch_size: usize,
-) {
-    let suffix = if field_off == 0 {
-        String::new()
-    } else {
-        format!(" + {field_off}")
-    };
-    if regmatch_size == 16 {
-        emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
-    } else {
-        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
-    }
 }

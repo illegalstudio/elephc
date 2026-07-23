@@ -43,6 +43,13 @@ inventory = "0.3"
 stacker = "0.1"
 bitflags = "2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+toml = "0.9"
+toml_edit = "0.25"
+tar = "0.4"
+fs2 = "0.4"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # flate2 (default miniz_oxide backend = pure Rust, no system zlib) is used by the
 # compiler to inflate raw-DEFLATE phar:// entries at compile time. Decompress-only.
 flate2 = "1"

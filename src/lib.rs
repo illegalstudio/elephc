@@ -35,12 +35,18 @@ pub mod ir;
 pub mod ir_lower;
 /// IR-level analyses and transforms (liveness, intervals, register allocation).
 pub mod ir_passes;
+/// Ordered typed final-link inputs shared with integration-test providers.
+#[doc(hidden)]
+pub mod link_plan;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
+/// Curated project-native dependency management and artifact resolution.
+#[doc(hidden)]
+pub mod native_deps;
 /// Namespace and use resolution.
 pub mod name_resolver;
 /// Name resolution and mangling.

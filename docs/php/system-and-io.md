@@ -227,8 +227,8 @@ deprecated `Serializable` interface (`C:` wire form) is not supported.
 ## Regex
 
 Regex functions and SPL regex iterators are documented in [Regex](regex.md),
-including the PCRE2 native library requirements for compiling programs that use
-them.
+including the `elephc native add pcre2` project setup required for their final
+native link.
 
 ## Streams
 

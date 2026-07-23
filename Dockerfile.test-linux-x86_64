@@ -1,6 +1,8 @@
 FROM rust:1.95-alpine
 
-RUN apk add --no-cache gcc musl-dev openssl-dev zlib-dev bzip2-dev pcre2-dev pcre2-static gdb strace binutils file tzdata
+# pcre2-dev/pcre2-static are test-only: the codegen provider compiles Elephc's
+# shim against matching system headers/libs. Production regex links managed archives.
+RUN apk add --no-cache gcc musl-dev make openssl-dev zlib-dev bzip2-dev pcre2-dev pcre2-static gdb strace binutils file tzdata
 
 ENV PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 

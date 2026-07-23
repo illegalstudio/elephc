@@ -17,7 +17,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Despite the historic helper name, this no longer translates PCRE to POSIX
 /// syntax. It copies the stripped pattern bytes into the primary C-string
 /// scratch buffer and returns the buffer pointer in the platform result
-/// register so `pcre2_regcomp()` receives the original PCRE pattern.
+/// register so `elephc_pcre2_v1_compile()` receives the original PCRE pattern.
 pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pcre_pattern_to_cstr ---");

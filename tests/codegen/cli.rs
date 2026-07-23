@@ -1,13 +1,130 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of cli, including check stops after typecheck, emit asm writes assembly only, and rejects emit asm and check together.
+//! Integration coverage for top-level compile/native dispatch and compiler output modes.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - Native help and managed-PCRE2 recovery diagnostics are exercised through subprocesses.
+//! - Non-link modes must remain independent of installed native artifacts.
 
 use crate::support::*;
+
+/// Verifies native help is handled before project discovery and bare native is a usage error.
+#[test]
+fn test_cli_native_help_and_bare_usage() {
+    let dir = make_cli_test_dir("elephc_cli_native_help");
+
+    let help = elephc_cli_command(&dir)
+        .args(["native", "--help"])
+        .output()
+        .expect("failed to run elephc native --help");
+    assert!(help.status.success(), "native help should succeed");
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("elephc native add"),
+        "native help should print the command synopsis"
+    );
+
+    let bare = elephc_cli_command(&dir)
+        .arg("native")
+        .output()
+        .expect("failed to run bare elephc native");
+    assert!(!bare.status.success(), "bare native should be a usage error");
+    let stderr = String::from_utf8_lossy(&bare.stderr);
+    assert!(stderr.contains("missing native command"), "unexpected stderr: {stderr}");
+    assert!(stderr.contains("elephc native install"), "missing synopsis: {stderr}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies read-only native commands preserve their captured stdout and health exit status.
+#[test]
+fn test_cli_native_read_only_commands_map_output_and_status() {
+    let dir = make_cli_test_dir("elephc_cli_native_read_only");
+    let cache = dir.join("native-cache-must-not-exist");
+
+    let list = elephc_cli_command(&dir)
+        .args(["native", "list"])
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run elephc native list");
+    assert!(list.status.success(), "empty native list should succeed");
+    assert!(
+        String::from_utf8_lossy(&list.stdout).contains("no native dependencies"),
+        "unexpected list output: {}",
+        String::from_utf8_lossy(&list.stdout)
+    );
+
+    let doctor = elephc_cli_command(&dir)
+        .args(["native", "doctor"])
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run elephc native doctor");
+    assert!(!doctor.status.success(), "doctor without a project should be unhealthy");
+    assert!(
+        String::from_utf8_lossy(&doctor.stdout).contains("summary: unhealthy"),
+        "unexpected doctor output: {}",
+        String::from_utf8_lossy(&doctor.stdout)
+    );
+    assert!(!cache.exists(), "read-only commands must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies non-link output modes never require or create a managed native cache.
+#[test]
+fn test_cli_regex_non_link_modes_skip_native_resolution() {
+    for mode in ["--check", "--emit-ir", "--emit-asm"] {
+        let dir = make_cli_test_dir("elephc_cli_regex_non_link");
+        let cache = dir.join("native-cache-must-not-exist");
+        let php_path = dir.join("main.php");
+        fs::write(&php_path, "<?php echo preg_match('/a/', 'a');").unwrap();
+
+        let output = elephc_cli_command(&dir)
+            .arg(mode)
+            .arg(&php_path)
+            .env("ELEPHC_NATIVE_CACHE", &cache)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run elephc {mode}: {error}"));
+        assert!(
+            output.status.success(),
+            "elephc {mode} unexpectedly required native PCRE2: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !cache.exists(),
+            "elephc {mode} must not create the managed native cache"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Verifies a final regex link without a project fails with the frozen recovery command.
+#[test]
+fn test_cli_regex_final_link_requires_managed_pcre2_project() {
+    let dir = make_cli_test_dir("elephc_cli_regex_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo preg_match('/a/', 'a');").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run final-link regex compilation");
+    assert!(!output.status.success(), "regex link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "regex support requires managed native package pcre2; run elephc native add pcre2"
+        ),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
 
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
