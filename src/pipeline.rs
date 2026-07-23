@@ -59,44 +59,53 @@ pub(crate) fn compile(config: CliConfig) {
         strict_php,
         web,
         with_crates,
+        quiet,
     } = config;
     let filename = filename.as_str();
+    crate::progress::init(quiet);
     codegen::set_null_repr(null_repr);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename, target, emit);
     let mut timings = CompileTimings::new(emit_timings);
 
+    crate::progress::phase("read");
     let phase_started = Instant::now();
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
         Err(e) => {
+            crate::progress::clear();
             eprintln!("Error reading '{}': {}", filename, e);
             process::exit(1);
         }
     };
     timings.record_since("read", phase_started);
 
+    crate::progress::phase("tokenize");
     let phase_started = Instant::now();
     let tokens = match lexer::tokenize(&source) {
         Ok(tokens) => tokens,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e.with_file(filename.to_string()));
             process::exit(1);
         }
     };
     timings.record_since("tokenize", phase_started);
 
+    crate::progress::phase("parse");
     let phase_started = Instant::now();
     let parsed = match parser::parse(&tokens) {
         Ok(ast) => ast,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e.with_file(filename.to_string()));
             process::exit(1);
         }
     };
     timings.record_since("parse", phase_started);
 
+    crate::progress::phase("magic-constants");
     let phase_started = Instant::now();
     let main_file_path = Path::new(filename).to_path_buf();
     let parsed = magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
@@ -109,12 +118,14 @@ pub(crate) fn compile(config: CliConfig) {
     // are audited where they are parsed (resolver / autoloader), so injected
     // compiler preludes are never audited.
     if let Err(e) = crate::strict_php::check_file(&parsed, filename) {
+        crate::progress::clear();
         errors::report(&e);
         process::exit(1);
     }
 
     let parsed = conditional::apply(parsed, &defines);
 
+    crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
     let (autoload_registry, parsed) = autoload::Registry::build(parent, parsed);
     codegen::set_autoload_rule_count(autoload_registry.rule_count());
@@ -123,10 +134,12 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("autoload-build", phase_started);
 
+    crate::progress::phase("resolve");
     let phase_started = Instant::now();
     let ast = match resolver::resolve(parsed, parent) {
         Ok(resolved) => resolved,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e);
             process::exit(1);
         }
@@ -138,6 +151,7 @@ pub(crate) fn compile(config: CliConfig) {
     // written in elephc-PHP) only when the program references PDO, so non-PDO
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
+    crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
     let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
     timings.record_since("pdo-prelude", phase_started);
@@ -147,6 +161,7 @@ pub(crate) fn compile(config: CliConfig) {
     // getTransitions / listAbbreviations or their procedural aliases, so other
     // binaries never declare the elephc_tz externs or link the bridge. Runs after
     // include resolution so usage inside includes is detected.
+    crate::progress::phase("tz-prelude");
     let phase_started = Instant::now();
     let ast = tz_prelude::inject_if_used(ast, with_crates.contains("tz"));
     timings.record_since("tz-prelude", phase_started);
@@ -156,6 +171,7 @@ pub(crate) fn compile(config: CliConfig) {
     // DateTimeZone::listIdentifiers or timezone_identifiers_list, so other binaries
     // never carry the table. Runs after include resolution so usage inside includes
     // is detected, and before name resolution, which desugars both call forms to it.
+    crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
     let ast = list_id_prelude::inject_if_used(ast);
     timings.record_since("list-id-prelude", phase_started);
@@ -164,6 +180,7 @@ pub(crate) fn compile(config: CliConfig) {
     // references var_export and does not declare its own, so other binaries carry
     // nothing. Runs after include resolution so usage inside includes is detected, and
     // before name resolution so the call resolves to the injected function.
+    crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
     let ast = var_export_prelude::inject_if_used(ast);
     timings.record_since("var-export-prelude", phase_started);
@@ -173,42 +190,51 @@ pub(crate) fn compile(config: CliConfig) {
     // references an image symbol, so non-image binaries never declare the
     // elephc_image externs or link the bridge. Runs after include resolution so
     // image usage inside includes is detected.
+    crate::progress::phase("image-prelude");
     let phase_started = Instant::now();
     let ast = crate::image_prelude::inject_if_used(ast, with_crates.contains("image"));
     timings.record_since("image-prelude", phase_started);
 
+    crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(ast, web, php_version);
     timings.record_since("web-prelude", phase_started);
 
+    crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {
         Ok(resolved) => resolved,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e);
             process::exit(1);
         }
     };
     timings.record_since("name-resolve", phase_started);
 
+    crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
     let ast = match autoload::run(ast, parent, &autoload_registry) {
         Ok(resolved) => resolved,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e);
             process::exit(1);
         }
     };
     timings.record_since("autoload-run", phase_started);
 
+    crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
     timings.record_since("opt-fold", phase_started);
 
+    crate::progress::phase("typecheck");
     let phase_started = Instant::now();
     let check_result = match types::check_with_target(&ast, target) {
         Ok(result) => result,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e);
             process::exit(1);
         }
@@ -224,6 +250,7 @@ pub(crate) fn compile(config: CliConfig) {
     );
 
     if !target.supports_current_backend() {
+        crate::progress::clear();
         eprintln!(
             "Target '{}' is recognized, but it is outside the current supported target matrix",
             target
@@ -231,10 +258,12 @@ pub(crate) fn compile(config: CliConfig) {
         process::exit(1);
     }
 
+    crate::progress::phase("exports-scan");
     let phase_started = Instant::now();
     let exported_functions = match exports::collect(&ast, &check_result.functions) {
         Ok(exports) => exports,
         Err(e) => {
+            crate::progress::clear();
             errors::report(&e.with_file(filename.to_string()));
             process::exit(1);
         }
@@ -249,28 +278,34 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     if check_only {
+        crate::progress::clear();
         timings.report();
         println!("Checked '{}'", filename);
         return;
     }
 
+    crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
     let ast = optimize::propagate_constants(ast);
     timings.record_since("opt-prop", phase_started);
 
+    crate::progress::phase("opt-post");
     let phase_started = Instant::now();
     let ast = optimize::prune_constant_control_flow(ast);
     timings.record_since("opt-post", phase_started);
 
+    crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
     let ast = optimize::normalize_control_flow(ast);
     timings.record_since("opt-norm", phase_started);
 
+    crate::progress::phase("dce");
     let phase_started = Instant::now();
     let ast = optimize::eliminate_dead_code(ast);
     timings.record_since("dce", phase_started);
 
     if emit_ir {
+        crate::progress::phase("ir-lower");
         let phase_started = Instant::now();
         let mut module = match ir_lower::lower_program_with_source_path_and_web(
             &ast,
@@ -281,26 +316,31 @@ pub(crate) fn compile(config: CliConfig) {
         ) {
             Ok(module) => module,
             Err(err) => {
+                crate::progress::clear();
                 eprintln!("EIR lowering error: {}", err);
                 process::exit(1);
             }
         };
         timings.record_since("ir-lower", phase_started);
 
+        crate::progress::phase("ir-opt");
         let phase_started = Instant::now();
         if ir_opt {
             ir_passes::optimize_module(&mut module);
         }
         timings.record_since("ir-opt", phase_started);
 
+        crate::progress::phase("ir-print");
         let phase_started = Instant::now();
         let text = ir::print_module(&module);
         timings.record_since("ir-print", phase_started);
+        crate::progress::clear();
         timings.report();
         print!("{}", text);
         return;
     }
 
+    crate::progress::phase("ir-lower");
     let phase_started = Instant::now();
     let mut ir_module = match ir_lower::lower_program_with_source_path_and_web(
         &ast,
@@ -311,12 +351,14 @@ pub(crate) fn compile(config: CliConfig) {
     ) {
         Ok(module) => module,
         Err(err) => {
+            crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);
             process::exit(1);
         }
     };
     timings.record_since("ir-lower", phase_started);
 
+    crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
     if ir_opt {
         ir_passes::optimize_module(&mut ir_module);
@@ -354,11 +396,13 @@ pub(crate) fn compile(config: CliConfig) {
             .iter()
             .any(|lib| lib == "elephc_tls");
 
+    crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();
     let runtime_pic = matches!(emit, Emit::Cdylib);
     let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target, runtime_features, runtime_pic) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {
+            crate::progress::clear();
             eprintln!("Runtime cache error: {}", err);
             process::exit(1);
         }
@@ -366,6 +410,7 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("runtime-cache", phase_started);
     timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
 
+    crate::progress::phase("codegen");
     let phase_started = Instant::now();
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
@@ -379,6 +424,7 @@ pub(crate) fn compile(config: CliConfig) {
     ) {
         Ok(asm) => asm,
         Err(err) => {
+            crate::progress::clear();
             eprintln!("EIR backend error: {}", err);
             process::exit(1);
         }
@@ -401,14 +447,17 @@ pub(crate) fn compile(config: CliConfig) {
         }
     }
 
+    crate::progress::phase("write-asm");
     let phase_started = Instant::now();
     if let Err(e) = fs::write(&output_paths.asm, &user_asm) {
+        crate::progress::clear();
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
     }
     timings.record_since("write-asm", phase_started);
 
     if emit_source_map {
+        crate::progress::phase("source-map");
         let phase_started = Instant::now();
         if let Err(err) =
             source_map::write_source_map(
@@ -418,6 +467,7 @@ pub(crate) fn compile(config: CliConfig) {
                 &output_paths.source_map,
             )
         {
+            crate::progress::clear();
             eprintln!("Source map error: {}", err);
             process::exit(1);
         }
@@ -425,6 +475,7 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     if emit_asm {
+        crate::progress::clear();
         timings.report();
         println!(
             "Emitted assembly '{}' -> '{}'",
@@ -434,10 +485,12 @@ pub(crate) fn compile(config: CliConfig) {
         return;
     }
 
+    crate::progress::phase("assemble");
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
     timings.record_since("assemble", phase_started);
 
+    crate::progress::phase("link");
     let phase_started = Instant::now();
     linker::link(
         target,
@@ -462,6 +515,7 @@ pub(crate) fn compile(config: CliConfig) {
         let _ = fs::remove_file(&output_paths.obj);
     }
 
+    crate::progress::clear();
     timings.report();
     println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
 }

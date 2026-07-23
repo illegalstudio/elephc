@@ -35,6 +35,7 @@ mod optimize;
 mod parser;
 mod pdo_prelude;
 mod pipeline;
+mod progress;
 mod resolver;
 mod runtime_cache;
 mod debug_info;

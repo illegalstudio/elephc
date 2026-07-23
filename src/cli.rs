@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--quiet] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -52,6 +52,10 @@ pub(crate) struct CliConfig {
     /// the API is available even when feature auto-detection would not trigger.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
+    /// Suppresses the live spinner and bridge-library "Linking" event lines,
+    /// forcing plain output regardless of whether stderr is a terminal.
+    /// Errors, warnings, and the final success line are unaffected.
+    pub(crate) quiet: bool,
 }
 
 /// Parse command-line arguments into a CliConfig struct.
@@ -80,6 +84,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
     let mut web = false;
+    let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
@@ -137,6 +142,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--quiet" || arg == "-q" {
+            quiet = true;
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
@@ -257,6 +264,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         strict_php,
         web,
         with_crates,
+        quiet,
     }
 }
 
@@ -576,5 +584,29 @@ mod tests {
         assert!(validate_strict_php_defines(true, &empty).is_ok());
         assert!(validate_strict_php_defines(false, &defines).is_ok());
         assert!(validate_strict_php_defines(false, &empty).is_ok());
+    }
+
+    /// Verifies `--quiet` sets the quiet flag.
+    #[test]
+    fn quiet_flag_sets_quiet() {
+        let args = vec!["elephc".into(), "--quiet".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.quiet);
+    }
+
+    /// Verifies `-q` is accepted as a short alias for `--quiet`.
+    #[test]
+    fn short_quiet_flag_sets_quiet() {
+        let args = vec!["elephc".into(), "-q".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.quiet);
+    }
+
+    /// Verifies quiet defaults to false when not passed.
+    #[test]
+    fn quiet_defaults_to_false() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(!config.quiet);
     }
 }
