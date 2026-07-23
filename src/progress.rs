@@ -47,12 +47,6 @@ pub(crate) fn init(quiet: bool) {
     let _ = BAR.set(bar);
 }
 
-/// Whether this run is decorated (spinner/colors/symbols/event lines). Read by
-/// `errors::report` and `timings::CompileTimings::report` to match this switch.
-pub(crate) fn is_decorated() -> bool {
-    *DECORATED.get().unwrap_or(&false)
-}
-
 fn bar() -> Option<&'static ProgressBar> {
     BAR.get().and_then(|b| b.as_ref())
 }
