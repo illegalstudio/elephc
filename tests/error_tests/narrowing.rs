@@ -64,3 +64,24 @@ fn test_magic_get_property_is_not_persistently_narrowed() {
         "return type expects Object(\"W\"), got Union",
     );
 }
+
+/// Verifies the post-guard narrowing is NOT kept when a nested branch inside the null guard can
+/// fall through: the inner `if` has no `else`, so reaching the code after the guard does not imply
+/// the guard was false and `?array` must stay a union (issue #590 negative case).
+#[test]
+fn test_no_narrow_when_nested_branch_falls_through() {
+    expect_error(
+        "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { if ($flag) { return; } } [$key, $value] = $entry; }",
+        "List unpacking requires an array",
+    );
+}
+
+/// Verifies the narrowing is NOT kept when a nested `switch` in the null guard has no `default`, so
+/// a subject matching no case falls through to the code after the guard.
+#[test]
+fn test_no_narrow_when_switch_has_no_default() {
+    expect_error(
+        "<?php function consume(?array $entry, int $mode): void { if ($entry === null) { switch ($mode) { case 1: return; } } [$key, $value] = $entry; }",
+        "List unpacking requires an array",
+    );
+}

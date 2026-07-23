@@ -292,3 +292,165 @@ fn test_narrowing_restores_all_narrowed_variables() {
     );
     assert_eq!(out, "8");
 }
+
+/// Verifies a null guard whose body returns before unreachable trailing code still narrows the
+/// `?array` value to `Array` for the list unpack after the `if` (issue #590 shape 1). The former
+/// last-statement-only model saw the dead `echo` instead of the terminal `return` and dropped the
+/// narrowing.
+#[test]
+fn test_narrow_after_terminal_return_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                return "empty";
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]), "|", consume(null);
+        "#,
+    );
+    assert_eq!(out, "a=b|empty");
+}
+
+/// Verifies a null guard whose nested `if` terminates on every branch (return / throw) narrows the
+/// `?array` value for the following list unpack (issue #590 shape 2).
+#[test]
+fn test_narrow_after_nested_if_all_branches_terminate() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    return "flag";
+                } else {
+                    throw new Exception("missing");
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"], true);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a null guard whose nested `switch` exits on its single case and its `default` narrows
+/// the `?array` value for the following list unpack.
+#[test]
+fn test_narrow_after_nested_switch_all_paths_terminate() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry, int $mode): string {
+            if ($entry === null) {
+                switch ($mode) {
+                    case 1:
+                        return "one";
+                    default:
+                        throw new Exception("missing");
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"], 1);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a null guard whose nested `try`/`catch` exits on both the try and the catch bodies
+/// narrows the `?array` value for the following list unpack.
+#[test]
+fn test_narrow_after_nested_try_all_paths_terminate() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                try {
+                    throw new Exception("inner");
+                } catch (Throwable $e) {
+                    return "caught";
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]), "|", consume(null);
+        "#,
+    );
+    assert_eq!(out, "a=b|caught");
+}
+
+/// Verifies a null guard ending in `continue` before unreachable trailing code keeps the `?array`
+/// narrowing for the list unpack later in the same loop body. `continue` cannot reach the following
+/// statement even though it does not exit the function, so the complement is still sound.
+#[test]
+fn test_narrow_after_continue_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function row(int $n): ?array {
+            if ($n < 0) { return null; }
+            return ["k" . $n, "v" . $n];
+        }
+        $out = "";
+        foreach ([1, -1, 2] as $n) {
+            $entry = row($n);
+            if ($entry === null) {
+                continue;
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            $out .= $key . "=" . $value . ";";
+        }
+        echo $out;
+        "#,
+    );
+    assert_eq!(out, "k1=v1;k2=v2;");
+}
+
+/// Verifies the narrowing-specific `exit()` overlay still fires — and now fires even when the
+/// diverging call is not the block's last statement. The structural termination model does not
+/// model `exit()`, so the checker overlay must keep the `?array` narrowing here.
+#[test]
+fn test_narrow_after_exit_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                exit(1);
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies the narrowing-specific `never`-function overlay is preserved and now also fires when
+/// the diverging call precedes unreachable trailing code. A user function declared `never` needs
+/// the checker's function table, which the structural termination model does not consult.
+#[test]
+fn test_narrow_after_never_call_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $m): never { throw new Exception($m); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                fail("empty");
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
