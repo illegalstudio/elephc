@@ -4750,40 +4750,50 @@ pub(crate) fn lower_bound_closure_for_assignment(
     Some(closure_value)
 }
 
-/// Resolves the statically-known class name of an object expression used as the
-/// receiver of an instance first-class callable (`$obj->m(...)`).
-///
-/// Returns the normalized class name for `$var` (from `local_types`), `$this`
-/// (the current class), and `new` expressions; `None` when the receiver class
-/// cannot be determined statically.
+/// Resolves the statically-known class name of an object expression used as an instance-call
+/// receiver, including declared property and chained-call results.
 fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {
-    match &object.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .and_then(class_name_from_php_type),
-        ExprKind::This => ctx.current_class.as_deref().and_then(normalized_class_name),
-        ExprKind::NewObject { class_name, .. } => normalized_class_name(class_name.as_str()),
+    instance_callable_object_class_and_nullability(ctx, object).map(|(class_name, _)| class_name)
+}
+
+/// Resolves one instance-call receiver class and whether its expression may produce `null`.
+fn instance_callable_object_class_and_nullability(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<(String, bool)> {
+    let object_type = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned()?,
+        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
-            normalized_class_name(fallback_class.as_str())
+            PhpType::Object(fallback_class.to_string())
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions
             .get(name.as_str())
-            .and_then(|sig| class_name_from_php_type(&sig.return_type)),
-        _ => class_name_from_php_type(&infer_expr_type_syntactic(object)),
-    }
-}
-
-/// Returns a non-empty normalized class name for an object PHP type.
-fn class_name_from_php_type(ty: &PhpType) -> Option<String> {
-    match ty.codegen_repr() {
-        PhpType::Object(class_name) => normalized_class_name(&class_name),
-        _ => None,
-    }
+            .map(|sig| sig.return_type.clone())?,
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        _ => infer_expr_type_syntactic(object),
+    };
+    let (class_name, nullable) = singular_object_class(&object_type)?;
+    normalized_class_name(class_name).map(|class_name| (class_name, nullable))
 }
 
 /// Trims PHP's optional leading namespace separator from class metadata names.
@@ -7553,7 +7563,15 @@ fn array_literal_element_type_for_ir(
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-            PhpType::Array(elem) => elem.codegen_repr(),
+            // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
+            // bare-`array`-returning method) contributes no element constraint, so widen its
+            // Void/Never element to Mixed rather than collapsing the outer literal to
+            // `array<never>` — which would normalize to a `Void` element and emit an unsupported
+            // `array_push for PHP type Void` (`[...$acc, ...$this->more()]`).
+            PhpType::Array(elem) => match elem.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                other => other,
+            },
             _ => PhpType::Mixed,
         },
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
@@ -7578,6 +7596,23 @@ fn array_literal_element_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
+        // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
+        // or an object result is cast into an incorrectly stamped scalar array.
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7587,6 +7622,19 @@ fn array_literal_element_type_for_ir(
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
+    }
+}
+
+/// Returns the EIR array storage type for a resolved element type, or `None` when the type
+/// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
+/// is nonetheless collected into a literal) has no array-element representation — stamping it
+/// would emit an unsupported `array_push for PHP type Void` — so the caller keeps its syntactic
+/// fallback for that degenerate case, exactly as before this arm existed (no regression).
+fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
+    let stored = ir_array_storage_type(return_type);
+    match stored.codegen_repr() {
+        PhpType::Void | PhpType::Never => None,
+        _ => Some(stored),
     }
 }
 
@@ -7724,6 +7772,21 @@ fn assoc_array_literal_value_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7814,6 +7877,21 @@ pub(super) fn property_access_expr_type_for_ir(
         .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
 }
 
+/// Returns the declared property result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_property_access_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let property_type = property_access_expr_type_for_ir(ctx, object, property)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(property_type))
+    } else {
+        Some(property_type)
+    }
+}
+
 /// Returns the declared result type for an instance method call before its receiver is lowered.
 pub(super) fn method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -7824,6 +7902,21 @@ pub(super) fn method_call_expr_type_for_ir(
     let method_key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &method_key)
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+}
+
+/// Returns the declared method result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<PhpType> {
+    let return_type = method_call_expr_type_for_ir(ctx, object, method)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(return_type))
+    } else {
+        Some(return_type)
+    }
 }
 
 /// Merges associative-array value types for EIR storage metadata.
