@@ -67,6 +67,11 @@ pub(super) fn lower_hash_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers associative-array widening to boxed Mixed entry payloads.
+///
+/// Null and in-band null-container-sentinel inputs (missed hash reads that a
+/// branch merge forwards, issue #549) pass through unconverted so the
+/// helper's entry iteration never dereferences the sentinel (issue #533
+/// convention).
 pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -77,15 +82,28 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let hash = expect_operand(inst, 0)?;
     require_hash(ctx.value_php_type(hash)?.codegen_repr(), inst)?;
     require_hash_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
+    let done = ctx.next_label("hash_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(hash, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no entries to box
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the hash carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(hash, "rdi")?;
+            ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through unconverted
+            ctx.emitter.instruction("test rdi, rdi");                           // null containers have no entries to box
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep the null container as the passthrough result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rdi, r10");                            // does the hash carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 

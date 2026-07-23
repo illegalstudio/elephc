@@ -1,6 +1,6 @@
 //! Purpose:
-//! Integration and regression tests for match expressions with heterogeneous
-//! arm result types (object/array/string/int/null mixes) and homogeneous arms.
+//! Integration and regression tests for match expressions, including builtin
+//! error references and heterogeneous or homogeneous arm result types.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -9,9 +9,40 @@
 //! - Regression coverage for issue #488: heterogeneous match arms must merge
 //!   to a Mixed hidden temp (boxed per arm) instead of coercing every arm to
 //!   one scalar-biased unified type, which fatally cast object arms to string.
+//! - Regression coverage for issue #549: match arms producing indexed or
+//!   associative arrays with mismatched element types must widen the merged
+//!   temp to array-of-boxed-Mixed elements instead of letting the last arm's
+//!   element type relabel every other arm's runtime array.
 //! - `gettype` probes assert PHP's per-arm type preservation across arms.
+//! - Explicit `UnhandledMatchError` construction is distinct from the current
+//!   fatal terminator used when no match arm and no default arm succeeds.
 
 use super::*;
+
+/// Verifies the builtin `UnhandledMatchError` class can be constructed in a
+/// match default arm, thrown, caught by its fully-qualified name, and queried
+/// through the `getMessage()` method inherited from `Error`.
+#[test]
+fn test_unhandled_match_error_throw_and_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function classify(int $n): string {
+    return match (true) {
+        $n < 0 => "negative",
+        $n === 0 => "zero",
+        default => throw new UnhandledMatchError("no arm for " . $n),
+    };
+}
+
+try {
+    classify(5);
+} catch (\UnhandledMatchError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "no arm for 5");
+}
 
 /// Regression test for issue #488: a match whose arms produce an object, an
 /// array, and a string must preserve each arm's value instead of fatally
@@ -441,6 +472,215 @@ echo $count;
 "#,
     );
     assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #549: match arms producing indexed arrays with
+/// different element types (array<int> vs array<string>) must widen the merged
+/// result to array-of-Mixed instead of letting the last arm's element type
+/// win. `$argc` is 1 under the test runner, so the int arm is selected; before
+/// the fix the merged temp was typed array<string> and reading the int arm's
+/// 8-byte scalar slots as 16-byte string descriptors segfaulted (the issue's
+/// exact repro).
+#[test]
+fn test_match_array_int_and_array_string_arms_selects_int_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => [1, 2],
+    default => ["a", "b"],
+};
+echo $r[0], "\n";
+echo $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Reverse arm order for issue #549: the string arm is selected at runtime
+/// while the int arm folds last into the merge; before the fix the temp kept
+/// array<int> and the string arm's 16-byte slots were read back as raw heap
+/// pointers (silent garbage instead of "a"/"b").
+#[test]
+fn test_match_array_string_and_array_int_arms_selects_string_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => ["a", "b"],
+    default => [1, 2],
+};
+echo $r[0], "\n", $r[1], "\n", gettype($r[0]), "\n";
+"#,
+    );
+    assert_eq!(out, "a\nb\nstring\n");
+}
+
+/// Associative variant of issue #549: assoc arms with mismatched value types
+/// must widen the merged value dimension to boxed Mixed. Before the fix the
+/// temp kept the default arm's string value type and the int-valued entries
+/// read back as empty strings.
+#[test]
+fn test_match_assoc_arms_with_mismatched_value_types() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => ["k" => 1, "n" => 2],
+    default => ["k" => "x", "n" => "y"],
+};
+echo $r["k"], "\n", $r["n"], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Empty-arm variant of issue #549: an `[]` arm (array<never>) must not win
+/// the merge wholesale. Before the fix the temp was typed array<never> and
+/// every element read of the populated arm returned the null sentinel,
+/// printing blank lines instead of the ints.
+#[test]
+fn test_match_array_arm_with_empty_array_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => [1, 2],
+    default => [],
+};
+echo $r[0], "\n", $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Borrowed-source variant of issue #549: when an arm forwards a live local
+/// array, widening must copy-on-write instead of boxing the local's slots in
+/// place, so the source variable keeps its typed layout after the match.
+#[test]
+fn test_match_variable_array_arm_preserves_source_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+$r = match($argc) {
+    1 => $a,
+    default => ["x", "y"],
+};
+echo $r[0], "\n", $r[1], "\n";
+echo $a[0], "\n", $a[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n1\n2\n");
+}
+
+/// Nested-array variant of issue #549: arms of array<array<int>> vs
+/// array<array<string>> widen the outer element to Mixed; inner reads must
+/// unbox the nested array pointer and still address 8-byte int slots.
+#[test]
+fn test_match_nested_array_arms_widen_inner_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => [[1, 2]],
+    default => [["a", "b"]],
+};
+echo $r[0][0], "\n", $r[0][1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Heap balance for issue #549: the per-arm array-to-Mixed widening transfers
+/// slot ownership into the boxed cells, so repeated match merges and element
+/// reads must release cleanly (no leak from the conversion or the hidden
+/// temp protocol).
+#[test]
+fn test_match_mismatched_array_arms_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = match($i % 2) {
+        0 => [1, 2],
+        default => ["a", "b"],
+    };
+    $count = $count + count($r);
+    $probe = $r[0];
+}
+echo $count;
+"#,
+    );
+    assert_eq!(out.stdout, "40");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Sentinel-arm guard for issue #549: a missed indexed read forwarded by a
+/// match arm materializes the in-band null-container sentinel; the merge's
+/// array-to-Mixed widening must pass it through instead of dereferencing it
+/// as an array header (this segfaulted while the fix was unguarded).
+#[test]
+fn test_match_missed_indexed_read_arm_passes_sentinel_through() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [[1, 2]];
+$r = match($argc) {
+    1 => $rows[5],
+    default => ["a", "b"],
+};
+echo $r[0] ?? "none", "\n";
+echo "done", "\n";
+"#,
+    );
+    assert_eq!(out, "none\ndone\n");
+}
+
+/// Associative sentinel-arm guard for issue #549: a missed hash read
+/// forwarded by a match arm must pass the null-container sentinel through the
+/// hash-to-Mixed widening instead of iterating its entries.
+#[test]
+fn test_match_missed_hash_read_arm_passes_sentinel_through() {
+    let out = compile_and_run(
+        r#"<?php
+$maps = [["k" => 1]];
+$r = match($argc) {
+    1 => $maps[5],
+    default => ["k" => "x"],
+};
+echo $r["k"] ?? "none", "\n";
+echo "done", "\n";
+"#,
+    );
+    assert_eq!(out, "none\ndone\n");
+}
+
+/// Heap balance for the borrowed-source widening of issue #549: a live local
+/// forwarded by an arm reports as a *provisional* owner during lowering, so
+/// the conversion must retain it for real before the copy-on-write split;
+/// getting that wrong either boxed the local in place or double-released the
+/// shared array (heap debug flagged a bad refcount at exit).
+#[test]
+fn test_match_borrowed_array_arm_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2];
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = match($i % 2) {
+        0 => $a,
+        default => ["a", "b"],
+    };
+    $count = $count + count($r);
+    $probe = $r[0];
+}
+echo $count, "|", $a[0], "|", $a[1];
+"#,
+    );
+    assert_eq!(out.stdout, "40|1|2");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap summary, got: {}",

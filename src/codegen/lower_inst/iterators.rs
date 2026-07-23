@@ -62,6 +62,21 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     if by_ref {
         ensure_unique_static_iter_source(ctx, source, &source_kind)?;
+        if matches!(
+            source_kind,
+            IteratorSourceKind::Indexed { .. } | IteratorSourceKind::Hash
+        ) {
+            // -- normalize a missed-read sentinel source to the canonical zero pointer --
+            // Only the iterator's private slot is normalized; the origin local keeps the
+            // sentinel so the user-visible value stays null. `IterNext` re-reads the live
+            // length from this slot every iteration, so folding the sentinel here keeps
+            // that hot path on the cheap zero check (issue #556).
+            crate::codegen::sentinels::emit_normalize_null_container_to_zero(
+                ctx.emitter,
+                result_reg,
+                abi::secondary_scratch_reg(ctx.emitter),
+            );
+        }
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
@@ -380,6 +395,12 @@ fn iter_start_is_by_ref(inst: &Instruction) -> bool {
 }
 
 /// Splits statically typed array/hash sources before by-reference iteration.
+///
+/// A null/sentinel source — the value a missed read such as `foreach ($a[7] as &$v)`
+/// materializes — has nothing to split: the copy-on-write helpers recognize both the zero
+/// pointer and the in-band `NULL_SENTINEL` and return them unchanged (issue #556). The
+/// origin local and SSA slot therefore keep the sentinel; the caller normalizes only the
+/// iterator's private source slot afterwards.
 fn ensure_unique_static_iter_source(
     ctx: &mut FunctionContext<'_>,
     source: ValueId,
@@ -869,6 +890,33 @@ fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
 }
 
+/// Loads the live entry count from the indexed-array header in `array_reg` into `len_reg`,
+/// substituting zero for a zero source pointer. Used by the by-reference `IterNext`
+/// advancement, whose source slot `IterStart` has already normalized: a missed-read
+/// sentinel was folded to zero there, so the per-iteration hot path needs only the cheap
+/// zero check instead of the full null-container guard (issue #556). `len_reg` must not
+/// alias `array_reg`.
+fn load_live_indexed_array_length(ctx: &mut FunctionContext<'_>, array_reg: &str, len_reg: &str) {
+    let null_label = ctx.next_label("iter_len_null_source");
+    let done_label = ctx.next_label("iter_len_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", array_reg, null_label));    // zero sources (normalized missed reads) have no header to read
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", array_reg, array_reg));    // is the source the canonical zero container pointer?
+            ctx.emitter.instruction(&format!("jz {}", null_label));             // zero sources (normalized missed reads) have no header to read
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done_label);
+}
+
 /// Boxes a concrete iterator method result when the EIR result slot expects `Mixed`.
 fn box_iterator_method_result_if_needed(
     ctx: &mut FunctionContext<'_>,
@@ -1252,7 +1300,7 @@ fn lower_indexed_iter_next_aarch64(
     if by_ref {
         let array_reg = abi::int_result_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        load_live_indexed_array_length(ctx, array_reg, len_reg);
         ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
     } else {
         abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
@@ -1283,7 +1331,7 @@ fn lower_indexed_iter_next_x86_64(
     if by_ref {
         let array_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        load_live_indexed_array_length(ctx, array_reg, len_reg);
         ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
     } else {
         abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);

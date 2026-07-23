@@ -24,6 +24,16 @@ try {
     echo "caught Error" . PHP_EOL;
 }
 
+try {
+    $status = 500;
+    echo match ($status) {
+        200 => "OK",
+        default => throw new UnhandledMatchError("unsupported status " . $status),
+    };
+} catch (\UnhandledMatchError $e) {
+    echo "caught UnhandledMatchError: " . $e->getMessage() . PHP_EOL;
+}
+
 interface AppThrowable extends Throwable {}
 
 class AppException extends Exception implements AppThrowable {}
