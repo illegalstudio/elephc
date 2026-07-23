@@ -2992,9 +2992,9 @@ fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Opti
     let ty = match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
-        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
-            PhpType::Object(fallback_class.as_str().to_string())
+            PhpType::Object(fallback_class.to_string())
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions
