@@ -80,6 +80,10 @@ A PHP-to-native AOT compiler
 Arguments:
   <source.php>            PHP source file to compile
 
+Modes:
+  --web                   Compile as a prefork HTTP server
+  --strict-php            Reject elephc-only syntax; accept only the PHP-compatible subset
+
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
@@ -97,8 +101,6 @@ Codegen:
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
   --heap-debug            Enable heap debug instrumentation
-  --web                   Compile as a --web prefork HTTP server
-  --strict-php            Reject elephc-only syntax; accept only the PHP-compatible subset
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
 
 Linking:
