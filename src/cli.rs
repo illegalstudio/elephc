@@ -14,8 +14,9 @@ use std::process;
 pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
-/// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--quiet] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+/// Short usage line shown after every parameter error, alongside the `--help` hint.
+/// The full categorized reference lives in `HELP`.
+pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source.php>";
 
 /// Returns true if `-h` or `--help` appears anywhere in the argument list, so
 /// help always wins regardless of position or what else was passed alongside
@@ -271,10 +272,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
 
     let filename = match filename_arg {
         Some(filename) => filename,
-        None => {
-            eprintln!("{USAGE}");
-            process::exit(1);
-        }
+        None => fail("no source file given"),
     };
     let output_modes = usize::from(emit_ir) + usize::from(emit_asm) + usize::from(check_only);
     if output_modes > 1 {
@@ -454,10 +452,20 @@ fn validate_define_symbol(symbol: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Prints a message to stderr and exits the process with code 1.
-/// Never returns.
+/// Builds the full parameter-error text: an `error: ` prefix, the short usage
+/// line, and a hint to run `--help` for the full reference. Kept pure (no
+/// IO/exit) so the format can be unit-tested without spawning a process.
+fn format_fail_message(message: &str) -> String {
+    format!(
+        "error: {}\n\n{}\n\nRun 'elephc --help' for more information.",
+        message, USAGE
+    )
+}
+
+/// Prints a formatted parameter-error message to stderr and exits the
+/// process with code 1. Never returns.
 fn fail(message: &str) -> ! {
-    eprintln!("{}", message);
+    eprintln!("{}", format_fail_message(message));
     process::exit(1);
 }
 
@@ -690,5 +698,16 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies a parameter-error message is formatted as `error: <message>`
+    /// followed by the short usage line and the `--help` hint, so every
+    /// parsing failure (unknown flag, bad value, missing file) reads the same way.
+    #[test]
+    fn format_fail_message_has_error_prefix_usage_and_hint() {
+        let msg = format_fail_message("Unknown flag: --bogus");
+        assert!(msg.starts_with("error: Unknown flag: --bogus"));
+        assert!(msg.contains(USAGE));
+        assert!(msg.contains("Run 'elephc --help' for more information."));
     }
 }
