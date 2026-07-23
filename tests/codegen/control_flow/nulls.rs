@@ -134,3 +134,141 @@ echo $r[0], $r[1], $s[0], $s[1], "\n";
     );
     assert_eq!(out, "1212\n");
 }
+
+/// Regression test for issue #554: `??` must select its default when a missing
+/// indexed-array read has a statically-known `Str` result, while a present empty
+/// string keeps `''`. Indices are bound to `$argc`-derived locals so the element
+/// read stays statically `Str` (an inline arithmetic index like `$a[$argc + 6]`
+/// is typed `Mixed` and would route through the boxed-Mixed null path instead),
+/// forcing the miss through the `IsNull`(`Str`) branch decision: a missed string
+/// slot carries the null-string pointer sentinel, a real empty string does not.
+/// Covers both the first-index miss (missed outer container) and the second-index
+/// miss (missed inner string slot).
+#[test]
+fn test_null_coalesce_string_array_miss_selects_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [['', 'word0'], ['', 'word1']];
+$miss_i = $argc + 6;
+$hit_i = $argc;
+$miss_j = $argc + 6;
+$hit_j = $argc - 1;
+echo '[' . ($a[$miss_i][$hit_j] ?? 'dflt') . "]\n";
+echo '[' . ($a[$hit_i][$miss_j] ?? 'dflt') . "]\n";
+echo '[' . ($a[$hit_i][$hit_j] ?? 'dflt') . "]\n";
+"#,
+    );
+    assert_eq!(out, "[dflt]\n[dflt]\n[]\n");
+}
+
+/// Regression test for issue #554 using the issue's verbatim literal-index
+/// reproduction: `$a[7][1] ?? 'dflt'` and `$a[1][7] ?? 'dflt'` select the
+/// default, and the present empty string `$a[1][0]` stays `''`, matching PHP's
+/// `[dflt]` / `[dflt]` / `[]` output exactly.
+#[test]
+fn test_null_coalesce_string_array_miss_literal_repro() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [['', 'word0'], ['', 'word1']];
+echo '[' . ($a[7][1] ?? 'dflt') . "]\n";
+echo '[' . ($a[1][7] ?? 'dflt') . "]\n";
+echo '[' . ($a[1][0] ?? 'dflt') . "]\n";
+"#,
+    );
+    assert_eq!(out, "[dflt]\n[dflt]\n[]\n");
+}
+
+/// Regression test for issue #554 (string-keyed associative sibling): a missing
+/// string-keyed read of a statically-`Str`-valued hash selects the `??` default,
+/// a present key keeps its value, and a present empty string stays `''`. The
+/// runtime-unknown key defeats folding so the miss travels the hash-get null
+/// fallback into the `IsNull`(`Str`) branch decision.
+#[test]
+fn test_null_coalesce_assoc_string_miss_selects_default() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ['a' => 'x', 'b' => 'y'];
+$miss = $argc > 100 ? 'a' : 'zzz';
+echo '[' . ($m[$miss] ?? 'dflt') . "]\n";
+$hit = $argc > 100 ? 'zzz' : 'a';
+echo '[' . ($m[$hit] ?? 'dflt') . "]\n";
+$e = ['k' => ''];
+echo '[' . ($e['k'] ?? 'dflt') . "]\n";
+"#,
+    );
+    assert_eq!(out, "[dflt]\n[x]\n[]\n");
+}
+
+/// Regression test for issue #554 (nullable-string local/return sibling): a
+/// `?string` return that is null at runtime selects the `??` default, a non-null
+/// return keeps its value, and a present empty-string local stays `''`. Confirms
+/// the same null-string representation used for array-element misses drives the
+/// coalesce decision for scalar nullable-string storage too.
+#[test]
+fn test_null_coalesce_nullable_string_local_selects_default() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n): ?string { return $n > 100 ? 'hit' : null; }
+$s = f($argc);
+echo '[' . ($s ?? 'dflt') . "]\n";
+$t = f($argc + 1000);
+echo '[' . ($t ?? 'dflt') . "]\n";
+$u = '';
+echo '[' . ($u ?? 'dflt') . "]\n";
+"#,
+    );
+    assert_eq!(out, "[dflt]\n[hit]\n[]\n");
+}
+
+/// Regression test for issue #554: the `??` string-miss decision keeps the heap
+/// balanced across a loop that mixes a missing read (default 'dflt') and a
+/// present empty-string control (kept `''`). The missed read materializes a
+/// non-owned null-string sentinel and the default is a persistent literal, so no
+/// per-iteration allocation should leak.
+#[test]
+fn test_null_coalesce_string_array_miss_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [['', 'word0'], ['', 'word1']];
+$hit_i = $argc;
+$miss_j = $argc + 6;
+$hit_j = $argc - 1;
+$c = 0;
+for ($i = 0; $i < 20; $i++) {
+    $miss = ($a[$hit_i][$miss_j] ?? 'dflt');
+    $present = ($a[$hit_i][$hit_j] ?? 'dflt');
+    $c = $c + strlen($miss) + strlen($present);
+}
+echo $c;
+"#,
+    );
+    assert_eq!(out.stdout, "80");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #554: the `??` string-miss path must stay silent,
+/// matching PHP. A bare missed read warns "Undefined array key", but wrapping it
+/// in `??` suppresses the warning (issue #533's warning behavior on the coalesce
+/// path). Asserts the default is selected with no diagnostics on stderr.
+#[test]
+fn test_null_coalesce_string_array_miss_is_silent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['', 'word0'], ['', 'word1']];
+$hit_i = $argc;
+$miss_j = $argc + 6;
+echo ($a[$hit_i][$miss_j] ?? 'dflt');
+"#,
+    );
+    assert_eq!(out.stdout, "dflt");
+    assert!(
+        !out.stderr.contains("Undefined") && !out.stderr.contains("Warning"),
+        "expected silent coalesce path, got stderr: {}",
+        out.stderr
+    );
+    assert!(out.success, "program should exit successfully");
+}
