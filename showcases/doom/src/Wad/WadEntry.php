@@ -3,9 +3,9 @@
 namespace Showcases\Doom\Wad;
 
 class WadEntry {
-    public $name;
-    public $offset;
-    public $size;
+    public string $name;
+    public int $offset;
+    public int $size;
 
     public function __construct(string $name, int $offset, int $size) {
         $this->name = $name;
