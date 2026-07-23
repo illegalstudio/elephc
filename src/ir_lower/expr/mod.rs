@@ -13254,10 +13254,29 @@ fn release_owned_call_arg_temporaries_with_signature(
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });
-            if !independently_boxed
-                && return_alias.may_alias_parameter(parameter_index)
-                && result.is_some_and(|result| ctx.call_result_may_alias_arg(*value, result))
-            {
+            // The call result reuses this argument's payload — so the argument release
+            // must be suppressed and the ownership left to flow through the result —
+            // in either of two cases:
+            //  - a summary that *may* return this parameter, under the conservative
+            //    alias check (which excludes fresh checked-arithmetic boxes so an
+            //    unproven callee still releases them, issue #486); or
+            //  - a callee *proven* to return this parameter, where even a fresh
+            //    boxed `$i + 1` argument is handed straight back and must not be
+            //    released twice (issue #604).
+            // `ReturnArgAlias::Parameters` is a MAY summary (a union over branches), so
+            // `proven_aliases_parameter` also holds for a callee that returns the
+            // parameter only conditionally (`if ($c) return $x; return 7;`). Suppressing
+            // the argument release on every path then leaks the owned box on the runtime
+            // paths that do not return it — the same deliberate leak-over-crash trade-off
+            // the `may_alias` suppression already makes for array/hash arguments. A
+            // follow-up issue tracks runtime alias disambiguation.
+            let result_reuses_arg = result.is_some_and(|result| {
+                (return_alias.may_alias_parameter(parameter_index)
+                    && ctx.call_result_may_alias_arg(*value, result))
+                    || (return_alias.proven_aliases_parameter(parameter_index)
+                        && ctx.arg_and_result_types_can_alias(*value, result))
+            });
+            if !independently_boxed && result_reuses_arg {
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
