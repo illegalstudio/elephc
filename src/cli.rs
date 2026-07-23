@@ -18,6 +18,52 @@ use crate::codegen::platform::Target;
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source.php>";
 
+/// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
+/// from a filesystem path — the original source file lives outside this
+/// repo, on one contributor's machine, and wouldn't exist anywhere else).
+const MASCOTTE_ART: &str = "        _ooOoo_
+       o8888888o
+       (| -_- |)
+       0\\  =  /0
+     ___/`---'\\___
+  .'  \\\\|     |//  '.
+  / \\\\|||  :  |||// \\
+  \\  '-.\\\\___//.-'  /
+   '-._   '-'   _.-'
+     `-.______.-'
+        `=---='";
+
+/// Fixed pool of zen/developer quotes `--mascotte` picks from at random.
+const ZEN_QUOTES: &[&str] = &[
+    "There is no cloud, just someone else's computer.",
+    "It works on my machine.",
+    "The best code is no code at all.",
+    "Premature optimization is the root of all evil.",
+    "Simplicity is the ultimate sophistication.",
+    "The obstacle is the path.",
+    "First, solve the problem. Then, write the code.",
+    "A bug in production is worth two in the backlog.",
+    "When in doubt, print it out.",
+    "Silence is also an answer — usually a segfault.",
+];
+
+/// Returns true if `--mascotte` appears anywhere in the argument list.
+pub(crate) fn wants_mascotte(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--mascotte")
+}
+
+/// Prints the ASCII mascot and a randomly chosen quote to stdout. The index
+/// comes from the current time's sub-second nanoseconds — good enough for a
+/// cosmetic banner, no `rand` dependency needed.
+pub(crate) fn print_mascotte() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let quote = ZEN_QUOTES[(nanos as usize) % ZEN_QUOTES.len()];
+    println!("{}\n\n  \"{}\"\n", MASCOTTE_ART, quote);
+}
+
 /// Returns true if `-h` or `--help` appears anywhere in the argument list, so
 /// help always wins regardless of position or what else was passed alongside
 /// it (e.g. `elephc --check --help app.php` still shows help).
@@ -69,6 +115,7 @@ Diagnostics:
 
 Other:
   -h, --help              Print this help and exit
+  --mascotte              Print an ASCII mascot and a random quote before output
 ";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
@@ -201,6 +248,10 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_debug_info = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
+        } else if arg == "--mascotte" {
+            // Already handled in main() before parse_args ran (so the banner
+            // prints before --help/errors/compilation); recognized here only
+            // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
@@ -698,6 +749,25 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--mascotte` is detected anywhere in the argument list.
+    #[test]
+    fn wants_mascotte_detects_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--mascotte".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_mascotte(&args));
+    }
+
+    /// Verifies a normal argument list without `--mascotte` is not mistaken for one.
+    #[test]
+    fn wants_mascotte_false_without_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_mascotte(&args));
     }
 
     /// Verifies a parameter-error message is formatted as `error: <message>`

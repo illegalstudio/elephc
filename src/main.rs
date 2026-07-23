@@ -70,6 +70,9 @@ mod web_prelude;
 /// - May create temporary files during assembly and linking.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if cli::wants_mascotte(&args) {
+        cli::print_mascotte();
+    }
     let config = cli::parse_args(&args);
     pipeline::compile(config);
 }
