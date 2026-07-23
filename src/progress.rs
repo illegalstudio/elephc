@@ -14,6 +14,8 @@
 //!   very start of `compile()`, mirroring the existing `codegen::set_null_repr`/
 //!   `strict_php::set_enabled` global-setup pattern in this codebase.
 
+#![allow(dead_code)]
+
 use std::sync::OnceLock;
 use std::time::Duration;
 
