@@ -17,6 +17,59 @@ use crate::codegen::platform::Target;
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
 pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--quiet] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
+/// Returns true if `-h` or `--help` appears anywhere in the argument list, so
+/// help always wins regardless of position or what else was passed alongside
+/// it (e.g. `elephc --check --help app.php` still shows help).
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-h" || a == "--help")
+}
+
+/// Full `--help` reference text, categorized by section. Printed to stdout
+/// with exit code 0 — this is a successful, requested action, not an error.
+pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source.php>
+
+A PHP-to-native AOT compiler
+
+Arguments:
+  <source.php>            PHP source file to compile
+
+Output modes:
+  --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
+  --emit-ir               Emit EIR text instead of compiling
+  --emit-asm              Emit assembly (.s) instead of linking
+  --emit KIND             Output kind: executable (default) | cdylib
+
+Target:
+  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
+  --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
+
+Codegen:
+  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --null-repr=MODE        sentinel (default) | tagged
+  --regalloc=MODE         linear (default) | stack
+  --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
+  --gc-stats              Print GC statistics at exit
+  --heap-debug            Enable heap debug instrumentation
+  --web                   Compile as a --web prefork HTTP server
+  --strict-php            Reject elephc-only syntax; accept only the PHP-compatible subset
+  --define SYMBOL         Define a symbol for `ifdef` conditional compilation
+
+Linking:
+  --link LIB, -l LIB      Extra library to link
+  --link-path DIR, -L DIR Extra library search path
+  --framework NAME        macOS framework to link
+  --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
+
+Diagnostics:
+  --timings               Report per-phase compile timings to stderr
+  --quiet, -q             Disable the live spinner and colorized output
+  --source-map            Emit a .map source map alongside the assembly
+  --debug-info            Embed DWARF line info for debuggers
+
+Other:
+  -h, --help              Print this help and exit
+";
+
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
 pub(crate) struct CliConfig {
@@ -61,8 +114,11 @@ pub(crate) struct CliConfig {
 /// Parse command-line arguments into a CliConfig struct.
 pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
-        eprintln!("{USAGE}");
-        process::exit(1);
+        fail("no source file given");
+    }
+    if wants_help(args) {
+        println!("{HELP}");
+        process::exit(0);
     }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
@@ -608,5 +664,31 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(!config.quiet);
+    }
+
+    /// Verifies `--help` is detected anywhere in the argument list.
+    #[test]
+    fn wants_help_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--help".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_help(&args));
+    }
+
+    /// Verifies `-h` is detected as the short alias for `--help`.
+    #[test]
+    fn wants_help_detects_short_flag() {
+        let args = vec!["elephc".into(), "-h".into()];
+        assert!(wants_help(&args));
+    }
+
+    /// Verifies a normal argument list without `--help`/`-h` is not mistaken for a help request.
+    #[test]
+    fn wants_help_false_without_help_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_help(&args));
     }
 }
