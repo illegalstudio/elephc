@@ -447,8 +447,8 @@ pub(crate) fn lower_eval_aot_function(
     module.add_function(function);
 }
 
-/// Lowers one literal eval fragment as an internal EIR function that reads eval scope.
-pub(crate) fn lower_eval_aot_scope_read_function(
+/// Lowers one literal eval fragment as an internal scope-aware EIR function.
+pub(crate) fn lower_eval_aot_scope_function(
     name: &str,
     body: &[Stmt],
     scope_reads: &std::collections::BTreeSet<String>,

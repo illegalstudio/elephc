@@ -650,6 +650,43 @@ try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
     assert_eq!(out, "err");
 }
 
+/// An object-returning function whose `try` and every `catch` terminate must leave the dead
+/// `try.after` join unreachable instead of synthesizing a typed fall-through return.
+#[test]
+fn test_object_return_dead_try_after_is_unreachable() {
+    let out = compile_and_run(
+        r#"<?php
+final class Conn { public function __construct(public string $dsn) {} }
+final class Factory {
+    public function create(string $dsn): Conn {
+        try { return new Conn($dsn); }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    }
+}
+echo (new Factory())->create('pg')->dsn;
+"#,
+    );
+    assert_eq!(out, "pg");
+}
+
+/// An array-returning function with `finally` must also mark `try.after` unreachable when neither
+/// the `try` nor any `catch` can fall through the finalizer into the join.
+#[test]
+fn test_array_return_dead_try_after_with_finally_is_unreachable() {
+    let out = compile_and_run(
+        r#"<?php
+function values(): array {
+    try { return [1, 2]; }
+    catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    finally { $cleanup = true; }
+}
+$values = values();
+echo $values[0] . ',' . $values[1];
+"#,
+    );
+    assert_eq!(out, "1,2");
+}
+
 /// The builtin exception constructors accept PHP's third `$previous` parameter (positional or
 /// the `previous:` named argument), store it on the Throwable payload, and expose it through
 /// `getPrevious()`. Byte-parity vs PHP 8.5 for message/code/`getPrevious()` round-trips.

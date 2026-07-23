@@ -611,13 +611,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Applies only the materialized local-scope part needed by EIR eval AOT.
-    pub(crate) fn apply_eval_scope_barrier(&mut self) {
+    /// Applies the materialized local scope and widens caller slots written by EIR eval AOT.
+    pub(crate) fn apply_eval_scope_barrier(&mut self, write_names: &BTreeSet<String>) {
         self.eval_barrier_active = true;
         self.declare_eval_scope_local();
         // Scope-sync codegen paths flush program globals into the local scope,
         // so the global-scope handle slot must exist alongside the scope slot.
         self.declare_eval_global_scope_local();
+        let widen_names = write_names
+            .iter()
+            .filter(|name| {
+                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                    && self
+                        .local_slots
+                        .get(*name)
+                        .is_some_and(|slot| eval_barrier_can_widen(&self.builder.local_php_type(*slot)))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in widen_names {
+            self.set_local_type(&name, PhpType::Mixed);
+        }
     }
 
     /// Ensures top-level eval fragments can see `$argc` and `$argv` by name.

@@ -21,6 +21,40 @@ fn assert_no_rust_panic_leaked(stderr: &str) {
     );
 }
 
+/// Asserts a scope-aware literal eval was lowered as an internal EIR function without Magician.
+fn assert_scope_eir_aot_without_bridge(
+    user_asm: &str,
+    runtime_asm: &str,
+    required_libraries: &[String],
+    context: &str,
+) {
+    assert!(
+        user_asm.contains("eval literal AOT compiled EIR function with eval scope"),
+        "{context} should call the scope-aware internal EIR function:\n{user_asm}"
+    );
+    assert!(
+        user_asm.contains("@fn name=__eir@evalaot_scope_")
+            && user_asm.contains("__elephc_eval_scope_set"),
+        "{context} should contain the lowered EIR scope function and writes:\n{user_asm}"
+    );
+    assert!(
+        !user_asm.contains("compiled local scalar")
+            && !user_asm.contains("compiled direct local read/write"),
+        "{context} should not use legacy eval AOT mini-backend markers:\n{user_asm}"
+    );
+    assert!(
+        !user_asm.contains("__elephc_eval_execute")
+            && !runtime_asm.contains("__elephc_eval_execute"),
+        "{context} should not reference the interpreter bridge"
+    );
+    assert!(
+        !required_libraries
+            .iter()
+            .any(|lib| lib == "elephc_magician"),
+        "{context} should not link elephc_magician: {required_libraries:?}"
+    );
+}
+
 /// Verifies `eval` is resolved as a language construct, not a PHP-visible callable function.
 #[test]
 fn test_eval_is_not_function_exists_or_callable() {
@@ -1301,7 +1335,7 @@ echo eval('return strlen(string: "ab")
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies foldable static builtins also work in direct local-scalar statement bodies.
+/// Verifies foldable static builtins work in scope-aware EIR statement bodies.
 #[test]
 fn test_literal_eval_static_scalar_builtins_in_local_body_use_aot() {
     let dir = make_cli_test_dir("elephc_literal_eval_static_scalar_builtins_local_body_aot");
@@ -1312,27 +1346,11 @@ fn test_literal_eval_static_scalar_builtins_in_local_body_use_aot() {
         false,
         false,
     );
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval static scalar builtins in a local body should use local-scalar AOT:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_"),
-        "literal eval static scalar builtins in a local body should not reference eval runtime helpers:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval static scalar builtins in a local body should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval static scalar builtins in a local body should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval static scalar builtins in a local body should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval static scalar builtins in a local body",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -2366,7 +2384,7 @@ echo eval('return 2 ** 3 ** 2;');
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies compound division/modulo inside literal eval uses direct local sync.
+/// Verifies compound division/modulo inside literal eval uses scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_division_modulo_assign_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_division_modulo_assign_eir_aot");
@@ -2376,17 +2394,11 @@ echo ":" . $x;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "division/modulo assignment literal eval should use local scalar direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "division/modulo assignment literal eval should not flush local writes through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "division/modulo assignment literal eval should not call the interpreter bridge:\n{user_asm}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "division/modulo assignment literal eval",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -2401,7 +2413,7 @@ echo ":" . $x;
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies bitwise and shift operators inside literal eval can lower through local-scalar AOT.
+/// Verifies bitwise and shift operators inside literal eval lower through scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_bitwise_shift_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_bitwise_shift_eir_aot");
@@ -2416,27 +2428,11 @@ echo ":" . $x;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "bitwise/shift literal eval should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "bitwise/shift literal eval should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "bitwise/shift literal eval should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "bitwise/shift literal eval should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "bitwise/shift literal eval should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "bitwise/shift literal eval",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -2597,38 +2593,22 @@ eval('if (true) { echo "yes"; } else { echo "no"; }');
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies scalar literal eval stores can write directly to caller locals without the eval runtime.
+/// Verifies scalar literal eval stores synchronize through a scope-aware EIR function.
 #[test]
-fn test_literal_eval_scalar_store_uses_direct_local_write_without_magician() {
+fn test_literal_eval_scalar_store_uses_scope_eir_without_magician() {
     let dir = make_cli_test_dir("elephc_literal_eval_aot_store_asm");
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
-        "<?php eval('$created = \"yes\";'); echo $created;",
+        "<?php $existing = 1; eval('$created = \"yes\"; $existing = \"changed\";'); echo $created . ':' . $existing;",
         &dir,
         8_388_608,
         false,
         false,
     );
-    assert!(
-        user_asm.contains("eval literal AOT compiled"),
-        "scalar literal eval store should use the AOT path:\n{user_asm}"
-    );
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "scalar literal eval store should use local-scalar direct caller-local writes:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "scalar literal eval store should not write through the eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "scalar literal eval store should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "direct scalar literal eval store should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "scalar literal eval store",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -2639,7 +2619,7 @@ fn test_literal_eval_scalar_store_uses_direct_local_write_without_magician() {
         &default_link_paths(),
         &[],
     );
-    assert_eq!(out, "yes");
+    assert_eq!(out, "yes:changed");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -3477,7 +3457,7 @@ fn test_literal_eval_float_scope_read_uses_direct_params_without_magician() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a literal eval integer read-modify-write can use direct caller locals.
+/// Verifies a literal eval integer read-modify-write uses scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_scope_read_write_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_aot_scope_read_write_asm");
@@ -3488,31 +3468,11 @@ fn test_literal_eval_scope_read_write_uses_aot_without_execute_bridge() {
         false,
         false,
     );
-    assert!(
-        user_asm.contains("eval literal AOT compiled"),
-        "literal eval read-modify-write should use the AOT path:\n{user_asm}"
-    );
-    assert!(
-        user_asm.contains("eval literal AOT compiled direct local read/write stores"),
-        "literal eval read-modify-write should use direct local read/write stores:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_"),
-        "literal eval read-modify-write should not reference eval runtime helpers:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval read-modify-write should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval read-modify-write should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval read-modify-write should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval integer read-modify-write",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3527,10 +3487,10 @@ fn test_literal_eval_scope_read_write_uses_aot_without_execute_bridge() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies float read-modify-write literal eval uses direct caller locals.
+/// Verifies float read-modify-write literal eval uses scope-aware EIR AOT.
 #[test]
-fn test_literal_eval_float_scope_read_write_uses_direct_locals_without_magician() {
-    let dir = make_cli_test_dir("elephc_literal_eval_float_scope_read_write_direct");
+fn test_literal_eval_float_scope_read_write_uses_scope_eir_without_magician() {
+    let dir = make_cli_test_dir("elephc_literal_eval_float_scope_read_write_eir");
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         "<?php $x = 20.0; eval('$x = $x / 2;'); echo $x;",
         &dir,
@@ -3538,23 +3498,11 @@ fn test_literal_eval_float_scope_read_write_uses_direct_locals_without_magician(
         false,
         false,
     );
-    assert!(
-        user_asm.contains("eval literal AOT compiled direct local read/write stores"),
-        "float literal eval read-modify-write should use direct caller locals:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_"),
-        "float literal eval read-modify-write should not reference eval runtime helpers:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "float literal eval read-modify-write should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "float literal eval read-modify-write should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "float literal eval read-modify-write",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3569,7 +3517,7 @@ fn test_literal_eval_float_scope_read_write_uses_direct_locals_without_magician(
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies local `isset()` and `empty()` probes inside literal eval lower through direct AOT.
+/// Verifies local `isset()` and `empty()` probes lower through scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_local_isset_empty_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_local_isset_empty_aot");
@@ -3588,27 +3536,11 @@ echo ":" . $value;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval local isset/empty should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval local isset/empty should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval local isset/empty should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval local isset/empty should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval local isset/empty should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval local isset/empty",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3672,7 +3604,7 @@ echo empty($blank) ? "B" : "bad";');
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `print` expressions inside literal eval lower through local-scalar AOT.
+/// Verifies `print` expressions inside literal eval lower through scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_print_expression_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_print_expr_aot");
@@ -3685,27 +3617,11 @@ echo ":" . $x;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval print expression should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval print expression should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval print expression should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval print expression should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval print expression should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval print expression",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3720,7 +3636,7 @@ echo ":" . $x;
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies error-suppressed scalar expressions inside literal eval use local-scalar AOT.
+/// Verifies error-suppressed scalar expressions use scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_error_suppress_expression_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_error_suppress_expr_aot");
@@ -3732,27 +3648,11 @@ echo ":" . $x;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval error suppression should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval error suppression should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval error suppression should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval error suppression should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval error suppression should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval error suppression",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3767,7 +3667,7 @@ echo ":" . $x;
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a self-contained literal eval while loop uses scalar AOT without eval scope runtime.
+/// Verifies a literal eval while loop uses a scope-aware internal EIR function.
 #[test]
 fn test_literal_eval_local_while_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_local_while_aot");
@@ -3783,27 +3683,11 @@ echo ":" . $sum;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval while loop should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval while loop should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval while loop should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval while loop should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval while loop should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval while loop",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3833,27 +3717,11 @@ echo ":" . $i;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval do/while loop should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval do/while loop should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval do/while loop should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval do/while loop should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval do/while loop should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval do/while loop",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3882,27 +3750,11 @@ echo ":" . $i;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval for loop should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval for loop should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval for loop should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval for loop should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval for loop should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval for loop",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3934,27 +3786,11 @@ echo ":" . $i . ":" . $j . ":" . $k;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval local inc/dec should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval local inc/dec should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval local inc/dec should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval local inc/dec should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval local inc/dec should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval local increment/decrement",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -3969,7 +3805,7 @@ echo ":" . $i . ":" . $j . ":" . $k;
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies supported `switch` statements inside literal eval lower through local-scalar AOT.
+/// Verifies supported `switch` statements lower through scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_switch_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_switch_aot");
@@ -3988,27 +3824,11 @@ echo ":" . $x;
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "literal eval switch should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "literal eval switch should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "literal eval switch should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "literal eval switch should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "literal eval switch should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval switch",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -4023,7 +3843,7 @@ echo ":" . $x;
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies default-before-case switch fallthrough lowers through local-scalar AOT.
+/// Verifies default-before-case switch fallthrough lowers through scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_switch_default_before_case_uses_aot_without_magician() {
     let dir = make_cli_test_dir("elephc_literal_eval_switch_default_before_case_aot");
@@ -4041,27 +3861,11 @@ switch ($x) {
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "default-before-case switch should use local-scalar AOT:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "default-before-case switch should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_"),
-        "default-before-case switch should not reference eval runtime helpers:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "default-before-case switch should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "default-before-case switch should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "default-before-case literal eval switch",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -4098,7 +3902,7 @@ switch (2) {
     );
     assert!(
         !user_asm.contains("eval literal AOT compiled local scalar"),
-        "no-scope default-before-case switch should not use the local-scalar mini-codegen:\n{user_asm}"
+        "no-scope default-before-case switch should not use the legacy eval mini-backend:\n{user_asm}"
     );
     assert!(
         !user_asm.contains("__elephc_eval_execute"),
@@ -4152,27 +3956,11 @@ eval('for ($i = 0; $i < 3; $i = $i + 1) {
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "switch continue should use local-scalar AOT:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "switch continue should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_"),
-        "switch continue should not reference eval runtime helpers:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "switch continue should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "switch continue should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "literal eval switch continue",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -4201,7 +3989,7 @@ echo ":" . $key . ":" . $value;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("eval literal AOT compiled EIR function with scope reads"),
+        user_asm.contains("eval literal AOT compiled EIR function with eval scope"),
         "static foreach eval should use the scope-aware EIR AOT function path:\n{user_asm}"
     );
     assert!(
@@ -4303,7 +4091,7 @@ echo $kept;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("eval literal AOT compiled EIR function with scope reads"),
+        user_asm.contains("eval literal AOT compiled EIR function with eval scope"),
         "foreach over caller-scope arrays should use the scope-aware EIR AOT function path:\n{user_asm}"
     );
     assert!(
@@ -4364,7 +4152,7 @@ eval('foreach ($n as $item) { echo $item; }');
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies the prime-sum benchmark fragment uses scalar AOT without eval scope runtime.
+/// Verifies the prime-sum benchmark fragment uses scope-aware EIR AOT.
 #[test]
 fn test_literal_eval_prime_loop_uses_aot_without_execute_bridge() {
     let dir = make_cli_test_dir("elephc_literal_eval_prime_loop_aot");
@@ -4390,27 +4178,11 @@ echo $sum;');
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(
-        user_asm.contains("eval literal AOT compiled local scalar with direct local sync"),
-        "prime loop eval should use local-scalar AOT with direct sync:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_scope_set"),
-        "prime loop eval should not write through eval scope:\n{user_asm}"
-    );
-    assert!(
-        !user_asm.contains("__elephc_eval_execute"),
-        "prime loop eval should not call the interpreter bridge:\n{user_asm}"
-    );
-    assert!(
-        !runtime_asm.contains("__elephc_eval_"),
-        "prime loop eval should not emit eval bridge runtime helpers:\n{runtime_asm}"
-    );
-    assert!(
-        !required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_magician"),
-        "prime loop eval should not link elephc_magician: {required_libraries:?}"
+    assert_scope_eir_aot_without_bridge(
+        &user_asm,
+        &runtime_asm,
+        &required_libraries,
+        "prime loop literal eval",
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let out = assemble_and_run(
@@ -14079,6 +13851,22 @@ try {
         out,
         "ValueError:\"live\" is not a valid backing value for enum EvalDynStatus"
     );
+}
+
+/// Verifies eval can construct, catch, inspect, and call inherited methods on
+/// the builtin `UnhandledMatchError` class through the native bridge.
+#[test]
+fn test_eval_fragment_constructs_unhandled_match_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try {
+    throw new UnhandledMatchError("eval");
+} catch (UnhandledMatchError $error) {
+    echo ($error instanceof Error ? "yes:" : "no:") . $error->getMessage();
+}');
+"#,
+    );
+    assert_eq!(out, "yes:eval");
 }
 
 /// Verifies eval-declared enums reject magic methods PHP forbids on enums.

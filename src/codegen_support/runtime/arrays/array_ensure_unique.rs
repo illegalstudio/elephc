@@ -13,8 +13,10 @@ use crate::codegen_support::platform::Arch;
 
 /// Splits a shared array before mutation using copy-on-write (COW) semantics.
 ///
-/// Null arrays (x0=0) are returned immediately as they are trivially unique.
-/// For non-null arrays: if refcount > 1, clones the array and decrements the
+/// Null arrays (x0=0) and the in-band null-container sentinel that missed reads
+/// materialize (issue #556) are returned unchanged: neither carries a heap header,
+/// so they must never reach the refcount load below.
+/// For real arrays: if refcount > 1, clones the array and decrements the
 /// original's refcount; if refcount <= 1, returns the array unchanged.
 ///
 /// Dispatches to `emit_array_ensure_unique_linux_x86_64` on x86_64; emits
@@ -32,8 +34,15 @@ pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_ensure_unique ---");
     emitter.label_global("__rt_array_ensure_unique");
 
-    // -- null arrays are already trivially unique --
+    // -- null and sentinel-null arrays are already trivially unique --
     emitter.instruction("cbz x0, __rt_array_ensure_unique_done");               // null inputs do not need copy-on-write splitting
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the array carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_array_ensure_unique_done");                  // sentinel-null arrays from missed reads have no header to split
 
     // -- only shared arrays need to be cloned --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform header
@@ -59,9 +68,10 @@ pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux implementation of `__rt_array_ensure_unique`.
 ///
-/// Mirrors the ARM64 logic: null inputs return immediately; shared arrays
-/// (refcount > 1) are cloned via `__rt_array_clone_shallow` and the original's
-/// refcount is decremented; unique arrays (refcount <= 1) are returned unchanged.
+/// Mirrors the ARM64 logic: null and sentinel-null inputs return immediately;
+/// shared arrays (refcount > 1) are cloned via `__rt_array_clone_shallow` and the
+/// original's refcount is decremented; unique arrays (refcount <= 1) are returned
+/// unchanged.
 ///
 /// Input:  rdi = candidate indexed-array pointer
 /// Output: rax = unique indexed-array pointer
@@ -73,6 +83,13 @@ fn emit_array_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // default to returning the original indexed-array pointer when no copy-on-write split is needed
     emitter.instruction("test rdi, rdi");                                       // null indexed-array pointers are already trivially unique
     emitter.instruction("je __rt_array_ensure_unique_done");                    // return immediately for null inputs without touching heap metadata
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r10");                                        // does the indexed array carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_array_ensure_unique_done");                    // sentinel-null arrays from missed reads have no header to split
     emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
     emitter.instruction("cmp r10d, 1");                                         // does the indexed array have more than one logical owner?
     emitter.instruction("jbe __rt_array_ensure_unique_done");                   // refcount <= 1 means the indexed array can be mutated in place
