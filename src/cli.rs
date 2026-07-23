@@ -53,14 +53,14 @@ pub(crate) fn wants_mascotte(args: &[String]) -> bool {
 }
 
 /// Prints the ASCII mascot and a randomly chosen quote to stdout. The index
-/// comes from the current time's sub-second nanoseconds — good enough for a
+/// comes from the current time's sub-second microseconds — good enough for a
 /// cosmetic banner, no `rand` dependency needed.
 pub(crate) fn print_mascotte() {
-    let nanos = std::time::SystemTime::now()
+    let micros = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
+        .map(|d| d.subsec_micros())
         .unwrap_or(0);
-    let quote = ZEN_QUOTES[(nanos as usize) % ZEN_QUOTES.len()];
+    let quote = ZEN_QUOTES[(micros as usize) % ZEN_QUOTES.len()];
     println!("{}\n\n  \"{}\"\n", MASCOTTE_ART, quote);
 }
 
