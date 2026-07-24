@@ -214,6 +214,21 @@ impl<'f> Builder<'f> {
         self.func.values[value.as_raw() as usize].ownership
     }
 
+    /// Returns the number of SSA values currently emitted in this function.
+    pub fn value_count(&self) -> usize {
+        self.func.values.len()
+    }
+
+    /// Updates one result value's ownership on both value and instruction metadata.
+    pub fn set_value_ownership(&mut self, value: ValueId, ownership: Ownership) {
+        let value_index = value.as_raw() as usize;
+        let def = self.func.values[value_index].def;
+        self.func.values[value_index].ownership = ownership;
+        if let ValueDef::Instruction { inst, .. } = def {
+            self.func.instructions[inst.as_raw() as usize].result_ownership = ownership;
+        }
+    }
+
     /// Returns the opcode that produced an instruction-defined value, if available.
     pub fn value_defining_op(&self, value: ValueId) -> Option<Op> {
         self.value_defining_instruction(value).map(|inst| inst.op)

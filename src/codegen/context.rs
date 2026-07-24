@@ -850,11 +850,14 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
-    /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
+    /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
+        }
+        if self.value_ownership(value)? == Ownership::Owned {
+            return Ok(true);
         }
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -881,55 +884,7 @@ impl<'a> FunctionContext<'a> {
                         | PhpType::Iterable
                 ));
         }
-        Ok(matches!(
-            inst.op,
-            Op::Acquire
-                // Checked integer arithmetic and mixed numeric binops allocate a
-                // fresh, solely-owned boxed Mixed result. A Mixed-valued container
-                // (hash/array/object slot) steals that reference on insert instead
-                // of retaining it, so it must not be re-incref'd (issue #595).
-                | Op::ICheckedAdd
-                | Op::ICheckedSub
-                | Op::ICheckedMul
-                | Op::MixedNumericBinop
-                | Op::ArrayNew
-                | Op::HashNew
-                | Op::ArrayToMixed
-                | Op::ArrayCloneShallow
-                | Op::HashCloneShallow
-                | Op::ArrayUnion
-                | Op::HashUnion
-                | Op::ArrayHashUnion
-                | Op::HashArrayUnion
-                | Op::ArrayToHash
-                | Op::ObjectNew
-                | Op::DynamicObjectNew
-                | Op::DynamicObjectNewMixed
-                | Op::ClosureNew
-                | Op::FirstClassCallableNew
-                | Op::CallableArrayNew
-                | Op::BufferNew
-                | Op::GeneratorNew
-                | Op::CatchBind
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::LanguageConstructCall
-                | Op::EvalFunctionCall
-                | Op::EvalFunctionCallArray
-                | Op::EvalConstantFetch
-                | Op::RuntimeCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::CallableDescriptorInvoke
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        ))
+        Ok(false)
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.
