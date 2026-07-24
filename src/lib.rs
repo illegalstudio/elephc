@@ -25,6 +25,7 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
+mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.
