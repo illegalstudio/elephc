@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// array_is_list: report whether a container is a PHP list (keys 0..n-1 in order).
 /// Input:  x0 = container pointer (indexed array, hash, or boxed mixed cell)
@@ -63,6 +64,7 @@ pub fn emit_array_is_list(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_is_list_zero");                           // non-array mixed payloads are not lists
     emitter.label("__rt_array_is_list_unwrap");
     emitter.instruction("ldr x0, [x0, #8]");                                    // unbox the container pointer from mixed[8]
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_array_is_list_zero");
     emitter.instruction("b __rt_array_is_list");                                // re-dispatch on the unboxed container
     emitter.label("__rt_array_is_list_one");
     emitter.instruction("mov x0, #1");                                          // result: the value is a list
@@ -114,6 +116,7 @@ fn emit_array_is_list_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_is_list_zero");                         // non-array mixed payloads are not lists
     emitter.label("__rt_array_is_list_unwrap");
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // unbox the container pointer from mixed[8]
+    emit_branch_if_null_container(emitter, "rdi", "r10", "__rt_array_is_list_zero");
     emitter.instruction("jmp __rt_array_is_list");                              // re-dispatch on the unboxed container
     emitter.label("__rt_array_is_list_one");
     emitter.instruction("mov rax, 1");                                          // result: the value is a list
@@ -122,4 +125,3 @@ fn emit_array_is_list_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rax, rax");                                        // result: the value is not a list
     emitter.instruction("ret");                                                 // return to caller
 }
-

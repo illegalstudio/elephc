@@ -332,6 +332,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.label("__rt_uusf_havekey");
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key → key_lo/key_hi in x1/x2
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
+    emitter.instruction("mov x3, xzr");                                         // optional stat fields are probed without PHP undefined-key warnings
     emitter.instruction("bl __rt_mixed_array_get");                             // x0 = boxed Mixed value at the key (Mixed null on miss)
     emitter.instruction("mov x10, x0");                                         // keep the value box for release
     emitter.instruction("ldr x9, [x0]");                                        // value runtime tag
@@ -399,6 +400,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key → key_lo in rax, key_hi in rdx
     emitter.instruction("mov rsi, rax");                                        // key_lo → SysV second arg for the reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
+    emitter.instruction("xor ecx, ecx");                                        // optional stat fields are probed without PHP undefined-key warnings
     emitter.instruction("call __rt_mixed_array_get");                           // rax = boxed Mixed value at the key (Mixed null on miss)
     emitter.instruction("mov r10, rax");                                        // keep the value box for release
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // value runtime tag

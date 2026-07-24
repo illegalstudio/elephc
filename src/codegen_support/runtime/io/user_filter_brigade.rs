@@ -33,7 +33,9 @@
 //!   input from the stream layer; ERR_FATAL doesn't propagate as an
 //!   error to the caller.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    abi, emit::Emitter, platform::Arch, sentinels::emit_branch_if_null_container,
+};
 
 /// `__rt_user_filter_brigade_invoke`: dispatch a single 4-arg PHP filter
 /// invocation through bucket brigades.
@@ -186,7 +188,7 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #4");                                          // compare runtime values for the next branch
     emitter.instruction("b.ne __rt_ufbi_empty");                                // branch when the checked value is nonzero or different
     emitter.instruction("ldr x9, [x0, #8]");                                    // array ptr
-    emitter.instruction("cbz x9, __rt_ufbi_empty");                             // branch when the checked value is zero or equal
+    emit_branch_if_null_container(emitter, "x9", "x11", "__rt_ufbi_empty");
     emitter.instruction("ldr x10, [x9]");                                       // length
     emitter.instruction("cbz x10, __rt_ufbi_empty");                            // branch when the checked value is zero or equal
 
@@ -206,7 +208,7 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x16, #6");                                         // tag = obj?
     emitter.instruction("b.ne __rt_ufbi_walk_next");                            // branch when the checked value is nonzero or different
     emitter.instruction("ldr x0, [x0, #8]");                                    // bucket obj
-    emitter.instruction("cbz x0, __rt_ufbi_walk_next");                         // branch when the checked value is zero or equal
+    emit_branch_if_null_container(emitter, "x0", "x16", "__rt_ufbi_walk_next");
 
     // Save walk state across the stdclass_get call (x0-x18 are caller-saved).
     // Use non-overlapping 16-byte slots: 88..104, 104..120 (the previous
@@ -395,8 +397,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 4");                                          // compare runtime values for the next branch
     emitter.instruction("jne __rt_ufbi_empty_x");                               // branch when the checked value is nonzero or different
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // array
-    emitter.instruction("test r10, r10");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_ufbi_empty_x");                                // branch when the checked value is zero or equal
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_ufbi_empty_x");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // length
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_ufbi_empty_x");                                // branch when the checked value is zero or equal
@@ -421,8 +422,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag = obj?
     emitter.instruction("jne __rt_ufbi_walk_next_x");                           // branch when the checked value is nonzero or different
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // bucket obj
-    emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_ufbi_walk_next_x");                            // branch when the checked value is zero or equal
+    emit_branch_if_null_container(emitter, "rdi", "r10", "__rt_ufbi_walk_next_x");
     abi::emit_symbol_address(emitter, "rsi", "_brigade_data_key");
     emitter.instruction("mov rdx, 4");                                          // prepare SysV call argument
     abi::emit_call_label(emitter, "__rt_stdclass_get");

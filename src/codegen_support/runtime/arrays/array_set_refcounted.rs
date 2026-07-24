@@ -11,6 +11,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the refcounted indexed-array set helper for the current target.
 pub fn emit_array_set_refcounted(emitter: &mut Emitter) {
@@ -41,7 +42,12 @@ pub fn emit_array_set_refcounted(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the current packed indexed-array metadata
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the incoming heap payload before deriving the runtime value_type
-    emitter.instruction("cbz x10, __rt_array_set_refcounted_retain");           // null payloads cannot refine the array value_type metadata
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x11",
+        "__rt_array_set_refcounted_retain",
+    );
     emitter.instruction("ldr x11, [x10, #-8]");                                 // load the incoming payload heap kind word
     emitter.instruction("and x11, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x11, #2");                                         // is the incoming payload an indexed array?
@@ -143,8 +149,12 @@ fn emit_array_set_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the current packed indexed-array metadata
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the incoming heap payload before deriving the runtime value_type
-    emitter.instruction("test r8, r8");                                         // can the payload refine the indexed-array value_type metadata?
-    emitter.instruction("jz __rt_array_set_refcounted_retain");                 // null payloads keep existing metadata unchanged
+    emit_branch_if_null_container(
+        emitter,
+        "r8",
+        "r9",
+        "__rt_array_set_refcounted_retain",
+    );
     emitter.instruction("mov r9, QWORD PTR [r8 - 8]");                          // load the incoming payload heap kind word
     emitter.instruction("and r9, 0xff");                                        // isolate the low-byte heap kind tag
     emitter.instruction("cmp r9, 2");                                           // is the incoming payload an indexed array?

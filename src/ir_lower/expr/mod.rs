@@ -8076,9 +8076,14 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let mut operands = vec![array_value.value, index_value.value];
+    if matches!(op, Op::RuntimeCall) {
+        let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
+        operands.push(warning_flag.value);
+    }
     let result = ctx.emit_value(
         op,
-        vec![array_value.value, index_value.value],
+        operands,
         None,
         result_type,
         op.default_effects(),

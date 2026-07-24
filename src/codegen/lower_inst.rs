@@ -2051,6 +2051,9 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         return Ok(());
     }
     if inst.operands.len() == 3 {
+        if inst.result_php_type.codegen_repr() != PhpType::Void {
+            return lower_mixed_array_runtime_get(ctx, inst);
+        }
         return lower_mixed_array_runtime_set(ctx, inst);
     }
     if inst.operands.len() == 2 {
@@ -2461,13 +2464,16 @@ fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
+    let warn_on_missing = expect_operand(inst, 2)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "x3")?;
             ctx.load_value_to_reg(receiver, "x0")?;
         }
         Arch::X86_64 => {
             hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "rcx")?;
             ctx.load_value_to_reg(receiver, "rdi")?;
         }
     }

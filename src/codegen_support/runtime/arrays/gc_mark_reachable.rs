@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_gc_mark_reachable` runtime helper.
 ///
@@ -118,7 +119,12 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("lsl x11, x9, #3");                                     // compute the byte offset for an 8-byte child slot
     emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte array header
     emitter.instruction("ldr x0, [x10, x11]");                                  // load the nested heap child pointer
-    emitter.instruction("cbz x0, __rt_gc_mark_reachable_array_next");           // null child slots need no recursion
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x10",
+        "__rt_gc_mark_reachable_array_next",
+    );
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load the child kind word to check whether it is already marked
     emitter.instruction("mov x11, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x11, x11, #16");                                   // x11 = GC reachable bit inside the kind word

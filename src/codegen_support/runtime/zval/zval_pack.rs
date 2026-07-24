@@ -19,6 +19,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// zval_pack: convert a boxed elephc Mixed cell into a PHP zval.
 /// Input:  x0 / rax = boxed Mixed cell pointer
@@ -48,6 +49,23 @@ fn emit_zval_pack_element_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+
+    emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("b.lt __rt_zval_pack_element_input_ready");             // scalar payloads preserve their original bits
+    emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("b.gt __rt_zval_pack_element_input_ready");             // nested Mixed and other tags use ordinary dispatch
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x9",
+        "__rt_zval_pack_element_null_input",
+    );
+    emitter.instruction("b __rt_zval_pack_element_input_ready");                // pack the valid container payload
+    emitter.label("__rt_zval_pack_element_null_input");
+    emitter.instruction("mov x0, #8");                                          // convert a legacy container-shaped null to IS_NULL
+    emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
+    emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
+    emitter.label("__rt_zval_pack_element_input_ready");
 
     // -- set up stack frame and spill the incoming payload triple --
     emitter.instruction("sub sp, sp, #64");                                     // reserve tag/lo/hi/value/type_info slots plus frame records
@@ -200,6 +218,23 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+
+    emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("jl __rt_zval_pack_element_input_ready");               // scalar payloads preserve their original bits
+    emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("jg __rt_zval_pack_element_input_ready");               // nested Mixed and other tags use ordinary dispatch
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__rt_zval_pack_element_null_input",
+    );
+    emitter.instruction("jmp __rt_zval_pack_element_input_ready");              // pack the valid container payload
+    emitter.label("__rt_zval_pack_element_null_input");
+    emitter.instruction("mov rax, 8");                                          // convert a legacy container-shaped null to IS_NULL
+    emitter.instruction("xor edi, edi");                                        // canonical null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // canonical null has no high payload word
+    emitter.label("__rt_zval_pack_element_input_ready");
 
     // -- set up stack frame and spill the incoming payload triple --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer

@@ -10,10 +10,12 @@
 //! - `stdClass` layout is `[class_id:8][hash_ptr:8]`; properties live in a hash of boxed Mixed values.
 //! - ARM64 uses the project PCS convention; x86_64 uses SysV register materialization.
 //! - Property reads return owned `Mixed*` cells; borrowed hash entries are retained before return.
+//! - Mixed object dispatch rejects zero and sentinel payloads before reading a class id.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emit `__rt_stdclass_new() → obj_ptr` for both targets.
 ///
@@ -341,7 +343,7 @@ fn emit_mixed_property_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
     emitter.instruction("b.ne __rt_mixed_property_get_null");                   // non-object payload → null result
     emitter.instruction("ldr x9, [x0, #8]");                                    // load obj pointer from mixed[8]
-    emitter.instruction("cbz x9, __rt_mixed_property_get_null");                // null obj → null result
+    emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_property_get_null");
     emitter.instruction("ldr x10, [x9]");                                       // load class_id from obj[0]
     abi::emit_symbol_address(emitter, "x11", "_stdclass_class_id");
     emitter.instruction("ldr x11, [x11]");                                      // load the compile-time stdClass class_id sentinel
@@ -391,7 +393,7 @@ fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
     emitter.instruction("b.ne __rt_mixed_property_set_done");                   // non-object payload → silently drop the write
     emitter.instruction("ldr x9, [x0, #8]");                                    // load obj pointer from mixed[8]
-    emitter.instruction("cbz x9, __rt_mixed_property_set_done");                // null obj → silently drop the write
+    emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_property_set_done");
     emitter.instruction("ldr x10, [x9]");                                       // load class_id from obj[0]
     abi::emit_symbol_address(emitter, "x11", "_stdclass_class_id");
     emitter.instruction("ldr x11, [x11]");                                      // load the compile-time stdClass class_id sentinel
@@ -585,8 +587,7 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
     emitter.instruction("jne __rt_mixed_property_get_null");                    // non-object payload → null result
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load obj pointer from mixed[8]
-    emitter.instruction("test r10, r10");                                       // null obj → null result
-    emitter.instruction("je __rt_mixed_property_get_null");                     // branch on the current JSON object encoder condition
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_property_get_null");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
     abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
@@ -636,8 +637,7 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
     emitter.instruction("jne __rt_mixed_property_set_done");                    // non-object payload → drop write
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load obj pointer from mixed[8]
-    emitter.instruction("test r10, r10");                                       // null obj → drop write
-    emitter.instruction("je __rt_mixed_property_set_done");                     // branch on the current JSON object encoder condition
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_property_set_done");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
     abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?

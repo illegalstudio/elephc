@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_array_push_refcounted` runtime helper for ARM64.
 ///
@@ -61,6 +62,12 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore destination array pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // restore retained heap pointer
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the current packed array kind word
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x10",
+        "__rt_array_push_refcounted_push",
+    );
     emitter.instruction("ldr x10, [x1, #-8]");                                  // load the child heap kind word
     emitter.instruction("and x10, x10, #0xff");                                 // isolate the child's low-byte heap kind tag
     emitter.instruction("cmp x10, #2");                                         // is the child an indexed array?
@@ -131,6 +138,12 @@ fn emit_array_push_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the unique destination indexed-array pointer before updating its packed value_type metadata
     emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the current packed indexed-array kind word from the destination heap header
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the retained child pointer before deriving its heap kind tag
+    emit_branch_if_null_container(
+        emitter,
+        "r8",
+        "r9",
+        "__rt_array_push_refcounted_push",
+    );
     emitter.instruction("mov r9, QWORD PTR [r8 - 8]");                          // load the child heap-kind word so the destination indexed array can record the correct value_type tag
     emitter.instruction("and r9, 0xff");                                        // isolate the child low-byte heap kind tag from the packed uniform header
     emitter.instruction("cmp r9, 2");                                           // is the retained child an indexed array?

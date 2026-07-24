@@ -7,8 +7,10 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - Container-shaped null/sentinel payloads are treated as empty before any header load.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits `__rt_mixed_is_empty` which implements PHP `empty()` semantics for boxed mixed values.
 ///
@@ -100,7 +102,7 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_is_empty_array");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the array/hash pointer from value_lo
-    emitter.instruction("cbz x10, __rt_mixed_is_empty_yes");                    // null containers behave like empty/null
+    emit_branch_if_null_container(emitter, "x10", "x11", "__rt_mixed_is_empty_yes");
     emitter.instruction("ldr x10, [x10]");                                      // load the container element count from the header
     emitter.instruction("cmp x10, #0");                                         // compare the element count against zero
     emitter.instruction("cset x0, eq");                                         // return 1 when the container has no elements

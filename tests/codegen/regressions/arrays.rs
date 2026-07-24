@@ -1545,6 +1545,33 @@ echo "done", "\n";
     assert_eq!(out.stderr, "");
 }
 
+/// Ordinary reads from a valid indexed array boxed behind Mixed diagnose missing
+/// integer and string keys, while the same keys under coalescing stay quiet.
+#[test]
+fn test_ternary_indexed_merge_present_arm_preserves_missing_key_warning_modes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc != 1 ? $rows[5] : ["a", "b"];
+var_dump($r[7]);
+echo ($r[8] ?? "quiet-int"), "\n";
+var_dump($r["missing"]);
+echo ($r["quiet"] ?? "quiet-string"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\nquiet-int\nNULL\nquiet-string\n");
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 1);
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined array key \"missing\"")
+            .count(),
+        1
+    );
+    assert!(!out.stderr.contains("Undefined array key 8"));
+    assert!(!out.stderr.contains("Undefined array key \"quiet\""));
+}
+
 /// Regression for issue #585: the previously crashing read path must leave the heap
 /// clean — the boxed Mixed carrying the sentinel container is released like any other
 /// temporary rather than entering refcount traffic on a bogus pointer.
@@ -1566,13 +1593,11 @@ echo ($r[0] ?? "none"), "\n";
     );
 }
 
-/// Regression for issue #585 (sibling writer): an indexed write into the
-/// sentinel-container Mixed produced by the same ternary merge must not dereference
-/// the sentinel in `__rt_mixed_array_set`. The write is dropped (matching elephc's
-/// existing null-target behavior) and execution continues; the follow-up read yields
-/// the default through the guarded reader.
+/// Regression for issue #585 (sibling writer): an indexed write into the null
+/// produced by the same ternary merge autovivifies an array, matching PHP instead
+/// of dropping the write or dereferencing the legacy sentinel shape.
 #[test]
-fn test_ternary_missed_indexed_read_merge_write_does_not_crash() {
+fn test_ternary_missed_indexed_read_merge_write_autovivifies() {
     let out = compile_and_run_capture(
         r#"<?php
 $rows = [[1, 2]];
@@ -1583,12 +1608,12 @@ echo "done", "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
-    assert_eq!(out.stdout, "none\ndone\n");
+    assert_eq!(out.stdout, "z\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
 }
 
-/// Regression for issue #585 (sibling writer): the dropped write into the
-/// sentinel-container Mixed releases the boxed value it consumes, leaving the heap
-/// clean instead of leaking the assigned string.
+/// Regression for issue #585 (sibling writer): the autovivified keyed write
+/// transfers the boxed value into the fresh array and leaves ownership balanced.
 #[test]
 fn test_ternary_missed_indexed_read_merge_write_is_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1601,6 +1626,144 @@ echo "done", "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The malformed container-shaped Mixed no longer escapes boxing: ordinary reads
+/// see canonical PHP null (and warn), while coalescing reads stay quiet.
+#[test]
+fn test_ternary_missed_read_boxes_canonical_null_and_preserves_warning_mode() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo is_null($r) ? "null\n" : "not-null\n";
+echo $r === null ? "strict-null\n" : "not-strict-null\n";
+var_dump($r[0]);
+echo ($r[0] ?? "quiet"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "null\nstrict-null\nNULL\nquiet\n");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Trying to access array offset on null")
+            .count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+}
+
+/// Sentinel-derived nulls stay canonical across non-indexing Mixed consumers:
+/// count/casts/empty, JSON encoding, and serialization must not dereference a
+/// container-shaped payload or observe it as an array.
+#[test]
+fn test_ternary_missed_read_structural_mixed_consumers_observe_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["fallback"];
+echo count($r), "\n";
+echo empty($r) ? "empty\n" : "not-empty\n";
+echo (int) $r, "\n";
+echo json_encode($r), "\n";
+echo serialize($r), "\n";
+echo zval_type(zval_pack($r)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "0\nempty\n0\nnull\nN;\n1\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+}
+
+/// Nullable container elements can be retained inside typed indexed and
+/// associative storage, whole-boxed, and read back as canonical nulls.
+#[test]
+fn test_ternary_missed_read_normalizes_sentinel_children_in_typed_containers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [["present"]];
+$typed = [$rows[5]];
+$indexed = $argc == 1 ? $typed : [7];
+$typed_map = ["missed" => $rows[6]];
+$assoc = $argc == 1 ? $typed_map : ["missed" => 7];
+$set = [["seed"]];
+$set[0] = $rows[7];
+$assigned = $argc == 1 ? $set : [7];
+echo is_null($indexed[0]) && $indexed[0] === null ? "indexed-null\n" : "indexed-shape\n";
+echo is_null($assoc["missed"]) && $assoc["missed"] === null ? "assoc-null\n" : "assoc-shape\n";
+echo is_null($assigned[0]) && $assigned[0] === null ? "assigned-null\n" : "assigned-shape\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "indexed-null\nassoc-null\nassigned-null\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 6").count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 7").count(),
+        1
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Keyed writes on sentinel-derived nulls follow PHP for integer, negative, and
+/// string keys; negative/string keys promote the fresh indexed array to hash storage.
+#[test]
+fn test_ternary_missed_read_keyed_writes_autovivify_all_key_shapes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$a = $argc == 1 ? $rows[5] : ["fallback"];
+$a[0] = "zero";
+$b = $argc == 1 ? $rows[5] : ["fallback"];
+$b[-1] = "negative";
+$c = $argc == 1 ? $rows[5] : ["fallback"];
+$c["name"] = "string";
+echo $a[0], "|", $b[-1], "|", $c["name"], "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "zero|negative|string\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        3
+    );
+}
+
+/// Nested keyed writes autovivify the null root in place, so the child created
+/// by fetch-for-write remains attached to the original Mixed local.
+#[test]
+fn test_ternary_missed_read_nested_write_autovivifies_root_in_place() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["fallback"];
+$r["outer"]["inner"] = "value";
+echo $r["outer"]["inner"], "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "value\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

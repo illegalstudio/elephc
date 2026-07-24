@@ -8,9 +8,10 @@
 //! Key details:
 //! - JSON encoders are emitted formatter state machines; escaping, type tags, and buffer growth are observable PHP behavior.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
 ///
@@ -79,14 +80,17 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_encode_mixed_array");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed array pointer
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     emitter.instruction("b __rt_json_encode_array_dynamic");                    // tail-call to the dynamic indexed-array JSON encoder
 
     emitter.label("__rt_json_encode_mixed_assoc");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed associative-array pointer
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     emitter.instruction("b __rt_json_encode_assoc");                            // tail-call to associative-array JSON encoding
 
     emitter.label("__rt_json_encode_mixed_object");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed object pointer
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
     emitter.instruction("ldr x9, [x0]");                                        // load class_id from the object header
@@ -166,14 +170,17 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_encode_mixed_array");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed indexed-array pointer from the mixed cell payload
+    emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     emitter.instruction("jmp __rt_json_encode_array_dynamic");                  // tail-call to the dynamic indexed-array JSON encoder
 
     emitter.label("__rt_json_encode_mixed_assoc");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed associative-array pointer from the mixed cell payload
+    emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     emitter.instruction("jmp __rt_json_encode_assoc");                          // tail-call to the associative-array JSON encoder
 
     emitter.label("__rt_json_encode_mixed_object");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed object pointer from the mixed cell payload
+    emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
