@@ -493,6 +493,147 @@ echo $r[0];
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Regression for #607: loop storage inference must iterate when an external scalar widens
+/// before feeding an array rebind. A one-shot scan sees `$v` as the entry `int` and misses that
+/// checked subtraction makes it `mixed`, leaving the next iteration's `$r[0]` read raw.
+#[test]
+fn test_loop_reassigned_array_cascading_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$out = "";
+$v = 3;
+for ($k = 0; $k < 4; $k++) {
+    $out = $out . $r[0] . ",";
+    $v = $v - 1;
+    $r = [$v, 0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Regression for #608: two different raw array element layouts must join to boxed `mixed`
+/// storage at the loop header. Otherwise the single lowered string read interprets later raw
+/// integers as `{pointer, length}` string descriptors and silently emits empty output.
+#[test]
+fn test_loop_reassigned_array_raw_to_raw_representation_join() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["x", "y"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [$k, $k];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "x,0,1,");
+}
+
+/// Verifies loop storage inference follows a non-literal RHS through another local instead of
+/// relying on array-literal-only inference in EIR lowering.
+#[test]
+fn test_loop_reassigned_array_non_literal_rhs_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$next = $r;
+$out = "";
+for ($k = 0; $k < 4; $k++) {
+    $out = $out . $r[0] . ",";
+    $next = [$r[0] - 1, 0];
+    $r = $next;
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies a call-produced array rebind consumes the same checker storage contract as literals
+/// and local aliases; EIR must not need to recognize the RHS expression shape independently.
+#[test]
+fn test_loop_reassigned_array_call_rhs_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+function makeRow(int $value): array {
+    return [$value, $value];
+}
+$r = ["x", "y"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = makeRow($k);
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "x,0,1,");
+}
+
+/// Verifies the checker-recorded fixed-point contract reaches function EIR lowering rather than
+/// depending on main's final top-level environment.
+#[test]
+fn test_loop_reassigned_array_fixed_point_inside_function() {
+    let out = compile_and_run(
+        r#"<?php
+function countdown(array $row): string {
+    $out = "";
+    for ($k = 0; $k < 4; $k++) {
+        $out = $out . $row[0] . ",";
+        $row = [$row[0] - 1, 0];
+    }
+    return $out;
+}
+echo countdown([3, 0]);
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies nested closure scope keys carry the checker contract into the generated closure EIR
+/// function without colliding with loops at the same line/column in other function-like bodies.
+#[test]
+fn test_loop_reassigned_array_fixed_point_inside_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$countdown = function(array $row): string {
+    $out = "";
+    for ($k = 0; $k < 4; $k++) {
+        $out = $out . $row[0] . ",";
+        $row = [$row[0] - 1, 0];
+    }
+    return $out;
+};
+echo $countdown([3, 0]);
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies the fixed-point storage join covers associative-array values and materializes
+/// `HashToMixed` before a raw string payload is rebound to raw integers.
+#[test]
+fn test_loop_reassigned_assoc_array_raw_to_raw_representation_join() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$row = ["value" => "x"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $row["value"] . ",";
+    $row = ["value" => $k];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out.stdout, "x,0,1,");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Verifies array access on function call result.
 #[test]
 fn test_array_access_on_function_call_result() {

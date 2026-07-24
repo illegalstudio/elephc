@@ -19,37 +19,31 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
-/// Widens locals whose indexed-array element representation changes to a boxed cell across the
-/// loop back edge, so the single-pass loop body types every read against the fixed-point type:
-/// growth/write sites that join the element to `mixed` (issue #452) and full reassignments that
-/// rebuild the array with a boxed `mixed` or tagged `int|null` element (issue #594). Without
-/// this, an early read is typed against the pre-promotion element type even though the back edge
-/// brings the promoted array around; fixing the type to `mixed` up front resolves both.
-fn widen_loop_grown_array_pushes(
+/// Computes and records fixed-point array storage contracts before checking a loop body.
+///
+/// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
+/// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
+/// header/body read is checked. EIR lowering later consumes the recorded contract for the same
+/// loop span rather than repeating expression inference.
+fn stabilize_loop_storage(
     checker: &mut Checker,
+    loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
     env: &mut TypeEnv,
 ) {
     let snapshot = env.clone();
-    let mut names = crate::types::checker::loop_grown_mixed_array_pushes(
+    let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
-        &|name| snapshot.get(name).cloned(),
-        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
+        &snapshot,
+        &mut |expr, analysis_env| checker.infer_type(expr, analysis_env).ok(),
     );
-    // A full reassignment `$r = [...]` that rebuilds the array with a boxed `mixed` element is
-    // not a growth site, but a read of `$r` at the top of the single-pass loop body is still
-    // typed against the entry `array<int>` while the back edge brings the `array<mixed>` around
-    // (issue #594). Widen those locals too so the entry type sees the fixed-point representation.
-    names.extend(crate::types::checker::loop_reassigned_mixed_arrays(
-        body,
-        update,
-        &|name| snapshot.get(name).cloned(),
-        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
-    ));
-    for name in names {
-        env.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    let key = (checker.current_loop_storage_scope.clone(), loop_span);
+    let recorded = checker.loop_storage_types.entry(key).or_default();
+    for (name, storage_type) in contracts {
+        recorded.insert(name.clone(), storage_type.clone());
+        env.insert(name, storage_type);
     }
 }
 
@@ -176,7 +170,7 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -302,7 +296,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
@@ -312,7 +306,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
@@ -330,7 +324,7 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
-                widen_loop_grown_array_pushes(self, body, update.as_deref(), env);
+                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
                 if let Some(c) = condition {
                     self.infer_type_with_assignment_effects(c, env)?;
                 }

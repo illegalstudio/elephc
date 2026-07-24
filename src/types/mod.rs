@@ -58,6 +58,7 @@ pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
 };
+pub(crate) use result::LoopStorageTypes;
 pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
@@ -78,4 +79,9 @@ pub fn check(
     program: &crate::parser::ast::Program,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check(program)
+}
+
+/// Returns the stable checker/EIR scope key for a closure nested at `span`.
+pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
+    format!("{}::closure@{}:{}", parent, span.line, span.col)
 }

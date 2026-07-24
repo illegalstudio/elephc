@@ -24,7 +24,7 @@ mod driver;
 mod extern_decl;
 mod functions;
 mod inference;
-mod loop_widening;
+mod loop_storage;
 mod method_pass;
 mod schema;
 mod stmt_check;
@@ -47,8 +47,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
-pub(crate) use loop_widening::loop_grown_mixed_array_pushes;
-pub(crate) use loop_widening::loop_reassigned_mixed_arrays;
+pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
@@ -173,6 +172,8 @@ pub(crate) struct Checker {
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
     /// used to restore correct depth when branching through `finally`.
     pub finally_break_continue_bases: Vec<usize>,
+    /// Stable function-like scope key used to disambiguate identical loop spans.
+    pub current_loop_storage_scope: String,
     /// Warnings raised during type checking (e.g. `#[\Deprecated]` call sites).
     /// Merged with AST-only warnings from `collect_warnings` before being returned
     /// in `CheckResult`.
@@ -188,6 +189,8 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Fixed-point storage contracts keyed by function-like scope and loop span.
+    pub loop_storage_types: crate::types::LoopStorageTypes,
 }
 
 #[derive(Clone)]
@@ -265,6 +268,7 @@ pub fn check_types(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        loop_storage_types: checker.loop_storage_types,
     })
 }
 

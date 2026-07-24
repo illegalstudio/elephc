@@ -21,6 +21,9 @@ use super::{
     InterfaceInfo, PackedClassInfo, PhpType, ReturnAliasSummaries, TypeEnv,
 };
 
+/// Fixed-point loop storage contracts keyed by `(function-like scope, loop span)`.
+pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
 /// `Error` at runtime instead of a compile-time rejection.
@@ -82,6 +85,8 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
+    pub loop_storage_types: LoopStorageTypes,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).
