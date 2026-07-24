@@ -154,15 +154,6 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
-    /// Names of assignment targets that were poisoned during error recovery
-    /// because their initializer failed to type-check (see
-    /// `stmt_check::assignments::locals`). The checker binds such a target as
-    /// `Mixed` so later uses do not cascade into misleading `Undefined variable`
-    /// diagnostics. Recorded only so the method-body pass can exclude a poisoned
-    /// *top-level* local from the environment it inherits: methods seed their base
-    /// env from the top-level env, and a poisoned `Mixed` would otherwise merge
-    /// with a same-named method local and spawn a spurious return-type error.
-    pub failed_assignment_targets: HashSet<String>,
     /// Names bound as `foreach` loop keys in the current function/closure scope.
     /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
     /// even when the checker types it as `Int`/`Str` from the source array, so an

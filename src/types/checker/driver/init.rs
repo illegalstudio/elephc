@@ -143,7 +143,6 @@ impl Checker {
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
-            failed_assignment_targets: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
             break_continue_depth: 0,

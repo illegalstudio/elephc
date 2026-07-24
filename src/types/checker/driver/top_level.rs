@@ -40,6 +40,7 @@ impl Checker {
                 .unwrap_or_default();
             all_errors.push(stmt_errors);
         }
+        self.top_level_env = global_env.clone();
         self.eval_barrier_active = saved_eval_barrier_active;
         (global_env, all_errors)
     }

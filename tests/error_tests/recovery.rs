@@ -11,6 +11,16 @@
 
 use super::*;
 
+/// Runs full type checking and returns every emitted diagnostic message.
+fn checker_error_messages(src: &str) -> Vec<String> {
+    check_source_full(src)
+        .expect_err("expected source to fail type checking")
+        .flatten()
+        .iter()
+        .map(|error| error.message.clone())
+        .collect()
+}
+
 /// Verifies the parser collects multiple errors from malformed PHP with sequential
 /// `echo ;` statements missing expressions. Uses `tokenize` + `parse_with_recovery`
 /// to confirm at least 2 parse errors are reported.
@@ -89,12 +99,8 @@ fn test_type_checker_recovery_collects_multiple_method_return_errors() {
 /// error (the spread diagnostic), and nothing about the assigned `$s`.
 #[test]
 fn test_failed_assignment_target_no_undefined_cascade() {
-    let error = check_source_full("<?php $x = 5; $s = [...$x]; echo count($s);").unwrap_err();
-    let messages: Vec<String> = error
-        .flatten()
-        .iter()
-        .map(|error| error.message.clone())
-        .collect();
+    let messages =
+        checker_error_messages("<?php $x = 5; $s = [...$x]; echo count($s);");
     assert_eq!(
         messages.len(),
         1,
@@ -119,15 +125,9 @@ fn test_failed_assignment_target_no_undefined_cascade() {
 /// `mixed` target is accepted silently rather than producing spurious type errors.
 #[test]
 fn test_failed_assignment_many_uses_single_error() {
-    let error = check_source_full(
+    let messages = checker_error_messages(
         "<?php $x = 5; $s = [...$x]; echo count($s); echo $s[0]; var_dump($s); $y = $s;",
-    )
-    .unwrap_err();
-    let messages: Vec<String> = error
-        .flatten()
-        .iter()
-        .map(|error| error.message.clone())
-        .collect();
+    );
     assert_eq!(
         messages.len(),
         1,
@@ -146,15 +146,9 @@ fn test_failed_assignment_many_uses_single_error() {
 /// are both reported, while the assigned `$s` produces no `Undefined variable` noise.
 #[test]
 fn test_failed_assignment_preserves_later_real_undefined() {
-    let error = check_source_full(
+    let messages = checker_error_messages(
         "<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;",
-    )
-    .unwrap_err();
-    let messages: Vec<String> = error
-        .flatten()
-        .iter()
-        .map(|error| error.message.clone())
-        .collect();
+    );
     assert_eq!(
         messages.len(),
         2,
@@ -178,22 +172,101 @@ fn test_failed_assignment_preserves_later_real_undefined() {
     );
 }
 
-/// Regression for #597: a typed local declaration whose initializer fails to type-check must
-/// bind the target to its declared type for recovery, so later uses do not cascade. Only the
-/// real RHS (spread) error is reported.
+/// Regression for #597: a typed local declaration whose initializer fails to type-check binds
+/// the target as unknown for recovery, so later uses do not cascade. Only the real RHS error is
+/// reported.
 #[test]
 fn test_failed_typed_assignment_no_undefined_cascade() {
-    let error =
-        check_source_full("<?php $x = 5; int $s = [...$x]; echo count($s); echo $s;").unwrap_err();
-    let messages: Vec<String> = error
-        .flatten()
-        .iter()
-        .map(|error| error.message.clone())
-        .collect();
+    let messages =
+        checker_error_messages("<?php $x = 5; int $s = [...$x]; echo count($s); echo $s;");
     assert_eq!(
         messages.len(),
         1,
         "a failed typed assignment must emit exactly one error, got {:?}",
+        messages,
+    );
+    assert!(
+        messages[0].contains("Spread operator requires an array"),
+        "expected the spread diagnostic, got {:?}",
+        messages,
+    );
+}
+
+/// Regression for #597: a typed local whose initializer has an incompatible type is poisoned as
+/// unknown, preventing a later consumer from producing a second diagnostic based on the rejected
+/// declaration.
+#[test]
+fn test_failed_typed_assignment_mismatch_no_follow_on_error() {
+    let messages = checker_error_messages("<?php int $s = \"bad\"; echo count($s);");
+    assert_eq!(
+        messages.len(),
+        1,
+        "a typed-assignment mismatch must not trigger follow-on errors, got {:?}",
+        messages,
+    );
+    assert!(
+        messages[0].contains("cannot initialize $s as int with string"),
+        "expected the typed-assignment diagnostic, got {:?}",
+        messages,
+    );
+}
+
+/// Regression for #597: list destructuring is also a local-binding assignment. A non-array RHS
+/// must report its own diagnostic while every newly named target remains usable for recovery.
+#[test]
+fn test_failed_list_unpack_targets_no_undefined_cascade() {
+    let messages =
+        checker_error_messages("<?php [$a, $b] = 42; echo count($a); echo $b;");
+    assert_eq!(
+        messages.len(),
+        1,
+        "failed list unpacking must emit only its RHS-shape error, got {:?}",
+        messages,
+    );
+    assert!(
+        messages[0].contains("List unpacking requires an array"),
+        "expected the list-unpacking diagnostic, got {:?}",
+        messages,
+    );
+}
+
+/// Regression for #597: if list destructuring cannot infer its RHS at all, all targets are still
+/// bound for recovery and only the genuinely undefined source variable is diagnosed.
+#[test]
+fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
+    let messages =
+        checker_error_messages("<?php [$a, $b] = $missing; echo count($a); echo $b;");
+    assert_eq!(
+        messages,
+        vec!["Undefined variable: $missing".to_string()],
+        "failed list-unpack inference must not leave either target undefined",
+    );
+}
+
+/// Regression for #597: a failed reference assignment still names its target. Poisoning an
+/// unbound target prevents the undefined source diagnostic from cascading to later target reads.
+#[test]
+fn test_failed_reference_assignment_target_no_undefined_cascade() {
+    let messages =
+        checker_error_messages("<?php $target =& $missing; echo count($target);");
+    assert_eq!(
+        messages,
+        vec!["Undefined variable: $missing".to_string()],
+        "failed reference assignment must not leave its target undefined",
+    );
+}
+
+/// Regression for #597: a static local whose initializer fails must still be present in the local
+/// recovery environment, so later reads in the same function do not add undefined-variable noise.
+#[test]
+fn test_failed_static_local_target_no_undefined_cascade() {
+    let messages = checker_error_messages(
+        "<?php function f(int $x): void { static $s = [...$x]; echo count($s); }",
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "failed static-local initialization must emit only the RHS error, got {:?}",
         messages,
     );
     assert!(
@@ -213,22 +286,13 @@ fn test_valid_spread_assignment_still_compiles() {
     );
 }
 
-/// Regression for #597: a failed top-level assignment poisons its target as `Mixed`, but
-/// method bodies seed their base environment from the top-level env. The poisoned top-level
-/// local must not leak into a method that happens to reuse the same name, or the merge with
-/// the method's own local would keep `Mixed` and spawn a spurious return-type error. Only the
-/// real RHS (spread) error may be reported.
+/// Regression for #597: a failed top-level assignment target must not leak into a method-local
+/// scope that happens to reuse the same name. Only the real RHS error may be reported.
 #[test]
 fn test_failed_top_level_assignment_does_not_poison_method_local() {
-    let error = check_source_full(
+    let messages = checker_error_messages(
         "<?php $x = 5; $s = [...$x]; class C { public function f(): int { $s = 5; return $s; } }",
-    )
-    .unwrap_err();
-    let messages: Vec<String> = error
-        .flatten()
-        .iter()
-        .map(|error| error.message.clone())
-        .collect();
+    );
     assert_eq!(
         messages.len(),
         1,
@@ -239,5 +303,49 @@ fn test_failed_top_level_assignment_does_not_poison_method_local() {
         messages[0].contains("Spread operator requires an array"),
         "expected the spread diagnostic, got {:?}",
         messages,
+    );
+}
+
+/// Verifies method locals are isolated from ordinary top-level locals even when the top-level
+/// binding is valid. Reusing a name with a different type must not cause a false reassignment or
+/// return-type error inside the method.
+#[test]
+fn test_top_level_local_does_not_seed_method_scope() {
+    assert!(
+        check_source(
+            "<?php $value = \"top\"; class C { public function f(): int { $value = 5; return $value; } }",
+        )
+        .is_ok(),
+        "ordinary top-level locals must not participate in method-local type merging",
+    );
+}
+
+/// Verifies PHP's scope boundary directly: a method cannot read an ordinary top-level local unless
+/// it declares that name global, so the checker must report the method-local read as undefined.
+#[test]
+fn test_method_cannot_read_top_level_local_without_global() {
+    let messages = checker_error_messages(
+        "<?php $value = 5; class C { public function f(): int { return $value; } }",
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Undefined variable: $value")),
+        "method reads must not resolve ordinary top-level locals, got {:?}",
+        messages,
+    );
+}
+
+/// Verifies the method-scope isolation keeps PHP's explicit `global` escape hatch. The method
+/// resolves the final top-level type even when that binding is introduced by the program's last
+/// statement.
+#[test]
+fn test_method_global_declaration_uses_final_top_level_environment() {
+    assert!(
+        check_source(
+            "<?php class C { public function f(): string { global $value; return $value; } } $value = \"ok\";",
+        )
+        .is_ok(),
+        "explicit global declarations must resolve final top-level bindings",
     );
 }
