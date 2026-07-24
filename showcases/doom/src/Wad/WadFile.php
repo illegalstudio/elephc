@@ -3,13 +3,13 @@
 namespace Showcases\Doom\Wad;
 
 class WadFile {
-    public $path;
-    public $kind;
-    public $entryCount;
-    public $directoryOffset;
-    public $firstEntryName;
-    public $firstEntryOffset;
-    public $firstEntrySize;
+    public string $path;
+    public string $kind;
+    public int $entryCount;
+    public int $directoryOffset;
+    public string $firstEntryName;
+    public int $firstEntryOffset;
+    public int $firstEntrySize;
 
     public function __construct(
         string $path,

@@ -53,27 +53,113 @@ impl CompileTimings {
         }
     }
 
+    /// Returns elapsed time since this collector was constructed, regardless of
+    /// whether timing collection is enabled. Used for the final success line's
+    /// elapsed-seconds suffix even when `--timings` was not passed.
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
     /// Prints the collected timing report to stderr.
     ///
     /// Output is gated behind the `enabled` flag. The report includes all notes
     /// in insertion order, each phase with its duration in milliseconds, and a
-    /// total elapsed time from when the collector was constructed.
+    /// total elapsed time from when the collector was constructed. Decorated
+    /// runs (see `crate::progress::is_decorated`) bold the header/total row and
+    /// add a per-phase percentage-of-total column; plain runs keep today's exact
+    /// unstyled, no-percentage table — byte-identical to before this task.
     pub(crate) fn report(&self) {
         if !self.enabled {
             return;
         }
 
-        eprintln!("Compiler timings:");
+        let decorated = crate::progress::is_decorated();
+        let total = self.started_at.elapsed();
+
+        eprintln!("{}", style_if(decorated, "Compiler timings:"));
         for note in &self.notes {
             eprintln!("  {}", note);
         }
         for (phase, duration) in &self.phases {
-            eprintln!("  {:<12} {:>8.2} ms", phase, duration.as_secs_f64() * 1000.0);
+            eprintln!("{}", format_phase_line(phase, *duration, total, decorated));
         }
-        eprintln!(
-            "  {:<12} {:>8.2} ms",
-            "total",
-            self.started_at.elapsed().as_secs_f64() * 1000.0
-        );
+        let total_line = format!("  {:<12} {:>8.2} ms", "total", total.as_secs_f64() * 1000.0);
+        eprintln!("{}", style_if(decorated, &total_line));
+    }
+}
+
+/// Returns `part`'s share of `total` as a percentage, or `0.0` when `total` is
+/// zero (guards the first phase recorded before any measurable time elapses).
+fn percentage(part: Duration, total: Duration) -> f64 {
+    if total.as_secs_f64() == 0.0 {
+        0.0
+    } else {
+        part.as_secs_f64() / total.as_secs_f64() * 100.0
+    }
+}
+
+fn style_if(decorated: bool, text: &str) -> String {
+    if decorated {
+        console::style(text).bold().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Formats one phase's timing line. Decorated runs add a percentage-of-total
+/// column; plain runs keep today's exact two-column layout (phase + ms) with
+/// no percentage suffix, so plain-mode `--timings` output stays byte-identical
+/// to before this task.
+fn format_phase_line(phase: &str, duration: Duration, total: Duration, decorated: bool) -> String {
+    if decorated {
+        format!(
+            "  {:<12} {:>8.2} ms {:>5.1}%",
+            phase,
+            duration.as_secs_f64() * 1000.0,
+            percentage(duration, total),
+        )
+    } else {
+        format!("  {:<12} {:>8.2} ms", phase, duration.as_secs_f64() * 1000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentage_of_zero_total_is_zero() {
+        assert_eq!(percentage(Duration::from_millis(5), Duration::ZERO), 0.0);
+    }
+
+    #[test]
+    fn percentage_computes_share_of_total() {
+        let pct = percentage(Duration::from_millis(25), Duration::from_millis(100));
+        assert!((pct - 25.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn style_if_plain_is_unchanged() {
+        assert_eq!(style_if(false, "Compiler timings:"), "Compiler timings:");
+    }
+
+    #[test]
+    fn style_if_decorated_contains_original_text() {
+        assert!(style_if(true, "Compiler timings:").contains("Compiler timings:"));
+    }
+
+    #[test]
+    fn format_phase_line_plain_has_no_percentage() {
+        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), false);
+        assert!(!line.contains('%'));
+        assert!(line.contains("codegen"));
+        assert!(line.contains("10.00 ms"));
+    }
+
+    #[test]
+    fn format_phase_line_decorated_includes_percentage() {
+        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), true);
+        assert!(line.contains('%'));
+        assert!(line.contains("10.0%"));
     }
 }
