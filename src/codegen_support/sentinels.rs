@@ -147,6 +147,31 @@ pub(crate) fn emit_branch_if_null_container(
     }
 }
 
+/// Branches to `label` when `value_reg` carries the in-band `NULL_SENTINEL`, and only the
+/// sentinel — a plain zero is deliberately left to fall through. Clobbers `scratch_reg` with
+/// the sentinel bit pattern. Used to turn a runtime helper's "receiver was a null container"
+/// signal (the sentinel encoded in an integer result) into the caller's error path, where a
+/// plain zero is a legitimate result (e.g. `count([])` is `0`) and must not be treated as null.
+pub(crate) fn emit_branch_if_null_sentinel(
+    emitter: &mut Emitter,
+    value_reg: &str,
+    scratch_reg: &str,
+    label: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the value carry the in-band null sentinel?
+            emitter.instruction(&format!("b.eq {}", label));                    // sentinel-null values take the caller's null path
+        }
+        Arch::X86_64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the value carry the in-band null sentinel?
+            emitter.instruction(&format!("je {}", label));                      // sentinel-null values take the caller's null path
+        }
+    }
+}
+
 /// Replaces the in-band `NULL_SENTINEL` in `value_reg` with a zero pointer, leaving any
 /// other value untouched. Clobbers `scratch_reg` with the sentinel bit pattern. Used where
 /// a null container must be representable by the cheap zero check alone — e.g. the

@@ -7,11 +7,19 @@
 //!
 //! Key details:
 //! - Boxed indexed arrays and hashes read the entry count from their payload header.
-//! - Non-countable tags return zero instead of modeling PHP's warning surface.
+//! - The in-band `NULL_SENTINEL` a missed refcounted-slot read materializes — carried either
+//!   as the cell itself or as a tag-4/5 payload pointer — returns the `NULL_SENTINEL` value as
+//!   a "receiver was a null container" signal. The call-site turns that into `count()`'s PHP
+//!   `TypeError`, matching the concrete-array path. The sentinel is checked before every
+//!   dereference so it is never followed (issues #533, #602).
+//! - A plain null pointer (e.g. an uninitialized off-web superglobal), a boxed null cell
+//!   (tag 8), and any other non-countable tag return zero, matching the legacy behavior the
+//!   codebase locks (`count($_SERVER) == 0` off-web; PHP parity for real null tracked by #617).
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::{emit_branch_if_null_sentinel, NULL_SENTINEL};
 
 /// Emits the `__rt_mixed_count` runtime helper for `count()` on a boxed Mixed receiver.
 /// Dispatches to the target-specific implementation.
@@ -31,15 +39,22 @@ pub fn emit_mixed_count(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `x0`.
-/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
-///   "not countable" semantics.
+/// - In-band `NULL_SENTINEL` receiver, either as the cell itself or as a tag-4/5 payload
+///   pointer (a missed refcounted read boxed as an array): returns `NULL_SENTINEL` in `x0`
+///   as the "receiver was a null container" signal the call-site turns into `count()`'s PHP
+///   `TypeError`. The sentinel is checked before every dereference so it is never followed.
+/// - Plain null pointer (e.g. an uninitialized off-web superglobal), boxed null cell (tag 8),
+///   and any other non-countable tag: returns 0 silently, matching the legacy behavior.
 fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
     emitter.label_global("__rt_mixed_count");
 
-    // x0 = Mixed* receiver. Output: x0 = count.
-    emitter.instruction("cbz x0, __rt_mixed_count_zero");                       // null Mixed → 0
+    // x0 = Mixed* receiver. Output: x0 = count, or NULL_SENTINEL for a sentinel receiver.
+    emitter.instruction("cbz x0, __rt_mixed_count_zero");                       // plain null-pointer receiver → 0 (legacy)
+    abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
+    emitter.instruction("cmp x0, x9");                                          // in-band null sentinel receiver?
+    emitter.instruction("b.eq __rt_mixed_count_null");                          // guard the sentinel before dereferencing it
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #4");                                          // tag = 4 (indexed array)?
     emitter.instruction("b.eq __rt_mixed_count_payload");                       // share the payload-header read with the assoc path
@@ -47,11 +62,14 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_count_payload");                       // share the payload-header read with the indexed path
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
     emitter.instruction("b.eq __rt_mixed_count_object");                        // runtime-managed Countable objects need object dispatch
-    emitter.instruction("b __rt_mixed_count_zero");                             // any other tag → 0 (quiet PHP "not countable")
+    emitter.instruction("b __rt_mixed_count_zero");                             // any other non-countable tag (incl. tag 8 null) → 0
 
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed payload pointer (array or hash)
-    emitter.instruction("cbz x9, __rt_mixed_count_zero");                       // defensive null guard for the payload pointer
+    emitter.instruction("cbz x9, __rt_mixed_count_zero");                       // defensive null payload → 0 (legacy)
+    // A missed refcounted read can box the null-container sentinel as a tag-4/5 payload; treat
+    // an in-band-sentinel payload as a null container instead of dereferencing it (#602).
+    emit_branch_if_null_sentinel(emitter, "x9", "x10", "__rt_mixed_count_null");
     emitter.instruction("ldr x0, [x9]");                                        // count lives at offset 0 of both array and hash headers
     emitter.instruction("ret");                                                 // return count in x0
 
@@ -86,6 +104,10 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_zero");
     emitter.instruction("mov x0, #0");                                          // not a container → return 0
     emitter.instruction("ret");                                                 // return 0 in x0
+
+    emitter.label("__rt_mixed_count_null");
+    abi::emit_load_int_immediate(emitter, "x0", NULL_SENTINEL);                 // null receiver → sentinel signal for the call-site TypeError
+    emitter.instruction("ret");                                                 // return NULL_SENTINEL in x0
 }
 
 /// Emits `__rt_mixed_count` for x86_64.
@@ -96,16 +118,24 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `rax`.
-/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
-///   "not countable" semantics.
+/// - In-band `NULL_SENTINEL` receiver, either as the cell itself or as a tag-4/5 payload
+///   pointer (a missed refcounted read boxed as an array): returns `NULL_SENTINEL` in `rax`
+///   as the "receiver was a null container" signal the call-site turns into `count()`'s PHP
+///   `TypeError`. The sentinel is checked before every dereference so it is never followed.
+/// - Plain null pointer (e.g. an uninitialized off-web superglobal), boxed null cell (tag 8),
+///   and any other non-countable tag: returns 0 silently, matching the legacy behavior.
 fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
     emitter.label_global("__rt_mixed_count");
 
-    // rax = Mixed* receiver (single-arg int-result ABI). Output: rax = count.
-    emitter.instruction("test rax, rax");                                       // null Mixed → 0
-    emitter.instruction("je __rt_mixed_count_zero");                            // branch on the current mixed count helper condition
+    // rax = Mixed* receiver (single-arg int-result ABI). Output: rax = count, or
+    // NULL_SENTINEL for a sentinel receiver.
+    emitter.instruction("test rax, rax");                                       // plain null-pointer receiver?
+    emitter.instruction("je __rt_mixed_count_zero");                            // plain null-pointer receiver → 0 (legacy)
+    abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
+    emitter.instruction("cmp rax, r10");                                        // in-band null sentinel receiver?
+    emitter.instruction("je __rt_mixed_count_null");                            // guard the sentinel before dereferencing it
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load tag from mixed[0]
     emitter.instruction("cmp r10, 4");                                          // tag = 4 (indexed array)?
     emitter.instruction("je __rt_mixed_count_payload");                         // branch on the current mixed count helper condition
@@ -113,12 +143,15 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_count_payload");                         // branch on the shared array/hash payload path
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
     emitter.instruction("je __rt_mixed_count_object");                          // runtime-managed Countable objects need object dispatch
-    emitter.instruction("jmp __rt_mixed_count_zero");                           // any other tag → 0
+    emitter.instruction("jmp __rt_mixed_count_zero");                           // any other non-countable tag (incl. tag 8 null) → 0
 
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed payload pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_count_zero");                            // branch on the current mixed count helper condition
+    emitter.instruction("test r10, r10");                                       // defensive null payload?
+    emitter.instruction("je __rt_mixed_count_zero");                            // defensive null payload → 0 (legacy)
+    // A missed refcounted read can box the null-container sentinel as a tag-4/5 payload; treat
+    // an in-band-sentinel payload as a null container instead of dereferencing it (#602).
+    emit_branch_if_null_sentinel(emitter, "r10", "r11", "__rt_mixed_count_null");
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // count lives at offset 0 of both array and hash headers
     emitter.instruction("ret");                                                 // return count in rax
 
@@ -150,4 +183,8 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_count_zero");
     emitter.instruction("xor rax, rax");                                        // not a container → return 0
     emitter.instruction("ret");                                                 // return 0 in rax
+
+    emitter.label("__rt_mixed_count_null");
+    abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);                // null receiver → sentinel signal for the call-site TypeError
+    emitter.instruction("ret");                                                 // return NULL_SENTINEL in rax
 }

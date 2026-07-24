@@ -13520,7 +13520,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1077,
+      "codegen_line": 1099,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],

@@ -1034,6 +1034,28 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+            // `__rt_mixed_count` returns the in-band null sentinel when the receiver is a
+            // null container (null pointer, in-band sentinel from a missed read, or a boxed
+            // null cell). `count()` on null is a PHP TypeError, matching the concrete-array
+            // path above; a plain zero result is a legitimate empty-container count and must
+            // pass straight through.
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+            let null_label = ctx.next_label("count_null_container");
+            let done_label = ctx.next_label("count_done");
+            crate::codegen::sentinels::emit_branch_if_null_sentinel(
+                ctx.emitter,
+                result_reg,
+                scratch_reg,
+                &null_label,
+            );
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            super::exceptions::emit_type_error(
+                ctx,
+                "count(): Argument #1 ($value) must be of type Countable|array, null given",
+            );
+            ctx.emitter.label(&done_label);
             store_if_result(ctx, inst)
         }
         PhpType::Object(class_name)
