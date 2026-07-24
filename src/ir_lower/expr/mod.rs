@@ -7650,7 +7650,7 @@ fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 
 /// Merges indexed-array element types for EIR storage metadata.
 fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
-    PhpType::widen_array_branch_element(left, right).codegen_repr()
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers an associative array literal.
@@ -7912,7 +7912,7 @@ fn nullsafe_method_call_expr_type_for_ir(
 
 /// Merges associative-array value types for EIR storage metadata.
 fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
-    PhpType::widen_array_branch_element(left, right).codegen_repr()
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers a match expression with lazy arm-result evaluation.

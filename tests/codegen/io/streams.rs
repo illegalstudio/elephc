@@ -6529,6 +6529,18 @@ echo $arr[0] . "|" . $arr[1] . "|" . $arr[2];
     assert_eq!(out, "Resource id #1|Resource id #2|Resource id #3");
 }
 
+/// Verifies associative array literals preserve resource value metadata.
+#[test]
+fn test_assoc_array_literal_of_resources_round_trips() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = ["in" => STDIN, "out" => STDOUT, "err" => STDERR];
+echo $arr["in"] . "|" . $arr["out"] . "|" . $arr["err"];
+"#,
+    );
+    assert_eq!(out, "Resource id #1|Resource id #2|Resource id #3");
+}
+
 /// Verifies compiled PHP output for stream get meta data describes file stream.
 #[test]
 fn test_stream_get_meta_data_describes_file_stream() {
