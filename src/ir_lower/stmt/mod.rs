@@ -369,7 +369,8 @@ fn contextualize_local_assignment(
     lowered: LoweredValue,
     span: Span,
 ) -> (LoweredValue, PhpType) {
-    let source_ty = ctx.builder.value_php_type(lowered.value).codegen_repr();
+    let value_ty = ctx.builder.value_php_type(lowered.value);
+    let source_ty = value_ty.codegen_repr();
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
         crate::superglobals::superglobal_type().codegen_repr()
     } else {
@@ -439,7 +440,11 @@ fn contextualize_local_assignment(
         return (hash, contextual_ty);
     }
 
-    (lowered, source_ty)
+    // No storage contract applies: keep the value's own checker type. `codegen_repr()` is lossy
+    // (`Resource(_)` -> `Int`, `Union(_)` -> `Mixed`/`TaggedScalar`, `False` -> `Bool`), and the
+    // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
+    // collapsed form must stay confined to the storage-contract comparisons above.
+    (lowered, value_ty)
 }
 
 /// Returns whether this function-like scope records `target` for `name` on any loop header.
