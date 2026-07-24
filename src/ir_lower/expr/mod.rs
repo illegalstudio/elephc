@@ -1151,13 +1151,14 @@ fn lower_logical_xor(
     )
 }
 
-/// Converts a lowered PHP value into a canonical boolean value for value-level logical ops.
+/// Converts a lowered PHP value into a canonical boolean and releases an owned input.
 fn lower_truthy_bool(
     ctx: &mut LoweringContext<'_, '_>,
     input: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    match ctx.builder.value_php_type(input.value).codegen_repr() {
+    let owns_input = ctx.value_is_owning_temporary(input);
+    let result = match ctx.builder.value_php_type(input.value).codegen_repr() {
         PhpType::Bool => input,
         PhpType::Int => {
             let zero = ctx
@@ -1191,7 +1192,11 @@ fn lower_truthy_bool(
             Op::IsTruthy.default_effects(),
             span,
         ),
+    };
+    if owns_input && result.value != input.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, input, span);
     }
+    result
 }
 
 /// Lowers null coalesce so the default expression is evaluated only for null values.

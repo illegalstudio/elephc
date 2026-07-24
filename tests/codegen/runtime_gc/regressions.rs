@@ -3931,6 +3931,33 @@ echo $count;
     );
 }
 
+/// Regression test (issue #586): non-short-circuiting logical `xor` coerces
+/// and discards both operands, so owned coalesce boxes on either side must be
+/// released after their truthiness has been canonicalized.
+#[test]
+fn test_array_reads_through_coalesce_in_logical_xor_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $left = [$i + 1];
+    $right = [$i % 2];
+    if ((($left[0] ?? 0) xor ($right[0] ?? 0))) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both coalesce boxes feeding xor to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test (issue #586): logical negation coerces its operand to a
 /// boolean, so `!($r[0] ?? 0)` must release the owned coalesce box.
 #[test]
