@@ -39,6 +39,24 @@ echo $r[0], "\n", $r[1], "\n";
     assert_eq!(out, "1\n2\n");
 }
 
+/// End-to-end companion for issue #587: `??` keeps the heterogeneous result
+/// array-shaped in the checker while #549 provides boxed-Mixed merge storage,
+/// allowing array builtins and spread to consume the selected branch.
+#[test]
+fn test_null_coalesce_heterogeneous_array_result_supports_array_operations() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe(int $n) {
+    return $n === 1 ? [1, 2] : null;
+}
+$r = maybe($argc) ?? ["a", "b"];
+$spread = [...$r];
+echo array_sum($r), "|", in_array(2, $r), "|", count($spread);
+"#,
+    );
+    assert_eq!(out, "3|1|2");
+}
+
 /// Regression test for issue #549 (borrowed-cell review follow-up): a
 /// borrowed `?array` parameter cell flowing through `??` into a widened
 /// merge shares its payload with the caller's live array, so the widening

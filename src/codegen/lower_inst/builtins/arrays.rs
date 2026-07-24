@@ -46,14 +46,40 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over supported indexed-array payloads.
+/// Lowers `array_sum()` over supported indexed arrays and boxed-Mixed associative values.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_sum", "__rt_array_sum")
+    super::ensure_arg_count(inst, "array_sum", 1)?;
+    let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+    ) {
+        ctx.load_value_to_result(array)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_sum_mixed");
+        return store_if_result(ctx, inst);
+    }
+
+    lower_indexed_array_aggregate(
+        ctx,
+        inst,
+        "array_sum",
+        "__rt_array_sum",
+        Some("__rt_array_sum_mixed"),
+    )
 }
 
 /// Lowers `array_product()` over supported indexed-array payloads.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_product", "__rt_array_product")
+    lower_indexed_array_aggregate(
+        ctx,
+        inst,
+        "array_product",
+        "__rt_array_product",
+        None,
+    )
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
@@ -1860,6 +1886,8 @@ fn lower_in_array_with_mode(
         InArrayCase::BoolNeedleStringArray => {
             lower_in_array_bool_needle_string_array(ctx, needle, array)?
         }
+        InArrayCase::MixedIntExact => lower_in_array_mixed_int(ctx, needle, array, true)?,
+        InArrayCase::MixedIntLoose => lower_in_array_mixed_int(ctx, needle, array, false)?,
         InArrayCase::MixedStringExact => {
             lower_in_array_mixed_string(ctx, needle, array, "__rt_str_eq")?
         }
@@ -1875,11 +1903,26 @@ fn lower_indexed_array_aggregate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    helper: &str,
+    scalar_helper: &str,
+    mixed_helper: Option<&str>,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_supported_indexed_array(ctx.value_php_type(array)?, name)?;
+    let array_ty = ctx.value_php_type(array)?;
+    let helper = match array_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "{} for PHP type {:?}",
+                    name,
+                    array_ty.codegen_repr()
+                ))
+            })?,
+        _ => {
+            require_supported_indexed_array(array_ty, name)?;
+            scalar_helper
+        }
+    };
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
@@ -5849,6 +5892,8 @@ enum InArrayCase {
     IntNeedleStringArray,
     StringNeedleBoolArray,
     BoolNeedleStringArray,
+    MixedIntExact,
+    MixedIntLoose,
     MixedStringExact,
     MixedStringLoose,
 }
@@ -5874,6 +5919,10 @@ fn supported_in_array_case(
             PhpType::Mixed if needle_ty == PhpType::Str => match mode {
                 InArrayMode::Loose => Ok(InArrayCase::MixedStringLoose),
                 InArrayMode::Strict => Ok(InArrayCase::MixedStringExact),
+            },
+            PhpType::Mixed if needle_ty == PhpType::Int => match mode {
+                InArrayMode::Loose => Ok(InArrayCase::MixedIntLoose),
+                InArrayMode::Strict => Ok(InArrayCase::MixedIntExact),
             },
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
@@ -6595,6 +6644,33 @@ fn lower_in_array_mixed_string(
         Arch::AArch64 => lower_in_array_mixed_string_aarch64(ctx, needle, array, eq_helper),
         Arch::X86_64 => lower_in_array_mixed_string_x86_64(ctx, needle, array, eq_helper),
     }
+}
+
+/// Lowers an integer-needle membership scan over boxed-Mixed indexed-array slots.
+///
+/// The runtime helper dispatches on each cell's tag so loose mode preserves PHP
+/// numeric-string, float, bool, and null comparison rules while strict mode
+/// accepts only an integer-tagged cell with the same payload.
+fn lower_in_array_mixed_int(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    strict: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(needle, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::from(strict));
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(needle, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(strict));
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_in_array_mixed_int");
+    Ok(())
 }
 
 /// Emits the AArch64 boxed-Mixed-array string membership loop.

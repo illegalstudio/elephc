@@ -883,8 +883,7 @@ fn test_error_exception_previous_rejects_non_throwable() {
 /// Regression for issue #587: a `match` merging two indexed arrays with different
 /// element types (`[1, 2]` vs `["a", "b"]`) must type as `array<mixed>`, so passing
 /// the result to a by-ref `array` parameter type-checks instead of failing with
-/// "expects Array(Mixed), got Mixed". Checker-only: heterogeneous merge runtime
-/// lowering is tracked by issue #549 / PR #583.
+/// "expects Array(Mixed), got Mixed".
 #[test]
 fn test_heterogeneous_match_array_merge_accepts_by_ref_array_param() {
     expect_no_error(
@@ -921,6 +920,44 @@ fn test_heterogeneous_match_array_merge_accepts_spread() {
 #[test]
 fn test_heterogeneous_ternary_array_merge_accepts_array_use() {
     expect_no_error("<?php $r = $argc > 1 ? [1, 2] : [\"a\", \"b\"]; echo array_sum($r);");
+}
+
+/// Regression for issue #587: `??` must join array element types just like
+/// `match`/ternary after removing null from the value side, instead of retaining
+/// the left branch's `array<int>` type.
+#[test]
+fn test_heterogeneous_null_coalesce_array_merge_widens_element_type() {
+    let tokens = tokenize(
+        "<?php function maybe(int $n) { return $n === 1 ? [1, 2] : null; } \
+         $r = maybe($argc) ?? [\"a\", \"b\"];",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Mixed)))
+    );
+}
+
+/// An empty branch contributes no element values, so `[]` merged with
+/// `array<int>` retains `array<int>` instead of widening unnecessarily.
+#[test]
+fn test_empty_match_array_branch_keeps_populated_element_type() {
+    let tokens = tokenize(
+        "<?php $r = match($argc) { 1 => [], default => [1, 2] };",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Int)))
+    );
 }
 
 /// Regression for issue #587: an associative merge whose value types differ

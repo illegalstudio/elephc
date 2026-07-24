@@ -501,6 +501,28 @@ echo $r[1], "\n";
     assert_eq!(out, "1\n2\n");
 }
 
+/// End-to-end regression for issue #587: after the checker keeps a
+/// heterogeneous branch result array-shaped, by-reference parameters, array
+/// builtins, and spread must all consume the #549 widened runtime storage.
+#[test]
+fn test_match_heterogeneous_array_result_supports_array_operations() {
+    let out = compile_and_run(
+        r#"<?php
+function append_five(array &$items): void {
+    $items[] = 5;
+}
+$r = match($argc) {
+    1 => [1, 2],
+    default => ["a", "b"],
+};
+append_five($r);
+$spread = [...$r];
+echo array_sum($r), "|", in_array(2, $r), "|", count($spread);
+"#,
+    );
+    assert_eq!(out, "8|1|3");
+}
+
 /// Reverse arm order for issue #549: the string arm is selected at runtime
 /// while the int arm folds last into the merge; before the fix the temp kept
 /// array<int> and the string arm's 16-byte slots were read back as raw heap
@@ -535,6 +557,38 @@ echo $r["k"], "\n", $r["n"], "\n";
 "#,
     );
     assert_eq!(out, "1\n2\n");
+}
+
+/// Verifies that the associative-array half of issue #587 remains usable by
+/// array builtins after heterogeneous match arms widen value slots to Mixed.
+#[test]
+fn test_match_heterogeneous_assoc_result_supports_array_sum() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => ["k" => 1, "n" => 2],
+    default => ["k" => "x", "n" => "y"],
+};
+echo array_sum($r);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Distinguishes an empty array's `Never` placeholder from a materialized null
+/// element: null/int alternatives require boxed Mixed slots at runtime.
+#[test]
+fn test_match_heterogeneous_null_and_int_array_elements_use_mixed_slots() {
+    let out = compile_and_run(
+        r#"<?php
+$r = match($argc) {
+    1 => [null],
+    default => [1],
+};
+echo gettype($r[0]);
+"#,
+    );
+    assert_eq!(out, "NULL");
 }
 
 /// Empty-arm variant of issue #549: an `[]` arm (array<never>) must not win
