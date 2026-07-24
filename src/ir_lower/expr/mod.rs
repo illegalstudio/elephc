@@ -14901,7 +14901,11 @@ fn merge_initialized_slots_for_expr(
 }
 
 /// Emits a boolean literal value for control-expression lowering.
-fn emit_bool_literal(
+///
+/// Also emits the trailing warn-on-missing flag that boxed-`Mixed` subscript reads
+/// pass to `__rt_mixed_array_get`, so every producer of such a read builds the
+/// operand the same way.
+pub(crate) fn emit_bool_literal(
     ctx: &mut LoweringContext<'_, '_>,
     value: bool,
     span: Option<crate::span::Span>,
