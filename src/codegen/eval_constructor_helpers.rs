@@ -732,7 +732,8 @@ fn emit_aarch64_validate_builtin_throwable_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for builtin Throwable arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("str x0, [sp, #40]");                                   // preserve argc outside the eval argument scratch slot
     emitter.instruction("cmp x0, #3");                                          // compact Throwable initialization supports message/code/previous
@@ -746,7 +747,8 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for builtin Throwable arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save constructor argc for message/code initialization
     emitter.instruction("cmp rax, 3");                                          // compact Throwable initialization supports message/code/previous
@@ -936,6 +938,9 @@ fn emit_x86_64_constructor_body(
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
         materialize_constructor_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
+    if slot.runtime_helper.is_some() {
+        abi::emit_windows_c_abi_registers_for_runtime_helper(emitter);
+    }
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     let callee = slot
@@ -1033,7 +1038,8 @@ fn emit_aarch64_validate_constructor_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("str x0, [sp, #32]");                                   // save the supplied constructor argument count
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
@@ -1058,7 +1064,8 @@ fn emit_x86_64_validate_constructor_arg_count(
     fail_label: &str,
 ) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    let array_len_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the supplied constructor argument count
     abi::emit_load_int_immediate(emitter, "r10", slot.params.len() as i64);
@@ -1313,8 +1320,10 @@ fn emit_x86_64_constructor_ref_arg_cells(
 
 /// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
 fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    let value_int_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_int");
+    let array_get_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_get");
     abi::emit_load_int_immediate(emitter, "x0", index as i64);
     abi::emit_call_label(emitter, &value_int_symbol);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
@@ -1326,8 +1335,10 @@ fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usi
 
 /// Loads one eval argument into an x86_64 spill slot as a boxed Mixed cell.
 fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    let value_int_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_int");
+    let array_get_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_get");
     abi::emit_load_int_immediate(emitter, "rdi", index as i64);
     abi::emit_call_label(emitter, &value_int_symbol);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
@@ -1744,5 +1755,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 
 /// Emits a platform-C global label for a user assembly helper.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    emitter.label_global(&module.target.extern_symbol(name));
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

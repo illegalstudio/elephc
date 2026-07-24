@@ -2,7 +2,7 @@
 title: "ptr_read_string()"
 description: "Copies raw bytes from a pointer into a PHP string of the given length."
 sidebar:
-  order: 312
+  order: 313
 ---
 
 ## ptr_read_string()

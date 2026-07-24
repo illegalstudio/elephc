@@ -8,7 +8,7 @@ sidebar:
 ## tempnam()
 
 ```php
-function tempnam(string $directory, string $prefix): string
+function tempnam(string $directory, string $prefix): mixed
 ```
 
 Creates a file with a unique filename.
@@ -17,7 +17,7 @@ Creates a file with a unique filename.
 - `$directory` (`string`)
 - `$prefix` (`string`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 

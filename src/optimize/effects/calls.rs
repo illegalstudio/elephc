@@ -16,13 +16,14 @@ use crate::types::PhpType;
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
 /// Registry builtins consume their shared descriptor; unknown calls remain conservative.
 pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
+    let normalized_name = name.trim_start_matches('\\');
     ACTIVE_FUNCTION_EFFECTS.with(|slot| {
         slot.borrow()
             .as_ref()
-            .and_then(|effects| effects.get(name).copied())
+            .and_then(|effects| effects.get(normalized_name).copied())
     })
     .unwrap_or_else(|| {
-        if let Some(def) = crate::builtins::registry::lookup(name) {
+        if let Some(def) = crate::builtins::registry::lookup(normalized_name) {
             let semantics = def.spec.semantics;
             let arg_types = semantic_optimizer_arg_types(def, args);
             let input = crate::builtins::semantics::BuiltinSemanticInput {
@@ -36,7 +37,7 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                 crate::builtins::semantics::BuiltinEffects::Shared(resolve) => resolve(&input),
             };
             let effect = Effect::from_eir(effects);
-            if builtin_invokes_callbacks(name) {
+            if builtin_invokes_callbacks(normalized_name) {
                 return effect.with_side_effects().with_may_throw().with_writes_globals();
             }
             effect

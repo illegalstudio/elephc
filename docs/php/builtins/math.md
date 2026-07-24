@@ -38,6 +38,7 @@ sidebar:
 | [`pow()`](./math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
 | [`rad2deg()`](./math/rad2deg.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`rand()`](./math/rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`random_bytes()`](./math/random_bytes.md) | `(int $length): string` | `string` | ✓ | ✓ |
 | [`random_int()`](./math/random_int.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
 | [`round()`](./math/round.md) | `(float $num, int $precision = 0): float` | `float` | ✓ | ✓ |
 | [`sin()`](./math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |

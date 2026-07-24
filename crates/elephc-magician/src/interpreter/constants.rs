@@ -59,9 +59,15 @@ pub(super) const EVAL_STREAM_WRAPPERS: &[&str] = &[
 ];
 
 /// Built-in stream transports reported by eval `stream_get_transports()`.
+#[cfg(not(windows))]
 pub(super) const EVAL_STREAM_TRANSPORTS: &[&str] = &[
-    "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3", "tlsv1.0", "tlsv1.1", "tlsv1.2",
-    "tlsv1.3",
+    "tcp", "udp", "unix", "udg", "tls", "ssl", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
+];
+
+/// Built-in stream transports reported by eval `stream_get_transports()` on Windows.
+#[cfg(windows)]
+pub(super) const EVAL_STREAM_TRANSPORTS: &[&str] = &[
+    "tcp", "udp", "tls", "ssl", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
 ];
 
 /// Monotonic salt mixed into eval `rand()`/`mt_rand()` and array key sampling.

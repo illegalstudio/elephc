@@ -127,8 +127,9 @@ const BRIDGES: &[BridgeStaticlib] = &[
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
         flag_name: "web",
-        // The bridge owns the program entry (elephc_web_run) and tokio/hyper
-        // link-time machinery, so the whole archive is force-loaded.
+        // The bridge owns the program entry (elephc_web_run) and Tokio/Hyper
+        // link-time machinery. Windows is the sole exception: its GNU/COFF
+        // archive must stay a plain link to avoid duplicate import members.
         whole_archive: true,
         macos_frameworks: &[],
         // Rust runtime/unwinder symbols, like the other bridges.
@@ -174,6 +175,18 @@ pub(crate) fn bridges_in(extra_link_libs: &[String]) -> Vec<(&'static str, &'sta
 }
 
 impl BridgeStaticlib {
+    /// Returns whether this bridge must be force-loaded on `platform`.
+    ///
+    /// `elephc_web` owns the native web entry point on Linux and macOS, but its
+    /// GNU/COFF archive must remain a plain link on Windows to avoid duplicate
+    /// import-library members. An explicitly forced archive still wins for all
+    /// other bridges.
+    fn requires_whole_archive(&self, platform: Platform, forced: bool) -> bool {
+        forced
+            || (self.whole_archive
+                && !(platform == Platform::Windows && self.lib_name == "elephc_web"))
+    }
+
     /// Returns the `lib<name>.a` archive filename this bridge produces.
     fn archive_filename(&self) -> String {
         format!("lib{}.a", self.lib_name)
@@ -187,41 +200,81 @@ impl BridgeStaticlib {
     /// fallbacks. In a source checkout, builds the staticlib once when it is
     /// missing so `cargo run --` can compile examples without a manual
     /// `cargo build -p <crate>`. Returns `None` when it cannot be found or built.
-    fn lib_dir(&self) -> Option<String> {
+    fn lib_dir(&self, target: Target) -> Option<String> {
         if let Ok(env_dir) = std::env::var(self.env_var) {
             if !env_dir.is_empty() {
                 return Some(env_dir);
             }
         }
-        if let Some(dir) = self.find_lib_dir() {
+        if let Some(dir) = self.find_lib_dir(target) {
             return Some(dir);
         }
         let workspace = self.find_workspace()?;
-        self.build_staticlib(&workspace);
-        self.find_lib_dir()
+        self.build_staticlib(&workspace, target);
+        self.find_lib_dir(target)
     }
 
     /// Returns the first candidate directory that currently contains the staticlib.
-    /// Order: the running binary's dir, its sibling `lib/`, `CARGO_TARGET_DIR`
-    /// profiles, then in-tree `target/{debug,release}`.
-    fn find_lib_dir(&self) -> Option<String> {
+    /// For a native target, order is the running binary's dir, its sibling
+    /// `lib/`, `CARGO_TARGET_DIR` profiles, then in-tree profiles. For a cross
+    /// target, only Cargo's target-triple subdirectories are considered: a host
+    /// archive with the same filename must never shadow the PE/COFF archive.
+    fn find_lib_dir(&self, target: Target) -> Option<String> {
         let archive = self.archive_filename();
         let exe = std::env::current_exe().ok()?;
         let dir = exe.parent()?;
-        let mut candidates = vec![
-            dir.to_path_buf(),
-            dir.parent().map(|parent| parent.join("lib")).unwrap_or_default(),
-        ];
+        let native = target_is_native(target);
+        let mut candidates = Vec::new();
+        let mut executable_cross_candidate = None;
+        if native {
+            candidates.push(dir.to_path_buf());
+            candidates.push(dir.parent().map(|parent| parent.join("lib")).unwrap_or_default());
+        } else {
+            // Derive Cargo's target root from either `target/<profile>/elephc`
+            // or `target/<profile>/deps/<test-binary>`. PE compilation tests
+            // execute the compiler from a temporary cwd, so cwd-relative
+            // `target/...` alone cannot discover the already-built COFF bridge.
+            let profile_dir = if dir.file_name().is_some_and(|name| name == "deps") {
+                dir.parent()
+            } else {
+                Some(dir)
+            };
+            if let Some(profile_dir) = profile_dir {
+                if let (Some(target_root), Some(profile)) =
+                    (profile_dir.parent(), profile_dir.file_name())
+                {
+                    executable_cross_candidate = Some(
+                        target_root
+                            .join(cargo_target_triple(target))
+                            .join(profile),
+                    );
+                }
+            }
+        }
         if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
             if !target_dir.is_empty() {
-                candidates.push(PathBuf::from(&target_dir).join("debug"));
-                candidates.push(PathBuf::from(target_dir).join("release"));
+                let base = PathBuf::from(target_dir);
+                let base = if native {
+                    base
+                } else {
+                    base.join(cargo_target_triple(target))
+                };
+                candidates.push(base.join("debug"));
+                candidates.push(base.join("release"));
             }
+        }
+        if let Some(candidate) = executable_cross_candidate {
+            candidates.push(candidate);
         }
         // Fallbacks for source-tree builds where the process cwd is the
         // workspace root or a path below it.
-        candidates.push(PathBuf::from("target/debug"));
-        candidates.push(PathBuf::from("target/release"));
+        let source_target = if native {
+            PathBuf::from("target")
+        } else {
+            PathBuf::from("target").join(cargo_target_triple(target))
+        };
+        candidates.push(source_target.join("debug"));
+        candidates.push(source_target.join("release"));
 
         candidates
             .into_iter()
@@ -242,17 +295,58 @@ impl BridgeStaticlib {
     /// Builds this bridge's staticlib in the current binary's debug/release
     /// profile (best-effort; failures are ignored so callers fall back to other
     /// discovery candidates).
-    fn build_staticlib(&self, workspace: &Path) {
+    fn build_staticlib(&self, workspace: &Path, target: Target) {
         let release = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .is_some_and(|dir| dir.file_name().is_some_and(|name| name == "release"));
         let mut cmd = Command::new("cargo");
         cmd.args(["build", "-p", self.crate_name]);
+        if !target_is_native(target) {
+            cmd.args(["--target", cargo_target_triple(target)]);
+        }
         if release {
             cmd.arg("--release");
         }
         let _ = cmd.current_dir(workspace).status();
+    }
+}
+
+/// Returns whether `target` matches the compiler process OS, architecture, and
+/// object ABI used by bridge archives.
+///
+/// Elephc's Windows x86_64 output always uses the GNU/MinGW ABI. A compiler
+/// built with Rust's native MSVC host toolchain must therefore discover and
+/// build bridges in Cargo's `x86_64-pc-windows-gnu` target directory instead
+/// of treating incompatible host `.lib` archives as native output.
+fn target_is_native(target: Target) -> bool {
+    let platform_and_arch_match = target.platform == Platform::detect_host()
+        && match target.arch {
+            crate::codegen::platform::Arch::AArch64 => cfg!(target_arch = "aarch64"),
+            crate::codegen::platform::Arch::X86_64 => cfg!(target_arch = "x86_64"),
+        };
+    let abi_matches = match (target.platform, target.arch) {
+        (Platform::Windows, crate::codegen::platform::Arch::X86_64) => {
+            cfg!(all(windows, target_env = "gnu"))
+        }
+        (Platform::Windows, crate::codegen::platform::Arch::AArch64) => {
+            cfg!(all(windows, target_env = "msvc"))
+        }
+        _ => true,
+    };
+    platform_and_arch_match && abi_matches
+}
+
+/// Returns Cargo's canonical Rust target triple for a bridge staticlib build.
+fn cargo_target_triple(target: Target) -> &'static str {
+    use crate::codegen::platform::Arch;
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => "aarch64-apple-darwin",
+        (Platform::MacOS, Arch::X86_64) => "x86_64-apple-darwin",
+        (Platform::Linux, Arch::AArch64) => "aarch64-unknown-linux-gnu",
+        (Platform::Linux, Arch::X86_64) => "x86_64-unknown-linux-gnu",
+        (Platform::Windows, Arch::X86_64) => "x86_64-pc-windows-gnu",
+        (Platform::Windows, Arch::AArch64) => "aarch64-pc-windows-msvc",
     }
 }
 
@@ -262,29 +356,67 @@ impl BridgeStaticlib {
 /// - `obj_path`: Output path for the resulting `.o` object file.
 /// Exits with status 1 if the assembler fails.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
-    let mut as_cmd = Command::new(target.assembler_cmd());
-    if target.platform == Platform::MacOS {
-        as_cmd.args(["-arch", target.darwin_arch_name()]);
-    }
-    as_cmd.arg("-o").arg(obj_path).arg(asm_path);
+    let mut as_cmd = if target.platform == Platform::Windows {
+        crate::windows_toolchain::assembler_command(asm_path, obj_path)
+            .unwrap_or_else(|message| fail_tool_configuration("Assembler", &message))
+    } else {
+        let mut command = Command::new(target.assembler_cmd());
+        if target.platform == Platform::MacOS {
+            command.args(["-arch", target.darwin_arch_name()]);
+        }
+        command.arg("-o").arg(obj_path).arg(asm_path);
+        command
+    };
     run_tool("Assembler", &mut as_cmd);
 }
 
-/// Makes `--debug-info` line tables reachable by debuggers after the user
-/// object file is deleted.
-///
-/// On macOS the linked binary only carries a debug map pointing at the object
-/// files, so `dsymutil` must bake the DWARF into a standalone `.dSYM` bundle
-/// while the object still exists. Returns `false` when that fails (the caller
-/// then keeps the object file so lldb can follow the debug map instead).
-/// On Linux the linker copies `.debug_line` into the binary itself, so there
-/// is nothing to do.
+/// Bakes DWARF debug info into a standalone `.dSYM` bundle next to `bin_path`
+/// via `dsymutil` on macOS (a no-op returning `true` on other platforms).
+/// Returns `true` on success (or when nothing needs baking).
 pub(crate) fn bake_debug_info(target: Target, bin_path: &Path) -> bool {
     if target.platform != Platform::MacOS {
         return true;
     }
     let status = Command::new("dsymutil").arg(bin_path).status();
     matches!(status, Ok(status) if status.success())
+}
+
+/// Returns the `-L` search paths derived from the `ELEPHC_MINGW_SYSROOT` env
+/// var for the Windows MinGW link, when that variable is set and points at an
+/// existing directory. CI sets it to a cross-built MinGW sysroot containing
+/// PE/COFF static archives of PCRE2 (`libpcre2-8.a`, `libpcre2-posix.a`),
+/// bzip2 (`libbz2.a`), zlib (`libz.a`), and libiconv (`libiconv.a`), so the
+/// `x86_64-w64-mingw32-gcc` link resolves those C symbols. The variable is
+/// unset on local non-CI builds, so this returns an empty `Vec` and the link
+/// command emits no missing-directory warnings.
+///
+/// Both `$SYSROOT/lib` and `$SYSROOT/lib64` are added when present, so a
+/// sysroot that installs either layout works without per-lib configuration.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    mingw_sysroot_link_paths_from(&PathBuf::from(dir))
+}
+
+/// Pure core of [`mingw_sysroot_link_paths`]: returns the `-L` search paths for
+/// a given sysroot base directory when it exists, or an empty `Vec` otherwise.
+/// Split out so the gating logic can be unit-tested without mutating the
+/// process environment (which is racy under parallel test execution).
+fn mingw_sysroot_link_paths_from(base: &Path) -> Vec<String> {
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
 }
 
 /// Links object files and runtime objects into a final binary.
@@ -321,7 +453,7 @@ pub(crate) fn link(
     let needed_bridges: Vec<(&BridgeStaticlib, Option<String>)> = BRIDGES
         .iter()
         .filter(|bridge| extra_link_libs.iter().any(|l| l.as_str() == bridge.lib_name))
-        .map(|bridge| (bridge, bridge.lib_dir()))
+        .map(|bridge| (bridge, bridge.lib_dir(target)))
         .collect();
     // A bridge is force-loaded either because its `BRIDGES` entry demands it
     // (link-time side effects / owned entry point) or because the user passed
@@ -396,7 +528,32 @@ pub(crate) fn link(
             }
             cmd
         }
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => {
+            let mut cmd = crate::windows_toolchain::linker_command()
+                .unwrap_or_else(|message| fail_tool_configuration("Linker", &message));
+            cmd.args(windows_pe_hardening_linker_flags());
+            if matches!(emit, Emit::Cdylib) {
+                cmd.arg("-shared");
+                cmd.arg(format!(
+                    "-Wl,--out-implib,{}",
+                    windows_import_library_path(bin_path).display()
+                ));
+            }
+            cmd.arg("-o").arg(bin_path);
+            cmd.arg(obj_path);
+            cmd.arg(runtime_object_path);
+            // Surface a CI-provided MinGW sysroot (cross-built PCRE2, bzip2,
+            // zlib, libiconv) before the system import libs and any
+            // `extra_link_libs` (`-lpcre2-8`, `-lbz2`, `-lz`, `-liconv`) so the
+            // MinGW linker resolves those C symbols against PE/COFF archives
+            // instead of the ELF dev packages the ubuntu runner also installs.
+            // Gated on `ELEPHC_MINGW_SYSROOT` so local non-CI builds — which
+            // never set the env var — see no missing-directory warnings.
+            for path in mingw_sysroot_link_paths() {
+                cmd.arg(format!("-L{}", path));
+            }
+            cmd
+        }
     };
     // Search paths for the located bridge staticlibs.
     for (_, dir) in &needed_bridges {
@@ -426,8 +583,10 @@ pub(crate) fn link(
                 .iter()
                 .find(|(b, d)| {
                     b.lib_name == lib.as_str()
-                        && (b.whole_archive
-                            || forced_whole_archive.iter().any(|l| l.as_str() == b.lib_name))
+                        && b.requires_whole_archive(
+                            target.platform,
+                            forced_whole_archive.iter().any(|l| l.as_str() == b.lib_name),
+                        )
                         && d.is_some()
                 })
                 .map(|(b, _)| (*b, lib.as_str()))
@@ -473,8 +632,23 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => {
+            }
         }
+    }
+    // MinGW Rust staticlibs can each carry std/core/allocator support. In
+    // addition, rustls-native-certs embeds duplicate import members within the
+    // TLS archive itself when it is force-loaded. Keep the first identical
+    // definition only for either of those established COFF cases; ordinary
+    // single-bridge links retain the linker's duplicate-symbol diagnostics.
+    if windows_link_needs_duplicate_bridge_tolerance(
+        target.platform,
+        needed_bridges.iter().filter(|(_, dir)| dir.is_some()).count(),
+        whole_archive_order
+            .iter()
+            .any(|(bridge, _)| bridge.lib_name == "elephc_tls"),
+    ) {
+        ld_cmd.arg("-Wl,--allow-multiple-definition");
     }
     for lib in extra_link_libs {
         if lib == "System" {
@@ -485,8 +659,10 @@ pub(crate) fn link(
         // links with a plain `-l`.
         let whole_archive_bridge = needed_bridges.iter().find(|(bridge, dir)| {
             bridge.lib_name == lib.as_str()
-                && (bridge.whole_archive
-                    || forced_whole_archive.iter().any(|l| l.as_str() == bridge.lib_name))
+                && bridge.requires_whole_archive(
+                    target.platform,
+                    forced_whole_archive.iter().any(|l| l.as_str() == bridge.lib_name),
+                )
                 && dir.is_some()
         });
         match whole_archive_bridge {
@@ -506,13 +682,28 @@ pub(crate) fn link(
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");
                     }
-                    Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+                    Platform::Windows => {
+                        ld_cmd.arg("-Wl,--whole-archive");
+                        ld_cmd.arg(format!("-l{}", bridge.lib_name));
+                        ld_cmd.arg("-Wl,--no-whole-archive");
+                    }
                 }
             }
             None => {
                 ld_cmd.arg(format!("-l{}", lib));
             }
         }
+    }
+    if target.platform == Platform::Windows
+        && extra_link_libs
+            .iter()
+            .any(|library| library == "elephc_magician")
+    {
+        // The eval staticlib contains direct PCRE2 and libiconv references. Rust
+        // staticlib metadata is not propagated to this custom final link, and
+        // GNU ld scans archives from left to right, so repeat these dependencies
+        // after the whole-archived magician bridge that introduces the symbols.
+        ld_cmd.args(windows_magician_transitive_libraries());
     }
     if target.platform == Platform::Linux && !extra_link_libs.is_empty() {
         ld_cmd.arg("-Wl,--as-needed");
@@ -528,11 +719,70 @@ pub(crate) fn link(
             }
         }
     }
+    if target.platform == Platform::Windows {
+        // Keep import libraries AFTER every Rust bridge archive. GNU ld scans
+        // static archives from left to right: placing these before elephc-tz
+        // left Rust std's Nt*/WSA*/UserEnv references unresolved even though
+        // the correct MinGW import libraries were named on the command line.
+        // secur32/userenv/ntdll also cover the std-windows dependencies pulled
+        // in by the PDO and image bridges.
+        ld_cmd.args([
+            "-lkernel32",
+            "-lmsvcrt",
+            "-lwinmm",
+            "-lws2_32",
+            "-lbcrypt",
+            "-lshlwapi",
+            "-lshell32",
+            "-lsecur32",
+            "-luserenv",
+            "-lntdll",
+        ]);
+    }
     run_tool("Linker", &mut ld_cmd);
     // The deduped archive copies were only needed for the link command above.
     if let Some(scratch) = dedup_scratch {
         let _ = std::fs::remove_dir_all(scratch);
     }
+}
+
+/// Returns whether MinGW must tolerate identical Rust runtime definitions from
+/// multiple located bridge staticlibs.
+fn windows_link_needs_duplicate_bridge_tolerance(
+    platform: Platform,
+    located_bridge_count: usize,
+    force_loaded_tls: bool,
+) -> bool {
+    platform == Platform::Windows && (located_bridge_count >= 2 || force_loaded_tls)
+}
+
+/// Returns MinGW libraries that must follow the whole-archived eval bridge.
+fn windows_magician_transitive_libraries() -> &'static [&'static str] {
+    &["-lpcre2-posix", "-lpcre2-8", "-liconv"]
+}
+
+/// Returns the MinGW linker flags that opt generated PE images into supported
+/// loader mitigations.
+///
+/// GNU ld supports ASLR, 64-bit high-entropy address selection, and DEP through
+/// PE DLL-characteristic bits. It does not currently emit a Guard CF load
+/// configuration for elephc's hand-written assembly, so CFG is deliberately not
+/// advertised here; setting the bit without a valid guard table would be unsafe.
+fn windows_pe_hardening_linker_flags() -> &'static [&'static str] {
+    &[
+        "-Wl,--dynamicbase",
+        "-Wl,--high-entropy-va",
+        "-Wl,--nxcompat",
+    ]
+}
+
+/// Returns the conventional MinGW import-library path paired with a Windows DLL.
+fn windows_import_library_path(dll_path: &Path) -> PathBuf {
+    let stem = dll_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("elephc_module");
+    dll_path.with_file_name(format!("lib{}.dll.a", stem))
 }
 
 /// Lists the member (object file) names in `archive` via `ar t`. Member-name
@@ -675,6 +925,12 @@ fn run_tool(name: &str, cmd: &mut Command) {
     }
 }
 
+/// Prints an actionable toolchain configuration error and terminates compilation.
+fn fail_tool_configuration(name: &str, message: &str) -> ! {
+    eprintln!("{name} configuration failed: {message}");
+    process::exit(1);
+}
+
 /// Returns the macOS SDK path by running `xcrun --show-sdk-path`.
 ///
 /// Exits with an actionable diagnostic when no SDK path can be resolved (xcrun missing,
@@ -762,6 +1018,24 @@ mod tests {
         assert_eq!(ok, "/Library/Dev/MacOSX.sdk");
     }
 
+    /// Verifies GNU Windows bridge output is native only for a GNU Windows
+    /// compiler process, never for the MSVC host used by native Windows CI.
+    #[test]
+    fn windows_gnu_bridge_target_requires_a_matching_host_abi() {
+        let target = Target::new(
+            Platform::Windows,
+            crate::codegen::platform::Arch::X86_64,
+        );
+        assert_eq!(
+            target_is_native(target),
+            cfg!(all(
+                windows,
+                target_arch = "x86_64",
+                target_env = "gnu"
+            ))
+        );
+    }
+
     /// Verifies the elephc-crypto bridge is registered and produces the expected
     /// archive filename, so compiled programs that use hashing can link it.
     #[test]
@@ -836,6 +1110,55 @@ mod tests {
         assert_eq!(bridge_lib_for_flag("web"), Some("elephc_web"));
     }
 
+    /// Verifies the web bridge is force-loaded on Unix targets that need its
+    /// entry-point machinery.
+    #[test]
+    fn web_bridge_force_loads_on_linux_and_macos() {
+        let bridge = BRIDGES
+            .iter()
+            .find(|bridge| bridge.lib_name == "elephc_web")
+            .expect("web bridge entry");
+        assert!(bridge.requires_whole_archive(Platform::Linux, false));
+        assert!(bridge.requires_whole_archive(Platform::MacOS, false));
+    }
+
+    /// Verifies the web bridge remains a plain archive link on Windows so GNU/COFF
+    /// linking does not force-load duplicate import members from its Rust staticlib.
+    #[test]
+    fn web_bridge_does_not_force_whole_archive_on_windows() {
+        let bridge = BRIDGES
+            .iter()
+            .find(|bridge| bridge.lib_name == "elephc_web")
+            .expect("web bridge entry");
+        assert!(!bridge.requires_whole_archive(Platform::Windows, false));
+    }
+
+    /// Verifies MinGW tolerates duplicate bridge runtime members and the
+    /// duplicate import members introduced by a force-loaded TLS archive.
+    #[test]
+    fn windows_duplicate_bridge_or_tls_import_members_enable_tolerance() {
+        assert!(!windows_link_needs_duplicate_bridge_tolerance(
+            Platform::Windows,
+            1,
+            false,
+        ));
+        assert!(windows_link_needs_duplicate_bridge_tolerance(
+            Platform::Windows,
+            2,
+            false,
+        ));
+        assert!(windows_link_needs_duplicate_bridge_tolerance(
+            Platform::Windows,
+            1,
+            true,
+        ));
+        assert!(!windows_link_needs_duplicate_bridge_tolerance(
+            Platform::Linux,
+            2,
+            true,
+        ));
+    }
+
     /// Verifies an unknown crate flag resolves to `None` so the CLI rejects
     /// `--with-<bogus>` instead of silently ignoring it.
     #[test]
@@ -861,12 +1184,126 @@ mod tests {
             .find(|b| b.lib_name == "elephc_magician")
             .expect("elephc_magician must be a registered bridge");
 
-        let resolved = entry.lib_dir();
+        let resolved = entry.lib_dir(Target::new(
+            Platform::detect_host(),
+            if cfg!(target_arch = "aarch64") {
+                crate::codegen::platform::Arch::AArch64
+            } else {
+                crate::codegen::platform::Arch::X86_64
+            },
+        ));
 
         match previous {
             Some(value) => std::env::set_var("ELEPHC_MAGICIAN_LIB_DIR", value),
             None => std::env::remove_var("ELEPHC_MAGICIAN_LIB_DIR"),
         }
         assert_eq!(resolved.as_deref(), Some(override_dir));
+    }
+
+    /// Verifies Windows cross-discovery ignores a same-named host archive in
+    /// `CARGO_TARGET_DIR/debug` and selects the PE/COFF archive under Cargo's
+    /// target-triple directory instead.
+    #[test]
+    fn windows_bridge_discovery_prefers_cross_target_archive() {
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock should not be poisoned");
+        let previous_target_dir = std::env::var_os("CARGO_TARGET_DIR");
+        let previous_override = std::env::var_os("ELEPHC_TZ_LIB_DIR");
+        let tmp = std::env::temp_dir().join(format!(
+            "elephc-bridge-target-discovery-{}",
+            std::process::id()
+        ));
+        let host_dir = tmp.join("debug");
+        let coff_dir = tmp.join("x86_64-pc-windows-gnu").join("debug");
+        std::fs::create_dir_all(&host_dir).expect("create host archive directory");
+        std::fs::create_dir_all(&coff_dir).expect("create COFF archive directory");
+        std::fs::write(host_dir.join("libelephc_tz.a"), b"host").expect("write host archive");
+        std::fs::write(coff_dir.join("libelephc_tz.a"), b"coff").expect("write COFF archive");
+        std::env::set_var("CARGO_TARGET_DIR", &tmp);
+        std::env::remove_var("ELEPHC_TZ_LIB_DIR");
+
+        let entry = BRIDGES
+            .iter()
+            .find(|bridge| bridge.lib_name == "elephc_tz")
+            .expect("elephc_tz must be registered");
+        let resolved = entry.find_lib_dir(Target::new(
+            Platform::Windows,
+            crate::codegen::platform::Arch::X86_64,
+        ));
+
+        match previous_target_dir {
+            Some(value) => std::env::set_var("CARGO_TARGET_DIR", value),
+            None => std::env::remove_var("CARGO_TARGET_DIR"),
+        }
+        match previous_override {
+            Some(value) => std::env::set_var("ELEPHC_TZ_LIB_DIR", value),
+            None => std::env::remove_var("ELEPHC_TZ_LIB_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(resolved.as_deref(), Some(coff_dir.to_string_lossy().as_ref()));
+    }
+
+    /// Verifies a non-existent sysroot base produces no search paths, so a
+    /// stray `ELEPHC_MINGW_SYSROOT` value can never emit a missing-directory
+    /// linker warning.
+    #[test]
+    fn mingw_sysroot_paths_empty_for_missing_dir() {
+        let paths = mingw_sysroot_link_paths_from(Path::new("/nonexistent/elephc-mingw-sysroot-123"));
+        assert!(paths.is_empty(), "got: {paths:?}");
+    }
+
+    /// Verifies a real sysroot with a `lib` directory is surfaced as a `-L`
+    /// path, and that `lib64` is also added when present, so a CI cross-built
+    /// sysroot is picked up regardless of which layout the libs installed into.
+    #[test]
+    fn mingw_sysroot_paths_from_real_dir() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        std::fs::create_dir_all(tmp.join("lib64")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        assert!(paths[1].ends_with("lib64"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Verifies only `lib` is returned when `lib64` is absent, so sysroots
+    /// that install solely into `lib` do not produce a phantom `lib64` entry.
+    #[test]
+    fn mingw_sysroot_paths_lib_only() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-lib-only-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Verifies Windows PE links explicitly request every loader mitigation
+    /// supported by the MinGW linker instead of relying on toolchain defaults.
+    #[test]
+    fn windows_pe_hardening_flags_enable_aslr_dep_and_high_entropy() {
+        assert_eq!(
+            windows_pe_hardening_linker_flags(),
+            &[
+                "-Wl,--dynamicbase",
+                "-Wl,--high-entropy-va",
+                "-Wl,--nxcompat",
+            ]
+        );
+    }
+
+    /// Verifies the eval bridge's native dependencies retain GNU archive scan order.
+    #[test]
+    fn windows_magician_dependencies_follow_the_bridge() {
+        assert_eq!(
+            windows_magician_transitive_libraries(),
+            &["-lpcre2-posix", "-lpcre2-8", "-liconv"]
+        );
     }
 }

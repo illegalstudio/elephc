@@ -138,7 +138,7 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted hash pointer
 
-    emitter.label("__rt_hash_to_mixed_x86_box_owned");
+    emitter.label_global("__rt_hash_to_mixed_x86_box_owned");
     emitter.instruction("push rbp");                                            // preserve the conversion frame before allocating a Mixed box
     emitter.instruction("mov rbp, rsp");                                        // establish a helper frame for tag and payload words
     emitter.instruction("sub rsp, 32");                                         // reserve helper slots for tag, payload, and alignment

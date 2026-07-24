@@ -10,6 +10,10 @@
 //!   becomes the PHP directory stream resource value.
 //! - The `DIR*` is recorded in the `_dir_handles` table keyed by descriptor so
 //!   `readdir()`, `rewinddir()`, and `closedir()` can hand it back to libc.
+//! - The x86_64 `opendir`/`dirfd` call sites route through `Emitter::emit_call_c`.
+//!   On Windows, `__rt_sys_opendir` enumerates through `FindFirstFileExW` and
+//!   `dirfd` mints a small CRT descriptor used as the `_dir_handles` table key.
+//!   Other targets continue to use their libc implementations.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -150,7 +154,9 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_opendir_no_glob_x86");                        // not the glob scheme
     emitter.instruction("jmp __rt_opendir_glob");                               // glob:// path: tail-call into the synthetic helper
     emitter.label("__rt_opendir_no_glob_x86");
+    emitter.instruction("jmp __rt_opendir_native_x86");                         // enter the independently unwindable native helper
 
+    emitter.label_global("__rt_opendir_native_x86");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the DIR* handle
@@ -160,14 +166,14 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     // -- open the directory stream --
     emitter.instruction("mov rdi, rax");                                        // C-string path argument for opendir
-    emitter.bl_c("opendir");
+    emitter.emit_call_c("opendir");                                             // Windows: enumerate through the FindFirstFileExW-backed shim
     emitter.instruction("test rax, rax");                                       // a NULL DIR* means opendir failed
     emitter.instruction("jz __rt_opendir_fail_x86");                            // bail out on an opendir failure
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the DIR* across the dirfd call
 
     // -- recover the underlying descriptor with dirfd --
     emitter.instruction("mov rdi, rax");                                        // DIR* argument for dirfd
-    emitter.bl_c("dirfd");
+    emitter.emit_call_c("dirfd");                                               // Windows: mint a small CRT descriptor for the DIR state table
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
     abi::emit_symbol_address(emitter, "r10", "_dir_handles");                   // base of the fd->DIR* table

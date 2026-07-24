@@ -9,7 +9,7 @@
 //! - Results are written to fixed value-placement slots immediately after definition.
 //! - Unsupported opcodes fail explicitly instead of silently emitting invalid code.
 
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{
     abi, callable_descriptor, callable_invoker_args, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
@@ -1094,8 +1094,11 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
-    let (actual_stack_offsets, actual_overflow_bytes) =
+    let (mut actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    shift_descriptor_entry_stack_offsets(&mut actual_stack_offsets, actual_call_pad_bytes);
+    let actual_call_stack_bytes = actual_overflow_bytes + actual_call_pad_bytes;
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -1112,8 +1115,8 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
             incoming_stack_offsets[idx],
         );
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     for (idx, (ty, assignment)) in actual_types
         .iter()
@@ -1134,8 +1137,8 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
         );
     }
     abi::emit_call_label(ctx.emitter, &method_symbol(class_name, method_key));
-    if actual_overflow_bytes > 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
@@ -1160,8 +1163,11 @@ fn emit_static_method_descriptor_entry_wrapper_body(
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
-    let (actual_stack_offsets, actual_overflow_bytes) =
+    let (mut actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    shift_descriptor_entry_stack_offsets(&mut actual_stack_offsets, actual_call_pad_bytes);
+    let actual_call_stack_bytes = actual_overflow_bytes + actual_call_pad_bytes;
     let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -1178,8 +1184,8 @@ fn emit_static_method_descriptor_entry_wrapper_body(
             incoming_stack_offsets[idx],
         );
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     for (idx, (ty, assignment)) in actual_types
         .iter()
@@ -1204,8 +1210,8 @@ fn emit_static_method_descriptor_entry_wrapper_body(
         }
     }
     abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
-    if actual_overflow_bytes > 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
@@ -1227,8 +1233,11 @@ fn emit_static_late_bound_descriptor_entry_wrapper_body(
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
-    let (actual_stack_offsets, actual_overflow_bytes) =
+    let (mut actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    shift_descriptor_entry_stack_offsets(&mut actual_stack_offsets, actual_call_pad_bytes);
+    let actual_call_stack_bytes = actual_overflow_bytes + actual_call_pad_bytes;
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
@@ -1245,8 +1254,8 @@ fn emit_static_late_bound_descriptor_entry_wrapper_body(
             incoming_stack_offsets[idx],
         );
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     for (idx, (ty, assignment)) in actual_types
         .iter()
@@ -1271,8 +1280,8 @@ fn emit_static_late_bound_descriptor_entry_wrapper_body(
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_call_stack_bytes);
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
@@ -1354,6 +1363,13 @@ fn descriptor_entry_stack_offsets(
         next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
     }
     (offsets, next_offset)
+}
+
+/// Shifts descriptor overflow arguments above the platform caller-stack prefix.
+fn shift_descriptor_entry_stack_offsets(offsets: &mut [Option<usize>], prefix_bytes: usize) {
+    for offset in offsets.iter_mut().flatten() {
+        *offset += prefix_bytes;
+    }
 }
 
 /// Lowers an explicit cycle-collection safe point.
@@ -1967,6 +1983,12 @@ fn first_class_builtin_descriptor(
     target: &str,
 ) -> Result<Option<FirstClassCallableDescriptor>> {
     let name = php_symbol_key(target.trim_start_matches('\\'));
+    if !crate::types::checker::builtins::builtin_available_on_platform(
+        &name,
+        ctx.emitter.target.platform,
+    ) {
+        return Ok(None);
+    }
     let Some(sig) = first_class_callable_builtin_sig(&name) else {
         return Ok(None);
     };
@@ -2983,13 +3005,26 @@ fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     );
     abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    // setjmp is a runtime-helper-convention call: on Windows it routes to the
+    // SEH-free __rt_setjmp (SysV rdi), and on Linux the C setjmp also takes its
+    // jmp_buf in the SysV arg-0 register, so stage the address in the SysV-fixed
+    // runtime-helper register (rdi/x0) on every target rather than the MSx64 arg
+    // register (rcx) `int_arg_reg_name` would pick on Windows.
     abi::emit_frame_slot_address(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 0),
         handler_offset - TRY_HANDLER_JMP_BUF_OFFSET,
     );
     ctx.emitter.bl_c("setjmp");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let resume_label = ctx.next_label("try_handler_resume");
+            ctx.emitter.instruction(&format!("cbz x0, {}", resume_label));      // keep the normal setjmp path within the AArch64 conditional-branch range
+            ctx.emitter.instruction(&format!("b {}", handler_label));           // take a long-range handler edge after longjmp resumes the frame
+            ctx.emitter.label(&resume_label);
+        }
+        Arch::X86_64 => abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label),
+    }
     Ok(())
 }
 
@@ -3634,6 +3669,11 @@ fn lower_instance_runtime_intrinsic(
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let abi_param_types = abi_param_types_for_refs(&param_types, &ref_params);
+    remap_platform_args_to_runtime_helper_regs(
+        ctx.emitter,
+        int_register_arg_count(&abi_param_types),
+    );
     abi::emit_call_label(
         ctx.emitter,
         intrinsic
@@ -3696,6 +3736,11 @@ fn lower_static_runtime_intrinsic(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let visible_abi_param_types = abi_param_types_for_refs(&param_types, &callee_ref_params);
+    remap_platform_args_to_runtime_helper_regs(
+        ctx.emitter,
+        1 + int_register_arg_count(&visible_abi_param_types), // +1 for the hidden called-class-id arg (always Int, 1 register)
+    );
     abi::emit_call_label(
         ctx.emitter,
         intrinsic
@@ -3771,9 +3816,8 @@ fn lower_callback_filter_accept_intrinsic(
 /// integer key. The helper's result register holds the value delivered by the
 /// next `send()`/`next()`, which becomes the SSA result of the yield.
 fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let target = ctx.emitter.target;
-    let key_arg = abi::int_arg_reg_name(target, 0);
-    let value_arg = abi::int_arg_reg_name(target, 1);
+    let key_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let value_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     let n = inst.operands.len();
@@ -3797,7 +3841,7 @@ fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             emit_value_as_owned_mixed(ctx, key)?;
             if key_arg != result_reg {
                 ctx.emitter
-                    .instruction(&format!("mov {}, {}", key_arg, result_reg)); // move the boxed key into the first argument register
+                    .instruction(&format!("mov {}, {}", key_arg, result_reg));  // move the boxed key into the first argument register
             }
         }
         None => {
@@ -3817,8 +3861,7 @@ fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// reaching the backend, so the operand here is always a Generator/Traversable.
 fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let operand = expect_operand(inst, 0)?;
-    let target = ctx.emitter.target;
-    let arg0 = abi::int_arg_reg_name(target, 0);
+    let arg0 = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_result(operand)?; // inner generator pointer (borrowed)
     if arg0 != result_reg {
@@ -3875,6 +3918,11 @@ fn lower_generator_intrinsic(
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let abi_param_types = abi_param_types_for_refs(&param_types, &ref_params);
+    remap_platform_args_to_runtime_helper_regs(
+        ctx.emitter,
+        int_register_arg_count(&abi_param_types),
+    );
     let helper = intrinsic.runtime_helper().ok_or_else(|| {
         CodegenIrError::invalid_module(format!(
             "Generator intrinsic {:?} has no runtime helper",
@@ -4196,7 +4244,7 @@ fn lower_fiber_start(
         abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     emit_store_fiber_start_args(ctx, &assignments, args.len())?;
     abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
@@ -4214,9 +4262,9 @@ fn lower_fiber_resume(
         fiber_single_optional_arg(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::resume")?;
     emit_optional_mixed_arg(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed resume value while loading the receiver
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the boxed resume value as runtime helper argument 2
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1)); // pass the boxed resume value as runtime helper argument 2
     abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
     store_if_result(ctx, inst)
 }
@@ -4242,8 +4290,8 @@ fn lower_fiber_throw(
         )));
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the Throwable while loading the Fiber receiver
-    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the Throwable object as runtime helper argument 2
+    ctx.load_value_to_reg(object, abi::runtime_helper_int_arg_reg(ctx.emitter, 0))?;
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 1)); // pass the Throwable object as runtime helper argument 2
     abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
@@ -4353,7 +4401,7 @@ fn lower_fiber_noarg_runtime_method(
             helper
         )));
     }
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
@@ -4444,7 +4492,7 @@ fn lower_fiber_state_predicate(
     object: ValueId,
     state: FiberStatePredicate,
 ) -> Result<()> {
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     emit_fiber_state_predicate_call(ctx, inst, state)
 }
@@ -4483,7 +4531,7 @@ fn emit_mixed_fiber_receiver_to_arg(
         .ok_or_else(|| {
             CodegenIrError::unsupported("mixed Fiber predicate without Fiber metadata")
         })?;
-    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let receiver_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -4523,7 +4571,7 @@ fn emit_fiber_state_predicate_call(
 ) -> Result<()> {
     abi::emit_load_int_immediate(
         ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(ctx.emitter, 1),
         state.expected_state() as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_fiber_state_eq");
@@ -5108,7 +5156,7 @@ fn lower_static_fiber_suspend(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value = fiber_single_optional_arg(ctx, &inst.operands, "Fiber::suspend")?;
     emit_optional_mixed_arg(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed suspend value for target-specific argument loading
-    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0)); // pass the boxed suspend value as runtime helper argument 1
+    abi::emit_pop_reg(ctx.emitter, abi::runtime_helper_int_arg_reg(ctx.emitter, 0)); // pass the boxed suspend value as runtime helper argument 1
     abi::emit_call_label(ctx.emitter, "__rt_fiber_suspend");
     store_if_result(ctx, inst)
 }
@@ -5856,12 +5904,12 @@ fn emit_branch_if_cleanup_temp_aliases_result(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
+                .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
             ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // keep the temp alive when ownership moved to the result
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); // compare the temporary Mixed cell with the saved call result
+                .instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
             ctx.emitter.instruction(&format!("je {}", skip_label));             // keep the temp alive when ownership moved to the result
         }
     }
@@ -6350,7 +6398,7 @@ pub(super) fn load_value_to_first_int_arg(
 pub(super) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'_>) {
     let non_string = ctx.next_label("mixed_string_persist_non_string");
     let done = ctx.next_label("mixed_string_persist_done");
-    let mixed_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let mixed_arg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     abi::emit_push_reg(ctx.emitter, mixed_arg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -6414,7 +6462,7 @@ pub(super) fn resolve_int_operand_to_result(
 /// Moves the canonical integer result register into the target's first argument register.
 fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
     if result_reg == arg_reg {
         return;
     }
@@ -6430,7 +6478,65 @@ fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Remaps the platform (MSx64) integer argument registers into the SysV
+/// registers a hand-written `__rt_*` runtime helper reads, on the
+/// windows-x86_64 target. No-op (byte-identical output) on every other
+/// target because `int_arg_reg_name` and `runtime_helper_int_arg_reg`
+/// resolve to the same register there; the register choice only diverges
+/// on windows-x86_64 (see `runtime_helper_int_arg_reg`'s docs). Only valid
+/// when every argument is register-passed (`arg_count <= 4`, i.e. no
+/// caller-stack overflow args) — the generator/instance/static
+/// runtime-intrinsic dispatch families this serves are all small-arity.
+/// Panics rather than silently miscompiling a future >4-register-arg
+/// caller; extend this helper deliberately if that ever happens.
+fn remap_platform_args_to_runtime_helper_regs(
+    emitter: &mut crate::codegen::emit::Emitter,
+    arg_count: usize,
+) {
+    assert!(
+        arg_count <= 4,
+        "runtime-helper register remap only covers <=4 register-passed args, got {}",
+        arg_count
+    );
+    if emitter.target.platform == Platform::Windows && emitter.target.arch == Arch::X86_64 {
+        for idx in 0..arg_count {
+            let src = abi::int_arg_reg_name(emitter.target, idx);
+            let dst = abi::runtime_helper_int_arg_reg(emitter, idx);
+            if src != dst {
+                emitter.instruction(&format!("mov {}, {}", dst, src));          // MSx64 arg -> SysV arg for the hand-written helper
+            }
+        }
+    }
+}
+
+/// Returns the number of integer-class ABI argument registers consumed by
+/// `abi_param_types`, mirroring the register-class accounting used by
+/// `build_outgoing_arg_assignments_for_target`/`materialize_outgoing_args`:
+/// float-class types occupy separate XMM registers (byte-identical index on
+/// every x86_64 target, so they never need remapping), and multi-slot
+/// int-class types (`Str`'s pointer+length pair) occupy `register_count()`
+/// consecutive integer registers rather than one. Passing `param_types.len()`
+/// directly to the remap helper undercounts whenever a `Str` (or other
+/// 2-register) argument is present.
+fn int_register_arg_count(abi_param_types: &[PhpType]) -> usize {
+    abi_param_types
+        .iter()
+        .filter(|ty| !ty.is_float_reg())
+        .map(|ty| ty.register_count())
+        .sum()
+}
+
 /// Returns the temporary caller-stack pad needed to match incoming stack-arg offsets.
+///
+/// AArch64 call sites reserve a fixed 16-byte nested-call save slot above outgoing
+/// stack args (see `caller_stack_start_offset`'s doc comment). x86_64 callees read
+/// their first stack-passed argument at `caller_stack_start_offset(target)` bytes
+/// above their frame pointer; on Linux/macOS that offset (16: 8-byte return address
+/// + 8-byte saved rbp) already matches where this function's stack-arg staging
+/// lands the overflow args, so no extra pad is needed. Windows x86_64 callees read
+/// stack args starting at offset 48 after saving rbp (32-byte mandatory shadow
+/// space + 8-byte return address + 8-byte saved frame pointer), so the caller
+/// must reserve the shadow area or the callee reads the wrong stack slot.
 pub(super) fn direct_call_stack_pad_bytes(
     ctx: &FunctionContext<'_>,
     overflow_bytes: usize,
@@ -6991,7 +7097,7 @@ fn coerce_ref_cell_store_value(
                 // Save the Mixed pointer on the stack, narrow to int, then
                 // release the Mixed box to avoid leaking the checked-arithmetic temporary.
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let result_reg = abi::int_result_reg(ctx.emitter);
                 // Stack layout after pushes: [result_placeholder | saved_mixed_ptr]
                 abi::emit_push_reg(ctx.emitter, result_reg); // placeholder for int result
@@ -7015,7 +7121,7 @@ fn coerce_ref_cell_store_value(
             }
             PhpType::Bool => {
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let result_reg = abi::int_result_reg(ctx.emitter);
                 abi::emit_push_reg(ctx.emitter, result_reg);
                 abi::emit_push_reg(ctx.emitter, arg_reg);
@@ -7035,7 +7141,7 @@ fn coerce_ref_cell_store_value(
             }
             PhpType::Float => {
                 move_int_result_to_first_arg(ctx);
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                let arg_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 abi::emit_push_reg(ctx.emitter, int_reg); // placeholder for float result
                 abi::emit_push_reg(ctx.emitter, arg_reg); // save Mixed pointer
@@ -7648,4 +7754,65 @@ fn expect_operand(inst: &Instruction, index: usize) -> Result<ValueId> {
     inst.operands.get(index).copied().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("{} missing operand {}", inst.op.name(), index))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::Target;
+
+    use super::*;
+
+    /// Verifies that on windows-x86_64 the remap emits `mov` instructions moving
+    /// every MSx64 argument register into the SysV register the hand-written
+    /// `__rt_*` helper actually reads, for a 2-register-arg call.
+    #[test]
+    fn test_remap_emits_msx64_to_sysv_on_windows_x86_64() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        remap_platform_args_to_runtime_helper_regs(&mut emitter, 2);
+        let asm = emitter.output();
+        assert!(asm.contains("mov rdi, rcx"));
+        assert!(asm.contains("mov rsi, rdx"));
+    }
+
+    /// Verifies that on linux-x86_64 the remap is a no-op: `int_arg_reg_name`
+    /// and `runtime_helper_int_arg_reg` already agree there, so `src == dst`
+    /// for every index and nothing is emitted.
+    #[test]
+    fn test_remap_is_noop_on_linux_x86_64() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        remap_platform_args_to_runtime_helper_regs(&mut emitter, 4);
+        let asm = emitter.output();
+        assert!(!asm.contains("mov rdi, rcx"));
+        assert!(!asm.contains("mov"));
+    }
+
+    /// Verifies that on macOS AArch64 the remap emits nothing: AArch64 has a
+    /// single calling convention, so `int_arg_reg_name` and
+    /// `runtime_helper_int_arg_reg` are byte-identical for every index.
+    #[test]
+    fn test_remap_is_noop_on_aarch64() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        remap_platform_args_to_runtime_helper_regs(&mut emitter, 2);
+        let asm = emitter.output();
+        assert!(asm.is_empty());
+    }
+
+    /// Verifies that a `Str` (pointer+length pair) argument counts as 2
+    /// integer-class registers, not 1 — the bug this helper must avoid for
+    /// call sites like `SplDoublyLinkedList::unserialize(string $data)`.
+    #[test]
+    fn test_int_register_arg_count_counts_str_as_two_registers() {
+        let abi_param_types = vec![PhpType::Object("SplDoublyLinkedList".to_string()), PhpType::Str];
+        assert_eq!(int_register_arg_count(&abi_param_types), 3);
+    }
+
+    /// Verifies that float-class arguments are excluded from the integer
+    /// register count, since they occupy separate XMM registers that never
+    /// need remapping between MSx64 and SysV.
+    #[test]
+    fn test_int_register_arg_count_excludes_float_args() {
+        let abi_param_types = vec![PhpType::Int, PhpType::Float, PhpType::Int];
+        assert_eq!(int_register_arg_count(&abi_param_types), 2);
+    }
 }

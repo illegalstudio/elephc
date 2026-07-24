@@ -111,6 +111,82 @@ impl ElephcEvalContext {
         self.included_files.insert(path.into());
     }
 
+    /// Records PHP-visible permission bits against the file's stable identity.
+    #[cfg(any(windows, test))]
+    pub(crate) fn remember_local_file_mode(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        mode: u32,
+    ) {
+        if let Some(key) = local_file_mode_key(path.as_ref()) {
+            self.local_file_modes.insert(key, mode & 0o7777);
+        }
+    }
+
+    /// Returns emulated PHP permission bits for one local file, when present.
+    #[cfg(any(windows, test))]
+    pub(crate) fn local_file_mode(&self, path: impl AsRef<std::path::Path>) -> Option<u32> {
+        let key = local_file_mode_key(path.as_ref())?;
+        self.local_file_modes.get(&key).copied()
+    }
+
+    /// Captures emulated mode state before rename/copy/link/unlink mutates paths.
+    #[cfg(any(windows, test))]
+    pub(crate) fn capture_local_file_mode(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Option<LocalFileModeToken> {
+        let path = path.as_ref();
+        let key = local_file_mode_key(path)?;
+        let mode = self.local_file_modes.get(&key).copied()?;
+        Some(LocalFileModeToken {
+            key,
+            mode,
+            last_link: local_file_link_count(path).is_none_or(|count| count <= 1),
+        })
+    }
+
+    /// Copies captured mode state onto a newly materialized destination file.
+    #[cfg(any(windows, test))]
+    pub(crate) fn copy_local_file_mode(
+        &mut self,
+        source: Option<&LocalFileModeToken>,
+        replaced_destination: Option<&LocalFileModeToken>,
+        destination: impl AsRef<std::path::Path>,
+    ) {
+        if let Some(replaced) = replaced_destination.filter(|token| token.last_link) {
+            self.local_file_modes.remove(&replaced.key);
+        }
+        if let Some(source) = source {
+            self.remember_local_file_mode(destination, source.mode);
+        }
+    }
+
+    /// Moves captured mode state from the old path identity to the renamed file.
+    #[cfg(any(windows, test))]
+    pub(crate) fn rename_local_file_mode(
+        &mut self,
+        source: Option<LocalFileModeToken>,
+        replaced_destination: Option<LocalFileModeToken>,
+        destination: impl AsRef<std::path::Path>,
+    ) {
+        if let Some(replaced) = replaced_destination.filter(|token| token.last_link) {
+            self.local_file_modes.remove(&replaced.key);
+        }
+        if let Some(source) = source {
+            self.local_file_modes.remove(&source.key);
+            self.remember_local_file_mode(destination, source.mode);
+        }
+    }
+
+    /// Purges captured mode state only when unlink removed the inode's last alias.
+    #[cfg(any(windows, test))]
+    pub(crate) fn unlink_local_file_mode(&mut self, removed: Option<LocalFileModeToken>) {
+        if let Some(removed) = removed.filter(|token| token.last_link) {
+            self.local_file_modes.remove(&removed.key);
+        }
+    }
+
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
@@ -421,5 +497,240 @@ impl ElephcEvalContext {
             return String::new();
         }
         format!("{}({}) : eval()'d code", self.call_file, self.call_line)
+    }
+}
+
+/// Builds an inode-like key, falling back to a normalized absolute path.
+#[cfg(any(windows, test))]
+fn local_file_mode_key(path: &std::path::Path) -> Option<LocalFileModeKey> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if let Some((volume, index)) = local_file_identity(path, &metadata) {
+        return Some(LocalFileModeKey::FileId { volume, index });
+    }
+    Some(LocalFileModeKey::Path(normalize_local_file_mode_path(path)?))
+}
+
+/// Returns a stable host filesystem identity for hard-link-aware mode tracking.
+#[cfg(any(windows, test))]
+fn local_file_identity(
+    _path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Some((metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        let (volume, index, _) = windows_local_file_info(_path)?;
+        return Some((volume, index));
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (_path, metadata);
+        None
+    }
+}
+
+/// Returns the host hard-link count when the platform exposes it.
+#[cfg(any(windows, test))]
+fn local_file_link_count(path: &std::path::Path) -> Option<u64> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Some(metadata.nlink());
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        return windows_local_file_info(path).map(|(_, _, links)| links);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+/// Canonicalizes an existing path and applies Windows case-insensitive folding.
+#[cfg(any(windows, test))]
+fn normalize_local_file_mode_path(path: &std::path::Path) -> Option<String> {
+    let absolute = std::fs::canonicalize(path).or_else(|_| {
+        if path.is_absolute() {
+            Ok(path.to_path_buf())
+        } else {
+            std::env::current_dir().map(|cwd| cwd.join(path))
+        }
+    });
+    let normalized = absolute.ok()?.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    return Some(normalized.to_lowercase());
+    #[cfg(not(windows))]
+    return Some(normalized);
+}
+
+/// Reads stable Windows volume, file-index, and hard-link-count fields.
+#[cfg(windows)]
+fn windows_local_file_info(path: &std::path::Path) -> Option<(u64, u64, u64)> {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        attributes: u32,
+        creation_time: FileTime,
+        last_access_time: FileTime,
+        last_write_time: FileTime,
+        volume_serial: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// Reads stable filesystem identity for one open Windows handle.
+        fn GetFileInformationByHandle(
+            file: *mut c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut information = std::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+    let status = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr())
+    };
+    if status == 0 {
+        return None;
+    }
+    let information = unsafe { information.assume_init() };
+    Some((
+        u64::from(information.volume_serial),
+        (u64::from(information.file_index_high) << 32)
+            | u64::from(information.file_index_low),
+        u64::from(information.number_of_links),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+    /// Creates an isolated filesystem fixture directory for one mode-state test.
+    fn mode_test_dir(label: &str) -> PathBuf {
+        let id = NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "elephc_magician_mode_{label}_{}_{id}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).expect("create mode test directory");
+        path
+    }
+
+    /// Verifies canonical and dot-segment aliases resolve to the same mode identity.
+    #[test]
+    fn local_file_mode_resolves_path_aliases() {
+        let dir = mode_test_dir("aliases");
+        let file = dir.join("sample.txt");
+        std::fs::write(&file, b"data").expect("create mode test file");
+        let alias = dir.join(".").join("sample.txt");
+        let canonical = std::fs::canonicalize(&file).expect("canonicalize mode test file");
+        let mut context = ElephcEvalContext::new();
+
+        context.remember_local_file_mode(&alias, 0o640);
+
+        assert_eq!(context.local_file_mode(&file), Some(0o640));
+        assert_eq!(context.local_file_mode(&canonical), Some(0o640));
+        std::fs::remove_dir_all(dir).expect("remove mode test directory");
+    }
+
+    /// Verifies rename moves mode state and copy replaces destination mode state.
+    #[test]
+    fn local_file_mode_follows_rename_and_copy() {
+        let dir = mode_test_dir("rename_copy");
+        let source = dir.join("source.txt");
+        let renamed = dir.join("renamed.txt");
+        let copied = dir.join("copied.txt");
+        std::fs::write(&source, b"source").expect("create source file");
+        std::fs::write(&copied, b"old destination").expect("create copy destination");
+        let mut context = ElephcEvalContext::new();
+        context.remember_local_file_mode(&source, 0o600);
+        context.remember_local_file_mode(&copied, 0o777);
+
+        let source_mode = context.capture_local_file_mode(&source);
+        let renamed_mode = context.capture_local_file_mode(&renamed);
+        std::fs::rename(&source, &renamed).expect("rename source file");
+        context.rename_local_file_mode(source_mode, renamed_mode, &renamed);
+        assert_eq!(context.local_file_mode(&source), None);
+        assert_eq!(context.local_file_mode(&renamed), Some(0o600));
+
+        let source_mode = context.capture_local_file_mode(&renamed);
+        let destination_mode = context.capture_local_file_mode(&copied);
+        std::fs::copy(&renamed, &copied).expect("copy renamed file");
+        context.copy_local_file_mode(source_mode.as_ref(), destination_mode.as_ref(), &copied);
+        assert_eq!(context.local_file_mode(&renamed), Some(0o600));
+        assert_eq!(context.local_file_mode(&copied), Some(0o600));
+        std::fs::remove_dir_all(dir).expect("remove mode test directory");
+    }
+
+    /// Verifies hard-link aliases retain mode state until the last link is removed.
+    #[test]
+    fn local_file_mode_tracks_hard_links_and_recreation() {
+        let dir = mode_test_dir("hard_link");
+        let source = dir.join("source.txt");
+        let alias = dir.join("alias.txt");
+        std::fs::write(&source, b"source").expect("create hard-link source");
+        let mut context = ElephcEvalContext::new();
+        context.remember_local_file_mode(&source, 0o620);
+
+        let source_mode = context.capture_local_file_mode(&source);
+        std::fs::hard_link(&source, &alias).expect("create hard-link alias");
+        context.copy_local_file_mode(source_mode.as_ref(), None, &alias);
+        assert_eq!(context.local_file_mode(&alias), Some(0o620));
+
+        let removed_source = context.capture_local_file_mode(&source);
+        std::fs::remove_file(&source).expect("remove original hard link");
+        context.unlink_local_file_mode(removed_source);
+        assert_eq!(context.local_file_mode(&alias), Some(0o620));
+
+        let removed_alias = context.capture_local_file_mode(&alias);
+        std::fs::remove_file(&alias).expect("remove final hard link");
+        context.unlink_local_file_mode(removed_alias);
+        std::fs::write(&alias, b"replacement").expect("recreate alias path");
+        assert_eq!(context.local_file_mode(&alias), None);
+        std::fs::remove_dir_all(dir).expect("remove mode test directory");
+    }
+
+    /// Verifies Windows case-insensitive path aliases share one emulated mode.
+    #[cfg(windows)]
+    #[test]
+    fn local_file_mode_resolves_windows_case_aliases() {
+        let dir = mode_test_dir("case_alias");
+        let file = dir.join("CaseSample.txt");
+        std::fs::write(&file, b"data").expect("create Windows case test file");
+        let case_alias = dir.join("casesample.TXT");
+        let mut context = ElephcEvalContext::new();
+
+        context.remember_local_file_mode(&file, 0o604);
+
+        assert_eq!(context.local_file_mode(&case_alias), Some(0o604));
+        std::fs::remove_dir_all(dir).expect("remove mode test directory");
     }
 }

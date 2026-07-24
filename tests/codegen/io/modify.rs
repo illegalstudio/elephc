@@ -28,7 +28,12 @@ echo (function_exists("touch") ? "1" : "0")
    . (function_exists("FdAtAsYnC") ? "1" : "0");
 "#,
     );
-    assert_eq!(out, "11111111111");
+    let expected = if target().platform == Platform::Windows {
+        "11110011111"
+    } else {
+        "11111111111"
+    };
+    assert_eq!(out, expected);
 }
 
 /// Verifies file-modify builtins are case-insensitive and resolve correctly
@@ -60,8 +65,9 @@ echo chmod("perms.txt", 0o644) ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies chmod() actually removes write permission when mode 0400 is set;
-/// fileperms() confirms the mode before chmod restores it.
+/// Verifies chmod() actually removes write permission when mode 0400 is set.
+/// Windows exposes its file-level read-only attribute as 0444 because it has no
+/// POSIX owner/group/other permission classes; POSIX targets preserve 0400.
 #[test]
 fn test_chmod_makes_file_unwritable() {
     let (out, dir) = compile_and_run_in_dir(
@@ -73,7 +79,12 @@ chmod("ro.txt", 0o644);
 echo $mode;
 "#,
     );
-    assert_eq!(out, "0400");
+    let expected = if target().platform == Platform::Windows {
+        "0444"
+    } else {
+        "0400"
+    };
+    assert_eq!(out, expected);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -104,10 +115,32 @@ fn test_chgrp_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies php-src's Windows ownership surface: chown/chgrp fail and lchown/lchgrp are absent.
+#[test]
+fn test_windows_ownership_changes_return_false_for_existing_path() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("owner.txt", "x");
+echo chown("owner.txt", 1000) ? "y" : "n";
+echo chgrp("owner.txt", 1000) ? "y" : "n";
+echo function_exists("lchown") ? "y" : "n";
+echo function_exists("lchgrp") ? "y" : "n";
+unlink("owner.txt");
+"#,
+    );
+    assert_eq!(out, "nnnn");
+}
+
 /// Verifies lchown()/lchgrp() succeed on an existing symlink when asked to leave ownership unchanged.
 /// The namespaced, mixed-case calls also verify PHP-style builtin fallback and case-insensitive lookup.
 #[test]
 fn test_lchown_lchgrp_symlink_noop_succeeds() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 namespace FsModifyLinks;
@@ -125,6 +158,9 @@ unlink("target.txt");
 /// Verifies lchown()/lchgrp() return false when the path does not exist.
 #[test]
 fn test_lchown_lchgrp_missing_path_returns_false() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 echo lchown("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
@@ -137,6 +173,9 @@ echo lchgrp("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
 /// Verifies lchown()/lchgrp() return false for unknown user/group names.
 #[test]
 fn test_lchown_lchgrp_unknown_principal_strings_return_false() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 file_put_contents("target.txt", "x");
@@ -237,6 +276,24 @@ echo ($ok ? "y" : "n") . "|" . filesize("ext.txt");
 "#,
     );
     assert_eq!(out, "y|8");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies ftruncate() preserves the stream position while changing file size.
+#[test]
+fn test_ftruncate_preserves_stream_position() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("position.txt", "abcdef");
+$h = fopen("position.txt", "r+");
+fseek($h, 2);
+$ok = ftruncate($h, 9);
+$position = ftell($h);
+fclose($h);
+echo ($ok ? "y" : "n") . "|" . $position . "|" . filesize("position.txt");
+"#,
+    );
+    assert_eq!(out, "y|2|9");
     let _ = fs::remove_dir_all(&dir);
 }
 

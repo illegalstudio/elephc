@@ -64,6 +64,17 @@ const DEFAULT_BINARY_TIMEOUT_SECS: u64 = 60;
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    ensure_windows_runnable_or_skip();
+    // Rewrite the shared x86_64 backend's raw Linux syscalls into windows shim
+    // calls before assembling; a no-op on native targets, so their bytes are
+    // unchanged (the borrowed `asm` is fed straight through).
+    let windows_asm;
+    let asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(asm);
+        windows_asm.as_str()
+    } else {
+        asm
+    };
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -105,6 +116,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// runtimes and custom heap sizes get distinct objects while repeated tests can
 /// still share the assembled output.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    ensure_windows_runnable_or_skip();
+    // Key the cache on the untransformed runtime assembly: the windows rewrite is
+    // deterministic, so identical raw assembly still shares one assembled object.
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -116,6 +130,15 @@ pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     fs::create_dir_all(&dir).unwrap();
     let asm_path = dir.join(format!("runtime_{hash:016x}.s"));
     let obj_path = dir.join(format!("runtime_{hash:016x}.o"));
+    // Apply the windows syscall→shim rewrite before writing/assembling; a no-op on
+    // native targets, so the runtime bytes are unchanged there.
+    let windows_asm;
+    let runtime_asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(runtime_asm);
+        windows_asm.as_str()
+    } else {
+        runtime_asm
+    };
     fs::write(&asm_path, runtime_asm).unwrap();
 
     let mut cmd = Command::new(assembler_cmd());
@@ -161,20 +184,40 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
         .collect()
 }
 
-/// Builds any requested bridge staticlibs missing from the debug target directory.
+/// Builds any requested bridge staticlibs missing from the target's debug
+/// directory.
+///
+/// On the windows-x86_64 test target the bridge staticlibs must be cross-built
+/// for `x86_64-pc-windows-gnu` (PE/COFF) so MinGW can link them into the `.exe`;
+/// MinGW cannot link host ELF archives into a PE binary. To that end the
+/// `cargo build -p <package>` command gains `--target x86_64-pc-windows-gnu` and
+/// the `CC_x86_64_pc_windows_gnu`/`AR_x86_64_pc_windows_gnu`/`RANLIB_*` env vars
+/// that cc-rs needs to compile bundled C (PDO's `libsqlite3-sys` amalgamation)
+/// with the MinGW toolchain. On every other target the command is byte-identical
+/// to the pre-Tier-2 path: no `--target`, no extra env, so macOS/Linux bridge
+/// builds are unchanged.
 fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
     let _guard = BRIDGE_STATICLIB_BUILD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("bridge staticlib build lock poisoned");
+    let platform = target().platform;
+    let cargo_target = bridge_staticlib_cargo_target(platform);
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
         if !bridge_staticlib_needs_build(&archive_path, bridge.package) {
             continue;
         }
 
-        let status = Command::new("cargo")
-            .args(["build", "-p", bridge.package])
+        let mut cmd = Command::new("cargo");
+        cmd.args(["build", "-p", bridge.package]);
+        if let Some(triple) = cargo_target {
+            cmd.args(["--target", triple]);
+            for (key, value) in bridge_staticlib_cross_env(platform) {
+                cmd.env(key, value);
+            }
+        }
+        let status = cmd
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .unwrap_or_else(|err| {
@@ -194,6 +237,50 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
             bridge.package,
             archive_path.display()
         );
+    }
+}
+
+/// Returns the `cargo build --target` triple the bridge staticlib build should
+/// target, or `None` when building for the host. Only the windows-x86_64 test
+/// target cross-compiles the bridges; every other target returns `None` so the
+/// `cargo build` command stays byte-identical to the pre-Tier-2 path. Split out
+/// as a pure helper so the gating can be unit-tested without mutating process
+/// environment (which is racy under parallel test execution).
+fn bridge_staticlib_cargo_target(platform: Platform) -> Option<&'static str> {
+    match platform {
+        Platform::Windows => Some("x86_64-pc-windows-gnu"),
+        _ => None,
+    }
+}
+
+/// Returns the `CC`/`AR`/`RANLIB` env vars cc-rs needs to compile bundled C
+/// (PDO's `libsqlite3-sys` amalgamation) for the windows-x86_64 cross target
+/// using the MinGW-w64 toolchain. Empty slice on non-Windows targets, so no env
+/// is injected into the host `cargo build` command there.
+fn bridge_staticlib_cross_env(platform: Platform) -> &'static [(&'static str, &'static str)] {
+    static WINDOWS: [(&str, &str); 3] = [
+        ("CC_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-gcc"),
+        ("AR_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ar"),
+        ("RANLIB_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ranlib"),
+    ];
+    static OTHER: [(&str, &str); 0] = [];
+    match platform {
+        Platform::Windows => &WINDOWS,
+        _ => &OTHER,
+    }
+}
+
+/// Returns the subdirectory under the cargo target dir where bridge staticlibs
+/// land. For the windows-x86_64 cross target, `cargo build --target
+/// x86_64-pc-windows-gnu` emits archives under
+/// `<target>/x86_64-pc-windows-gnu/debug`, so MinGW finds the PE/COFF archives
+/// there; every other target uses `<target>/debug` (the host cargo output dir),
+/// preserving the pre-Tier-2 layout on macOS/Linux. Pure helper so the dir
+/// resolution can be unit-tested without env mutation.
+fn bridge_staticlib_subdir(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Windows => "x86_64-pc-windows-gnu/debug",
+        _ => "debug",
     }
 }
 
@@ -368,7 +455,13 @@ pub(crate) fn link_binary(
     // shards derive it from their extracted executable, and local tests fall
     // back to the workspace target directory.
     let needs_bridge_staticlib = !requested_bridge_staticlibs(&actual_link_libs).is_empty();
-    let bridge_staticlib_dir = bridge_staticlib_dir();
+    let mut bridge_staticlib_dir = bridge_staticlib_dir();
+    if target().platform == Platform::Windows
+        && !bridge_staticlib_dir.ends_with(bridge_staticlib_subdir(Platform::Windows))
+    {
+        bridge_staticlib_dir.pop();
+        bridge_staticlib_dir.push(bridge_staticlib_subdir(Platform::Windows));
+    }
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
@@ -451,30 +544,150 @@ pub(crate) fn link_binary(
             );
         }
         Platform::Windows => {
-            panic!("Windows target is not yet supported (see issue #379)");
+            // MinGW GCC (`x86_64-w64-mingw32-gcc`) links the user + runtime objects
+            // into a PE32+ `.exe`, mirroring the production windows arm in
+            // `src/linker.rs`. The `.exe` suffix matches what MinGW emits and what
+            // the Wine runner then executes.
+            let mut ld_cmd = Command::new(gcc_cmd());
+            ld_cmd.arg("-o").arg(target_binary_path(bin_path));
+            ld_cmd.arg(obj_path);
+            ld_cmd.arg(runtime_obj);
+            // Surface the CI MinGW sysroot (cross-built PCRE2/bzip2/zlib/iconv)
+            // before any `-l` args so MinGW resolves those C symbols. Mirrors the
+            // production arm in `src/linker.rs`; gated on the env var so local
+            // non-CI runs are unaffected.
+            for path in mingw_sysroot_link_paths() {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            if needs_bridge_staticlib {
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
+            }
+            for path in extra_link_paths {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            for lib in &actual_link_libs {
+                ld_cmd.arg(format!("-l{}", lib));
+            }
+            if actual_link_libs
+                .iter()
+                .any(|library| *library == "elephc_magician")
+            {
+                // The Rust staticlib's Cargo native-link metadata does not reach
+                // this hand-built command. Repeat its C dependencies after the
+                // archive so GNU ld can resolve the symbols it introduces.
+                ld_cmd.args(windows_magician_transitive_libraries());
+            }
+            // Windows system import libraries the runtime shims resolve against
+            // (WriteFile/ReadFile/HeapAlloc/BCryptGenRandom/...); same set as the
+            // production linker. secur32/userenv/ntdll cover the std-windows deps
+            // pulled in by pdo's postgres/mysql crates and by image's std usage
+            // (GetUserNameExW, GetUserProfileDirectoryW, Nt*File/RtlNtStatusToDosError).
+            ld_cmd.args([
+                "-lkernel32",
+                "-lmsvcrt",
+                "-lwinmm",
+                "-lws2_32",
+                "-lbcrypt",
+                "-lshlwapi",
+                "-lshell32",
+                "-lsecur32",
+                "-luserenv",
+                "-lntdll",
+            ]);
+            let ld_out = ld_cmd.output().expect("failed to run linker");
+            assert!(
+                ld_out.status.success(),
+                "linker failed:\n{}",
+                String::from_utf8_lossy(&ld_out.stderr)
+            );
         }
     }
 }
 
-/// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
-/// On other platform/arch combinations, execs the binary natively.
-/// Used for post-link execution of already-assembled test binaries.
-pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
-    if target().platform == Platform::Linux
-        && target().arch == Arch::AArch64
-        && cfg!(target_arch = "x86_64")
-    {
-        let mut cmd = Command::new("qemu-aarch64-static");
-        if let Some(sysroot) = qemu_sysroot() {
-            cmd.args(["-L", sysroot]);
-        }
-        cmd.arg(bin_path).current_dir(dir);
-        run_command_with_timeout(cmd)
-    } else {
-        let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir);
-        run_command_with_timeout(cmd)
+/// Returns MinGW libraries that must follow the eval bridge in harness links.
+fn windows_magician_transitive_libraries() -> &'static [&'static str] {
+    &["-lpcre2-posix", "-lpcre2-8", "-liconv"]
+}
+
+/// Returns the `-L` search paths derived from the `ELEPHC_MINGW_SYSROOT` env
+/// var, mirroring `src/linker.rs::mingw_sysroot_link_paths` for the test
+/// harness. CI sets the env var to a cross-built MinGW sysroot (PCRE2, bzip2,
+/// zlib, libiconv) so the MinGW linker resolves the C symbols those codegen
+/// fixtures call. Unset on local non-CI runs, so no missing-directory warnings.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    let base = std::path::PathBuf::from(dir);
+    if !base.is_dir() {
+        return Vec::new();
     }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
+}
+
+/// Returns the on-disk path of the compiled binary for the current target. For
+/// windows-x86_64 this is `<bin>.exe` (MinGW emits a `.exe` and Wine runs it);
+/// every other target uses the bare binary path unchanged.
+pub(crate) fn target_binary_path(bin_path: &Path) -> std::path::PathBuf {
+    if target().platform == Platform::Windows {
+        bin_path.with_extension("exe")
+    } else {
+        bin_path.to_path_buf()
+    }
+}
+
+/// Applies host-side Wine diagnostics controls without altering the compiled
+/// program's stdout or stderr streams.
+fn configure_wine_command(cmd: &mut Command) {
+    cmd.env("WINEDEBUG", "-all");
+    cmd.env("MVK_CONFIG_LOG_LEVEL", "0");
+}
+
+/// Builds the base `Command` that executes a compiled codegen fixture for the
+/// current target: a direct exec on the host, `qemu-aarch64-static` when running
+/// ARM64 binaries on an x86_64 host, or Wine running the `.exe` for the
+/// windows-x86_64 target. Native Windows executes the PE directly; other hosts
+/// use Wine. The caller sets the working directory and wires args/stdin/stdout
+/// as needed. Centralizing dispatch keeps every runner path target-correct.
+pub(crate) fn build_run_command(bin_path: &Path) -> Command {
+    match target().platform {
+        Platform::Windows if cfg!(windows) => Command::new(target_binary_path(bin_path)),
+        Platform::Windows => {
+            let mut cmd = Command::new(wine_binary());
+            cmd.arg(target_binary_path(bin_path));
+            configure_wine_command(&mut cmd);
+            cmd
+        }
+        Platform::Linux if target().arch == Arch::AArch64 && cfg!(target_arch = "x86_64") => {
+            let mut cmd = Command::new("qemu-aarch64-static");
+            if let Some(sysroot) = qemu_sysroot() {
+                cmd.args(["-L", sysroot]);
+            }
+            cmd.arg(bin_path);
+            cmd
+        }
+        _ => Command::new(bin_path),
+    }
+}
+
+/// Runs a compiled binary for the current target, capturing stdout/stderr under a
+/// timeout. Uses qemu to emulate ARM64 on an x86_64 host and Wine to run the `.exe`
+/// on the windows-x86_64 target; execs natively otherwise. Used for post-link
+/// execution of already-assembled test binaries.
+pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
+    ensure_windows_runnable_or_skip();
+    let mut cmd = build_run_command(bin_path);
+    cmd.current_dir(dir);
+    run_command_with_timeout(cmd)
 }
 
 /// Runs a child command with a timeout and captures stdout/stderr.
@@ -651,4 +864,79 @@ pub(crate) fn assemble_and_run_expect_failure(
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
     String::from_utf8(output.stderr).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies Wine and MoltenVK host diagnostics are disabled at process
+    /// launch without filtering the compiled program's captured stderr.
+    #[test]
+    fn wine_command_disables_host_diagnostic_chatter() {
+        let mut cmd = Command::new("wine64");
+        configure_wine_command(&mut cmd);
+        let env = cmd
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(env.get("WINEDEBUG"), Some(&Some("-all".to_string())));
+        assert_eq!(
+            env.get("MVK_CONFIG_LOG_LEVEL"),
+            Some(&Some("0".to_string()))
+        );
+    }
+
+    /// Verifies the windows-x86_64 target cross-compiles bridge staticlibs for
+    /// `x86_64-pc-windows-gnu` so MinGW can link the PE/COFF archives, while
+    /// macOS/Linux build for the host (no `--target`) and stay on the pre-Tier-2
+    /// path.
+    #[test]
+    fn bridge_staticlib_cargo_target_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_cargo_target(Platform::Windows),
+            Some("x86_64-pc-windows-gnu")
+        );
+        assert_eq!(bridge_staticlib_cargo_target(Platform::MacOS), None);
+        assert_eq!(bridge_staticlib_cargo_target(Platform::Linux), None);
+    }
+
+    /// Verifies the cc-rs `CC`/`AR`/`RANLIB` env vars are surfaced only for the
+    /// windows-x86_64 cross target, so PDO's bundled `libsqlite3-sys` amalgamation
+    /// is compiled by `x86_64-w64-mingw32-gcc` and not the host cc. Non-Windows
+    /// targets get an empty slice so the host `cargo build` command is unchanged.
+    #[test]
+    fn bridge_staticlib_cross_env_only_on_windows() {
+        let env = bridge_staticlib_cross_env(Platform::Windows);
+        assert_eq!(env.len(), 3);
+        assert!(env.iter().any(|(k, v)| *k == "CC_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-gcc"));
+        assert!(env.iter().any(|(k, v)| *k == "AR_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ar"));
+        assert!(env.iter().any(|(k, v)| *k == "RANLIB_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ranlib"));
+        assert!(bridge_staticlib_cross_env(Platform::MacOS).is_empty());
+        assert!(bridge_staticlib_cross_env(Platform::Linux).is_empty());
+    }
+
+    /// Verifies bridge staticlibs are looked up under
+    /// `x86_64-pc-windows-gnu/debug` for the windows-x86_64 cross target (where
+    /// `cargo build --target x86_64-pc-windows-gnu` emits archives) and under
+    /// `debug` for every other target, preserving the pre-Tier-2 host layout on
+    /// macOS/Linux.
+    #[test]
+    fn bridge_staticlib_subdir_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_subdir(Platform::Windows),
+            "x86_64-pc-windows-gnu/debug"
+        );
+        assert_eq!(bridge_staticlib_subdir(Platform::MacOS), "debug");
+        assert_eq!(bridge_staticlib_subdir(Platform::Linux), "debug");
+    }
 }

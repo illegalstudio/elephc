@@ -91,13 +91,13 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // strtoll arg1: the C-string pointer
     emitter.instruction("lea rsi, [rbp - 24]");                                 // strtoll arg2: &end_i
     emitter.instruction("mov edx, 10");                                         // strtoll arg3: parse in base 10 like PHP string-to-int
-    emitter.instruction("call strtoll");                                        // rax = integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
+    emitter.emit_call_c("strtoll");                                             // rax = integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the integer-form value
 
     // -- float parse: strtod(cstr, &end_d) detects a '.'/'e' float continuation --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the C-string pointer for strtod
     emitter.instruction("lea rsi, [rbp - 32]");                                 // strtod arg2: &end_d
-    emitter.instruction("call strtod");                                         // xmm0 = parsed double value
+    emitter.emit_call_c("strtod");                                              // xmm0 = parsed double value
 
     // -- choose the integer value unless strtod consumed more bytes (a float part) --
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // load the end pointer returned by strtod

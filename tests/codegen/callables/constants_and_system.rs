@@ -2182,7 +2182,8 @@ echo $args[0];
 #[test]
 fn test_php_eol() {
     let out = compile_and_run("<?php echo \"a\" . PHP_EOL . \"b\";");
-    assert_eq!(out, "a\nb");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("a{eol}b"));
 }
 
 // Tests `echo PHP_OS;` outputs the platform-specific OS name (e.g. "Darwin" on macOS).
@@ -2200,7 +2201,116 @@ fn test_php_os() {
 #[test]
 fn test_directory_separator() {
     let out = compile_and_run("<?php echo DIRECTORY_SEPARATOR;");
-    assert_eq!(out, "/");
+    assert_eq!(out, target().platform.directory_separator());
+}
+
+// Tests `echo PATH_SEPARATOR;` outputs ":" (Unix path separator). PHP on Unix uses
+// ":" to separate include_path entries; Windows uses ";".
+/// Verifies that `PATH_SEPARATOR` follows the selected target rather than the host.
+#[test]
+fn test_path_separator() {
+    let out = compile_and_run("<?php echo PATH_SEPARATOR;");
+    assert_eq!(out, target().platform.path_separator());
+}
+
+// Tests `echo PHP_OS_FAMILY;` outputs the platform-specific OS family (e.g. "Darwin"
+// on macOS, "Linux" on Linux). The expected value is retrieved from
+// `target().platform.php_os_family()`, mirroring `test_php_os`.
+/// Verifies that PHP os family is target-aware on the native host.
+#[test]
+fn test_php_os_family() {
+    let out = compile_and_run("<?php echo PHP_OS_FAMILY;");
+    assert_eq!(out, target().platform.php_os_family());
+    assert!(out == "Darwin" || out == "Linux" || out == "Windows");
+}
+
+// Tests `echo PHP_INT_SIZE;` outputs "8": every elephc target is a 64-bit platform.
+/// Verifies that PHP int size is 8 on all elephc targets.
+#[test]
+fn test_php_int_size() {
+    let out = compile_and_run("<?php echo PHP_INT_SIZE;");
+    assert_eq!(out, "8");
+}
+
+// Tests `echo PHP_VERSION;` outputs elephc's emulated PHP compatibility level "8.4.0".
+// Distinct from `phpversion()`, which returns elephc's own package version.
+/// Verifies that PHP version reports the emulated PHP compatibility level.
+#[test]
+fn test_php_version() {
+    let out = compile_and_run("<?php echo PHP_VERSION;");
+    assert_eq!(out, "8.4.0");
+}
+
+// Tests `echo PHP_MAJOR_VERSION;` outputs "8".
+/// Verifies that PHP major version is 8.
+#[test]
+fn test_php_major_version() {
+    let out = compile_and_run("<?php echo PHP_MAJOR_VERSION;");
+    assert_eq!(out, "8");
+}
+
+// Tests `echo PHP_MINOR_VERSION;` outputs "4".
+/// Verifies that PHP minor version is 4.
+#[test]
+fn test_php_minor_version() {
+    let out = compile_and_run("<?php echo PHP_MINOR_VERSION;");
+    assert_eq!(out, "4");
+}
+
+// Tests `echo PHP_RELEASE_VERSION;` outputs "0".
+/// Verifies that PHP release version is 0.
+#[test]
+fn test_php_release_version() {
+    let out = compile_and_run("<?php echo PHP_RELEASE_VERSION;");
+    assert_eq!(out, "0");
+}
+
+// Tests `echo PHP_VERSION_ID;` outputs "80400", matching PHP_VERSION "8.4.0".
+/// Verifies that PHP version id is 80400.
+#[test]
+fn test_php_version_id() {
+    let out = compile_and_run("<?php echo PHP_VERSION_ID;");
+    assert_eq!(out, "80400");
+}
+
+// Tests `echo PHP_EXTRA_VERSION;` outputs "" (empty string).
+/// Verifies that PHP extra version is empty.
+#[test]
+fn test_php_extra_version() {
+    let out = compile_and_run("<?php echo PHP_EXTRA_VERSION === '' ? 'empty' : 'nonempty';");
+    assert_eq!(out, "empty");
+}
+
+/// Verifies PHP_VERSION_ID still resolves inside a namespace (a namespaced
+/// context must not shadow or block the builtin platform-identity constant).
+#[test]
+fn test_php_version_id_resolves_inside_namespace() {
+    let out = compile_and_run("<?php namespace App; echo PHP_VERSION_ID;");
+    assert_eq!(out, "80400");
+}
+
+// Tests `PHP_VERSION_ID >= 80400` — the canonical feature-detection idiom — evaluates
+// true, proving the constant participates in ordinary integer comparisons (finding F15).
+/// Verifies that PHP version id supports feature-detection comparisons.
+#[test]
+fn test_php_version_id_feature_detection_idiom() {
+    let out = compile_and_run("<?php echo PHP_VERSION_ID >= 80400 ? 'yes' : 'no';");
+    assert_eq!(out, "yes");
+}
+
+// Tests `PHP_OS_FAMILY === 'Windows'` — the canonical cross-platform feature-detection
+// idiom — evaluates against the native host, proving the constant is a real string
+// usable in strict comparisons, not just echo (finding F15).
+/// Verifies that PHP os family supports strict-equality feature-detection idiom.
+#[test]
+fn test_php_os_family_feature_detection_idiom() {
+    let out = compile_and_run("<?php echo PHP_OS_FAMILY === 'Windows' ? 'win' : 'notwin';");
+    let expected = if target().platform.php_os_family() == "Windows" {
+        "win"
+    } else {
+        "notwin"
+    };
+    assert_eq!(out, expected);
 }
 
 // -- v0.8 time / microtime --
@@ -2277,12 +2387,19 @@ fn test_usleep_zero() {
 
 // -- v0.8 getenv --
 
-// Tests `getenv("HOME")` returns a non-empty string on the current platform.
-/// Verifies that getenv home.
+// Tests the target's conventional home-directory variable is non-empty.
+/// Verifies that `getenv` reads `HOME` on Unix and `USERPROFILE` on Windows.
 #[test]
 fn test_getenv_home() {
-    let out =
-        compile_and_run("<?php $home = getenv(\"HOME\"); if (strlen($home) > 0) { echo \"ok\"; }");
+    let variable = if target().platform == Platform::Windows {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    };
+    let source = format!(
+        "<?php $home = getenv(\"{variable}\"); if (strlen($home) > 0) {{ echo \"ok\"; }}"
+    );
+    let out = compile_and_run(&source);
     assert_eq!(out, "ok");
 }
 
@@ -2367,7 +2484,14 @@ if (
 }
 "#,
     );
-    assert_eq!(out, format!("{}\nok", target().platform.php_os_name()));
+    // PHP_OS is "WINNT", while php_uname('s') follows Windows' uname-style
+    // system label and reports "Windows NT" (the two PHP surfaces differ).
+    let system_name = if target().platform == Platform::Windows {
+        "Windows NT"
+    } else {
+        target().platform.php_os_name()
+    };
+    assert_eq!(out, format!("{system_name}\nok"));
 }
 
 // Tests that `php_uname("sn")` (2-character mode string) fails at runtime with a
@@ -2411,7 +2535,12 @@ fn test_exec() {
 #[test]
 fn test_system() {
     let out = compile_and_run("<?php system(\"echo hi\");");
-    assert_eq!(out, "hi\n");
+    let expected = if target().platform == Platform::Windows {
+        "hi\r\n"
+    } else {
+        "hi\n"
+    };
+    assert_eq!(out, expected);
 }
 
 // Tests `passthru("echo bye")` outputs "bye\n" (writes directly to stdout, like system).
@@ -2419,5 +2548,10 @@ fn test_system() {
 #[test]
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
-    assert_eq!(out, "bye\n");
+    let expected = if target().platform == Platform::Windows {
+        "bye\r\n"
+    } else {
+        "bye\n"
+    };
+    assert_eq!(out, expected);
 }

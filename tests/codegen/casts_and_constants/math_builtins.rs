@@ -113,6 +113,31 @@ fn test_number_format_with_decimals() {
     assert_eq!(out, "1,234.57");
 }
 
+/// Verifies PHP's decimal pre-rounding fixes binary representation edges before formatting.
+#[test]
+fn test_number_format_php_rounding_edges() {
+    let out = compile_and_run(
+        "<?php echo number_format(1.005, 2), '|', number_format(-0.01, 0), '|', number_format(999.995, 2);",
+    );
+    assert_eq!(out, "1.01|0|1,000.00");
+}
+
+/// Verifies multi-digit precisions preserve PHP's binary-double formatting
+/// semantics instead of treating the precision as one malformed ASCII digit.
+#[test]
+fn test_number_format_high_precision_php_corpus() {
+    let out = compile_and_run(
+        r#"<?php
+echo number_format(0.285, 23 + $argc - $argc, ".", ""), "|";
+echo number_format(1.2345678901234567, 23, ".", ""), "|";
+echo number_format(0.285, 30, ".", "");"#,
+    );
+    assert_eq!(
+        out,
+        "0.28499999999999997557509|1.23456789012345669043214|0.284999999999999975575093458247"
+    );
+}
+
 /// Verifies `number_format(42, 2)` pads small numbers to 2 decimal places: expects `42.00`.
 #[test]
 fn test_number_format_small() {
@@ -146,6 +171,47 @@ fn test_number_format_no_thousands() {
 fn test_number_format_space_thousands() {
     let out = compile_and_run(r#"<?php echo number_format(1234567, 0, ".", " ");"#);
     assert_eq!(out, "1 234 567");
+}
+
+// --- random_bytes ---
+
+/// Verifies `random_bytes(16)` returns a 16-byte binary string (constant length).
+#[test]
+fn test_random_bytes_length() {
+    let out = compile_and_run("<?php echo strlen(random_bytes(16));");
+    assert_eq!(out, "16");
+}
+
+/// Verifies `random_bytes()` honors a runtime-unknown length (via `$argc`) so the
+/// dynamic-length runtime path is exercised rather than a folded constant.
+#[test]
+fn test_random_bytes_runtime_length() {
+    let out = compile_and_run("<?php echo strlen(random_bytes(32 + $argc - $argc));");
+    assert_eq!(out, "32");
+}
+
+/// Verifies a fully-qualified `\random_bytes()` call resolves through namespace
+/// fallback and still returns the requested number of bytes.
+#[test]
+fn test_random_bytes_namespaced() {
+    let out = compile_and_run("<?php echo strlen(\\random_bytes(8));");
+    assert_eq!(out, "8");
+}
+
+/// Verifies PHP case-insensitive builtin lookup: `RANDOM_BYTES(8)` resolves to
+/// `random_bytes` and returns 8 bytes.
+#[test]
+fn test_random_bytes_case_insensitive() {
+    let out = compile_and_run("<?php echo strlen(RANDOM_BYTES(8));");
+    assert_eq!(out, "8");
+}
+
+/// Verifies two `random_bytes(16)` results differ (guards against the impure call
+/// being constant-folded or deduplicated): `var_dump` shows `bool(true)`.
+#[test]
+fn test_random_bytes_distinct() {
+    let out = compile_and_run("<?php var_dump(random_bytes(16) !== random_bytes(16));");
+    assert_eq!(out, "bool(true)\n");
 }
 
 // --- Constants ---

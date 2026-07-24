@@ -45,28 +45,32 @@ pub(super) fn eval_tcp_address(address: &str) -> &str {
         .unwrap_or(address)
 }
 
-/// Converts Rust's socket shutdown enum into libc constants.
-pub(super) fn eval_shutdown_how(shutdown: Shutdown) -> libc::c_int {
-    match shutdown {
-        Shutdown::Read => libc::SHUT_RD,
-        Shutdown::Write => libc::SHUT_WR,
-        Shutdown::Both => libc::SHUT_RDWR,
-    }
-}
-
 /// Converts PHP `LOCK_*` bit flags into host `flock()` flags.
 pub(super) fn eval_flock_operation(operation: i64) -> Option<libc::c_int> {
     let non_blocking = operation & 4 != 0;
+    #[cfg(unix)]
     let base = match operation & !4 {
         1 => libc::LOCK_SH,
         2 => libc::LOCK_EX,
         3 => libc::LOCK_UN,
         _ => return None,
     };
-    Some(base | if non_blocking { libc::LOCK_NB } else { 0 })
+    #[cfg(windows)]
+    let base = match operation & !4 {
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        _ => return None,
+    };
+    #[cfg(unix)]
+    let non_blocking_flag = libc::LOCK_NB;
+    #[cfg(windows)]
+    let non_blocking_flag = 4;
+    Some(base | if non_blocking { non_blocking_flag } else { 0 })
 }
 
 /// Returns whether the last host `flock()` failure was a non-blocking lock miss.
+#[cfg(unix)]
 pub(super) fn eval_flock_would_block() -> bool {
     let errno = std::io::Error::last_os_error().raw_os_error();
     errno.is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
@@ -97,9 +101,214 @@ pub(super) fn eval_builtin_stream_wrapper_exists(builtins: &[&str], protocol: &s
         .any(|builtin| builtin.eq_ignore_ascii_case(protocol))
 }
 
+/// Host I/O object stored behind one eval stream resource.
+pub(super) enum EvalStreamHandle {
+    File(File),
+    Tcp(TcpStream),
+    ChildStdout(ChildStdout),
+    ChildStdin(ChildStdin),
+}
+
+impl Read for EvalStreamHandle {
+    /// Reads from handles that expose a readable byte stream.
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::File(handle) => handle.read(buffer),
+            Self::Tcp(handle) => handle.read(buffer),
+            Self::ChildStdout(handle) => handle.read(buffer),
+            Self::ChildStdin(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process stdin is not readable",
+            )),
+        }
+    }
+}
+
+impl Write for EvalStreamHandle {
+    /// Writes to handles that expose a writable byte stream.
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::File(handle) => handle.write(buffer),
+            Self::Tcp(handle) => handle.write(buffer),
+            Self::ChildStdin(handle) => handle.write(buffer),
+            Self::ChildStdout(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process stdout is not writable",
+            )),
+        }
+    }
+
+    /// Flushes writable handles while treating unbuffered sockets as already flushed.
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::File(handle) => handle.flush(),
+            Self::Tcp(handle) => handle.flush(),
+            Self::ChildStdin(handle) => handle.flush(),
+            Self::ChildStdout(_) => Ok(()),
+        }
+    }
+}
+
+impl Seek for EvalStreamHandle {
+    /// Seeks regular files and rejects non-seekable sockets and process pipes.
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match self {
+            Self::File(handle) => handle.seek(position),
+            Self::Tcp(_) | Self::ChildStdout(_) | Self::ChildStdin(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "stream is not seekable",
+            )),
+        }
+    }
+}
+
+impl EvalStreamHandle {
+    /// Returns regular-file metadata when the resource has a file backing.
+    pub(super) fn metadata(&self) -> io::Result<Metadata> {
+        match self {
+            Self::File(handle) => handle.metadata(),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "no file metadata")),
+        }
+    }
+
+    /// Resizes a regular file and rejects non-file resources.
+    pub(super) fn set_len(&self, size: u64) -> io::Result<()> {
+        match self {
+            Self::File(handle) => handle.set_len(size),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "stream is not resizable")),
+        }
+    }
+
+    /// Synchronizes a regular file's data and metadata.
+    pub(super) fn sync_all(&self) -> io::Result<()> {
+        match self {
+            Self::File(handle) => handle.sync_all(),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "stream is not syncable")),
+        }
+    }
+
+    /// Synchronizes a regular file's data.
+    pub(super) fn sync_data(&self) -> io::Result<()> {
+        match self {
+            Self::File(handle) => handle.sync_data(),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "stream is not syncable")),
+        }
+    }
+
+    /// Applies socket shutdown only to TCP-backed resources.
+    pub(super) fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        match self {
+            Self::Tcp(handle) => handle.shutdown(how),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "stream is not a socket")),
+        }
+    }
+
+    /// Toggles non-blocking mode only for TCP-backed resources.
+    #[cfg(windows)]
+    pub(super) fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        match self {
+            Self::Tcp(handle) => handle.set_nonblocking(nonblocking),
+            _ => Err(io::Error::new(io::ErrorKind::Unsupported, "stream is not a socket")),
+        }
+    }
+
+    /// Applies PHP flock semantics to regular Windows file handles.
+    #[cfg(windows)]
+    pub(super) fn flock(&self, operation: i64) -> io::Result<()> {
+        use std::ffi::c_void;
+
+        #[repr(C)]
+        struct Overlapped {
+            internal: usize,
+            internal_high: usize,
+            offset: u32,
+            offset_high: u32,
+            event: *mut c_void,
+        }
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            /// Acquires a shared or exclusive byte-range lock on a Windows file handle.
+            fn LockFileEx(
+                file: *mut c_void,
+                flags: u32,
+                reserved: u32,
+                bytes_low: u32,
+                bytes_high: u32,
+                overlapped: *mut Overlapped,
+            ) -> i32;
+            /// Releases a byte-range lock from a Windows file handle.
+            fn UnlockFileEx(
+                file: *mut c_void,
+                reserved: u32,
+                bytes_low: u32,
+                bytes_high: u32,
+                overlapped: *mut Overlapped,
+            ) -> i32;
+        }
+
+        const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
+        const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+        let Self::File(file) = self else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "flock requires a regular file",
+            ));
+        };
+        let mut overlapped = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: std::ptr::null_mut(),
+        };
+        let base = operation & !4;
+        let status = unsafe {
+            if base == 3 {
+                UnlockFileEx(
+                    file.as_raw_handle(),
+                    0,
+                    u32::MAX,
+                    u32::MAX,
+                    &mut overlapped,
+                )
+            } else {
+                let mut flags = if base == 2 { LOCKFILE_EXCLUSIVE_LOCK } else { 0 };
+                if operation & 4 != 0 {
+                    flags |= LOCKFILE_FAIL_IMMEDIATELY;
+                }
+                LockFileEx(
+                    file.as_raw_handle(),
+                    flags,
+                    0,
+                    u32::MAX,
+                    u32::MAX,
+                    &mut overlapped,
+                )
+            }
+        };
+        if status == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns the borrowed Unix descriptor used by terminal and lock operations.
+    #[cfg(unix)]
+    pub(super) fn as_raw_fd(&self) -> RawFd {
+        match self {
+            Self::File(handle) => handle.as_raw_fd(),
+            Self::Tcp(handle) => handle.as_raw_fd(),
+            Self::ChildStdout(handle) => handle.as_raw_fd(),
+            Self::ChildStdin(handle) => handle.as_raw_fd(),
+        }
+    }
+}
+
 /// File stream stored behind one eval resource id.
 pub(super) struct EvalFileStream {
-    pub(super) file: File,
+    pub(super) file: EvalStreamHandle,
     pub(super) uri: String,
     pub(super) mode: String,
     pub(super) eof: bool,
@@ -120,11 +329,44 @@ impl EvalFileStream {
         flush_target: Option<EvalStreamFlushTarget>,
     ) -> Self {
         Self {
-            file,
+            file: EvalStreamHandle::File(file),
             uri,
             mode,
             eof: false,
             flush_target,
+        }
+    }
+
+    /// Creates a tracked stream around a TCP socket without conflating SOCKET and HANDLE on Windows.
+    pub(super) fn new_tcp(stream: TcpStream, uri: String, mode: String) -> Self {
+        Self {
+            file: EvalStreamHandle::Tcp(stream),
+            uri,
+            mode,
+            eof: false,
+            flush_target: None,
+        }
+    }
+
+    /// Creates a readable tracked stream around a child process stdout pipe.
+    pub(super) fn new_child_stdout(stream: ChildStdout, uri: String, mode: String) -> Self {
+        Self {
+            file: EvalStreamHandle::ChildStdout(stream),
+            uri,
+            mode,
+            eof: false,
+            flush_target: None,
+        }
+    }
+
+    /// Creates a writable tracked stream around a child process stdin pipe.
+    pub(super) fn new_child_stdin(stream: ChildStdin, uri: String, mode: String) -> Self {
+        Self {
+            file: EvalStreamHandle::ChildStdin(stream),
+            uri,
+            mode,
+            eof: false,
+            flush_target: None,
         }
     }
 

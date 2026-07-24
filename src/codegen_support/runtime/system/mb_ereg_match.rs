@@ -194,7 +194,7 @@ fn emit_mb_ereg_match_linux_x86_64(emitter: &mut Emitter) {
     // -- pcre2_regcomp(&regex_t, pattern, flags) --
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage as regcomp argument 1
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass pattern C string as regcomp argument 2
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.emit_call_c("pcre2_regcomp");                                       // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_mb_ereg_match_no_x86");                       // compile failure produces no match
 
@@ -210,12 +210,12 @@ fn emit_mb_ereg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 1");                                          // request one regmatch slot for rm_so
     emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass local regmatch_t output buffer
     emitter.instruction("xor r8d, r8d");                                        // use default regexec flags
-    emitter.bl_c("pcre2_regexec");                                              // execute regex through PCRE2
+    emitter.emit_call_c("pcre2_regexec");                                       // execute regex through PCRE2
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across cleanup
 
     // -- free compiled regex --
     emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage for regfree
-    emitter.bl_c("pcre2_regfree");                                              // release compiled regex resources
+    emitter.emit_call_c("pcre2_regfree");                                       // release compiled regex resources
 
     // -- no match if regexec != 0 --
     emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload regexec status after regfree

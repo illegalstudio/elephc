@@ -33,7 +33,13 @@ impl Checker {
             self.canonical_function_name_folded(function_name.trim_start_matches('\\'))
         else {
             let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
-            if crate::types::first_class_callable_builtin_sig(&builtin_key).is_some() {
+            if crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+                &builtin_key,
+                self.target_platform,
+            )
+            .is_some()
+                && crate::types::first_class_callable_builtin_sig(&builtin_key).is_some()
+            {
                 return Ok(());
             }
             return Err(CompileError::new(

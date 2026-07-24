@@ -6,36 +6,37 @@
 //! - `crate::codegen_support::runtime::data::emit_runtime_data_fixed()`.
 //!
 //! Key details:
-//! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
+//! - Fixed symbols are cached per target; target-specific callable availability
+//!   and symbol spelling must use the target included in that cache key.
 
 use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    ESCAPE_SHELL_ARG_INPUT_LENGTH_MSG, ESCAPE_SHELL_ARG_NUL_MSG, ESCAPE_SHELL_ARG_OUTPUT_LENGTH_MSG,
+    ESCAPE_SHELL_CMD_INPUT_LENGTH_MSG, ESCAPE_SHELL_CMD_NUL_MSG, ESCAPE_SHELL_CMD_OUTPUT_LENGTH_MSG, HASH_UNKNOWN_ALGO_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, RANDOM_BYTES_LENGTH_MSG,
+    RANDOM_BYTES_SOURCE_MSG, STR_REPEAT_TIMES_MSG, TEMPNAM_FALLBACK_NOTICE,
 };
 use super::super::system;
-use crate::codegen_support::platform::Target;
-use crate::types::checker::builtins::supported_builtin_function_names;
+use crate::codegen_support::platform::{Platform, Target};
 
 /// Emit the fixed runtime `.data` section as assembly text.
-/// Cached across compilations because it contains only target-independent
-/// runtime data: heap globals, concat buffers, exception/fiber state,
-/// JSON/SPL error messages, base64 tables, PCRE regex patterns, and
-/// lookup tables for builtins, file types, and `pathinfo` keys.
+/// Cached across compilations per target because it contains heap globals,
+/// concat buffers, exception/fiber state, JSON/SPL error messages, base64
+/// tables, PCRE regex patterns, and lookup tables for builtins, file types,
+/// and `pathinfo` keys.
 ///
 /// `heap_size` is the maximum heap bytes requested by the user program;
 /// it is baked into `_heap_max` to enforce the heap limit at runtime.
 ///
-/// `target` is needed only for the one symbol the `--web` bridge references
-/// (`elephc_web_capture`): it must carry the platform's C-ABI mangling so the
-/// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
-/// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
-/// on Linux). The cache key already includes the target, so this stays cache-safe.
+/// `target` selects the PHP-visible builtin callable table and the C-ABI
+/// spelling of `elephc_web_capture`. The cache key already includes the target,
+/// so both target-specific data surfaces remain cache-safe.
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
@@ -97,6 +98,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // name and the status-array key strings read by __rt_ob_get_status.
     out.push_str(&format!(
         ".globl _ob_handler_name\n_ob_handler_name:\n    .ascii {OB_DEFAULT_HANDLER_NAME:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _tempnam_fallback_notice\n_tempnam_fallback_notice:\n    .ascii {TEMPNAM_FALLBACK_NOTICE:?}\n"
     ));
     for (sym, key) in [
         ("_ob_k_name", "name"),
@@ -161,6 +165,37 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _php_tz_utc\n");
     out.push_str("_php_tz_utc:\n");
     out.push_str("    .ascii \"UTC\"\n");
+    // _elephc_tz_offset_fn: indirect pointer to elephc_tz_offset, published only
+    // at a windows date()/mktime()/strtotime() call site so the windows-only
+    // __rt_sys_localtime/__rt_sys_mktime shims (codegen_support/runtime/win32/
+    // shims_time.rs) can call through it to resolve the active default
+    // timezone's IANA offset/DST. Programs that never reach a publishing call
+    // site leave the slot null, and the shims fall back to raw msvcrt
+    // localtime()/mktime() — so only windows programs that use date/time
+    // builtins pull in -lelephc_tz. The slot is emitted windows-only (like
+    // _win_tz_tm_buf below); no non-windows code references it.
+    if target.platform == Platform::Windows {
+        out.push_str(".comm _elephc_tz_offset_fn, 8, 3\n");
+        out.push_str(".comm _elephc_tz_abbreviation_fn, 8, 3\n");
+    }
+    // _win_tz_tm_buf: windows-only synthesized `struct tm` (glibc-layout: the 9
+    // standard int fields at +0..+36, `tm_gmtoff` (i64) at +40, `tm_zone`
+    // (char*) at +48) returned by __rt_sys_localtime when the offset bridge
+    // resolves the active zone. Needed because MinGW's own `struct tm` (see
+    // its <time.h>) is only the 9 plain ints — msvcrt's static localtime()/
+    // gmtime() buffer has no room for tm_gmtoff/tm_zone, so those fields must
+    // live in elephc's own storage, not msvcrt's, whenever the runtime's
+    // date() formatter reads them (the 'Z'/'O'/'P'/'I' specifiers).
+    if target.platform == Platform::Windows {
+        out.push_str(".comm _win_tz_tm_buf, 64, 3\n");
+        out.push_str(".comm _win_select_read_handles, 512, 3\n");
+        out.push_str(".comm _win_select_write_handles, 512, 3\n");
+        out.push_str(".comm _win_select_except_handles, 512, 3\n");
+        // 64 records of (active, descriptor/SOCKET, Linux status flags).  The
+        // Win32 fcntl shim uses this to preserve F_GETFL/F_SETFL semantics for
+        // CRT descriptors and opaque Winsock SOCKET values.
+        out.push_str(".comm _win_fd_status_records, 1536, 3\n");
+    }
     // getdate() associative-array key strings (read by __rt_getdate).
     for (sym, key) in [
         ("_gd_k_seconds", "seconds"),
@@ -193,6 +228,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
     out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
+    // Windows-only: saved main-thread TEB stack metadata (NT_TIB
+    // StackBase/StackLimit and TEB DeallocationStack), snapshotted when leaving
+    // the main thread and restored when a fiber switches back.
+    if target.platform == Platform::Windows {
+        out.push_str(".comm _fiber_main_saved_stack_base, 8, 3\n");
+        out.push_str(".comm _fiber_main_saved_stack_limit, 8, 3\n");
+        out.push_str(".comm _fiber_main_saved_deallocation_stack, 8, 3\n");
+    }
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
@@ -207,6 +250,21 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
+    // proc_open() retains the exact `$pipes` container in a linked registry
+    // until proc_close() marks/closes every associated pipe before waiting.
+    // Keeping this root outside PHP locals is what makes a pipe-full child
+    // unable to deadlock a parent that calls proc_close() without reading it.
+    out.push_str(".comm _proc_pipe_registry_head, 8, 3\n");
+    out.push_str(".comm _proc_status_registry_head, 8, 3\n");
+    out.push_str(".globl _proc_status_k_command\n_proc_status_k_command:\n    .ascii \"command\"\n");
+    out.push_str(".globl _proc_status_k_pid\n_proc_status_k_pid:\n    .ascii \"pid\"\n");
+    out.push_str(".globl _proc_status_k_cached\n_proc_status_k_cached:\n    .ascii \"cached\"\n");
+    out.push_str(".globl _proc_status_k_running\n_proc_status_k_running:\n    .ascii \"running\"\n");
+    out.push_str(".globl _proc_status_k_signaled\n_proc_status_k_signaled:\n    .ascii \"signaled\"\n");
+    out.push_str(".globl _proc_status_k_stopped\n_proc_status_k_stopped:\n    .ascii \"stopped\"\n");
+    out.push_str(".globl _proc_status_k_exitcode\n_proc_status_k_exitcode:\n    .ascii \"exitcode\"\n");
+    out.push_str(".globl _proc_status_k_termsig\n_proc_status_k_termsig:\n    .ascii \"termsig\"\n");
+    out.push_str(".globl _proc_status_k_stopsig\n_proc_status_k_stopsig:\n    .ascii \"stopsig\"\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
     out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
@@ -245,6 +303,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         STR_REPEAT_TIMES_MSG
     ));
     out.push_str(&format!(
+        ".globl _random_bytes_length_msg\n_random_bytes_length_msg:\n    .ascii {:?}\n",
+        RANDOM_BYTES_LENGTH_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _random_bytes_source_msg\n_random_bytes_source_msg:\n    .ascii {:?}\n",
+        RANDOM_BYTES_SOURCE_MSG
+    ));
+    out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_UNKNOWN_ALGO_MSG
     ));
@@ -260,6 +326,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
         MB_STRLEN_UNKNOWN_ENCODING_MSG
     ));
+    out.push_str(&format!(
+        ".globl _escapeshellarg_nul_msg\n_escapeshellarg_nul_msg:\n    .ascii {:?}\n",
+        ESCAPE_SHELL_ARG_NUL_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _escapeshellcmd_nul_msg\n_escapeshellcmd_nul_msg:\n    .ascii {:?}\n",
+        ESCAPE_SHELL_CMD_NUL_MSG
+    ));
+    for (label, message) in [
+        ("_escapeshellarg_input_length_msg", ESCAPE_SHELL_ARG_INPUT_LENGTH_MSG),
+        ("_escapeshellarg_output_length_msg", ESCAPE_SHELL_ARG_OUTPUT_LENGTH_MSG),
+        ("_escapeshellcmd_input_length_msg", ESCAPE_SHELL_CMD_INPUT_LENGTH_MSG),
+        ("_escapeshellcmd_output_length_msg", ESCAPE_SHELL_CMD_OUTPUT_LENGTH_MSG),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
     out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");
     out.push_str(".globl _mb_strlen_utf32le_name\n_mb_strlen_utf32le_name:\n    .asciz \"UTF-32LE\"\n");
@@ -364,7 +446,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
-    out.push_str(&emit_builtin_callable_data());
+    out.push_str(&emit_builtin_callable_data(target.platform));
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
     out.push_str(".comm _gc_live, 8, 3\n");
@@ -372,8 +454,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");
+    // Windows SOCKET values are pointer-sized opaque handles, not compact CRT
+    // descriptors. These two tables map every Windows stream handle to one of
+    // the 256 safe indexes shared by EOF and stream-filter state.
+    out.push_str(".comm _win_stream_slot_handles, 2048, 3\n");
+    out.push_str(".comm _win_stream_slot_used, 256, 3\n");
+    out.push_str(".comm _win_stream_timed_out, 256, 3\n");
     out.push_str(".comm _popen_files, 2048, 3\n");
     out.push_str(".comm _dir_handles, 2048, 3\n");
+    // Per-process tables for proc_open (256 fds × 8B each). _proc_pids stores the
+    // child PID keyed by the parent-side pipe fd; _proc_child_fds stores the child
+    // process handle (Windows) / pid mirror used by proc_close to reap the child.
+    // C1a declares the storage; C1b/C1c populate it from the real runtime helpers.
+    out.push_str(".comm _proc_pids, 2048, 3\n");
+    out.push_str(".comm _proc_child_fds, 2048, 3\n");
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
@@ -421,34 +515,36 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // actually open https URLs reference elephc-tls (and pull in -lelephc_tls
     // at link time); other programs keep the runtime libc-only.
     out.push_str(".comm _elephc_tls_connect_fn, 8, 3\n");
-    // _elephc_tls_connect_insecure_fn: same shape as _elephc_tls_connect_fn
-    // but dispatched when the caller has set ssl.verify_peer = false on the
-    // stream context. The runtime picks one over the other at https_open
-    // time so non-TLS programs still don't link elephc-tls.
+    // _elephc_tls_connect_with_options_fn: policy-aware v3 bridge entry. It
+    // consumes one pointer to the stable 88-byte ElephcTlsClientOptions ABI.
+    out.push_str(".comm _elephc_tls_connect_with_options_fn, 8, 3\n");
+    // The insecure/cafile/capath/peer-name slots preserve the historical bridge
+    // exports for compatibility. New context-aware clients combine those
+    // settings through _elephc_tls_connect_with_options_fn instead.
     out.push_str(".comm _elephc_tls_connect_insecure_fn, 8, 3\n");
-    // _elephc_tls_connect_cafile_fn: dispatched when the caller has set
-    // ssl.cafile on the stream context. Same late-binding pattern; takes two
-    // extra args (cafile path ptr/len) that the secure/insecure variants ignore.
     out.push_str(".comm _elephc_tls_connect_cafile_fn, 8, 3\n");
-    // _elephc_tls_connect_capath_fn / _peer_name_fn: dispatched for ssl.capath
-    // (a directory of CA certs) and ssl.peer_name (verify the cert for a name
-    // other than the connection host). Same late-binding/extra-args pattern.
     out.push_str(".comm _elephc_tls_connect_capath_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_connect_peer_name_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_write_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_read_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_close_fn, 8, 3\n");
+    // _elephc_tls_handshake_fn advances a rustls session after it has been
+    // attached to an existing socket. It returns 1=complete, 0=would-block,
+    // -1=terminal failure so stream_socket_enable_crypto can preserve PHP's
+    // tri-state contract.
+    out.push_str(".comm _elephc_tls_handshake_fn, 8, 3\n");
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same
     // late-binding pattern as the other tls fn slots so non-TLS programs
     // do not pull in elephc-tls at link time.
     out.push_str(".comm _elephc_tls_attach_fd_fn, 8, 3\n");
-    // _elephc_tls_attach_fd_client_cert_fn / _elephc_tls_connect_client_cert_fn:
-    // mutual-TLS variants dispatched when the stream context carries both
-    // ssl.local_cert and ssl.local_pk. The attach variant is used by
-    // stream_socket_enable_crypto; both take the extra cert/key path ptr/len
-    // pairs that the non-client-cert variants ignore. Same late-binding pattern.
+    // _elephc_tls_attach_fd_with_options_fn: policy-aware attach counterpart
+    // used when an existing socket is promoted to TLS.
+    out.push_str(".comm _elephc_tls_attach_fd_with_options_fn, 8, 3\n");
+    // The client-cert-specific attach/connect slots also preserve historical
+    // exports. New stream-context consumers combine cert/key paths with the
+    // remaining TLS options through the uniform options entries above.
     out.push_str(".comm _elephc_tls_attach_fd_client_cert_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_connect_client_cert_fn, 8, 3\n");
     // _elephc_crypto_hash_fn: indirect pointer to elephc_crypto_hash, published
@@ -527,11 +623,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _phar_list_len: output-length scratch written by elephc_phar_list_entries
     // and consumed immediately while expanding serialized names into an array.
     out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
-    // _tls_sessions: per-fd TLS handle (i64 returned by
-    // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
-    // fd up to 256; the runtime fread/fwrite/fclose paths consult this
-    // table and route through the elephc-tls helpers when an entry is
-    // non-zero, falling back to read/write/close syscalls otherwise.
+    // _tls_session_fds/_tls_sessions: bounded associative pairs mapping a full-width
+    // raw descriptor or Winsock SOCKET to the i64 handle returned by
+    // elephc_tls_attach_fd. Session zero marks an unused slot. Runtime stream paths
+    // access the pairs only through __rt_tls_session_{get,set,clear}.
+    out.push_str(".comm _tls_session_fds, 2048, 3\n");
     out.push_str(".comm _tls_sessions, 2048, 3\n");
     // _stream_chunk_size: per-fd read/write chunk size set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
@@ -539,10 +635,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
     out.push_str(".comm _stream_chunk_size, 2048, 3\n");
-    // _stream_connect_host: per-fd transport host string (ptr, len) captured by
-    // stream_socket_client so stream_socket_enable_crypto can default the TLS
-    // SNI / peer-name to the connection host when no ssl.peer_name context
-    // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
+    // _stream_connect_host_fds/_stream_connect_host: bounded associative pairs
+    // mapping full-width descriptors to persisted transport host (ptr, len)
+    // values for stream_socket_enable_crypto SNI defaults. A zero len is empty.
+    out.push_str(".comm _stream_connect_host_fds, 2048, 3\n");
     out.push_str(".comm _stream_connect_host, 4096, 3\n");
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
@@ -550,13 +646,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // it at the CONNECT, COMPLETED, and FAILURE transfer milestones. Zero when
     // no notification callback is registered (the fire shim is then a no-op).
     out.push_str(".comm _stream_notification_callback, 8, 3\n");
-    // _tls_peer_name_default: hardcoded peer-name buffer used as the SNI
-    // hint when stream_socket_enable_crypto is called without a context
-    // peer_name. v1 limitation — production TLS needs real peer-name
-    // passing via the stream context (deferred).
-    out.push_str(
-        ".globl _tls_peer_name_default\n_tls_peer_name_default:\n    .ascii \"localhost\"\n",
-    );
     // Key literals used by __rt_get_ssl_peer_name for the
     // _stream_context_options["ssl"]["peer_name"] lookup.
     out.push_str(".globl _ssl_key_str\n_ssl_key_str:\n    .ascii \"ssl\"\n");
@@ -586,6 +675,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     );
     out.push_str(
         ".globl _ssl_verify_peer_name_key_str\n_ssl_verify_peer_name_key_str:\n    .ascii \"verify_peer_name\"\n",
+    );
+    out.push_str(
+        ".globl _ssl_crypto_method_key_str\n_ssl_crypto_method_key_str:\n    .ascii \"crypto_method\"\n",
     );
     // Key literals + request fragments used by __rt_http_build_request.
     out.push_str(".globl _http_key_str\n_http_key_str:\n    .ascii \"http\"\n");
@@ -874,7 +966,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
-    out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
@@ -962,9 +1053,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
 /// holding the total count, and `_callable_builtin_table` containing
 /// pointer/length pairs for each builtin. Used by the `is_callable()` runtime
 /// routine and callable-invoke paths.
-fn emit_builtin_callable_data() -> String {
+fn emit_builtin_callable_data(platform: Platform) -> String {
     let mut out = String::new();
-    let builtins = supported_builtin_function_names();
+    let builtins =
+        crate::types::checker::builtins::supported_builtin_function_names_on_platform(platform);
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -983,6 +1075,24 @@ fn emit_builtin_callable_data() -> String {
         out.push_str(&format!("    .quad {}\n", name.len()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the runtime callable-name table follows PHP's target-specific
+    /// registration of link ownership functions without removing them on Unix.
+    #[test]
+    fn builtin_callable_data_filters_windows_lchown_functions() {
+        let windows = emit_builtin_callable_data(Platform::Windows);
+        assert!(!windows.contains(".ascii \"lchown\""));
+        assert!(!windows.contains(".ascii \"lchgrp\""));
+
+        let linux = emit_builtin_callable_data(Platform::Linux);
+        assert!(linux.contains(".ascii \"lchown\""));
+        assert!(linux.contains(".ascii \"lchgrp\""));
+    }
 }
 
 /// Emit the `php_uname_mode_len_msg` and `php_uname_mode_value_msg`

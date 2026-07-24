@@ -40,6 +40,7 @@ pub mod pi;
 pub mod pow;
 pub mod rad2deg;
 pub mod rand;
+pub mod random_bytes;
 pub mod random_int;
 pub mod round;
 pub mod sin;

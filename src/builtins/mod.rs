@@ -21,6 +21,10 @@ mod requirements;
 mod array;
 mod callables;
 mod io;
+pub(crate) use io::proc_open::{
+    argument_at as proc_open_argument_at, static_windows_command_line,
+    static_windows_environment_block, static_windows_options, WINDOWS_PROC_OPTION_BITS,
+};
 mod string;
 mod math;
 mod spl;

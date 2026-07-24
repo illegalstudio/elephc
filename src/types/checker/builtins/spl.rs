@@ -270,7 +270,10 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
                 return Ok(());
             }
         }
-        if let Some(builtin_name) = super::canonical_builtin_function_name(cb_name) {
+        if let Some(builtin_name) = super::canonical_builtin_function_name_on_platform(
+            cb_name,
+            checker.target_platform,
+        ) {
             if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
                 reject_dynamic_ref_args(&sig, span)?;
                 return Ok(());

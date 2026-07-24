@@ -186,6 +186,10 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_sprintf_type_float");                        // yes → float
     emitter.instruction("cmp w12, #103");                                       // 'g' ?
     emitter.instruction("b.eq __rt_sprintf_type_float");                        // yes → float
+    emitter.instruction("cmp w12, #69");                                        // 'E' ?
+    emitter.instruction("b.eq __rt_sprintf_type_float");                        // yes → float
+    emitter.instruction("cmp w12, #71");                                        // 'G' ?
+    emitter.instruction("b.eq __rt_sprintf_type_float");                        // yes → float
     emitter.instruction("cmp w12, #115");                                       // 's' ?
     emitter.instruction("b.eq __rt_sprintf_type_str");                          // yes → string
     emitter.instruction("b __rt_sprintf_type_int");                             // default → integer
@@ -195,7 +199,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sprintf_done");                                 // bail out
 
     // ================================================================
-    // FLOAT: %f, %e, %g (with optional flags/width/precision)
+    // FLOAT: %f, %e, %g, %E, %G (with optional flags/width/precision)
     // Passes the double value on the stack at [sp] for variadic ABI.
     // ================================================================
     emitter.label("__rt_sprintf_type_float");
@@ -221,6 +225,95 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
     emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
+
+    // -- PHP parity: %e/%E (and any exponential-form %g/%G) exponent uses the
+    // -- minimum digit count (no leading zero), but CRT snprintf pads to at
+    // -- least 2 digits. A double's decimal exponent never exceeds 3 digits and
+    // -- 3-digit exponents are never zero-padded (they start at magnitude 100),
+    // -- so the only possible padding is a single leading '0' in a 2-digit
+    // -- exponent; strip it in place and shrink the byte count by one.
+    emitter.instruction("add x5, sp, #112");                                    // scan cursor over the freshly formatted snprintf output
+    emitter.instruction("mov x6, x0");                                          // remaining bytes to scan for the 'e'/'E' exponent marker
+    emitter.label("__rt_sprintf_etrim_scan");
+    emitter.instruction("cbz x6, __rt_sprintf_etrim_done");                     // no exponent (e.g. %f) -> nothing to trim
+    emitter.instruction("ldrb w7, [x5]");                                       // load the next output byte
+    emitter.instruction("cmp w7, #101");                                        // is it 'e'?
+    emitter.instruction("b.eq __rt_sprintf_etrim_found");                       // found the exponent marker
+    emitter.instruction("cmp w7, #69");                                         // is it 'E'?
+    emitter.instruction("b.eq __rt_sprintf_etrim_found");                       // found the exponent marker
+    emitter.instruction("add x5, x5, #1");                                      // advance the scan cursor
+    emitter.instruction("sub x6, x6, #1");                                      // decrement the remaining scan length
+    emitter.instruction("b __rt_sprintf_etrim_scan");                           // keep scanning for the exponent marker
+    emitter.label("__rt_sprintf_etrim_found");
+    emitter.instruction("add x5, x5, #1");                                      // advance past the 'e'/'E' marker
+    emitter.instruction("sub x6, x6, #1");                                      // decrement the remaining scan length
+    emitter.instruction("cbz x6, __rt_sprintf_etrim_done");                     // malformed: exponent marker was the last byte -> bail defensively
+    emitter.instruction("ldrb w7, [x5]");                                       // load the byte after the exponent marker
+    emitter.instruction("cmp w7, #43");                                         // is it '+'?
+    emitter.instruction("b.eq __rt_sprintf_etrim_sign");                        // consume the exponent sign
+    emitter.instruction("cmp w7, #45");                                         // is it '-'?
+    emitter.instruction("b.ne __rt_sprintf_etrim_done");                        // C99 always emits an exponent sign; bail defensively if absent
+    emitter.label("__rt_sprintf_etrim_sign");
+    emitter.instruction("add x5, x5, #1");                                      // advance past the exponent sign
+    emitter.instruction("sub x6, x6, #1");                                      // decrement the remaining scan length
+    emitter.instruction("cmp x6, #2");                                          // need at least two remaining bytes to test "0<digit>"
+    emitter.instruction("b.lt __rt_sprintf_etrim_done");                        // too short to be a padded 2-digit exponent
+    emitter.instruction("ldrb w7, [x5]");                                       // load the first exponent digit
+    emitter.instruction("cmp w7, #48");                                         // is it '0'?
+    emitter.instruction("b.ne __rt_sprintf_etrim_done");                        // not zero-padded -> nothing to strip
+    emitter.instruction("ldrb w8, [x5, #1]");                                   // load the byte after the leading zero
+    emitter.instruction("cmp w8, #48");                                         // is it below '0'?
+    emitter.instruction("b.lt __rt_sprintf_etrim_done");                        // not a digit -> the '0' was the only exponent digit, keep it
+    emitter.instruction("cmp w8, #57");                                         // is it above '9'?
+    emitter.instruction("b.gt __rt_sprintf_etrim_done");                        // not a digit -> keep the only exponent digit
+    // -- guard: a right-justified WIDTH field pads BEFORE the sign/mantissa with
+    // -- ' ' or '0'. Stripping a byte from the exponent would shrink the total
+    // -- field width, so detect that padding and skip the strip entirely rather
+    // -- than corrupt the requested width (a documented, bounded residual gap;
+    // -- the no-width and left-justified-width cases below are fully handled).
+    emitter.instruction("add x9, sp, #112");                                    // buffer start
+    emitter.instruction("ldrb w12, [x9]");                                      // first output byte
+    emitter.instruction("cmp w12, #32");                                        // is it a space (space-padded field)?
+    emitter.instruction("b.eq __rt_sprintf_etrim_done");                        // space padding present -> skip the strip
+    emitter.instruction("mov x14, x9");                                         // cursor for the (optional) leading '-'/'+' sign
+    emitter.instruction("cmp w12, #45");                                        // is the first byte a '-' sign?
+    emitter.instruction("b.eq __rt_sprintf_etrim_lead_sign");                   // yes -> skip past it before checking for zero-padding
+    emitter.instruction("cmp w12, #43");                                        // is the first byte a '+' sign (the '+' flag)?
+    emitter.instruction("b.ne __rt_sprintf_etrim_lead_check");                  // no sign -> check directly
+    emitter.label("__rt_sprintf_etrim_lead_sign");
+    emitter.instruction("add x14, x14, #1");                                    // skip past the sign before checking for zero-padding
+    emitter.label("__rt_sprintf_etrim_lead_check");
+    emitter.instruction("ldrb w12, [x14]");                                     // byte after the optional sign
+    emitter.instruction("cmp w12, #48");                                        // is it '0'?
+    emitter.instruction("b.ne __rt_sprintf_etrim_shift_setup");                 // not zero -> no zero-padding, safe to strip
+    emitter.instruction("ldrb w12, [x14, #1]");                                 // byte after that leading zero
+    emitter.instruction("cmp w12, #46");                                        // is it '.' (the leading zero IS the legitimate mantissa digit)?
+    emitter.instruction("b.eq __rt_sprintf_etrim_shift_setup");                 // legitimate "0.xxx" mantissa -> safe to strip the exponent
+    emitter.instruction("b __rt_sprintf_etrim_done");                           // zero-padded width field -> skip the strip
+    // -- confirmed a padded 2-digit exponent ("0" + digit) with no right-justify padding: shift the tail left by one byte, dropping the leading zero --
+    emitter.label("__rt_sprintf_etrim_shift_setup");
+    emitter.instruction("add x9, x9, x0");                                      // x9 = original buffer end (using the pre-trim snprintf byte count)
+    emitter.instruction("ldrb w12, [x9, #-1]");                                 // last output byte (before this trim)
+    emitter.instruction("cmp w12, #32");                                        // was the field left-justify space-padded?
+    emitter.instruction("cset x13, eq");                                        // x13 = 1 when trailing-space padding is present
+    emitter.instruction("add x11, x5, #1");                                     // source cursor = byte after the leading zero
+    emitter.instruction("mov x9, x5");                                          // dest cursor = the leading zero's position
+    emitter.instruction("add x8, sp, #112");                                    // recompute the scratch buffer base
+    emitter.instruction("add x8, x8, x0");                                      // x8 = original buffer end (fixed, independent of the shift cursors)
+    emitter.label("__rt_sprintf_etrim_shift");
+    emitter.instruction("cmp x11, x8");                                         // reached the end of the original output?
+    emitter.instruction("b.ge __rt_sprintf_etrim_shift_done");                  // shift complete
+    emitter.instruction("ldrb w14, [x11], #1");                                 // load the next byte to shift down
+    emitter.instruction("strb w14, [x9], #1");                                  // shift it left by one position
+    emitter.instruction("b __rt_sprintf_etrim_shift");                          // continue shifting
+    emitter.label("__rt_sprintf_etrim_shift_done");
+    emitter.instruction("cbz x13, __rt_sprintf_etrim_shrink");                  // no trailing padding -> just shrink the byte count
+    emitter.instruction("mov w12, #32");                                        // ASCII space
+    emitter.instruction("strb w12, [x9]");                                      // restore the requested field width with one more trailing pad space
+    emitter.instruction("b __rt_sprintf_etrim_done");                           // keep x0 unchanged: total field width is preserved
+    emitter.label("__rt_sprintf_etrim_shrink");
+    emitter.instruction("sub x0, x0, #1");                                      // no padding to preserve -> one byte shorter after dropping the leading exponent zero
+    emitter.label("__rt_sprintf_etrim_done");
 
     // -- copy snprintf result to concat_buf --
     emitter.instruction("mov x4, x0");                                          // chars to copy
@@ -374,4 +467,42 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #384");                                    // deallocate our frame
     emitter.instruction("add sp, sp, x0");                                      // pop caller's args from stack
     emitter.instruction("ret");                                                 // return
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Target};
+
+    use super::*;
+
+    /// Verifies the `%E`/`%G` uppercase specifiers dispatch to the float path
+    /// alongside `%f`/`%e`/`%g` on AArch64 (a WF10b fix: they previously fell
+    /// through to the integer path, reinterpreting the double's raw bits as an
+    /// integer and producing garbage).
+    #[test]
+    fn test_emit_sprintf_aarch64_dispatches_uppercase_e_and_g_to_float_path() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_sprintf(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("cmp w12, #69\n"), "'E' (69) must be checked");
+        assert!(asm.contains("cmp w12, #71\n"), "'G' (71) must be checked");
+    }
+
+    /// Verifies the AArch64 `%e`/`%E` exponent-trim (PHP's minimum-digit
+    /// exponent) and its right-justified-width padding guard are present,
+    /// mirroring the x86_64 fix.
+    #[test]
+    fn test_emit_sprintf_aarch64_float_path_has_exponent_trim_with_padding_guard() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_sprintf(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_sprintf_etrim_scan\n"));
+        assert!(asm.contains("__rt_sprintf_etrim_shift_setup\n"));
+        assert!(
+            asm.contains("cmp w12, #32\n"),
+            "must detect space-padded (right-justified) fields to guard the strip"
+        );
+    }
 }

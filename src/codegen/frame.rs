@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Target};
+use crate::codegen::platform::{Arch, Platform, Target};
 use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
@@ -280,6 +280,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    emit_process_bootstrap_cleanup(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
@@ -292,6 +293,17 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Releases process-bootstrap storage that participates in runtime heap
+/// accounting before exit diagnostics inspect the allocator.
+fn emit_process_bootstrap_cleanup(ctx: &mut FunctionContext<'_>) {
+    if (ctx.emitter.platform, ctx.emitter.target.arch) != (Platform::Windows, Arch::X86_64) {
+        return;
+    }
+    ctx.emitter
+        .comment("release Windows UTF-8 argv bootstrap storage");
+    abi::emit_call_label(ctx.emitter, "__rt_sys_free_argv");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -452,7 +464,14 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
     let bridge_entry = target.extern_symbol("elephc_web_run");
+    let call_pad = abi::outgoing_call_stack_pad_bytes(target, 0);
+    if call_pad > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, call_pad);
+    }
     abi::emit_call_label(ctx.emitter, &bridge_entry);
+    if call_pad > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, call_pad);
+    }
     abi::emit_exit_with_result_reg(ctx.emitter);
 }
 

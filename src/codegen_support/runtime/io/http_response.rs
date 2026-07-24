@@ -8,7 +8,7 @@
 //! - The EIR lowering of the `http_response_code` / `header` builtins calls these labels.
 //!
 //! Key details:
-//! - In a `--web` build each routine forwards to a bridge setter via `bl_c`
+//! - In a `--web` build each routine forwards to a native bridge setter
 //!   (`elephc_web_set_status` / `elephc_web_header`); in a non-web build it is a
 //!   no-op and never names the bridge symbols, so non-web binaries link without them.
 //! - `__rt_http_response_code`: status code in the first int arg register
@@ -40,7 +40,7 @@ pub fn emit_http_response_code(emitter: &mut Emitter, web: bool) {
     emitter.instruction("str x30, [sp]");                                       // save the caller return address before the nested call
 
     if web {
-        emitter.bl_c("elephc_web_set_status");                                  // x0 = previous status; sets the status when the code is > 0
+        emitter.emit_native_bridge_symbol_call("elephc_web_set_status", 1);    // x0 = previous status; sets the status when the code is > 0
     } else {
         emitter.instruction("mov x0, #0");                                      // non-web: no status machinery, return 0
     }
@@ -50,7 +50,7 @@ pub fn emit_http_response_code(emitter: &mut Emitter, web: bool) {
     emitter.instruction("ret");                                                 // return to the caller (result in x0)
 }
 
-/// Emits the x86_64 Linux variant of `__rt_http_response_code`.
+/// Emits the x86_64 variant of `__rt_http_response_code`.
 fn emit_http_response_code_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.blank();
     emitter.comment("--- runtime: http_response_code ---");
@@ -60,7 +60,7 @@ fn emit_http_response_code_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
 
     if web {
-        emitter.bl_c("elephc_web_set_status");                                  // rax = previous status; sets the status when the code is > 0
+        emitter.emit_native_bridge_symbol_call("elephc_web_set_status", 1);    // rax = previous status; Windows remaps the SysV-staged status argument
     } else {
         emitter.instruction("xor eax, eax");                                    // non-web: no status machinery, return 0
     }
@@ -89,14 +89,14 @@ pub fn emit_header(emitter: &mut Emitter, web: bool) {
     if web {
         emitter.instruction("stp x29, x30, [sp, #-16]!");                       // save frame/link registers (the forward call clobbers x30)
         emitter.instruction("mov x29, sp");                                     // establish a frame pointer for the call
-        emitter.bl_c("elephc_web_header");                                      // forward (x0=ptr, x1=len, x2=replace, x3=code) to the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_header", 4);        // forward (x0=ptr, x1=len, x2=replace, x3=code) to the bridge
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore frame/link registers
     }
 
     emitter.instruction("ret");                                                 // return to the caller (header() is void)
 }
 
-/// Emits the x86_64 Linux variant of `__rt_header`.
+/// Emits the x86_64 variant of `__rt_header`.
 fn emit_header_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.blank();
     emitter.comment("--- runtime: header ---");
@@ -105,9 +105,62 @@ fn emit_header_x86_64(emitter: &mut Emitter, web: bool) {
     if web {
         emitter.instruction("push rbp");                                        // preserve the caller frame pointer and align rsp for the call
         emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base
-        emitter.bl_c("elephc_web_header");                                      // forward (rdi=ptr, rsi=len, rdx=replace, rcx=code) to the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_header", 4);        // forward SysV-staged args through the native C-ABI transition
         emitter.instruction("pop rbp");                                         // restore the caller frame pointer
     }
 
     emitter.instruction("ret");                                                 // return to the caller (header() is void)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies Windows status forwarding remaps the SysV argument and brackets
+    /// the native call with mandatory MSx64 shadow space.
+    #[test]
+    fn windows_http_response_code_uses_native_bridge_transition() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_http_response_code(&mut emitter, true);
+        let asm = emitter.output();
+        assert!(asm.contains("lea r11, [rip + elephc_web_set_status]"));
+        assert!(asm.contains("sub rsp, 32"));
+        assert!(asm.contains("mov rcx, rdi"));
+        assert!(asm.contains("call r11"));
+        assert!(asm.contains("add rsp, 32"));
+        assert!(!asm.contains("call elephc_web_set_status"));
+    }
+
+    /// Verifies the four-argument header bridge transition preserves the fourth
+    /// SysV argument before lower-index MSx64 register moves clobber it.
+    #[test]
+    fn windows_header_uses_four_argument_native_bridge_transition() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_header(&mut emitter, true);
+        let asm = emitter.output();
+        let save_fourth = asm.find("mov r9, rcx").expect("fourth argument remap");
+        let replace_first = asm.find("mov rcx, rdi").expect("first argument remap");
+        assert!(save_fourth < replace_first, "{asm}");
+        assert!(asm.contains("sub rsp, 32"));
+        assert!(asm.contains("call r11"));
+        assert!(asm.contains("add rsp, 32"));
+        assert!(!asm.contains("call elephc_web_header"));
+    }
+
+    /// Verifies Linux x86 keeps direct bridge calls and never adds Windows-only staging.
+    #[test]
+    fn linux_x86_web_calls_remain_direct() {
+        let mut status = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_http_response_code(&mut status, true);
+        let status_asm = status.output();
+        assert!(status_asm.contains("call elephc_web_set_status"));
+        assert!(!status_asm.contains("sub rsp, 32"));
+
+        let mut header = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_header(&mut header, true);
+        let header_asm = header.output();
+        assert!(header_asm.contains("call elephc_web_header"));
+        assert!(!header_asm.contains("sub rsp, 32"));
+    }
 }

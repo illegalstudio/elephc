@@ -44,6 +44,32 @@ fn test_emit_frame_prologue_rejects_undersized_frame() {
     emit_frame_prologue(&mut emitter, 8);
 }
 
+/// Verifies Windows function prologues reserve emergency stack space while a
+/// Fiber is active and abort before writing into that Fiber's guard page.
+#[test]
+fn test_windows_frame_prologue_checks_active_fiber_guard() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    emit_frame_prologue(&mut emitter, 256);
+    let asm = emitter.output();
+
+    assert!(asm.contains("mov r11, QWORD PTR [rip + _fiber_current]"));
+    assert!(asm.contains("mov r10, QWORD PTR [r11 + 16]"));
+    assert!(asm.contains("add r10, 16384"));
+    assert!(asm.contains("lea rax, [rsp - 16632]"));
+    assert!(asm.contains("call __rt_win_fiber_stack_overflow_abort"));
+    assert!(asm.find("call __rt_win_fiber_stack_overflow_abort") < asm.find("push rbp"));
+}
+
+/// Verifies Linux x86_64 prologues remain free of the Windows Fiber guard
+/// enforcement sequence.
+#[test]
+fn test_linux_frame_prologue_does_not_emit_windows_fiber_guard_check() {
+    let mut emitter = test_emitter_x86();
+    emit_frame_prologue(&mut emitter, 256);
+
+    assert!(!emitter.output().contains("__rt_win_fiber_stack_overflow_abort"));
+}
+
 /// Tests that string return values (pointer in x1, length in x2) are preserved
 /// across function boundaries by storing them to the caller's stack frame at negative
 /// offsets and restoring them after the call. Uses offset 32 for both stores.

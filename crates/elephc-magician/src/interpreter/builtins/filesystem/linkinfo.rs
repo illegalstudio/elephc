@@ -63,9 +63,12 @@ pub(in crate::interpreter) fn eval_linkinfo_result(
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.int(-1);
     };
+    #[cfg(unix)]
     let dev = match std::fs::symlink_metadata(path) {
         Ok(metadata) => i64::try_from(metadata.dev()).map_err(|_| EvalStatus::RuntimeFatal)?,
         Err(_) => -1,
     };
+    #[cfg(windows)]
+    let dev = if std::fs::symlink_metadata(path).is_ok() { 0 } else { -1 };
     values.int(dev)
 }

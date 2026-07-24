@@ -201,6 +201,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Rad2deg,
     /// Dispatches `rand(...)`.
     Rand,
+    /// Dispatches `random_bytes(...)`.
+    RandomBytes,
     /// Dispatches `random_int(...)`.
     RandomInt,
     /// Dispatches `round(...)`.
@@ -492,6 +494,7 @@ impl EvalValuesHook {
             Self::Pow => two_args(evaluated_args, values, eval_pow_result),
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
+            Self::RandomBytes => eval_random_bytes_values_result(evaluated_args, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
             Self::Round => match evaluated_args {
                 [value] => eval_round_result(*value, None, values),
@@ -529,6 +532,8 @@ impl EvalValuesHook {
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| match name {
                 "addslashes" => eval_addslashes_result(value, values),
+                "escapeshellarg" => eval_escapeshellarg_result(value, values),
+                "escapeshellcmd" => eval_escapeshellcmd_result(value, values),
                 "stripslashes" => eval_stripslashes_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),

@@ -45,10 +45,5 @@ pub(in crate::interpreter) fn eval_getservbyport_result(
     let Some(protocol) = eval_lowercase_c_string(protocol, values)? else {
         return values.bool_value(false);
     };
-    let network_port = port.to_be() as libc::c_int;
-    let entry = unsafe {
-        // libc returns a process-global servent; copy the name before another lookup.
-        libc_getservbyport(network_port, protocol.as_ptr())
-    };
-    eval_servent_name_or_false(entry, values)
+    eval_servent_name_or_false(eval_service_name(port, &protocol), values)
 }

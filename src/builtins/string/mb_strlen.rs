@@ -6,7 +6,8 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The public signature matches PHP: `mb_strlen(string $string, ?string $encoding = null)`.
+//! - The checker enforces PHP's `?string $encoding = null` contract while the registry keeps
+//!   the concrete argument representation intact for the target runtime.
 //! - Omitted/null encoding uses UTF-8; explicit encodings are handled by the target runtime,
 //!   which keeps malformed-sequence counting aligned with mbstring and rejects unknown names.
 
@@ -19,7 +20,7 @@ use crate::{
 builtin! {
     name: "mb_strlen",
     area: String,
-    params: [string: Str, encoding: Str = DefaultSpec::Null],
+    params: [string: Str, encoding: Mixed = DefaultSpec::Null],
     returns: Int,
     check: check,
     lazy_check: true,

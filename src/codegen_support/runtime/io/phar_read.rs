@@ -524,7 +524,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // was the bridge reader published?
     emitter.instruction("jz __rt_phar_read_asm_fallback_x86");                  // use the assembly reader when no bridge was published
     abi::emit_symbol_address(emitter, "rdx", "_phar_extract_len"); // pass output-length scratch to the bridge
-    emitter.instruction("call r9");                                             // elephc_phar_extract_url(url_ptr, url_len, &len)
+    emitter.emit_native_bridge_call("r9", 3);                                   // elephc_phar_extract_url(url_ptr, url_len, &len)
     emitter.instruction("test rax, rax");                                       // did the bridge find archive bytes?
     emitter.instruction("jz __rt_phar_read_fail_x86");                          // bridge miss means archive or entry was not readable
     emitter.instruction("mov rdi, rax");                                        // pass extracted bytes to data_stream
@@ -809,13 +809,14 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure (boxed false)
-    emitter.label("__rt_fgc_phar_plain_x86");
+    emitter.label_global("__rt_fgc_phar_plain_x86");
     emitter.instruction("jmp __rt_file_get_contents");                          // tail-call the generic reader (args intact)
 }
 
 /// Emits x86_64 helpers that decompress PHAR entry payloads through published
 /// zlib/libbz2 function-pointer slots instead of direct runtime references.
 fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
+    let zstream = crate::codegen_support::stream_filters::zlib::z_stream_layout(emitter.target);
     emitter.blank();
     emitter.comment("--- runtime: phar decompress helpers ---");
 
@@ -853,7 +854,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     // -- zero the z_stream before handing it to zlib --
     emitter.instruction("xor r9, r9");                                          // z_stream byte clear index
     emitter.label("__rt_phar_inflate_zero_x86");
-    emitter.instruction("cmp r9, 112");                                         // cleared the whole z_stream struct?
+    emitter.instruction(&format!("cmp r9, {}", zstream.size));                  // cleared the whole target-layout z_stream struct?
     emitter.instruction("jge __rt_phar_inflate_zeroed_x86");                    // the z_stream is ready for initialization
     emitter.instruction("mov BYTE PTR [rsp + r9], 0");                          // zero one z_stream byte
     emitter.instruction("inc r9");                                              // advance the clear index
@@ -864,9 +865,9 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, -15");                                        // arg 1 = raw-DEFLATE window bits
     abi::emit_symbol_address(emitter, "rdx", "_zlib_version"); // arg 2 = zlib version string
-    emitter.instruction("mov ecx, 112");                                        // arg 3 = sizeof(z_stream)
+    emitter.instruction(&format!("mov ecx, {}", zstream.size));                 // arg 3 = target sizeof(z_stream)
     abi::emit_load_symbol_to_reg(emitter, "r9", "_phar_zlib_inflate_init2_fn", 0); // reload the published inflateInit2_ pointer
-    emitter.instruction("call r9");                                             // initialize the raw-inflate stream
+    emitter.emit_native_bridge_call("r9", 4);                                   // initialize the raw-inflate stream
     emitter.instruction("test eax, eax");                                       // did zlib initialize successfully?
     emitter.instruction("jnz __rt_phar_inflate_fail_x86");                      // failed initialization makes the entry unreadable
 
@@ -876,21 +877,25 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                       // reload compressed source length
     emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                        // z_stream.avail_in = source length
     emitter.instruction("mov r9, QWORD PTR [rsp + 136]");                       // reload destination buffer pointer
-    emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // z_stream.next_out = destination buffer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // z_stream.next_out = destination buffer
     emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                       // reload expected decompressed length
-    emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                       // z_stream.avail_out = exact output capacity
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // z_stream.avail_out = exact output capacity
 
     // -- inflate the whole entry in one Z_FINISH pass, then end the stream --
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, 4");                                          // arg 1 = Z_FINISH
     abi::emit_load_symbol_to_reg(emitter, "r9", "_phar_zlib_inflate_fn", 0); // reload the published inflate pointer
-    emitter.instruction("call r9");                                             // inflate the compressed PHAR entry payload
+    emitter.emit_native_bridge_call("r9", 2);                                   // inflate the compressed PHAR entry payload
     emitter.instruction("mov QWORD PTR [rsp + 144], rax");                      // save the zlib status code
-    emitter.instruction("mov r9, QWORD PTR [rsp + 40]");                        // z_stream.total_out = inflated length
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out = inflated length
+    } else {
+        emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out = inflated length
+    }
     emitter.instruction("mov QWORD PTR [rsp + 152], r9");                       // save the actual inflated byte count
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     abi::emit_load_symbol_to_reg(emitter, "r9", "_phar_zlib_inflate_end_fn", 0); // reload the published inflateEnd pointer
-    emitter.instruction("call r9");                                             // release zlib's internal inflate state
+    emitter.emit_native_bridge_call("r9", 1);                                   // release zlib's internal inflate state
 
     emitter.instruction("cmp QWORD PTR [rsp + 144], 1");                        // did inflate reach Z_STREAM_END?
     emitter.instruction("jne __rt_phar_inflate_fail_x86");                      // partial or failed inflate makes the entry unreadable
@@ -941,7 +946,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8d, r8d");                                        // arg 4 = small = false
     emitter.instruction("xor r9d, r9d");                                        // arg 5 = verbosity = 0
     abi::emit_load_symbol_to_reg(emitter, "r10", "_phar_bz2_decompress_fn", 0); // reload the published BZ2 decompressor pointer
-    emitter.instruction("call r10");                                            // decompress the bzip2 PHAR entry payload
+    emitter.emit_native_bridge_call("r10", 6);                                  // decompress the bzip2 PHAR entry payload
     emitter.instruction("test eax, eax");                                       // did libbz2 report success?
     emitter.instruction("jnz __rt_phar_bzip2_fail_x86");                        // non-zero status makes the entry unreadable
     emitter.instruction("mov r9d, DWORD PTR [rsp + 32]");                       // destLen now holds the decompressed byte count
@@ -957,4 +962,47 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the bzip2 helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return decompressed bytes or null on failure
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies every windows-x86_64 native-bridge fn-ptr call in the phar
+    /// read helpers (`elephc_phar_extract_url`, the zlib `inflateInit2_`/
+    /// `inflate`/`inflateEnd` trio, and the libbz2 decompressor — all REAL
+    /// MSx64-ABI callees reached through pointer slots) routes through the F46
+    /// `emit_native_bridge_call` shim instead of a bare `call r9`/`call r10`.
+    /// The shim is the ONLY producer of `call r11`, so an exact count of five
+    /// proves all five sites were converted; no bare register-indirect native
+    /// call may remain, or the MSx64 callee would read the SysV registers.
+    #[test]
+    fn test_windows_x86_64_phar_read_native_bridge_calls_use_shim() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_phar_read(&mut emitter);
+        let asm = emitter.output();
+
+        assert_eq!(asm.matches("call r11").count(), 5, "all five phar-read native-bridge calls must route through the F46 shim");
+        assert!(!asm.contains("call r9\n"), "no bare call r9 may remain (MSx64 callee reading SysV registers)");
+        assert!(!asm.contains("call r10\n"), "no bare call r10 may remain (MSx64 callee reading SysV registers)");
+        assert!(asm.contains("mov r11, r9"), "expected an r9 fn-ptr relocated off the MSx64 arg registers");
+        assert!(asm.contains("mov r11, r10"), "expected the r10 bzip2 fn-ptr relocated off the MSx64 arg registers");
+    }
+
+    /// Verifies linux-x86_64 phar-read emission stays byte-identical to before
+    /// the F46 shim: the MSx64 relocation/shadow staging is windows-x86_64-only,
+    /// so linux must keep the plain bare `call r9`/`call r10` and emit no shim.
+    #[test]
+    fn test_linux_x86_64_phar_read_calls_stay_bare() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_phar_read(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("    call r9\n"), "linux keeps the byte-identical bare call r9");
+        assert!(asm.contains("    call r10\n"), "linux keeps the byte-identical bare call r10");
+        assert!(!asm.contains("call r11"), "linux must not emit the windows native-bridge shim");
+    }
 }

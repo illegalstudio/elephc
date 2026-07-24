@@ -129,12 +129,12 @@ pub(super) fn lower_float_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => {
             require_float(ctx.load_value_to_reg(lhs, "d0")?, inst)?;
             require_float(ctx.load_value_to_reg(rhs, "d1")?, inst)?;
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");
         }
         Arch::X86_64 => {
             require_float(ctx.load_value_to_reg(lhs, "xmm0")?, inst)?;
             require_float(ctx.load_value_to_reg(rhs, "xmm1")?, inst)?;
-            ctx.emitter.instruction("call pow");                                // compute floating-point exponentiation through libc pow()
+            ctx.emitter.emit_call_c("pow");                                     // compute floating-point exponentiation through libc pow() (Windows-safe: shadow space via __rt_sys_pow)
         }
     }
     store_if_result(ctx, inst)

@@ -8,7 +8,10 @@
 //! Key details:
 //! - Frame offsets and stack alignment are shared contracts with local collection and call materialization.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 #[cfg(test)]
 use crate::types::PhpType;
 
@@ -47,6 +50,22 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
         }
         Arch::X86_64 => {
             let local_bytes = frame_size.saturating_sub(16);
+            if emitter.target.platform == Platform::Windows {
+                let required_bytes = local_bytes + 8 + 16 * 1024;
+                // -- fail before a Fiber frame can consume its inaccessible guard --
+                emitter.instruction("mov r11, QWORD PTR [rip + _fiber_current]"); // load the active Fiber object, if execution is on a Fiber stack
+                emitter.instruction("test r11, r11");                           // main-stack execution has no Fiber guard to enforce
+                emitter.instruction("jz 8f");                                   // skip the guard check outside a running Fiber
+                emitter.instruction("mov r10, QWORD PTR [r11 + 16]");           // load this Fiber's mapping base (the guard's first byte)
+                emitter.instruction("add r10, 16384");                          // advance to the first usable byte above the 16 KiB guard
+                let prospective_sp = format!("lea rax, [rsp - {}]", required_bytes);
+                emitter.instruction(&prospective_sp);                           // include this frame and emergency-exit reserve in the prospective SP
+                emitter.instruction("cmp rax, r10");                            // would the prospective stack consume the guard or emergency reserve?
+                emitter.instruction("jae 8f");                                  // enough usable Fiber stack remains for the complete frame
+                emitter.instruction("call __rt_win_fiber_stack_overflow_abort"); // terminate deterministically before touching PAGE_NOACCESS
+                emitter.instruction("ud2");                                     // the emergency abort never returns; trap if the OS contract is violated
+                emitter.label("8");
+            }
             emitter.instruction("push rbp");                                    // save the caller frame pointer on the stack
             emitter.instruction("mov rbp, rsp");                                // establish the current stack pointer as the new frame base
             if local_bytes > 0 {

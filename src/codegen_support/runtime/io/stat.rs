@@ -255,9 +255,16 @@ pub fn emit_stat(emitter: &mut Emitter) {
 /// Uses the Linux `stat()` syscall via libc and the System V AMD64 ABI.
 /// Input: rdi=path pointer, rsi=path length (elephc string convention). Output: rax=result.
 fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
-    let mode_off = 24usize;
-    let size_off = emitter.platform.stat_size_offset();
-    let mtime_off = emitter.platform.stat_mtime_offset();
+    // Windows routes the C symbol through `__rt_sys_stat`, which deliberately
+    // writes the portable runtime layout. Native Linux keeps glibc's x86_64
+    // layout, whose mode field starts eight bytes later.
+    let mode_off = if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.platform.stat_mode_offset()
+    } else {
+        24usize
+    };
+    let size_off = 48usize;
+    let mtime_off = 88usize;
     let frame_size = 144usize;
 
     emitter.blank();

@@ -65,7 +65,7 @@ fn emit_microtime_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack storage for one timeval struct plus scratch padding before the libc call
     emitter.instruction("lea rdi, [rsp]");                                      // pass the temporary timeval storage as the first SysV integer argument to libc gettimeofday()
     emitter.instruction("xor esi, esi");                                        // pass NULL as the timezone pointer because elephc only needs the current Unix timestamp
-    emitter.bl_c("gettimeofday");                                               // fill the temporary timeval with the current wall-clock time through libc
+    emitter.emit_call_c("gettimeofday");                                        // fill the temporary timeval with the current wall-clock time through libc
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rsp]");                      // convert tv_sec from the temporary timeval into the base double-precision second count
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rsp + 8]");                  // convert tv_usec from the temporary timeval into a double-precision microsecond count
     emitter.instruction("mov r10, 1000000");                                    // materialize the number of microseconds per second before converting it into a floating divisor
@@ -187,7 +187,7 @@ fn emit_microtime_build_into_linux_x86_64(emitter: &mut Emitter) {
     // -- call gettimeofday --
     emitter.instruction("lea rdi, [rsp]");                                      // rdi = pointer to the timeval storage
     emitter.instruction("xor esi, esi");                                        // rsi = NULL (timezone not needed)
-    emitter.bl_c("gettimeofday");                                          // fill the timeval with the current wall-clock time
+    emitter.emit_call_c("gettimeofday");                                    // fill the timeval with the current wall-clock time
 
     // -- reload the buffer and write the "0." prefix --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                       // rdi = destination buffer (reloaded after the libc call)

@@ -691,7 +691,7 @@ fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
             break;
         }
         cats.push(match format[index] {
-            b'f' | b'e' | b'g' => SprintfSpecCat::Float,
+            b'f' | b'e' | b'g' | b'E' | b'G' => SprintfSpecCat::Float,
             b's' => SprintfSpecCat::Str,
             _ => SprintfSpecCat::Int,
         });
@@ -1076,7 +1076,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // save the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // save the source length
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
-    ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
+    ctx.emitter.emit_call_c("compressBound");                                   // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
@@ -1087,7 +1087,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // pass the source pointer
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                   // pass the source length
     ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 0]");                     // pass the requested compression level
-    ctx.emitter.instruction("call compress2");                                  // zlib-compress the source into the output buffer
+    ctx.emitter.emit_call_c("compress2");                                       // zlib-compress the source into the output buffer
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                   // return the compressed string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");                   // return the compressed string length
     ctx.emitter.instruction("add rsp, 64");                                     // release the zlib scratch storage
@@ -1160,13 +1160,14 @@ fn lower_gzdeflate_x86_64(
     zero: &str,
     zeroed: &str,
 ) -> Result<()> {
+    let zstream = crate::codegen_support::stream_filters::zlib::z_stream_layout(ctx.emitter.target);
     materialize_gz_level_x86_64(ctx, inst, "gzdeflate level")?;
     ctx.emitter.instruction("sub rsp, 160");                                    // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("mov QWORD PTR [rsp + 136], rdi");                  // save the compression level
     ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rsi");                  // save the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 120], rdx");                  // save the source length
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
-    ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
+    ctx.emitter.emit_call_c("compressBound");                                   // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
@@ -1175,7 +1176,7 @@ fn lower_gzdeflate_x86_64(
 
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
-    ctx.emitter.instruction("cmp r9, 112");                                     // check whether every z_stream byte is cleared
+    ctx.emitter.instruction(&format!("cmp r9, {}", zstream.size));              // check whether every target z_stream byte is cleared
     ctx.emitter.instruction(&format!("jge {}", zeroed));                        // continue after the z_stream has been zeroed
     ctx.emitter.instruction("mov BYTE PTR [rsp + r9], 0");                      // clear one z_stream byte
     ctx.emitter.instruction("inc r9");                                          // advance the z_stream clear index
@@ -1191,24 +1192,28 @@ fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve stack slots for the last deflateInit2_ args
     abi::emit_symbol_address(ctx.emitter, "rax", "_zlib_version");
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");                    // pass the zlib version string on the stack
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 112");                    // pass sizeof(z_stream) on the stack
-    ctx.emitter.instruction("call deflateInit2_");                              // initialize the raw-deflate zlib stream
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", zstream.size)); // pass target sizeof(z_stream) on the stack
+    ctx.emitter.emit_call_c("deflateInit2_");                                   // initialize the raw-deflate zlib stream
     ctx.emitter.instruction("add rsp, 16");                                     // release deflateInit2_ stack arguments
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 112]");                   // reload the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // set z_stream.next_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                   // reload the source length
     ctx.emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                    // set z_stream.avail_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                   // reload the destination pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // set z_stream.next_out
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // set z_stream.next_out
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 144]");                   // reload the destination capacity
-    ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // set z_stream.avail_out
+    ctx.emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // set z_stream.avail_out
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to deflate
     ctx.emitter.instruction("mov esi, 4");                                      // request a final deflate pass
-    ctx.emitter.instruction("call deflate");                                    // compress the full input
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // read z_stream.total_out
+    ctx.emitter.emit_call_c("deflate");                                         // compress the full input
+    if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        ctx.emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out is a u32
+    } else {
+        ctx.emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out is a u64
+    }
     ctx.emitter.instruction("mov QWORD PTR [rsp + 152], rax");                  // save the compressed length across deflateEnd
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to deflateEnd
-    ctx.emitter.instruction("call deflateEnd");                                 // release zlib's internal deflate state
+    ctx.emitter.emit_call_c("deflateEnd");                                      // release zlib's internal deflate state
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // return the compressed string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 152]");                  // return the compressed string length
     ctx.emitter.instruction("add rsp, 160");                                    // release z_stream scratch storage
@@ -1288,6 +1293,7 @@ fn lower_gzinflate_x86_64(
     fail: &str,
     done: &str,
 ) {
+    let zstream = crate::codegen_support::stream_filters::zlib::z_stream_layout(ctx.emitter.target);
     let sized = format!("{}_sized", zero);
     ctx.emitter.instruction("sub rsp, 160");                                    // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");                  // save the source pointer
@@ -1307,7 +1313,7 @@ fn lower_gzinflate_x86_64(
 
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
-    ctx.emitter.instruction("cmp r9, 112");                                     // check whether every z_stream byte is cleared
+    ctx.emitter.instruction(&format!("cmp r9, {}", zstream.size));              // check whether every target z_stream byte is cleared
     ctx.emitter.instruction(&format!("jge {}", zeroed));                        // continue after the z_stream has been zeroed
     ctx.emitter.instruction("mov BYTE PTR [rsp + r9], 0");                      // clear one z_stream byte
     ctx.emitter.instruction("inc r9");                                          // advance the z_stream clear index
@@ -1317,24 +1323,28 @@ fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer
     ctx.emitter.instruction("mov esi, -15");                                    // request raw inflate with negative window bits
     abi::emit_symbol_address(ctx.emitter, "rdx", "_zlib_version");
-    ctx.emitter.instruction("mov ecx, 112");                                    // pass sizeof(z_stream)
-    ctx.emitter.instruction("call inflateInit2_");                              // initialize the raw-inflate zlib stream
+    ctx.emitter.instruction(&format!("mov ecx, {}", zstream.size));             // pass target sizeof(z_stream)
+    ctx.emitter.emit_call_c("inflateInit2_");                                   // initialize the raw-inflate zlib stream
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 112]");                   // reload the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // set z_stream.next_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                   // reload the source length
     ctx.emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                    // set z_stream.avail_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                   // reload the destination pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // set z_stream.next_out
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // set z_stream.next_out
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 144]");                   // reload the destination capacity
-    ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // set z_stream.avail_out
+    ctx.emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // set z_stream.avail_out
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflate
     ctx.emitter.instruction("mov esi, 4");                                      // request a final inflate pass
-    ctx.emitter.instruction("call inflate");                                    // decompress the full input
+    ctx.emitter.emit_call_c("inflate");                                         // decompress the full input
     ctx.emitter.instruction("mov QWORD PTR [rsp + 136], rax");                  // save the inflate status code
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // read z_stream.total_out
+    if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        ctx.emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out is a u32
+    } else {
+        ctx.emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out is a u64
+    }
     ctx.emitter.instruction("mov QWORD PTR [rsp + 152], rax");                  // save the inflated length across inflateEnd
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflateEnd
-    ctx.emitter.instruction("call inflateEnd");                                 // release zlib's internal inflate state
+    ctx.emitter.emit_call_c("inflateEnd");                                      // release zlib's internal inflate state
     ctx.emitter.instruction("cmp QWORD PTR [rsp + 136], 1");                    // check for Z_STREAM_END success
     ctx.emitter.instruction(&format!("jne {}", fail));                          // return false for zlib inflate failures
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // return the decompressed string pointer
@@ -1399,7 +1409,7 @@ fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str, after: &st
     ctx.emitter.instruction("lea rsi, [rsp + 16]");                             // pass &destLen as the uncompress in/out length
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 0]");                    // pass the source pointer
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");                    // pass the source length
-    ctx.emitter.instruction("call uncompress");                                 // zlib-uncompress the source
+    ctx.emitter.emit_call_c("uncompress");                                      // zlib-uncompress the source
     ctx.emitter.instruction("test rax, rax");                                   // zero zlib status means success
     ctx.emitter.instruction(&format!("jz {}", ok));                             // load the success result for zero status
     ctx.emitter.instruction("xor eax, eax");                                    // use a null pointer as the failure sentinel

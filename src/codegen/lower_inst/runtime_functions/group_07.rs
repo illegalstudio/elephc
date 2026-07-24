@@ -112,6 +112,9 @@ pub(super) fn lower(
         RuntimeFnId::Rand => Some({
             crate::codegen::lower_inst::builtins::math::lower_rand(ctx, inst, "rand")
         }),
+        RuntimeFnId::RandomBytes => Some({
+            crate::codegen::lower_inst::builtins::math::lower_random_bytes(ctx, inst)
+        }),
         RuntimeFnId::RandomInt => Some({
             crate::codegen::lower_inst::builtins::math::lower_random_int(ctx, inst)
         }),

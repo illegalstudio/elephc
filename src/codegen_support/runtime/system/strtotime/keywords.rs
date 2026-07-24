@@ -257,7 +257,7 @@ fn emit_today_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rip + _strtotime_clock]");         // rax = effective clock (base timestamp or current time)
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save ts at top of sub-frame
     emitter.instruction("mov rdi, rsp");                                        // rdi = &ts for libc localtime
-    emitter.instruction("call localtime");                                      // rax = static struct tm*
+    emitter.emit_call_c("localtime");                                           // rax = static struct tm*
     // -- copy 36 bytes from libc tm into dispatcher tm scratch (caller's struct tm at [rbp - 128..rbp - 92]) --
     emitter.instruction("mov rcx, QWORD PTR [rax + 0]");                        // load tm_sec/tm_min/tm_hour/tm_mday (8 bytes)
     emitter.instruction("mov QWORD PTR [rbp - 128], rcx");                      // store first 8 bytes of tm
@@ -292,7 +292,7 @@ fn emit_now_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rip + _strtotime_clock]");         // rax = effective clock (base timestamp or current time)
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save ts at top of sub-frame
     emitter.instruction("mov rdi, rsp");                                        // rdi = &ts for libc localtime
-    emitter.instruction("call localtime");                                      // rax = static struct tm*
+    emitter.emit_call_c("localtime");                                           // rax = static struct tm*
     emitter.instruction("mov rcx, QWORD PTR [rax + 0]");                        // load tm_sec/tm_min/tm_hour/tm_mday
     emitter.instruction("mov QWORD PTR [rbp - 128], rcx");                      // store first 8 bytes of tm
     emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                        // load 8 more bytes

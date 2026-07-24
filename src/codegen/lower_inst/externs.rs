@@ -74,10 +74,14 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
 
     let assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types, 0);
+        abi::build_c_abi_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types);
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    abi::compact_windows_c_abi_stack_args(ctx.emitter, &assignments);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
     let symbol = ctx.emitter.target.extern_symbol(&decl.name);
     abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     normalize_extern_return(ctx, &decl.return_php_type)?;
     release_borrowed_cstr_temps(ctx, string_arg_count, cleanup_bytes, &decl.return_php_type);

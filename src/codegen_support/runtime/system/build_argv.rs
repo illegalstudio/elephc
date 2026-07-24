@@ -16,13 +16,13 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// `ptr+len` slot in a runtime array. Returns the array pointer in the function result
 /// register (`x0` on ARM64, `rax` on x86_64).
 ///
-/// On ARM64 this function uses `__rt_array_new` and `__rt_array_push_str` for allocation.
-/// On x86_64 Linux it calls `malloc` directly with a precomputed layout of `(argc * 16) + 24`
-/// bytes to hold the 24-byte array header plus `argc` entries of 16 bytes each (ptr + len).
+/// On every target this function uses `__rt_array_new` with 16-byte string slots.  That
+/// constructor stamps the uniform heap header and the string element type required by
+/// dynamic readers such as `eval`; direct `malloc` would leave those metadata words absent.
 /// Callee-saved registers are preserved across the helper call sequence.
 pub fn emit_build_argv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_build_argv_linux_x86_64(emitter);
+        emit_build_argv_x86_64(emitter);
         return;
     }
 
@@ -96,13 +96,12 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits the x86_64 Linux variant of `__rt_build_argv` using the System V AMD64 ABI.
-/// Uses callee-saved registers `r8` (argc), `r9` (argv), `r10` (array pointer), `r11`
-/// (current string pointer), and `rcx` (loop index). The loop counter lives at `[rbp - 32]`
-/// and the array pointer at `[rbp - 24]`. String length is accumulated in `rdx` via null-terminator
-/// scan. Allocates with `malloc` using a precomputed size of `(argc * 16) + 24` and stores the
-/// resulting array pointer in `rax` before returning.
-fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
+/// Emits the x86_64 variant of `__rt_build_argv` using the internal SysV-shaped ABI.
+/// Uses `r8` (argc), `r9` (argv), `r10` (array pointer), `r11` (current string pointer),
+/// and `rcx` (loop index). The loop counter lives at `[rbp - 32]` and the array pointer at
+/// `[rbp - 24]`. String length is accumulated in `rdx` via null-terminator scan. Allocation
+/// goes through `__rt_array_new(argc, 16)` so the result carries its heap and string-slot metadata.
+fn emit_build_argv_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: build_argv ---");
     emitter.label_global("__rt_build_argv");
@@ -113,19 +112,16 @@ fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_load_symbol_to_reg(emitter, "r8", "_global_argc", 0);
     abi::emit_load_symbol_to_reg(emitter, "r9", "_global_argv", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save argc across the malloc call and later loop iterations
-    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the OS argv pointer array across the malloc call
+    emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save argc across the array-constructor call and later loop iterations
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the OS argv pointer array across the array-constructor call
 
-    emitter.instruction("mov rdi, r8");                                         // seed malloc's size argument from argc
-    emitter.instruction("shl rdi, 4");                                          // reserve 16 bytes per argv entry for ptr+len storage
-    emitter.instruction("add rdi, 24");                                         // include the fixed 24-byte array header in the allocation size
-    emitter.instruction("call malloc");                                         // allocate the argv array backing storage with libc malloc
+    emitter.instruction("mov rdi, r8");                                         // request one 16-byte string slot for every OS argument
+    emitter.instruction("mov rsi, 16");                                         // string payloads use ptr+len slots in indexed arrays
+    emitter.instruction("call __rt_array_new");                                 // allocate a stamped indexed string array through the shared heap constructor
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the allocated array pointer for the loop body and final return
 
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload argc after malloc may have clobbered caller-saved registers
-    emitter.instruction("mov QWORD PTR [rax], r8");                             // header[0] = logical argv length
-    emitter.instruction("mov QWORD PTR [rax + 8], r8");                         // header[8] = argv capacity
-    emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // header[16] = elem_size for string ptr+len pairs
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload argc after the constructor clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax], r8");                             // publish every preallocated argv slot as a logical array element
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the argv loop counter to zero
 
     emitter.label("__rt_build_argv_loop");
@@ -170,18 +166,19 @@ mod tests {
 
     use super::*;
 
-    /// Verifies that the x86_64 Linux path calls `malloc` for array backing storage and
-    /// emits the expected header slots (`[rax] = argc`, `[rax + 8] = argc`, `[rax + 16] = 16`)
-    /// plus string length storage at `[r10 + 8] = rdx`.
+    /// Verifies that the x86_64 path uses the stamped indexed-array constructor so eval can
+    /// read `$argv` as `Array<string>`, then writes each measured string length into its slot.
     #[test]
-    fn test_emit_build_argv_linux_x86_64_uses_malloc_backing() {
-        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
-        emit_build_argv(&mut emitter);
-        let asm = emitter.output();
+    fn test_emit_build_argv_x86_64_uses_stamped_string_array_backing() {
+        for platform in [Platform::Linux, Platform::Windows] {
+            let mut emitter = Emitter::new(Target::new(platform, Arch::X86_64));
+            emit_build_argv(&mut emitter);
+            let asm = emitter.output();
 
-        assert!(asm.contains("__rt_build_argv:\n"));
-        assert!(asm.contains("call malloc\n"));
-        assert!(asm.contains("mov QWORD PTR [rax + 16], 16\n"));
-        assert!(asm.contains("mov QWORD PTR [r10 + 8], rdx\n"));
+            assert!(asm.contains("__rt_build_argv:\n"));
+            assert!(asm.contains("mov rsi, 16\n"));
+            assert!(asm.contains("call __rt_array_new\n"));
+            assert!(asm.contains("mov QWORD PTR [r10 + 8], rdx\n"));
+        }
     }
 }

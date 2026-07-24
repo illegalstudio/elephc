@@ -205,7 +205,7 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_filter_call");                           // call key-only callback without environment
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass capture environment after key argument
     emitter.label("__rt_array_filter_call");
-    emitter.instruction("call r12");                                            // invoke the user callback with the current source element and read the truthy result from rax
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("test rax, rax");                                       // check whether the callback reported a truthy keep/skip decision
     emitter.instruction("jz __rt_array_filter_skip");                           // skip copying the element when the callback returned zero / false
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
@@ -233,4 +233,40 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
         "_array_filter_mode_msg",
         ARRAY_FILTER_MODE_MSG_LEN,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_array_filter` callback call site emits
+    /// the reverse-ABI SysV->MSx64 remap immediately before the indirect
+    /// `call r12` into the generated callback (finding F1, reverse-ABI): without
+    /// it, the generated callback would read its value/key/env arguments from
+    /// the wrong registers on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_array_filter_remaps_before_indirect_callback_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_array_filter(&mut emitter);
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect callback call");
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_array_filter_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_array_filter(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+    }
 }

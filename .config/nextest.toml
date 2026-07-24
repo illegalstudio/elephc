@@ -38,6 +38,14 @@ relative-to = "target"
 path = "debug/libelephc_web.a"
 relative-to = "target"
 
+# Emit a machine-readable JUnit report for every `--profile ci` run. This is
+# purely additive (it writes `target/nextest/ci/junit.xml` and changes no test
+# outcome or console output), so the native codegen/non-codegen jobs are
+# unaffected. The `windows-codegen-gate` aggregate parses all 16 native Windows
+# reports and requires exactly one successful execution of every runnable test.
+[profile.ci.junit]
+path = "junit.xml"
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a

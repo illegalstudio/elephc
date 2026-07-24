@@ -168,6 +168,25 @@ fn test_round_down() {
     assert_eq!(out, "3");
 }
 
+/// Verifies decimal scaling correction and negative precision match PHP's HALF_UP behavior.
+#[test]
+fn test_round_php_decimal_scaling_edges() {
+    let out = compile_and_run(
+        "<?php echo round(1.005, 2), '|', round(0.285, 2), '|', round(-1.005, 2), '|', round(149, -1), '|', round(150, -2);",
+    );
+    assert_eq!(out, "1.01|0.29|-1.01|150|200");
+}
+
+/// Verifies precisions beyond PHP's decimal power table preserve the original
+/// binary double, while a very large negative precision rounds to zero.
+#[test]
+fn test_round_precision_beyond_twenty_two() {
+    let out = compile_and_run(
+        "<?php echo round(0.285, 23) === 0.285 ? 'same' : 'changed'; echo '|'; echo round(1234.5678, -23);",
+    );
+    assert_eq!(out, "same|0");
+}
+
 /// Verifies sqrt() of a perfect square (16.0) produces 4.
 #[test]
 fn test_sqrt() {

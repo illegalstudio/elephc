@@ -10,7 +10,7 @@
 
 use std::fmt::Write;
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{compile_and_run, compile_and_run_capture, target, Platform};
 
 const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_all",
@@ -103,6 +103,9 @@ fn test_eval_function_exists_covers_static_builtin_catalog() {
     let mut fragment = String::new();
     for name in elephc::builtin_metadata::php_visible_builtin_names() {
         if STATIC_ONLY_REGISTRY_BUILTINS.contains(name) {
+            continue;
+        }
+        if target().platform == Platform::Windows && matches!(*name, "lchgrp" | "lchown") {
             continue;
         }
         writeln!(

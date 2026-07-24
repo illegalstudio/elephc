@@ -517,17 +517,13 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_get_contents");                         // slurp the FTP data fd into concat buffer
     emitter.instruction("stp x1, x2, [sp, #64]");                               // preserve response ptr/len across close
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload FTP data fd
-    abi::emit_symbol_address(emitter, "x9", "_tls_sessions");
-    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // TLS session attached to this data fd?
-    emitter.instruction("cbz x10, __rt_fgc_url_ftp_close_plain");               // plain FTP data fd: close directly
-    emitter.instruction("mov x0, x10");                                         // TLS handle as close helper argument
+    emitter.instruction("bl __rt_tls_session_clear");                           // remove and return any TLS session associated with the full-width fd
+    emitter.instruction("cbz x0, __rt_fgc_url_ftp_close_plain");                // plain FTP data fd: close directly
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_close_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_close entry pointer
-    emitter.instruction("blr x9");                                              // send close_notify and drop the TLS session
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload FTP data fd after TLS close
-    abi::emit_symbol_address(emitter, "x9", "_tls_sessions");
-    emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear the TLS session slot for descriptor reuse
+    emitter.emit_published_bridge_call("x9");                                  // send close_notify through the published TLS ABI entry
     emitter.label("__rt_fgc_url_ftp_close_plain");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the FTP data descriptor for the OS close
     emitter.syscall(6);                                                         // close the data connection
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
@@ -995,17 +991,14 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save response length across close
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd
-    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // TLS session attached to this data fd?
-    emitter.instruction("test r10, r10");                                       // is the data fd plain?
+    emitter.instruction("call __rt_tls_session_clear");                         // remove and return any TLS session associated with the full-width fd
+    emitter.instruction("test rax, rax");                                       // is the data fd plain?
     emitter.instruction("je __rt_fgc_url_ftp_close_plain_x86");                 // plain FTP data fd: close directly
-    emitter.instruction("mov rdi, r10");                                        // TLS handle as close helper argument
+    emitter.instruction("mov rdi, rax");                                        // TLS handle as close helper argument
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0);     // elephc_tls_close entry pointer
-    emitter.instruction("call r9");                                             // send close_notify and drop the TLS session
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd after TLS close
-    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
-    emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the TLS session slot for descriptor reuse
+    emitter.emit_published_bridge_call("r9");                                  // send close_notify through the published TLS ABI entry
     emitter.label("__rt_fgc_url_ftp_close_plain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload the FTP data descriptor for the OS close
     emitter.instruction("call close");                                          // close the data connection
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore response length
@@ -1021,6 +1014,6 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return failure
-    emitter.label("__rt_fgc_url_plain_x86");
+    emitter.label_global("__rt_fgc_url_plain_x86");
     emitter.instruction("jmp __rt_file_get_contents_maybe_phar");               // fallback to phar:// runtime reader or filesystem path
 }

@@ -107,9 +107,15 @@ impl EvalStreamResources {
             );
             Some((left_id, right_id))
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            None
+            let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+            let address = listener.local_addr().ok()?;
+            let left = TcpStream::connect(address).ok()?;
+            let (right, _) = listener.accept().ok()?;
+            let left_id = self.insert_tcp_stream(left)?;
+            let right_id = self.insert_tcp_stream(right)?;
+            Some((left_id, right_id))
         }
     }
 

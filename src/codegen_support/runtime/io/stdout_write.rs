@@ -80,7 +80,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
         crate::codegen_support::abi::emit_symbol_address(emitter, "x9", &capture_symbol);
         emitter.instruction("ldrb w9, [x9]");                                   // load the low byte of the output-capture flag
         emitter.instruction("cbz x9, __rt_stdout_write_syscall");               // capture disabled — fall through to the plain write syscall
-        emitter.bl_c("elephc_web_write");                                       // capture enabled — append the bytes to the current request's response body (ptr=x0, len=x1)
+        emitter.emit_native_bridge_symbol_call("elephc_web_write", 2);         // capture enabled — append the bytes to the current request's response body (ptr=x0, len=x1)
         emitter.instruction("b __rt_stdout_write_done");                        // capture handled the bytes — skip the syscall path
     }
 
@@ -96,7 +96,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits the x86_64 Linux variant of the `__rt_stdout_write` runtime helper.
+/// Emits the x86_64 variant of the `__rt_stdout_write` runtime helper.
 ///
 /// Inputs: byte pointer in `rdi`, length in `rsi`. No result. Establishes an
 /// `rbp` frame (which leaves `rsp` 16-byte aligned for the capture branch's
@@ -145,7 +145,7 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
         emitter.instruction("movzx r11d, BYTE PTR [r11]");                      // load the low byte of the output-capture flag, zero-extended
         emitter.instruction("test r11d, r11d");                                 // is per-request output capture enabled?
         emitter.instruction("jz __rt_stdout_write_syscall");                    // capture disabled — fall through to the plain write syscall
-        emitter.bl_c("elephc_web_write");                                       // capture enabled — append the bytes to the current request's response body (ptr=rdi, len=rsi)
+        emitter.emit_native_bridge_symbol_call("elephc_web_write", 2);         // capture enabled — cross into the native bridge with Windows ABI staging when needed
         emitter.instruction("jmp __rt_stdout_write_done");                      // capture handled the bytes — skip the syscall path
     }
 
@@ -240,6 +240,16 @@ mod tests {
         assert!(linux_x86.contains("elephc_web_capture"));
         assert!(!linux_x86.contains("_elephc_web_capture"));
         assert!(linux_x86.contains("call elephc_web_write"));
+
+        let windows_x86 = render(Platform::Windows, Arch::X86_64, true);
+        assert!(windows_x86.contains("elephc_web_capture"));
+        assert!(windows_x86.contains("lea r11, [rip + elephc_web_write]"));
+        assert!(windows_x86.contains("sub rsp, 32"));
+        assert!(windows_x86.contains("mov rcx, rdi"));
+        assert!(windows_x86.contains("mov rdx, rsi"));
+        assert!(windows_x86.contains("call r11"));
+        assert!(windows_x86.contains("add rsp, 32"));
+        assert!(!windows_x86.contains("call elephc_web_write"));
     }
 
     /// Verifies both web and non-web emissions keep the plain `write(1, …)` syscall

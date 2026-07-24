@@ -5,10 +5,13 @@
 //! - `crate::interpreter::builtins::time` direct and by-value dispatch.
 //!
 //! Key details:
-//! - Monotonic time is returned as nanoseconds or `[seconds, nanoseconds]`.
+//! - Rust's platform monotonic clock is returned as nanoseconds or
+//!   `[seconds, nanoseconds]` without depending on target-specific libc APIs.
 
 use super::super::super::*;
 use super::super::*;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
@@ -19,6 +22,8 @@ eval_builtin! {
     direct: Time,
     values: Time,
 }
+
+static EVAL_MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
 
 /// Evaluates PHP `hrtime($as_number = false)`.
 pub(in crate::interpreter) fn eval_builtin_hrtime(
@@ -61,11 +66,10 @@ pub(in crate::interpreter) fn eval_hrtime_result(
 
 /// Reads the monotonic clock in whole seconds and nanoseconds.
 fn eval_monotonic_time() -> Result<(i64, i64), EvalStatus> {
-    let mut timespec = MaybeUninit::<libc::timespec>::uninit();
-    let status = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, timespec.as_mut_ptr()) };
-    if status != 0 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let timespec = unsafe { timespec.assume_init() };
-    Ok((timespec.tv_sec, timespec.tv_nsec))
+    let elapsed = EVAL_MONOTONIC_ORIGIN.get_or_init(Instant::now).elapsed();
+    let seconds = i64::try_from(elapsed.as_secs())
+        .map_err(|_| EvalStatus::RuntimeFatal)?
+        .checked_add(1)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((seconds, i64::from(elapsed.subsec_nanos())))
 }

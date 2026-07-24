@@ -18,6 +18,8 @@
 //!   linker needs it to build the `N_SO` stab; without it the debug map is
 //!   silently dropped). All of it is hand-encoded here, the same way
 //!   `-g`-enabled assemblers do it.
+//! - Windows GNU/COFF uses the standard DWARF section names with the `"dr"`
+//!   characteristics accepted by MinGW GAS (discardable, read-only debug data).
 //! - Markers only appear in the text section, which keeps `.loc` legal.
 
 use std::fmt::Write as _;
@@ -100,7 +102,10 @@ fn debug_info_sections(
             ".section .debug_abbrev,\"\",@progbits",
             ".section .debug_info,\"\",@progbits",
         ),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        Platform::Windows => (
+            ".section .debug_abbrev,\"dr\"",
+            ".section .debug_info,\"dr\"",
+        ),
     };
     let name = escape_asm_string(source_path);
     let comp_dir = escape_asm_string(
@@ -229,6 +234,17 @@ _php_foo:
             linux.contains(".section .debug_info,\"\",@progbits"),
             "{linux}"
         );
+
+        let windows = inject_line_directives(ASM, "a.php", Platform::Windows);
+        assert!(
+            windows.contains(".section .debug_abbrev,\"dr\""),
+            "{windows}"
+        );
+        assert!(
+            windows.contains(".section .debug_info,\"dr\""),
+            "{windows}"
+        );
+        assert!(windows.contains(".loc 1 3 5"), "{windows}");
     }
 
     /// Verifies non-marker lines pass through untouched and malformed markers

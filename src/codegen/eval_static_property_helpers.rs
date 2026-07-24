@@ -362,6 +362,7 @@ fn emit_static_property_set_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_static_property_set_fail_x";
     let done_label = "__elephc_eval_value_static_property_set_done_x";
+    let scope_len_offset = abi::c_callback_stack_arg_offset(emitter.target, 6);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for class, property, value, and scope
@@ -371,7 +372,7 @@ fn emit_static_property_set_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the boxed value being assigned
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval class-scope length stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", scope_len_offset)); // load the active eval class-scope length stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the active eval class-scope length
     emit_x86_64_static_property_dispatch(module, emitter, data, slots, "set");
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static property matched the request
@@ -996,7 +997,8 @@ fn emit_aarch64_store_object_static_property_slot(
 ) {
     if !class_name.is_empty() {
         let (label, len) = data.add_string(class_name.as_bytes());
-        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        let is_a_symbol =
+            abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
         emitter.instruction("ldr x0, [sp, #32]");                               // reload the boxed eval value for object type validation
         abi::emit_symbol_address(emitter, "x1", &label);
         abi::emit_load_int_immediate(emitter, "x2", len as i64);
@@ -1036,7 +1038,8 @@ fn emit_x86_64_store_object_static_property_slot(
 ) {
     if !class_name.is_empty() {
         let (label, len) = data.add_string(class_name.as_bytes());
-        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        let is_a_symbol =
+            abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_is_a");
         emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                   // reload the boxed eval value for object type validation
         abi::emit_symbol_address(emitter, "rsi", &label);
         abi::emit_load_int_immediate(emitter, "rdx", len as i64);
@@ -1221,6 +1224,6 @@ fn label_fragment(value: &str) -> String {
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

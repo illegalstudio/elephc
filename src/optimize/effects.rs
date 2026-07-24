@@ -198,6 +198,13 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
     expr_effect(expr).is_observable()
 }
 
+/// Returns whether an expression mutates or outputs without considering a
+/// catchable exception edge; pruning uses this narrower classification locally.
+#[cfg(test)]
+pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {
+    expr_effect(expr).has_side_effects
+}
+
 /// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.
 /// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.

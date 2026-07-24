@@ -112,7 +112,7 @@ fn emit_gethostbyaddr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 24]");                                 // pointer to the in_addr
     emitter.instruction("mov rsi, 4");                                          // in_addr length in bytes
     emitter.instruction(&format!("mov rdx, {}", AF_INET));                      // address family AF_INET
-    emitter.instruction("call gethostbyaddr");                                  // rax = struct hostent* (null when no record)
+    emitter.emit_call_c("gethostbyaddr");                                       // rax = struct hostent* (null when no record)
     emitter.instruction("test rax, rax");                                       // did the reverse lookup find a record?
     emitter.instruction("jz __rt_gethostbyaddr_input_x86");                     // no record: return the address unchanged
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // hostent.h_name: NUL-terminated C string

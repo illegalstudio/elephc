@@ -56,6 +56,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "flock" {
         return eval_builtin_flock(args, context, scope, values);
     }
+    if name == "proc_open" {
+        return eval_builtin_proc_open_call(args, context, scope, values);
+    }
     if name == "preg_match" {
         return eval_builtin_preg_match_call(args, context, scope, values);
     }

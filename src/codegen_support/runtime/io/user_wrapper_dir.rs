@@ -255,7 +255,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // path ptr → string-arg pair
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("xor rcx, rcx");                                        // options = 0
-    emitter.instruction("call r11");                                            // invoke dir_opendir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 4);
     emitter.instruction("test rax, rax");                                       // did dir_opendir return false?
     emitter.instruction("jz __rt_uwod_fail_x86");                               // dir_opendir returned false → free obj, false
 
@@ -368,7 +368,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // missing dir_readdir → end of directory
 
     // -- call dir_readdir($this) → returns string in rax/rdx --
-    emitter.instruction("call r11");                                            // invoke dir_readdir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("test rdx, rdx");                                       // empty name (len 0) is the end-of-directory sentinel
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // box end-of-directory as false
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -457,7 +457,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_closedir?
     emitter.instruction("jz __rt_uwcd_clear_x86");                              // missing dir_closedir → just clear
-    emitter.instruction("call r11");                                            // invoke dir_closedir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
 
     emitter.label("__rt_uwcd_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
@@ -544,7 +544,7 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uwrw_false_x86");                              // missing dir_rewinddir → false
 
     // -- call dir_rewinddir($this) → bool in rax --
-    emitter.instruction("call r11");                                            // invoke dir_rewinddir on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result
 

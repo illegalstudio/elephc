@@ -25,9 +25,22 @@ pub(in crate::interpreter) fn eval_path_is_readable(path: &std::path::Path) -> b
 
 /// Returns whether a path has any executable bit set in its Unix mode.
 pub(in crate::interpreter) fn eval_path_is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
     std::fs::metadata(path)
         .map(|metadata| metadata.mode() & 0o111 != 0)
         .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        path.is_file()
+            && path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| {
+                    matches!(extension.to_ascii_lowercase().as_str(), "exe" | "com" | "bat" | "cmd")
+                })
+    }
 }
 
 /// Returns whether a path can be written by the current process.

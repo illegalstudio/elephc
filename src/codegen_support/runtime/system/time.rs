@@ -91,7 +91,7 @@ fn emit_time_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack storage for one timeval struct plus scratch padding before the libc call
     emitter.instruction("lea rdi, [rsp]");                                      // pass the temporary timeval storage as the first SysV integer argument to libc gettimeofday()
     emitter.instruction("xor esi, esi");                                        // pass NULL as the timezone pointer because elephc only needs the current Unix timestamp
-    emitter.bl_c("gettimeofday");                                               // fill the temporary timeval with the current wall-clock time through libc
+    emitter.emit_call_c("gettimeofday");                                        // fill the temporary timeval with the current wall-clock time through libc
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // return tv_sec from the temporary timeval as the current Unix timestamp in the native integer result register
     emitter.instruction("leave");                                               // release the temporary timeval storage and restore the caller frame pointer in one step
     emitter.instruction("ret");                                                 // return the current Unix timestamp to generated code

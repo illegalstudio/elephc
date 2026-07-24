@@ -12,8 +12,8 @@
 //!   runs once the body is fully drained (before the PHP handler executes).
 //!
 //! Key details:
-//! - Progress writes use independent `open -> flock(LOCK_EX) -> read -> modify
-//!   -> write -> close` cycles on `<save_path>/sess_<id>`; they NEVER touch the
+//! - Progress writes use independent platform-locked `open -> read -> modify ->
+//!   write -> close` cycles on `<save_path>/sess_<id>`; they NEVER touch the
 //!   handler's persistent `state::SESSION_FD`, so the short lock is never held
 //!   across the whole upload. The handler runs after the drain, so all progress
 //!   writes are flushed and unlocked before `session_start` locks the file.
@@ -26,11 +26,11 @@
 
 use std::ffi::CStr;
 use std::io::Read;
-use std::os::unix::io::AsRawFd;
 use std::time::Instant;
 
 use super::file_io::{
     configured_session_file_path, lock_exclusive, open_session_file, parse_save_path,
+    write_file_in_place,
 };
 
 /// Per-file progress snapshot mirroring one entry of PHP's `files` sub-array.
@@ -277,10 +277,10 @@ impl Tracker {
         self.rmw(|data| Some(remove_entry(data, full_key, self.handler)))
     }
 
-    /// Runs `edit` under an independent `open -> flock(LOCK_EX) -> read ->
-    /// truncate+write -> unlock -> close` cycle on the session file. Never uses
-    /// the handler's persistent fd. Closes every transient fd (no fd leak) and
-    /// releases the lock on every path. Returns true when the edit was written.
+    /// Runs `edit` under an independent platform-locked `open -> read ->
+    /// truncate+write -> close` cycle on the session file. Never uses the
+    /// handler's persistent file. Closes every transient file and releases the
+    /// lock on every path. Returns true when the edit was written.
     fn rmw(&self, edit: impl FnOnce(&[u8]) -> Option<Vec<u8>>) -> bool {
         let Some(sid) = self.sid.as_deref() else {
             return false;
@@ -291,53 +291,22 @@ impl Tracker {
         let Some(path) = configured_session_file_path(&self.save_path, sid) else {
             return false;
         };
-        let file = match open_session_file(&path, config.mode) {
+        let mut file = match open_session_file(&path, config.mode) {
             Ok(f) => f,
             Err(_) => return false,
         };
-        let fd = file.as_raw_fd();
-        // SAFETY: fd is valid for the lifetime of `file`; flock is advisory and
-        // serializes this transient writer against concurrent poll requests.
-        if !lock_exclusive(fd) {
+        if !lock_exclusive(&file) {
             return false;
         }
         let mut data = Vec::new();
-        if (&file).read_to_end(&mut data).is_err() {
+        if file.read_to_end(&mut data).is_err() {
             return false;
         }
         let mut ok = false;
         if let Some(new_data) = edit(&data) {
-            // SAFETY: truncate then retry `pwrite` until the full buffer is on
-            // disk; interrupted and short writes are not success.
-            unsafe {
-                ok = libc::ftruncate(fd, 0) == 0;
-                let mut offset = 0usize;
-                while ok && offset < new_data.len() {
-                    let wrote = libc::pwrite(
-                        fd,
-                        new_data[offset..].as_ptr() as *const _,
-                        new_data.len() - offset,
-                        offset as libc::off_t,
-                    );
-                    if wrote > 0 {
-                        offset += wrote as usize;
-                    } else if wrote < 0
-                        && std::io::Error::last_os_error().kind()
-                            == std::io::ErrorKind::Interrupted
-                    {
-                        continue;
-                    } else {
-                        ok = false;
-                    }
-                }
-                ok = ok && libc::fsync(fd) == 0;
-            }
+            ok = write_file_in_place(&mut file, &new_data).is_ok();
         }
-        // SAFETY: release the advisory lock before the fd is closed by `drop`.
-        unsafe {
-            libc::flock(fd, libc::LOCK_UN);
-        }
-        drop(file); // closes the fd
+        drop(file); // closes the file and releases its OS lock
         ok
     }
 }

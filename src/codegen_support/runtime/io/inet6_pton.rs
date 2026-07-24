@@ -82,7 +82,7 @@ fn emit_inet6_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // c_str into argument 1 (src)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the out buffer pointer into argument 2 (dst)
     emitter.instruction(&format!("mov edi, {}", af_inet6));                     // family: AF_INET6 (30 on macOS, 10 on Linux)
-    emitter.instruction("call inet_pton");                                      // rax = 1 success, 0 fail, -1 EAFNOSUPPORT
+    emitter.emit_call_c("inet_pton");                                           // rax = 1 success, 0 fail, -1 EAFNOSUPPORT
 
     // -- collapse libc result to 0/1 (any non-positive return means fail) --
     emitter.instruction("cmp eax, 1");                                          // did libc report exactly one successful conversion?

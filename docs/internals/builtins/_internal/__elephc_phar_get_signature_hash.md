@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_signature_hash() — internals"
 description: "Compiler internals for __elephc_phar_get_signature_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 471
 ---
 
 ## `__elephc_phar_get_signature_hash()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_signature_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_signature_hash.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

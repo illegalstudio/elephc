@@ -697,6 +697,43 @@ fn emit_unser_key_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the integer key
 }
 
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Structural regressions for the target-specific serialized-value parser assembly.
+    //!
+    //! Called from:
+    //! - `cargo test --lib` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Windows must parse PHP's uppercase non-finite wire tokens before its CRT `strtod` fallback.
+
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_unserialize;
+
+    /// Verifies Windows recognizes PHP's INF, -INF, and NAN wire tokens without relying on msvcrt `strtod`.
+    #[test]
+    fn windows_unserialize_non_finite_tokens_bypass_crt_strtod() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_unserialize(&mut emitter);
+        let asm = emitter.output();
+
+        for bits in [
+            "mov r9, 0x7ff0000000000000",
+            "mov r9, 0xfff0000000000000",
+            "mov r9, 0x7ff8000000000000",
+        ] {
+            assert!(asm.contains(bits), "missing non-finite bit pattern: {bits}");
+        }
+        assert!(
+            asm.contains("call __rt_sys_strtod"),
+            "ordinary serialized float values must retain the Windows ABI-safe strtod fallback"
+        );
+    }
+}
+
 /// x86_64 implementation of the unserialize entry, recursive parser, and key parser.
 fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     // -- entry wrapper: __rt_unser_at(base=ptr, pos=0, end=len) --
@@ -818,9 +855,56 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add rdi, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add rdi, 2");                                          // strtod source = first byte after "d:"
+    // -- PHP's serialized non-finite spellings are not accepted by every CRT --
+    // MinGW's Windows `strtod` rejects the upper-case PHP wire tokens, whereas
+    // its Unix counterparts accept them. Recognize their exact, semicolon-ended
+    // forms before falling back to libc for ordinary decimal/exponent values.
+    emitter.instruction("mov r10, rdi");                                        // keep the wire-token cursor while matching its bytes
+    emitter.instruction("cmp BYTE PTR [r10], 73");                              // starts with ASCII 'I' for positive infinity?
+    emitter.instruction("jne __rt_unser_at_float_neg_inf");                     // try the negative-infinity spelling next
+    emitter.instruction("cmp BYTE PTR [r10 + 1], 78");                          // second byte is ASCII 'N'?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // not INF: try NAN before libc
+    emitter.instruction("cmp BYTE PTR [r10 + 2], 70");                          // third byte is ASCII 'F'?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // malformed INF falls back through NAN/libc checks
+    emitter.instruction("cmp BYTE PTR [r10 + 3], 59");                          // token must end at the PHP ';' delimiter
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // longer/malformed text is handled by libc
+    emitter.instruction("mov r9, 0x7ff0000000000000");                          // IEEE-754 positive infinity bit pattern
+    emitter.instruction("add r10, 3");                                          // endptr-equivalent cursor points at the delimiter
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // retain the cursor across Mixed boxing
+    emitter.instruction("jmp __rt_unser_at_float_box");                         // box the recognized positive infinity
+    emitter.label("__rt_unser_at_float_neg_inf");
+    emitter.instruction("cmp BYTE PTR [r10], 45");                              // starts with ASCII '-' for negative infinity?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // not negative infinity: try NAN
+    emitter.instruction("cmp BYTE PTR [r10 + 1], 73");                          // second byte is ASCII 'I'?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // malformed -INF: try NAN
+    emitter.instruction("cmp BYTE PTR [r10 + 2], 78");                          // third byte is ASCII 'N'?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // malformed -INF: try NAN
+    emitter.instruction("cmp BYTE PTR [r10 + 3], 70");                          // fourth byte is ASCII 'F'?
+    emitter.instruction("jne __rt_unser_at_float_nan");                         // malformed -INF: try NAN
+    emitter.instruction("cmp BYTE PTR [r10 + 4], 59");                          // token must end at the PHP ';' delimiter
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // longer/malformed text is handled by libc
+    emitter.instruction("mov r9, 0xfff0000000000000");                          // IEEE-754 negative infinity bit pattern
+    emitter.instruction("add r10, 4");                                          // endptr-equivalent cursor points at the delimiter
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // retain the cursor across Mixed boxing
+    emitter.instruction("jmp __rt_unser_at_float_box");                         // box the recognized negative infinity
+    emitter.label("__rt_unser_at_float_nan");
+    emitter.instruction("cmp BYTE PTR [r10], 78");                              // starts with ASCII 'N' for NaN?
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // ordinary numeric text uses libc
+    emitter.instruction("cmp BYTE PTR [r10 + 1], 65");                          // second byte is ASCII 'A'?
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // malformed NAN uses libc
+    emitter.instruction("cmp BYTE PTR [r10 + 2], 78");                          // third byte is ASCII 'N'?
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // malformed NAN uses libc
+    emitter.instruction("cmp BYTE PTR [r10 + 3], 59");                          // token must end at the PHP ';' delimiter
+    emitter.instruction("jne __rt_unser_at_float_libc");                        // longer/malformed text is handled by libc
+    emitter.instruction("mov r9, 0x7ff8000000000000");                          // canonical quiet-NaN bit pattern
+    emitter.instruction("add r10, 3");                                          // endptr-equivalent cursor points at the delimiter
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // retain the cursor across Mixed boxing
+    emitter.instruction("jmp __rt_unser_at_float_box");                         // box the recognized NaN
+    emitter.label("__rt_unser_at_float_libc");
     emitter.instruction("lea rsi, [rbp - 72]");                                 // strtod endptr = &scratch
-    emitter.instruction("call strtod");                                         // parse the float (stops at ';') -> xmm0, scratch=endptr
+    emitter.emit_call_c("strtod");                                              // parse the float (stops at ';') -> xmm0, scratch=endptr
     emitter.instruction("movq r9, xmm0");                                       // move the parsed double into a GPR
+    emitter.label("__rt_unser_at_float_box");
     emitter.instruction("mov rdi, r9");                                         // value payload = float bits
     emitter.instruction("mov rax, 2");                                          // value tag = float
     emitter.instruction("mov rsi, 0");                                          // float high payload unused
@@ -1024,7 +1108,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver = first argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // $data assoc array (bare hash) = second argument
     emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the __unserialize target
-    emitter.instruction("call r10");                                            // call __unserialize($this, $data)
+    emitter.emit_platform_callback_call("r10", 2);
     emitter.instruction("jmp __rt_unser_at_obj_box");                           // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the property index
@@ -1062,7 +1146,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?
     emitter.instruction("jz __rt_unser_at_obj_box");                            // no → box the object directly
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
-    emitter.instruction("call r10");                                            // call __wakeup($this)
+    emitter.emit_platform_callback_call("r10", 1);
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("mov rax, 24");                                         // box the object: Mixed cell = tag + two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell

@@ -352,6 +352,7 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // iconv input pointer variable starts at the PHP string bytes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // iconv input byte count variable starts at the PHP string length
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // decoded character count starts at zero
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // preserve the explicit encoding-name length across helper calls
 
     // -- copy the length-delimited PHP encoding name into a stack C string --
     emitter.instruction("lea rdi, [rbp - 160]");                                // destination is the 64-byte encoding-name buffer
@@ -368,35 +369,45 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
 
     // -- fast-path PHP's default UTF-8 names and byte-count encodings --
     emitter.instruction("lea rdi, [rbp - 160]");                                // first strcasecmp argument is the copied encoding name
-    abi::emit_symbol_address(emitter, "rsi", "_mb_strlen_utf8_name");
-    emitter.instruction("call strcasecmp");                                     // compare the explicit encoding with UTF-8 case-insensitively
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // first string length is the explicit encoding-name length
+    abi::emit_symbol_address(emitter, "rdx", "_mb_strlen_utf8_name");
+    emitter.instruction("mov rcx, 5");                                          // UTF-8 literal length
+    emitter.instruction("call __rt_strcasecmp");                                // compare the explicit encoding with UTF-8 case-insensitively
     emitter.instruction("test eax, eax");                                       // did the encoding match UTF-8?
     emitter.instruction("jz __rt_mb_strlen_use_utf8_framed_x86");               // UTF-8 uses the allocation-free validated scanner
     emitter.instruction("lea rdi, [rbp - 160]");                                // reload the copied encoding name after strcasecmp
-    abi::emit_symbol_address(emitter, "rsi", "_mb_strlen_utf8_alias");
-    emitter.instruction("call strcasecmp");                                     // compare the explicit encoding with PHP's UTF8 alias
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the explicit encoding-name length
+    abi::emit_symbol_address(emitter, "rdx", "_mb_strlen_utf8_alias");
+    emitter.instruction("mov rcx, 4");                                          // UTF8 alias literal length
+    emitter.instruction("call __rt_strcasecmp");                                // compare the explicit encoding with PHP's UTF8 alias
     emitter.instruction("test eax, eax");                                       // did the encoding match UTF8?
     emitter.instruction("jz __rt_mb_strlen_use_utf8_framed_x86");               // the UTF8 alias uses the same validated scanner
     emitter.instruction("lea rdi, [rbp - 160]");                                // reload the copied encoding name for the byte-count aliases
-    abi::emit_symbol_address(emitter, "rsi", "_mb_strlen_8bit_name");
-    emitter.instruction("call strcasecmp");                                     // compare the explicit encoding with 8bit
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the explicit encoding-name length
+    abi::emit_symbol_address(emitter, "rdx", "_mb_strlen_8bit_name");
+    emitter.instruction("mov rcx, 4");                                          // 8bit literal length
+    emitter.instruction("call __rt_strcasecmp");                                // compare the explicit encoding with 8bit
     emitter.instruction("test eax, eax");                                       // did the encoding match 8bit?
     emitter.instruction("jz __rt_mb_strlen_use_byte_length_x86");               // 8bit counts every byte as one character
     emitter.instruction("lea rdi, [rbp - 160]");                                // reload the copied encoding name for the binary alias
-    abi::emit_symbol_address(emitter, "rsi", "_mb_strlen_binary_name");
-    emitter.instruction("call strcasecmp");                                     // compare the explicit encoding with binary
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the explicit encoding-name length
+    abi::emit_symbol_address(emitter, "rdx", "_mb_strlen_binary_name");
+    emitter.instruction("mov rcx, 6");                                          // binary literal length
+    emitter.instruction("call __rt_strcasecmp");                                // compare the explicit encoding with binary
     emitter.instruction("test eax, eax");                                       // did the encoding match binary?
     emitter.instruction("jz __rt_mb_strlen_use_byte_length_x86");               // binary is PHP's alias for 8bit
     emitter.instruction("lea rdi, [rbp - 160]");                                // reload the copied encoding name for the 7bit encoding
-    abi::emit_symbol_address(emitter, "rsi", "_mb_strlen_7bit_name");
-    emitter.instruction("call strcasecmp");                                     // compare the explicit encoding with 7bit
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the explicit encoding-name length
+    abi::emit_symbol_address(emitter, "rdx", "_mb_strlen_7bit_name");
+    emitter.instruction("mov rcx, 4");                                          // 7bit literal length
+    emitter.instruction("call __rt_strcasecmp");                                // compare the explicit encoding with 7bit
     emitter.instruction("test eax, eax");                                       // did the encoding match 7bit?
     emitter.instruction("jz __rt_mb_strlen_use_byte_length_x86");               // 7bit preserves PHP's one-character-per-byte count
 
     // -- open a decoder from the requested encoding to fixed-width UTF-32LE --
     abi::emit_symbol_address(emitter, "rdi", "_mb_strlen_utf32le_name");
     emitter.instruction("lea rsi, [rbp - 160]");                                // iconv source encoding is the copied explicit name
-    emitter.instruction("call iconv_open");                                     // create the encoding-to-UTF-32LE conversion descriptor
+    emitter.emit_call_c("iconv_open");                                         // create the encoding-to-UTF-32LE conversion descriptor through the target ABI
     emitter.instruction("cmp rax, -1");                                         // did iconv_open return the failure sentinel?
     emitter.instruction("je __rt_mb_strlen_unknown_encoding_framed_x86");       // unknown encoding names raise PHP's ValueError
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the iconv descriptor across conversion iterations
@@ -413,7 +424,7 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 16]");                                 // iconv argument 2 is `&input_bytes_left`
     emitter.instruction("lea rcx, [rbp - 40]");                                 // iconv argument 3 is `&output_ptr`
     emitter.instruction("lea r8, [rbp - 48]");                                  // iconv argument 4 is `&output_bytes_left`
-    emitter.instruction("call iconv");                                          // decode as many complete characters as fit in the output scratch
+    emitter.emit_call_c("iconv");                                              // decode through the target ABI shim when required
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve iconv's status while accounting for produced code points
     emitter.instruction("mov r10, 16");                                         // reload the fixed output scratch capacity
     emitter.instruction("sub r10, QWORD PTR [rbp - 48]");                       // compute the number of UTF-32LE bytes produced
@@ -436,7 +447,7 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rdx, rdx");                                        // no input byte count participates in the reset
     emitter.instruction("xor rcx, rcx");                                        // no output pointer participates in the reset
     emitter.instruction("xor r8, r8");                                          // no output byte count participates in the reset
-    emitter.instruction("call iconv");                                          // reset stateful decoders after substituting one malformed byte
+    emitter.emit_call_c("iconv");                                              // reset stateful decoders through the target ABI shim
     emitter.instruction("jmp __rt_mb_strlen_iconv_loop_x86");                   // continue decoding after the malformed byte
 
     emitter.label("__rt_mb_strlen_iconv_incomplete_x86");
@@ -444,7 +455,7 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // mark the truncated suffix as fully handled
     emitter.label("__rt_mb_strlen_iconv_done_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // iconv_close argument is the active conversion descriptor
-    emitter.instruction("call iconv_close");                                    // release the conversion descriptor before returning
+    emitter.emit_call_c("iconv_close");                                        // release the descriptor through the target ABI shim
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the accumulated character count
     emitter.instruction("leave");                                               // release the iconv helper frame and restore rbp
     emitter.instruction("ret");                                                 // return the encoding-aware character count
@@ -462,7 +473,7 @@ fn emit_mb_strlen_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mb_strlen_unknown_encoding_framed_x86");
     emitter.instruction("leave");                                               // release the explicit-encoding helper frame before unwinding
-    emitter.label("__rt_mb_strlen_unknown_encoding_x86");
+    emitter.label_global("__rt_mb_strlen_unknown_encoding_x86");
     value_error::emit_throw_value_error_x86_64(
         emitter,
         "_mb_strlen_unknown_encoding_msg",

@@ -255,6 +255,19 @@ impl Checker {
                         }
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("proc_open") {
+                    if let Some(arg) = expanded_args.get(2) {
+                        if let Some(name) = proc_open_pipes_output_var(arg) {
+                            env.insert(
+                                name.clone(),
+                                PhpType::AssocArray {
+                                    key: Box::new(PhpType::Int),
+                                    value: Box::new(PhpType::stream_resource()),
+                                },
+                            );
+                        }
+                    }
+                }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
@@ -451,6 +464,20 @@ fn preg_match_output_var(arg: &Expr) -> Option<&String> {
     match &arg.kind {
         ExprKind::Variable(name) => Some(name),
         ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
+        _ => None,
+    }
+}
+
+/// Returns the plain local populated by `proc_open`'s `$pipes` output parameter.
+///
+/// PHP writes an integer-keyed map of stream resources through this by-reference
+/// parameter. The checker records that post-call fact only for a local variable:
+/// writing through an array element or property would require alias-aware flow
+/// tracking, which this targeted output-parameter rule deliberately does not add.
+fn proc_open_pipes_output_var(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => proc_open_pipes_output_var(value),
         _ => None,
     }
 }

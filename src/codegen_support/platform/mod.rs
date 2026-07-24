@@ -11,8 +11,10 @@
 mod linux_transform;
 mod target;
 mod toolchain;
+mod windows_transform;
 
 pub use target::{Arch, Platform, Target};
+pub use windows_transform::transform_for_windows;
 
 #[cfg(test)]
 mod tests {
@@ -36,6 +38,14 @@ mod tests {
         assert_eq!(
             Target::parse("aarch64-apple-darwin").unwrap(),
             Target::new(Platform::MacOS, Arch::AArch64)
+        );
+        assert_eq!(
+            Target::parse("x86_64-pc-windows-gnu").unwrap(),
+            Target::new(Platform::Windows, Arch::X86_64)
+        );
+        assert_eq!(
+            Target::parse("x86_64-pc-windows-msvc").unwrap(),
+            Target::new(Platform::Windows, Arch::X86_64)
         );
     }
 

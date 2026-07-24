@@ -14,7 +14,7 @@
 //!   as PHP `false`, matching PHP's `array|false` contract for the
 //!   domains the kernel refuses (typically `STREAM_PF_INET`).
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// stream_socket_pair: create a connected pair of socket descriptors.
 /// Input:  AArch64 x0 = domain, x1 = type, x2 = protocol
@@ -84,10 +84,18 @@ fn emit_stream_socket_pair_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 8");                                          // element size = 8 bytes
     emitter.instruction("call __rt_array_new");                                 // allocate the result array, rax = pointer
     emitter.instruction("mov rdi, rax");                                        // array pointer argument
-    emitter.instruction("mov esi, DWORD PTR [rbp - 16]");                       // sv[0] = first socket descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                   // sv[0] = full-width Windows SOCKET
+    } else {
+        emitter.instruction("mov esi, DWORD PTR [rbp - 16]");                   // sv[0] = first POSIX descriptor
+    }
     emitter.instruction("call __rt_array_push_int");                            // push the first descriptor, rax = array
     emitter.instruction("mov rdi, rax");                                        // array pointer argument
-    emitter.instruction("mov esi, DWORD PTR [rbp - 12]");                       // sv[1] = second socket descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                    // sv[1] = full-width Windows SOCKET
+    } else {
+        emitter.instruction("mov esi, DWORD PTR [rbp - 12]");                   // sv[1] = second POSIX descriptor
+    }
     emitter.instruction("call __rt_array_push_int");                            // push the second descriptor, rax = array
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

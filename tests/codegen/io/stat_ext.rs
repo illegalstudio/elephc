@@ -153,14 +153,10 @@ echo fileinode("missing.txt") === false ? "i" : "!";
     assert_eq!(out, "acpogi");
 }
 
-/// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every
-/// POSIX target the compiler ships for. Regression guard for target-specific path handling.
+/// Verifies `is_executable()` recognizes the currently running native binary on every target.
 #[test]
 fn test_is_executable_true_for_self() {
-    // /bin/sh is executable on every POSIX target we ship for.
-    let out = compile_and_run(
-        r#"<?php echo is_executable("/bin/sh") ? "y" : "n";"#,
-    );
+    let out = compile_and_run(r#"<?php echo is_executable($argv[0]) ? "y" : "n";"#);
     assert_eq!(out, "y");
 }
 
@@ -204,14 +200,27 @@ fn test_filetype_and_is_link_for_symlink() {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let source = r#"<?php
+    let source = if target().platform == Platform::Windows {
+        r#"<?php
+file_put_contents("target.txt", "payload");
+symlink("target.txt", "link.txt");
 echo filetype("link.txt") . "|";
 echo is_link("link.txt") ? "y" : "n";
-"#;
+unlink("link.txt");
+unlink("target.txt");
+"#
+    } else {
+        r#"<?php
+echo filetype("link.txt") . "|";
+echo is_link("link.txt") ? "y" : "n";
+"#
+    };
     let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    fs::write(dir.join("target.txt"), "payload").unwrap();
-    std::os::unix::fs::symlink("target.txt", dir.join("link.txt")).unwrap();
+    if target().platform != Platform::Windows {
+        fs::write(dir.join("target.txt"), "payload").unwrap();
+        std::os::unix::fs::symlink("target.txt", dir.join("link.txt")).unwrap();
+    }
 
     let out = assemble_and_run(
         &user_asm,
@@ -222,6 +231,30 @@ echo is_link("link.txt") ? "y" : "n";
         &[],
     );
     assert_eq!(out, "link|y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `lstat()` reads the link object after its target is removed.
+///
+/// The runtime creates the symlink itself on Windows so the fixture also exercises
+/// the Win32 unprivileged-symlink retry path used by CI and Wine.
+#[test]
+fn test_windows_lstat_succeeds_for_dangling_symlink() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dangling-target.txt", "payload");
+symlink("dangling-target.txt", "dangling-link.txt");
+unlink("dangling-target.txt");
+$info = lstat("dangling-link.txt");
+echo is_array($info) && ($info["mode"] & 0xF000) === 0xA000 ? "link" : "fail";
+unlink("dangling-link.txt");
+"#,
+    );
+    assert_eq!(out, "link");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -236,6 +269,27 @@ echo is_writeable("wr.txt") ? "y" : "n";
 "#,
     );
     assert_eq!(out, "y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `is_writable()` rejects readonly attributes while reads still succeed.
+#[test]
+fn test_windows_readonly_file_is_not_writable() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("readonly.txt", "x");
+chmod("readonly.txt", 0o444);
+echo file_exists("readonly.txt") ? "e" : "E";
+echo is_readable("readonly.txt") ? "r" : "R";
+echo is_writable("readonly.txt") ? "W" : "w";
+chmod("readonly.txt", 0o644);
+unlink("readonly.txt");
+"#,
+    );
+    assert_eq!(out, "erw");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -405,5 +459,32 @@ echo $info["size"];
 "#,
     );
     assert_eq!(out, "10");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `fstat()` exposes native identity, links, timestamps, and readonly mode.
+#[test]
+fn test_windows_fstat_reports_native_metadata() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fstat-native.txt", "abc");
+chmod("fstat-native.txt", 0o444);
+$h = fopen("fstat-native.txt", "r");
+$st = fstat($h);
+echo $st["size"] === 3 ? "s" : "S";
+echo $st["nlink"] >= 1 ? "n" : "N";
+echo $st["ino"] > 0 ? "i" : "I";
+echo $st["dev"] > 0 ? "d" : "D";
+echo $st["mtime"] > 0 ? "t" : "T";
+echo (($st["mode"] & 0o222) === 0) ? "r" : "R";
+fclose($h);
+chmod("fstat-native.txt", 0o644);
+unlink("fstat-native.txt");
+"#,
+    );
+    assert_eq!(out, "snidtr");
     let _ = fs::remove_dir_all(&dir);
 }

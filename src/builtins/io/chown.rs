@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     name: "chown",
     area: Io,
-    params: [filename: Str, user: Str],
+    params: [filename: Str, user: Mixed],
     returns: Bool,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

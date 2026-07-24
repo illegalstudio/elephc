@@ -434,7 +434,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to regcomp
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.emit_call_c("pcre2_regcomp");                                       // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_replace_callback_fail_linux_x86_64");    // return original subject when regex compilation fails
 
@@ -447,7 +447,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     } else {
         emitter.instruction("shl rdi, 3");                                      // malloc bytes = nmatch * 8-byte regmatch_t slots
     }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
+    emitter.emit_call_c("malloc");                                              // allocate the regmatch_t vector for all capture groups
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees regex_t and returns the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
@@ -479,7 +479,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
     emitter.instruction("xor r8d, r8d");                                        // use default regexec execution flags
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex at the current subject cursor
+    emitter.emit_call_c("pcre2_regexec");                                       // execute regex at the current subject cursor
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 
@@ -561,7 +561,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", callback_env_off)); // pass capture environment after visible callback args
     emitter.label("__rt_preg_replace_callback_direct_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); // reload callback entry point
-    emitter.instruction("call r10");                                            // call callback and receive replacement string in rax/rdx
+    emitter.emit_platform_callback_call("r10", 2);
     emitter.instruction("call __rt_str_persist");                               // copy callback result away from volatile concat-buffer scratch space
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
@@ -640,9 +640,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
     emitter.instruction("lea rdi, [rsp]");                                      // pass regex_t storage to regfree
-    emitter.bl_c("pcre2_regfree");                                                    // release compiled regex resources
+    emitter.emit_call_c("pcre2_regfree");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.emit_call_c("free");                                                // release the reusable regmatch_t vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
@@ -657,7 +657,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_replace_callback_malloc_fail_linux_x86_64");
     emitter.instruction("lea rdi, [rsp]");                                      // reload regex_t storage after capture-buffer allocation failed
-    emitter.bl_c("pcre2_regfree");                                                    // free compiled regex resources before returning the subject
+    emitter.emit_call_c("pcre2_regfree");                                       // free compiled regex resources before returning the subject
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer after allocation failure
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length after allocation failure
 
@@ -718,5 +718,41 @@ fn emit_x86_load_regoff_from_ptr(
         emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
     } else {
         emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_preg_replace_callback` callback call
+    /// site emits the reverse-ABI SysV->MSx64 remap immediately before the
+    /// indirect `call r10` into the generated regex callback (finding F1,
+    /// reverse-ABI): without it, the generated callback would read the
+    /// matches-array/env arguments from the wrong registers on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_preg_replace_callback_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_preg_replace_callback(&mut emitter);
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect callback call");
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_preg_replace_callback_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_preg_replace_callback(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
     }
 }

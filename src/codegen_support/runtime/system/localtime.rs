@@ -213,12 +213,12 @@ pub fn emit_localtime(emitter: &mut Emitter) {
             emitter.instruction("cmp rax, -1");                                 // timestamp == -1 (current-time sentinel)?
             emitter.instruction("jne __rt_localtime_have_x86");                 // explicit timestamp supplied → use it
             emitter.instruction("xor edi, edi");                                // NULL argument to time()
-            emitter.instruction("call time");                                   // time(NULL) → rax = current Unix timestamp
+            emitter.emit_call_c("time");                                        // time(NULL) → rax = current Unix timestamp
             emitter.label("__rt_localtime_have_x86");
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // save the resolved timestamp
             emitter.instruction("call __rt_tz_init_utc");                       // default the timezone to UTC on first use (PHP-compatible) unless already set
             emitter.instruction("lea rdi, [rbp - 8]");                          // rdi = &timestamp for localtime()
-            emitter.instruction("call localtime");                              // localtime(&ts) → rax = struct tm
+            emitter.emit_call_c("localtime");                                   // localtime(&ts) → rax = struct tm
             emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // save the struct tm pointer
             emitter.instruction("mov rdi, 16");                                 // capacity 16 (>= 9 entries, avoids a realloc)
             emitter.instruction("mov rsi, 7");                                  // value type = mixed

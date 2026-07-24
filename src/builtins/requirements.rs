@@ -20,6 +20,8 @@ pub enum BuiltinRequirement {
     SystemLibrary(&'static str),
     /// Link a macOS-only system library while Linux resolves the API from libc.
     MacOsLibrary(&'static str),
+    /// Link a Windows-only system library while Unix targets resolve the API elsewhere.
+    WindowsLibrary(&'static str),
     /// Enable a named runtime feature collected from the final EIR module.
     RuntimeFeature(&'static str),
 }
@@ -128,12 +130,22 @@ pub fn stream_filter_requirements(
     if matches!(filter.as_str(), "zlib.deflate" | "zlib.inflate") {
         vec![BuiltinRequirement::SystemLibrary("z")]
     } else if filter.starts_with("convert.iconv.") {
-        vec![BuiltinRequirement::MacOsLibrary("iconv")]
+        vec![
+            BuiltinRequirement::MacOsLibrary("iconv"),
+            BuiltinRequirement::WindowsLibrary("iconv"),
+        ]
     } else if matches!(filter.as_str(), "bzip2.compress" | "bzip2.decompress") {
         vec![BuiltinRequirement::SystemLibrary("bz2")]
     } else {
         Vec::new()
     }
+}
+
+/// Requires the timezone bridge only on Windows, where the CRT lacks IANA zone data.
+pub fn windows_timezone_requirements(
+    _input: &BuiltinRequirementInput<'_>,
+) -> Vec<BuiltinRequirement> {
+    vec![BuiltinRequirement::WindowsLibrary("elephc_tz")]
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// Reads one line from a file descriptor into the concat buffer.
@@ -199,6 +199,10 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fgets_wrapper_entry_x86");                    // wrappers read via the feof-gated stream_read loop below
 
     emitter.label("__rt_fgets_loop_x86");
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque descriptor before resetting timeout metadata
+        emitter.instruction("call __rt_win_stream_clear_timed_out");            // each new one-byte read starts with timed_out=false
+    }
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the current concat-buffer absolute offset before reading one more byte
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // rematerialize the concat-buffer base address for the current one-byte read destination
     emitter.instruction("lea rsi, [r11 + r10]");                                // compute the address where libc read() should append the next byte
@@ -273,10 +277,22 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_fgets_done_x86");                              // would-block returns the partial line without setting EOF
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("cmp r10d, 110");                                   // ETIMEDOUT is retryable stream timeout, not EOF
+        emitter.instruction("jne __rt_fgets_eof_x86");                          // only non-timeout failures set EOF
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record timed_out without touching EOF state
+        emitter.instruction("jmp __rt_fgets_done_x86");                         // return the partial line without EOF
+    }
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, r10");                                    // pass the opaque Windows descriptor to the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // obtain a bounded EOF-table slot
+        emitter.instruction("mov r10, rax");                                    // table indexing uses the compact slot, never a raw SOCKET
+    }
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the compact stream slot as EOF-reached after the zero-byte or failed read
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
 }

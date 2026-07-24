@@ -88,7 +88,16 @@ pub(in crate::interpreter) fn eval_filetype_result(
         "dir"
     } else if file_type.is_symlink() {
         "link"
-    } else if file_type.is_char_device() {
+    } else {
+        eval_special_filetype(&file_type)
+    };
+    values.string(label)
+}
+
+/// Classifies Unix special file kinds that have no Windows filesystem equivalent.
+#[cfg(unix)]
+fn eval_special_filetype(file_type: &std::fs::FileType) -> &'static str {
+    if file_type.is_char_device() {
         "char"
     } else if file_type.is_block_device() {
         "block"
@@ -98,6 +107,11 @@ pub(in crate::interpreter) fn eval_filetype_result(
         "socket"
     } else {
         "unknown"
-    };
-    values.string(label)
+    }
+}
+
+/// Classifies Windows special files as unknown outside files, directories, and links.
+#[cfg(windows)]
+fn eval_special_filetype(_file_type: &std::fs::FileType) -> &'static str {
+    "unknown"
 }

@@ -26,11 +26,13 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
-    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
-    /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
-    /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
-    /// classes, interfaces, enums, etc.) are initialized empty.
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`,
+    /// `PHP_OS_FAMILY`, `SID`, `PHP_INT_SIZE`, the emulated-PHP version constants
+    /// (`PHP_VERSION`, `PHP_MAJOR_VERSION`, `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`,
+    /// `PHP_VERSION_ID`, `PHP_EXTRA_VERSION`), pathinfo
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream
+    /// resources, `LOCK_*` constants), array, JSON, stream, date, preg, session, and error-level
+    /// constants. All other declaration tables are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -44,6 +46,17 @@ impl Checker {
         // Deprecated session-id constant; elephc is cookie-only so it always
         // resolves to the empty string (see `codegen::prescan::collect_constants`).
         constants.insert("SID".to_string(), PhpType::Str);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PATH_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
+        constants.insert("PHP_INT_SIZE".to_string(), PhpType::Int);
+        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_MAJOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_MINOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_RELEASE_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_VERSION_ID".to_string(), PhpType::Int);
+        constants.insert("PHP_EXTRA_VERSION".to_string(), PhpType::Str);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
@@ -100,9 +113,6 @@ impl Checker {
         constants.insert("M_PI_4".to_string(), PhpType::Float);
         constants.insert("M_LOG2E".to_string(), PhpType::Float);
         constants.insert("M_LOG10E".to_string(), PhpType::Float);
-        constants.insert("PHP_EOL".to_string(), PhpType::Str);
-        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
-
         Self {
             target_platform,
             fn_decls: HashMap::new(),

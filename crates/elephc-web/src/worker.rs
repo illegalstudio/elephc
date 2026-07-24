@@ -1,18 +1,18 @@
 //! Purpose:
-//! Per-worker HTTP serving: build a SO_REUSEPORT listening socket, run a tokio
-//! current-thread runtime, and dispatch each request to the PHP handler.
+//! Per-worker HTTP serving: build a listening socket, run a tokio current-thread
+//! runtime, and dispatch each request to the PHP handler.
 //!
 //! Called from:
 //! - `crate::server::elephc_web_run` in each forked child process.
 //!
 //! Key details:
 //! - current-thread runtime + a blocking handler() call means PHP never runs on
-//!   two threads in one worker; concurrency comes from the N forked workers.
-//! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
+//!   two threads in one worker; Unix concurrency also comes from prefork workers.
+//! - SO_REUSEPORT is Unix-only. Windows uses one listener and multiplexes I/O.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full, Limited};
@@ -30,11 +30,12 @@ use crate::session::upload_progress;
 /// Pending-connection backlog for each worker's listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
 
-/// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
+/// Builds a nonblocking listening socket bound to `addr`.
 fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
     let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     sock.set_reuse_address(true)?;
+    #[cfg(unix)]
     sock.set_reuse_port(true)?;
     sock.set_nonblocking(true)?;
     sock.bind(&addr.into())?;
@@ -52,6 +53,7 @@ static SERVED: AtomicUsize = AtomicUsize::new(0);
 /// under sustained traffic a worker can serve its whole quota in well under the
 /// master's fast-death window, and counting that as a crash-on-startup would
 /// shut the server down. Checked by `server::is_planned_recycle`.
+#[cfg(unix)]
 pub(crate) const RECYCLE_EXIT_CODE: i32 = 86;
 
 /// Per-request handler time limit in seconds (`0` = none), read by `run_handler`
@@ -61,6 +63,7 @@ static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);
 /// `SIGALRM` handler: a handler that ran past `--max-execution-time` is killed so
 /// the master respawns the worker (a runaway handler would otherwise pin the
 /// single worker thread forever). Async-signal-safe: only `write` + `_exit`.
+#[cfg(unix)]
 extern "C" fn handle_exec_timeout(_sig: libc::c_int) {
     const MSG: &[u8] = b"elephc-web: handler exceeded --max-execution-time; recycling worker\n";
     unsafe {
@@ -70,6 +73,7 @@ extern "C" fn handle_exec_timeout(_sig: libc::c_int) {
 }
 
 /// Installs the `SIGALRM` execution-timeout handler in this worker.
+#[cfg(unix)]
 fn install_exec_timeout_handler() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -103,7 +107,12 @@ const GZIP_MIN_LEN: usize = 256;
 /// Serves HTTP on `listen` (host:port) in this worker process. Builds a
 /// current-thread tokio runtime and loops accepting connections, serving each
 /// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+pub fn serve(
+    listen: &str,
+    handler: extern "C" fn(),
+    cfg: WorkerConfig,
+    shutdown: Option<&'static AtomicBool>,
+) {
     let WorkerConfig {
         max_body,
         max_requests,
@@ -111,8 +120,10 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         max_exec_secs,
         gzip,
     } = cfg;
+    SERVED.store(0, Ordering::Relaxed);
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
+        #[cfg(unix)]
         install_exec_timeout_handler();
     }
     let addr: SocketAddr = match listen.parse() {
@@ -153,9 +164,16 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
                 break;
             }
-            let (stream, peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
+            let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+            let (stream, peer) = match accepted {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(_)) => continue,
+                Err(_) => {
+                    if shutdown.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                        break;
+                    }
+                    continue;
+                }
             };
             let io = TokioIo::new(stream);
             tokio::task::spawn_local(http1::Builder::new()
@@ -331,13 +349,72 @@ fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     request_state::reset_response();
     // Arm the execution-timeout watchdog around the blocking handler, if enabled.
     let secs = MAX_EXEC_SECS.load(Ordering::Relaxed);
+    run_handler_with_timeout(handler, secs);
+    SERVED.fetch_add(1, Ordering::Relaxed);
+    request_state::take_body()
+}
+
+/// Runs the blocking handler under the Unix SIGALRM worker watchdog.
+#[cfg(unix)]
+fn run_handler_with_timeout(handler: extern "C" fn(), secs: u32) {
     if secs > 0 {
-        unsafe { libc::alarm(secs); }
+        unsafe { libc::alarm(secs) };
     }
     handler();
     if secs > 0 {
-        unsafe { libc::alarm(0); }
+        unsafe { libc::alarm(0) };
     }
-    SERVED.fetch_add(1, Ordering::Relaxed);
-    request_state::take_body()
+}
+
+/// Runs the blocking handler with a Windows watchdog thread.
+///
+/// A timeout terminates the server process, matching the Unix worker-fatal
+/// contract without attempting unsafe forced thread cancellation while PHP may
+/// hold process-global runtime state.
+#[cfg(windows)]
+fn run_handler_with_timeout(handler: extern "C" fn(), secs: u32) {
+    if secs == 0 {
+        handler();
+        return;
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let watchdog = std::thread::spawn(move || {
+        if done_rx
+            .recv_timeout(Duration::from_secs(secs.into()))
+            .is_err()
+        {
+            eprintln!("elephc-web: handler exceeded --max-execution-time; stopping server");
+            std::process::exit(1);
+        }
+    });
+    handler();
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No-op handler used by the shutdown-before-accept event-loop fixture.
+    extern "C" fn noop_handler() {}
+
+    /// Verifies a pre-set portable shutdown flag makes the listener event loop
+    /// return without accepting a request or leaving a serving thread behind.
+    #[test]
+    fn preset_shutdown_stops_event_loop_cleanly() {
+        static STOP: AtomicBool = AtomicBool::new(true);
+        serve(
+            "127.0.0.1:0",
+            noop_handler,
+            WorkerConfig {
+                max_body: 1024,
+                max_requests: 0,
+                access_log: false,
+                max_exec_secs: 0,
+                gzip: false,
+            },
+            Some(&STOP),
+        );
+    }
 }

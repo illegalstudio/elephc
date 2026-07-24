@@ -23,6 +23,22 @@ env:
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+  # Windows parity prebuild set: the bridges that cross-build cleanly for
+  # x86_64-pc-windows-gnu. elephc-phar is pure-Rust (bzip2 backed by
+  # libbz2-rs-sys, zlib backed by miniz_oxide -- no system libbz2/zlib
+  # dependency), so it needs no C toolchain support beyond MinGW. elephc-tls's
+  # `ring` crypto backend also builds cleanly under the provisioned MinGW CC;
+  # its fd-attachment surface uses a full-width Winsock SOCKET and duplicates
+  # it through `TcpStream::try_clone` on Windows. Building this set remains a
+  # structural bridge check; native behavior is covered separately below.
+  BRIDGE_CRATES_WINDOWS: >-
+    -p elephc-image
+    -p elephc-pdo
+    -p elephc-crypto
+    -p elephc-tz
+    -p elephc-phar
+    -p elephc-tls
+    -p elephc-web
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -667,6 +683,9 @@ jobs:
         # target/debug/examples/gen_builtins), so it must be built first.
         run: cargo build --example gen_builtins
 
+      - name: Test the builtin docs pipeline
+        run: python3 scripts/tests/test_builtin_docs.py
+
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
         # must come back byte-identical. A diff means someone changed a builtin
@@ -705,8 +724,15 @@ jobs:
       - codegen-tests-macos-aarch64
       - codegen-tests-linux-x86_64
       - codegen-tests-linux-aarch64
+      - eval-codegen-tests-macos-aarch64
+      - eval-codegen-tests-linux-x86_64
+      - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - windows-pe-cross-compile
+      - windows-pe-llvm-lld
+      - windows-bridge-native-build
+      - windows-codegen-gate
     if: always()
     steps:
       - name: Verify test jobs
@@ -723,8 +749,15 @@ jobs:
           test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
+          test "${{ needs.windows-pe-cross-compile.result }}" = "success"
+          test "${{ needs.windows-pe-llvm-lld.result }}" = "success"
+          test "${{ needs.windows-bridge-native-build.result }}" = "success"
+          test "${{ needs.windows-codegen-gate.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
@@ -765,3 +798,509 @@ jobs:
             benchmark-results.md
             magician-benchmark-results.json
             magician-benchmark-results.md
+
+  windows-pe-cross-compile:
+    name: Windows PE Cross-Compile Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
+      WINEDEBUG: -all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add x86_64-pc-windows-gnu Rust target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-pe-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-pe-
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            file
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; the callable binary on PATH is `wine`
+          # (dispatches to the 64-bit loader since wine32/i386 is not installed
+          # and is not needed for x86_64-only PE binaries).
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Cross-build Windows bridge archives
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          RANLIB_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ranlib
+        run: cargo build $BRIDGE_CRATES_WINDOWS --target x86_64-pc-windows-gnu
+
+      - name: Verify PE/COFF bridge archive exports
+        run: |
+          python3 scripts/check_bridge_exports.py \
+            --target x86_64-pc-windows-gnu \
+            --nm x86_64-w64-mingw32-nm
+
+      - name: Run Windows PE, web export, and Wine HTTP tests
+        run: cargo test --test codegen_tests -- windows_pe --nocapture
+
+      - name: Cross-compile hello-world
+        run: |
+          echo '<?php echo "Hello from Windows!\n";' > /tmp/hello.php
+          cargo run -- --target windows-x86_64 /tmp/hello.php
+          file /tmp/hello.exe
+          # Verify it is a valid PE32+ executable
+          file /tmp/hello.exe | grep -q "PE32+ executable (console) x86-64"
+          # Verify imports include kernel32
+          x86_64-w64-mingw32-objdump -x /tmp/hello.exe | grep -q "KERNEL32.dll"
+
+      - name: Run hello-world under Wine
+        run: |
+          WINE_BIN=wine64
+          command -v wine64 >/dev/null 2>&1 || WINE_BIN=wine
+          "$WINE_BIN" /tmp/hello.exe > /tmp/hello.out
+          cat /tmp/hello.out
+          grep -q "Hello from Windows!" /tmp/hello.out
+
+      - name: Cross-compile arithmetic test
+        run: |
+          echo '<?php echo 1 + 2 * 3;' > /tmp/arith.php
+          cargo run -- --target windows-x86_64 /tmp/arith.php
+          file /tmp/arith.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile function call test
+        run: |
+          echo '<?php function add($a, $b) { return $a + $b; } echo add(10, 20);' > /tmp/func.php
+          cargo run -- --target windows-x86_64 /tmp/func.php
+          file /tmp/func.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile loop test
+        run: |
+          echo '<?php for ($i = 0; $i < 5; $i++) { echo $i; }' > /tmp/loop.php
+          cargo run -- --target windows-x86_64 /tmp/loop.php
+          file /tmp/loop.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile string concatenation test
+        run: |
+          echo '<?php echo "Hello" . " " . "World";' > /tmp/concat.php
+          cargo run -- --target windows-x86_64 /tmp/concat.php
+          file /tmp/concat.exe | grep -q "PE32+ executable"
+
+  # Exercise the opt-in LLVM path independently from the GNU/MinGW job above.
+  # This stays focused: it proves PE assembly, linking, Wine execution, transport
+  # visibility, and timeout metadata without duplicating the native 16-way shard set.
+  windows-pe-llvm-lld:
+    name: Windows PE LLVM/LLD Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
+      WINEDEBUG: -all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-pe-llvm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-pe-llvm-
+
+      - name: Install LLVM, MinGW-w64, and inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            clang \
+            gcc-mingw-w64-x86-64 \
+            lld \
+            file
+
+      - name: Configure LLVM/LLD MinGW target
+        shell: bash
+        run: |
+          set -euo pipefail
+          sysroot="$(x86_64-w64-mingw32-gcc -print-sysroot)"
+          if [[ -z "$sysroot" || ! -d "$sysroot" ]]; then
+            for candidate in /usr/x86_64-w64-mingw32 /usr/x86_64-w64-mingw32/sys-root/mingw; do
+              if [[ -d "$candidate" ]]; then
+                sysroot="$candidate"
+                break
+              fi
+            done
+          fi
+          test -n "$sysroot"
+          test -d "$sysroot"
+          clang_bin="$(command -v clang)"
+          lld_bin="$(command -v ld.lld)"
+          gcc_bin="$(command -v x86_64-w64-mingw32-gcc)"
+          "$clang_bin" --version
+          "$lld_bin" --version
+          {
+            echo "ELEPHC_WINDOWS_TOOLCHAIN=llvm"
+            echo "ELEPHC_WINDOWS_CLANG=$clang_bin"
+            echo "ELEPHC_WINDOWS_LLD=$lld_bin"
+            echo "ELEPHC_WINDOWS_SYSROOT=$sysroot"
+            echo "ELEPHC_WINDOWS_GCC=$gcc_bin"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; `wine` dispatches to it for x86_64 PE.
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Compile and execute an LLVM/LLD PE smoke test under Wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '<?php echo "Hello from LLVM/LLD Windows!";' > /tmp/hello-llvm.php
+          cargo run -- --target windows-x86_64 /tmp/hello-llvm.php
+          file /tmp/hello-llvm.exe | grep -q "PE32+ executable (console) x86-64"
+          WINE_BIN=wine64
+          command -v wine64 >/dev/null 2>&1 || WINE_BIN=wine
+          "$WINE_BIN" /tmp/hello-llvm.exe > /tmp/hello-llvm.out
+          grep -q "Hello from LLVM/LLD Windows!" /tmp/hello-llvm.out
+
+      - name: Verify LLVM/LLD PE hardening and unwind metadata
+        run: cargo test --test codegen_tests -- test_windows_pe_hardening_and_generated_unwind_metadata --nocapture
+
+      - name: Run LLVM/LLD Wine transport visibility regression
+        run: cargo test --test codegen_tests -- test_windows_does_not_expose_unix_socket_transports --nocapture
+
+      - name: Run LLVM/LLD Wine timeout metadata regression
+        run: cargo test --test codegen_tests -- test_windows_stream_timeout_sets_metadata_without_eof --nocapture
+
+  # Keep bridge/toolchain coverage separate from the strict native codegen
+  # shards below so archive/export regressions have a focused failure signal.
+  windows-bridge-native-build:
+    name: Windows Native PE & Bridge Tests
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install the native MinGW toolchain and libraries
+        id: msys2_bridge
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-binutils
+            mingw-w64-x86_64-bzip2
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libiconv
+            mingw-w64-x86_64-pcre2
+            mingw-w64-x86_64-zlib
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-native-bridges-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-native-bridges-
+
+      - name: Build bridge staticlibs with the native MSVC toolchain
+        shell: bash
+        run: |
+          cargo build -p elephc
+          cargo build $BRIDGE_CRATES_WINDOWS
+
+      - name: Verify and expose GNU MinGW tools
+        shell: pwsh
+        run: |
+          $root = '${{ steps.msys2_bridge.outputs.msys2-location }}'
+          $binDir = Join-Path $root 'mingw64\bin'
+          foreach ($tool in @("gcc", "as", "ar", "ranlib", "nm", "objdump")) {
+            $target = Join-Path $binDir "x86_64-w64-mingw32-$tool.exe"
+            if (-not (Test-Path -LiteralPath $target)) {
+              $source = Join-Path $binDir "$tool.exe"
+              if (-not (Test-Path -LiteralPath $source)) {
+                throw "MSYS2 MinGW package setup did not provide $source"
+              }
+              New-Item -ItemType HardLink -Path $target -Target $source | Out-Null
+            }
+            & $target --version | Select-Object -First 1
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $binDir
+          Add-Content -LiteralPath $env:GITHUB_ENV `
+            -Value "ELEPHC_MINGW_SYSROOT=$(Join-Path $root 'mingw64')"
+
+      - name: Cross-build GNU/COFF bridge archives for generated programs
+        shell: bash
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          RANLIB_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ranlib
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          x86_64-w64-mingw32-gcc --version
+          cargo build $BRIDGE_CRATES_WINDOWS --target x86_64-pc-windows-gnu
+
+      - name: Execute the complete PE suite, including native web HTTP probes
+        shell: bash
+        run: cargo test --test codegen_tests windows_pe -- --nocapture
+
+      - name: Run bridge unit tests with a Unicode temporary path
+        shell: bash
+        run: |
+          PROBE_TEMP="$RUNNER_TEMP/elephc space été"
+          mkdir -p "$PROBE_TEMP"
+          TMP="$PROBE_TEMP" TEMP="$PROBE_TEMP" cargo test $BRIDGE_CRATES_WINDOWS
+
+      - name: Verify native COFF bridge archive exports
+        shell: bash
+        run: |
+          HOST="$(rustc -vV | sed -n 's/^host: //p')"
+          LLVM_NM="$(rustc --print sysroot)/lib/rustlib/$HOST/bin/llvm-nm"
+          test -x "$LLVM_NM.exe" && LLVM_NM="$LLVM_NM.exe"
+          python scripts/check_bridge_exports.py --nm "$LLVM_NM"
+
+      - name: Run bridge export verifier structural tests
+        shell: bash
+        run: python scripts/tests/test_check_bridge_exports.py
+
+  # Run every runnable codegen fixture directly on a native Windows host. The
+  # shards are strict: nextest itself is the gate, so no failure baseline or
+  # allow-list can turn a failing fixture green. JUnit artifacts are retained
+  # solely to prove that the 16 hash partitions cover the runnable inventory
+  # exactly once.
+  windows-codegen-native:
+    name: Windows Native Codegen (${{ matrix.shard }}/16)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    env:
+      ELEPHC_TEST_TARGET: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add the MinGW Rust target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      # GitHub's Windows curl uses Schannel. Its normal CRL distribution-point
+      # lookup intermittently fails on hosted runners with
+      # CRYPT_E_REVOCATION_OFFLINE before nextest is downloaded. Keep TLS,
+      # hostname, chain, and actual-revocation checks enabled; only make an
+      # unavailable CRL endpoint non-fatal for this installation action.
+      - name: Configure curl for the cargo-nextest download
+        id: nextest_curl
+        shell: pwsh
+        run: |
+          $curlHome = Join-Path $env:RUNNER_TEMP 'elephc-nextest-curl'
+          New-Item -ItemType Directory -Path $curlHome -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $curlHome '.curlrc') `
+            -Value 'ssl-revoke-best-effort' -NoNewline -Encoding ascii
+          "home=$curlHome" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+        env:
+          CURL_HOME: ${{ steps.nextest_curl.outputs.home }}
+
+      - name: Install the native MinGW toolchain and libraries
+        id: msys2_codegen
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-binutils
+            mingw-w64-x86_64-bzip2
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libiconv
+            mingw-w64-x86_64-pcre2
+            mingw-w64-x86_64-zlib
+
+      - name: Verify and expose GNU MinGW tools
+        shell: pwsh
+        run: |
+          $root = '${{ steps.msys2_codegen.outputs.msys2-location }}'
+          $binDir = Join-Path $root 'mingw64\bin'
+          foreach ($tool in @("gcc", "as", "ar", "ranlib", "nm", "objdump")) {
+            $target = Join-Path $binDir "x86_64-w64-mingw32-$tool.exe"
+            if (-not (Test-Path -LiteralPath $target)) {
+              $source = Join-Path $binDir "$tool.exe"
+              if (-not (Test-Path -LiteralPath $source)) {
+                throw "MSYS2 MinGW package setup did not provide $source"
+              }
+              New-Item -ItemType HardLink -Path $target -Target $source | Out-Null
+            }
+            & $target --version | Select-Object -First 1
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $binDir
+          Add-Content -LiteralPath $env:GITHUB_ENV `
+            -Value "ELEPHC_MINGW_SYSROOT=$(Join-Path $root 'mingw64')"
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-native-codegen-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-native-codegen-
+
+      - name: Build compiler and GNU/COFF bridge archives
+        shell: bash
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          RANLIB_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ranlib
+        run: |
+          set -euo pipefail
+          cargo build -p elephc
+          cargo build $BRIDGE_CRATES_WINDOWS -p elephc-magician \
+            --target x86_64-pc-windows-gnu
+          mkdir -p target/debug
+          cp target/x86_64-pc-windows-gnu/debug/libelephc_*.a target/debug/
+
+      - name: Run native Windows codegen shard
+        shell: bash
+        run: |
+          cargo nextest run --profile ci --test codegen_tests \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast \
+            -j 1
+
+      - name: Verify shard JUnit report
+        if: always()
+        shell: bash
+        run: |
+          test -s target/nextest/ci/junit.xml
+          grep -q '<testsuite' target/nextest/ci/junit.xml
+
+      - name: Capture runnable codegen inventory
+        if: always() && matrix.shard == 1
+        shell: bash
+        run: |
+          mkdir -p target/nextest/ci
+          cargo nextest list --profile ci --test codegen_tests \
+            --message-format json > target/nextest/ci/nextest-list.json
+
+      - name: Upload shard JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-codegen-junit-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload runnable codegen inventory
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-codegen-runnable-inventory
+          path: target/nextest/ci/nextest-list.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Aggregate the native reports independently of each matrix job's exit status.
+  # This proves both strict success and exact one-time coverage, so a missing or
+  # truncated shard cannot masquerade as a green Windows result.
+  windows-codegen-gate:
+    name: Windows Native Codegen Gate
+    runs-on: ubuntu-latest
+    needs:
+      - windows-codegen-native
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download shard JUnit reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: windows-codegen-junit-*
+          path: artifacts/junit
+
+      - name: Download runnable codegen inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-codegen-runnable-inventory
+          path: artifacts/inventory
+
+      - name: Verify complete Windows codegen coverage
+        shell: bash
+        run: |
+          junit_args=()
+          while IFS= read -r report; do
+            junit_args+=(--junit "$report")
+          done < <(find artifacts/junit -name junit.xml -type f | sort)
+          python3 scripts/gen_windows_codegen_allowlist.py verify-complete \
+            --list-json artifacts/inventory/nextest-list.json \
+            "${junit_args[@]}" \
+            --expected-junit-count 16 \
+            --require-success
+
+      - name: Verify native shard jobs
+        run: |
+          echo "windows-codegen-native result: ${{ needs.windows-codegen-native.result }}"
+          test "${{ needs.windows-codegen-native.result }}" = "success"

@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::codegen_support::platform::Platform;
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -98,6 +99,7 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
+    pub platform: Platform,
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
@@ -172,6 +174,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn new(
         builder: Builder<'f>,
         data: &'m mut DataPool,
+        platform: Platform,
         env: TypeEnv,
         functions: &'m HashMap<String, FunctionSig>,
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
@@ -199,6 +202,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         Self {
             builder,
             data,
+            platform,
             local_slots: HashMap::new(),
             local_kinds: HashMap::new(),
             local_types: env,

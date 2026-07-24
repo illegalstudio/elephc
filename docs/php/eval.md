@@ -41,8 +41,11 @@ bridge into the standalone binary; programs without that requirement do not.
 `--with-eval` force-links the bridge for testing or indirect use, but it is not
 required to enable the language construct.
 
-The AOT and fallback paths are covered on macOS ARM64, Linux ARM64, and Linux
-x86_64. CI runs dedicated eval integration shards for every supported target.
+The AOT and fallback paths are covered on macOS ARM64, Linux ARM64, Linux
+x86_64, and the experimental Windows x86_64 backend. Windows eval fixtures run
+directly on native Windows hosts as part of the strict 16-shard codegen gate.
+Windows remains experimental until the first complete native run is green and
+the target-policy review confirms that no Windows-only reduced semantics remain.
 
 ## Performance
 

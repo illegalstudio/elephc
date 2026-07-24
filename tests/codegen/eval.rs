@@ -110,6 +110,32 @@ fn test_eval_codegen_requires_eval_bridge() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies Windows eval registration materializes fifth and sixth C arguments
+/// on the caller stack instead of indexing beyond the four MS x64 registers.
+#[test]
+fn test_eval_windows_c_abi_registration_spills_after_shadow_space() {
+    if std::env::var("ELEPHC_TEST_TARGET").as_deref() != Ok("windows-x86_64") {
+        eprintln!("skipping Windows eval C ABI assembly test on the host target");
+        return;
+    }
+    let dir = make_cli_test_dir("elephc_eval_windows_c_abi_registration");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        "<?php $items = [1]; eval('$items[0] = bin2hex(\"Az\");');",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(user_asm.contains("__elephc_eval_register_native_function"));
+    assert!(user_asm.contains("sub rsp, 32"));
+    assert!(
+        required_libraries
+            .iter()
+            .any(|library| library == "elephc_magician")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a static literal `strlen()` call inside eval is folded into EIR-function AOT.
 #[test]
 fn test_literal_eval_static_strlen_uses_aot_without_execute_bridge() {
@@ -7333,18 +7359,24 @@ echo function_exists("getprotobyname"); echo function_exists("getprotobynumber")
 /// Verifies eval stream introspection builtins return native-compatible static lists.
 #[test]
 fn test_eval_dispatches_stream_introspection_builtin_calls() {
-    let out = compile_and_run(
+    let (transport_count, transport_index, call_transport_index) =
+        if target().platform == Platform::Windows {
+            (8, 4, 7)
+        } else {
+            (10, 6, 9)
+        };
+    let out = compile_and_run(&format!(
         r#"<?php
 eval('$wrappers = stream_get_wrappers();
 $transports = stream_get_transports();
 $filters = stream_get_filters();
 echo count($wrappers) . ":" . $wrappers[0] . ":" . $wrappers[5] . ":";
-echo count($transports) . ":" . $transports[0] . ":" . $transports[8] . ":";
+echo count($transports) . ":" . $transports[0] . ":" . $transports[{transport_index}] . ":";
 echo count($filters) . ":" . $filters[2] . ":";
 $call_wrappers = call_user_func("stream_get_wrappers");
 echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
-echo $call_transports[11] . ":";
+echo $call_transports[{call_transport_index}] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
 echo $call_filters[13] . ":";
 $tmp = tmpfile();
@@ -7354,11 +7386,13 @@ echo call_user_func("stream_is_local", "file://tmp") ? "calllocal" : "bad"; echo
 echo call_user_func_array("stream_supports_lock", ["stream" => $tmp]) ? "calllock" : "bad"; echo ":";
 echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports"); echo function_exists("stream_get_filters");
 echo function_exists("stream_is_local"); echo function_exists("stream_supports_lock");');
-"#,
-    );
+"#
+    ));
     assert_eq!(
         out,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
+        format!(
+            "11:file:https:{transport_count}:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
+        )
     );
 }
 
@@ -7429,9 +7463,9 @@ echo ":"; echo function_exists("realpath");');
 fn test_eval_dispatches_stream_resolve_include_path_builtin_call() {
     let out = compile_and_run(
         r#"<?php
-eval('echo stream_resolve_include_path("/tmp") !== false ? "resolved" : "bad"; echo ":";
+eval('echo stream_resolve_include_path(".") !== false ? "resolved" : "bad"; echo ":";
 echo stream_resolve_include_path(filename: "elephc-magician-missing-path") === false ? "false" : "bad"; echo ":";
-echo call_user_func("stream_resolve_include_path", "/tmp") !== false ? "call" : "bad"; echo ":";
+echo call_user_func("stream_resolve_include_path", ".") !== false ? "call" : "bad"; echo ":";
 echo call_user_func_array("stream_resolve_include_path", ["filename" => "elephc-magician-missing-path"]) === false ? "array-false" : "bad";
 echo ":"; echo function_exists("stream_resolve_include_path");');
 "#,
@@ -7851,7 +7885,12 @@ echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_to
 /// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
 #[test]
 fn test_eval_dispatches_stat_metadata_builtin_calls() {
-    let out = compile_and_run(
+    let executable_path = if target().platform.php_os_family() == "Windows" {
+        "C:/windows/system32/cmd.exe"
+    } else {
+        "/bin/sh"
+    };
+    let source = format!(
         r#"<?php
 eval('file_put_contents("eval-stat.txt", "hello");
 echo filemtime("eval-stat.txt") > 0 ? "mtime" : "bad"; echo ":";
@@ -7863,7 +7902,7 @@ echo filegroup("eval-stat.txt") >= 0 ? "group" : "bad"; echo ":";
 echo fileinode("eval-stat.txt") > 0 ? "inode" : "bad"; echo ":";
 echo filetype("eval-stat.txt") . ":";
 echo filetype(".") . ":";
-echo is_executable("/bin/sh") ? "exec" : "bad"; echo ":";
+echo is_executable("{executable_path}") ? "exec" : "bad"; echo ":";
 echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
 echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
 echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
@@ -7876,8 +7915,9 @@ echo function_exists("fileowner"); echo function_exists("filegroup");
 echo function_exists("fileinode"); echo function_exists("filetype");
 echo function_exists("is_executable"); echo function_exists("is_link");
 unlink("eval-stat.txt");');
-"#,
+"#
     );
+    let out = compile_and_run(&source);
     assert_eq!(
         out,
         "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:file:callinode:1111111111"
@@ -8048,6 +8088,9 @@ echo function_exists("glob");
 /// Verifies eval file-modification builtins update modes, masks, temp files, and dispatch.
 #[test]
 fn test_eval_dispatches_file_modify_builtin_calls() {
+    if target().platform == Platform::Windows {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 eval('file_put_contents("eval-mod.txt", "x");
@@ -8087,6 +8130,23 @@ echo function_exists("umask");
     );
 }
 
+/// Verifies Windows eval follows php-src and does not register link ownership builtins.
+#[test]
+fn test_windows_eval_omits_lchown_lchgrp() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+eval('echo function_exists("chown") ? "1" : "0";
+echo function_exists("chgrp") ? "1" : "0";
+echo function_exists("lchown") ? "1" : "0";
+echo function_exists("lchgrp") ? "1" : "0";');
+"#,
+    );
+    assert_eq!(out, "1100");
+}
+
 /// Verifies eval `touch()` creates files, stamps mtimes, and dispatches dynamically.
 #[test]
 fn test_eval_dispatches_touch_builtin_calls() {
@@ -8115,23 +8175,33 @@ echo function_exists("touch");
 /// Verifies eval process-pipe and temporary stream builtins dispatch dynamically.
 #[test]
 fn test_eval_dispatches_process_pipe_and_tmpfile_builtin_calls() {
-    let out = compile_and_run(
+    let (read_xyz_command, read_q_command) =
+        if target().platform.php_os_family() == "Windows" {
+            (
+                "echo|set /p=xyz & exit /b 0",
+                "echo|set /p=q & exit /b 0",
+            )
+        } else {
+            ("printf xyz", "printf q")
+        };
+    let source = format!(
         r#"<?php
 eval('$tmp = tmpfile();
 echo gettype($tmp) === "resource" ? "tmpfile" : "bad"; echo ":";
 echo fwrite($tmp, "abc") . ":";
 rewind($tmp);
 echo fread($tmp, 3) . ":";
-$pipe = popen("printf xyz", "r");
+$pipe = popen("{read_xyz_command}", "r");
 echo fread($pipe, 3) . ":";
 echo pclose($pipe) . ":";
 echo call_user_func("tmpfile") !== false ? "calltmp" : "bad"; echo ":";
-$callPipe = call_user_func_array("popen", ["command" => "printf q", "mode" => "r"]);
+$callPipe = call_user_func_array("popen", ["command" => "{read_q_command}", "mode" => "r"]);
 echo fread($callPipe, 1) . ":";
 echo call_user_func("pclose", $callPipe) . ":";
 echo function_exists("tmpfile"); echo function_exists("popen"); echo function_exists("pclose");');
-"#,
+"#
     );
+    let out = compile_and_run(&source);
     assert_eq!(out, "tmpfile:3:abc:xyz:0:calltmp:q:0:111");
 }
 
@@ -9108,16 +9178,20 @@ fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     );
 }
 
-/// Verifies eval failure classes map to distinct stable user-facing diagnostics.
+/// Verifies eval parse failures remain distinct and never leak Rust panics.
 #[test]
-fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning() {
+fn test_eval_error_contract_reports_parse_failure() {
     let parse_err = compile_and_run_expect_failure("<?php eval('if (');");
     assert!(
         parse_err.contains("Parse error: eval() fragment is invalid"),
         "stderr did not contain eval parse-error diagnostic: {parse_err}"
     );
     assert_no_rust_panic_leaked(&parse_err);
+}
 
+/// Verifies eval unsupported constructs remain distinct and never leak Rust panics.
+#[test]
+fn test_eval_error_contract_reports_unsupported_construct() {
     let unsupported_err = compile_and_run_expect_failure(
         "<?php eval('function eval_bad_static_return(): static {}');",
     );
@@ -9126,7 +9200,11 @@ fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning(
         "stderr did not contain eval unsupported-construct diagnostic: {unsupported_err}"
     );
     assert_no_rust_panic_leaked(&unsupported_err);
+}
 
+/// Verifies eval runtime failures remain distinct and never leak Rust panics.
+#[test]
+fn test_eval_error_contract_reports_runtime_failure() {
     let runtime_err =
         compile_and_run_expect_failure("<?php eval('return MissingEvalContractConst;');");
     assert!(
@@ -9134,7 +9212,11 @@ fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning(
         "stderr did not contain eval runtime-fatal diagnostic: {runtime_err}"
     );
     assert_no_rust_panic_leaked(&runtime_err);
+}
 
+/// Verifies eval warnings remain non-fatal and retain their stable diagnostic.
+#[test]
+fn test_eval_error_contract_reports_non_fatal_warning() {
     let warning = compile_and_run_capture(
         r#"<?php
 eval('define("EvalErrorContractConst", 1);');
@@ -9156,34 +9238,30 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     );
 }
 
-/// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
+/// Verifies eval builtin failures do not leak Rust panics.
 #[test]
-fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
-    for (source, expected) in [
-        (
-            "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
-        ),
-        (
-            "<?php eval('clamp(5, 10, 0);');",
-            "Fatal error: eval() runtime failed",
-        ),
-        (
-            concat!(
-                "<?php eval('class EvalPanicBoundaryPlainCallback {} ",
-                "$callback = new EvalPanicBoundaryPlainCallback(); ",
-                "call_user_func($callback);');"
-            ),
-            "Fatal error: uncaught exception",
-        ),
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains(expected),
-            "stderr did not contain expected eval diagnostic `{expected}`: {err}"
-        );
-        assert_no_rust_panic_leaked(&err);
-    }
+fn test_eval_bridge_builtin_failure_does_not_leak_rust_panics() {
+    let err = compile_and_run_expect_failure("<?php eval('clamp(5, 10, 0);');");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain the eval runtime failure diagnostic: {err}"
+    );
+    assert_no_rust_panic_leaked(&err);
+}
+
+/// Verifies eval non-callable failures do not leak Rust panics.
+#[test]
+fn test_eval_bridge_non_callable_failure_does_not_leak_rust_panics() {
+    let err = compile_and_run_expect_failure(concat!(
+        "<?php eval('class EvalPanicBoundaryPlainCallback {} ",
+        "$callback = new EvalPanicBoundaryPlainCallback(); ",
+        "call_user_func($callback);');"
+    ));
+    assert!(
+        err.contains("Fatal error: uncaught exception"),
+        "stderr did not contain the eval non-callable failure diagnostic: {err}"
+    );
+    assert_no_rust_panic_leaked(&err);
 }
 
 /// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
@@ -13726,9 +13804,18 @@ echo $pure->hasMethod("from") ? "bad" : "nofrom";');
     );
 }
 
+/// Compiles one invalid eval declaration and verifies the shared runtime fatal diagnostic.
+fn assert_eval_runtime_failure(source: &str) {
+    let err = compile_and_run_expect_failure(source);
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
 #[test]
-fn test_eval_declared_enum_marker_interface_inheritance() {
+fn test_eval_declared_enum_marker_interface_inheritance_succeeds() {
     let out = compile_and_run(
         r#"<?php
 eval('interface EvalDynUnitMarker extends UnitEnum {}
@@ -13754,20 +13841,24 @@ echo EvalDynMarkedBacked::Ready->value;');
         out,
         "UB2:EvalDynUnitMarker:UnitEnum:3:EvalDynBackedMarker:UnitEnum:BackedEnum:ready"
     );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval enums cannot explicitly implement PHP's `UnitEnum` marker.
+#[test]
+fn test_eval_declared_enum_rejects_explicit_unit_enum_implementation() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
     case Ready;
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies pure eval enums cannot implement an interface derived from `BackedEnum`.
+#[test]
+fn test_eval_declared_pure_enum_rejects_backed_enum_marker_interface() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalDynBackedMarkerBad extends BackedEnum {}
 enum EvalDynPureBackedMarker implements EvalDynBackedMarkerBad {
@@ -13775,34 +13866,26 @@ enum EvalDynPureBackedMarker implements EvalDynBackedMarkerBad {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared classes cannot implement PHP's special Throwable contract.
+/// Verifies eval-declared classes cannot directly implement PHP's special Throwable contract.
 #[test]
-fn test_eval_declared_class_rejects_throwable_interfaces() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_declared_class_rejects_direct_throwable_implementation() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('class EvalDynInvalidThrowable implements Throwable {}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared classes cannot implement an interface extending Throwable.
+#[test]
+fn test_eval_declared_class_rejects_indirect_throwable_implementation() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalDynThrowableMarker extends Throwable {}
 class EvalDynInvalidThrowableMarker implements EvalDynThrowableMarker {}');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
 }
 
@@ -13909,6 +13992,82 @@ echo function_exists("is_a"); echo function_exists("is_subclass_of");');
 "#,
     );
     assert_eq!(out, "YYYNYYYYN11");
+}
+
+/// Verifies AArch64 eval object checks use a long-range-safe conditional branch shape.
+#[test]
+fn test_eval_object_is_a_aarch64_uses_long_range_false_branch() {
+    if target().arch != Arch::AArch64 {
+        return;
+    }
+
+    let dir = make_cli_test_dir("eval_object_is_a_long_branch");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+eval('class EvalLongBranchObject {}');
+$object = new EvalLongBranchObject();
+echo is_a($object, "EvalLongBranchObject") ? "Y" : "N";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        user_asm.contains("eval_unboxed_object_continue")
+            && user_asm.contains("b.eq _eir_main_eval_unboxed_object_continue")
+            && user_asm.contains("b _eir_main_eval_object_is_a_false"),
+        "AArch64 eval object checks must invert the short conditional branch before the long unconditional fallback:\n{user_asm}"
+    );
+    assert!(
+        !user_asm.contains("b.ne _eir_main_eval_object_is_a_false"),
+        "AArch64 eval object checks must not emit a direct range-limited false branch:\n{user_asm}"
+    );
+}
+
+/// Verifies AArch64 EIR try handlers use a long-range-safe `setjmp` resume edge.
+#[test]
+fn test_try_handler_aarch64_uses_long_range_resume_branch() {
+    if target().arch != Arch::AArch64 {
+        return;
+    }
+
+    let dir = make_cli_test_dir("eval_try_handler_long_branch");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    if ($argc > 0) {
+        throw new Exception("boom");
+    }
+} catch (Throwable $error) {
+    echo "caught";
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        user_asm
+            .lines()
+            .any(|line| line.contains("cbz x0") && line.contains("try_handler_resume"))
+            && user_asm
+                .lines()
+                .any(|line| {
+                    line.trim_start().starts_with("b _eir_")
+                        && line.contains("try_catch_dispatch")
+                }),
+        "AArch64 EIR try handlers must use a nearby zero-resume branch before the long handler jump:\n{user_asm}"
+    );
+    assert!(
+        !user_asm
+            .lines()
+            .any(|line| line.contains("cbnz x0") && line.contains("try_catch_dispatch")),
+        "AArch64 EIR try handlers must not emit a direct range-limited longjmp branch:\n{user_asm}"
+    );
 }
 
 /// Verifies eval class-relation builtins materialize generated/AOT metadata.
@@ -14610,9 +14769,9 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
 }
 
-/// Verifies eval-declared method overrides enforce covariant return types.
+/// Verifies eval-declared method overrides accept covariant return types.
 #[test]
-fn test_eval_declared_method_return_type_override_contracts() {
+fn test_eval_declared_method_return_type_override_accepts_covariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReturnBase {
@@ -14648,8 +14807,12 @@ echo $child->id();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "2");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared overrides cannot widen a non-null return to nullable.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_wider_nullable() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnNarrowBase {
     public function id(): int { return 1; }
@@ -14659,12 +14822,12 @@ class EvalReturnWiderNullable extends EvalReturnNarrowBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared overrides cannot widen a static return to self.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_static_to_self() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnStaticBase {
     public function make(): static { return $this; }
@@ -14674,12 +14837,12 @@ class EvalReturnSelfChild extends EvalReturnStaticBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared overrides cannot widen a nullable return to mixed.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_nullable_to_mixed() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnNullableBase {
     public function maybe(): ?int { return null; }
@@ -14689,15 +14852,11 @@ class EvalReturnMixedChildBad extends EvalReturnNullableBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared method overrides enforce contravariant parameter types.
+/// Verifies eval-declared method overrides accept contravariant parameter types.
 #[test]
-fn test_eval_declared_method_parameter_type_override_contracts() {
+fn test_eval_declared_method_parameter_type_overrides_accept_contravariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalParamBase {
@@ -14722,8 +14881,12 @@ echo $child->maybeInt(null) === null ? "null" : "bad";');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:mixed:ok:null");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject an incompatible parameter type.
+#[test]
+fn test_eval_declared_method_parameter_override_rejects_incompatible_type() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('class EvalParamTypeBase {
     public function read(int $value) { return $value; }
@@ -14733,12 +14896,12 @@ class EvalParamStringChild extends EvalParamTypeBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides cannot remove parameter nullability.
+#[test]
+fn test_eval_declared_method_parameter_override_rejects_removed_nullability() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('class EvalParamNullableBase {
     public function maybe(?int $value) { return $value; }
@@ -14748,12 +14911,12 @@ class EvalParamNonNullChild extends EvalParamNullableBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides cannot narrow an untyped parameter.
+#[test]
+fn test_eval_declared_method_parameter_override_rejects_typed_child_of_untyped_parent() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('class EvalParamUntypedBase {
     public function read($value) { return $value; }
@@ -14763,15 +14926,11 @@ class EvalParamTypedChild extends EvalParamUntypedBase {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared interface methods enforce covariant return types.
+/// Verifies eval-declared interface methods accept covariant return types.
 #[test]
-fn test_eval_declared_interface_return_type_contracts() {
+fn test_eval_declared_interface_return_types_accept_covariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('interface EvalReturnReadable {
@@ -14801,8 +14960,12 @@ echo $reader->read();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies implementations cannot omit an eval-declared interface return type.
+#[test]
+fn test_eval_declared_interface_return_type_rejects_missing_implementation_type() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalNeedsReturn {
     function read(): string;
@@ -14812,12 +14975,12 @@ class EvalMissingReturnImpl implements EvalNeedsReturn {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies implementations cannot widen an eval-declared interface return type.
+#[test]
+fn test_eval_declared_interface_return_type_rejects_wider_implementation_type() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalNeedsStringReturn {
     function read(): string;
@@ -14827,15 +14990,11 @@ class EvalWiderReturnImpl implements EvalNeedsStringReturn {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared interface methods enforce contravariant parameter types.
+/// Verifies eval-declared interface methods accept contravariant parameter types.
 #[test]
-fn test_eval_declared_interface_parameter_type_contracts() {
+fn test_eval_declared_interface_parameter_types_accept_contravariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('interface EvalParamContract {
@@ -14856,8 +15015,12 @@ echo $reader->read(8);');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "8:ok");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies implementations cannot substitute an incompatible interface parameter type.
+#[test]
+fn test_eval_declared_interface_parameter_type_rejects_incompatible_type() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalParamStringContract {
     function read(int $value);
@@ -14867,12 +15030,12 @@ class EvalParamStringReader implements EvalParamStringContract {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies implementations cannot narrow an untyped interface parameter.
+#[test]
+fn test_eval_declared_interface_parameter_type_rejects_typed_implementation() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalParamUntypedContract {
     function read($value);
@@ -14882,15 +15045,11 @@ class EvalParamTypedReader implements EvalParamUntypedContract {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared abstract classes validate declared interface method signatures.
+/// Verifies eval-declared abstract classes may defer compatible interface methods.
 #[test]
-fn test_eval_declared_abstract_interface_method_contracts() {
+fn test_eval_declared_abstract_interface_methods_accept_compatible_deferral() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('interface EvalAbstractIfaceDeferred {
@@ -14909,8 +15068,12 @@ echo "ok";');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "ok");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies an abstract implementation cannot narrow an interface parameter type.
+#[test]
+fn test_eval_declared_abstract_interface_method_rejects_narrower_parameter() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalAbstractIfaceParam {
     function read(int $value);
@@ -14920,12 +15083,12 @@ abstract class EvalAbstractIfaceParamBase implements EvalAbstractIfaceParam {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies inherited methods must satisfy newly implemented interface signatures.
+#[test]
+fn test_eval_declared_abstract_interface_method_rejects_inherited_incompatibility() {
+    assert_eval_runtime_failure(
         r#"<?php
 eval('interface EvalInheritedIfaceMethod {
     function read(int $value);
@@ -14936,15 +15099,11 @@ abstract class EvalInheritedIfaceMethodBase {
 abstract class EvalInheritedIfaceMethodChild extends EvalInheritedIfaceMethodBase implements EvalInheritedIfaceMethod {}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
 }
 
-/// Verifies eval-declared methods enforce declared return values at runtime.
+/// Verifies eval-declared methods coerce valid scalar, self, and void returns.
 #[test]
-fn test_eval_declared_method_return_type_values() {
+fn test_eval_declared_method_return_type_values_accept_valid_returns() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReturnRuntimeBase {
@@ -14965,8 +15124,12 @@ $child->done();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "12:EvalReturnRuntimeBase:");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared scalar return types reject incompatible values.
+#[test]
+fn test_eval_declared_method_return_type_values_reject_bad_scalar() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnBadScalar {
     public function id(): int { return "nope"; }
@@ -14975,12 +15138,12 @@ $box = new EvalReturnBadScalar();
 echo $box->id();');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared void return types reject explicit values.
+#[test]
+fn test_eval_declared_method_return_type_values_reject_explicit_void_value() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnBadVoid {
     public function done(): void { return null; }
@@ -14989,12 +15152,12 @@ $box = new EvalReturnBadVoid();
 $box->done();');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared static returns enforce the runtime receiver class.
+#[test]
+fn test_eval_declared_method_return_type_values_reject_bad_static_class() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnStaticRuntimeBase {
     public function make(): static { return new EvalReturnStaticRuntimeBase(); }
@@ -15004,12 +15167,12 @@ $child = new EvalReturnStaticRuntimeChild();
 $child->make();');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared nullable scalar returns reject implicit fallthrough.
+#[test]
+fn test_eval_declared_method_return_type_values_reject_implicit_return() {
+    assert_eval_declared_method_return_type_runtime_failure(
         r#"<?php
 eval('class EvalReturnImplicitBad {
     public function id(): ?int {}
@@ -15018,6 +15181,11 @@ $box = new EvalReturnImplicitBad();
 $box->id();');
 "#,
     );
+}
+
+/// Compiles one eval method-return violation and checks the runtime-fatal contract.
+fn assert_eval_declared_method_return_type_runtime_failure(source: &str) {
+    let err = compile_and_run_expect_failure(source);
     assert!(
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
@@ -15998,9 +16166,9 @@ echo $box->value;');
     assert_eq!(out.stdout, "1:3:3");
 }
 
-/// Verifies eval-declared readonly properties can be initialized only in constructors.
+/// Verifies eval-declared readonly properties can be initialized in constructors.
 #[test]
-fn test_eval_declared_readonly_property_rules() {
+fn test_eval_declared_readonly_property_initializes_in_constructor() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReadonlyBox {
@@ -16018,7 +16186,11 @@ echo $box->id();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7");
+}
 
+/// Verifies eval-declared readonly properties reject writes after construction.
+#[test]
+fn test_eval_declared_readonly_property_rejects_second_write() {
     let err = compile_and_run_capture(
         r#"<?php
 eval('class EvalReadonlyFailBox {
@@ -16044,7 +16216,11 @@ try {
         err.stdout,
         "Error:Cannot modify readonly property EvalReadonlyFailBox::$id"
     );
+}
 
+/// Verifies eval-declared readonly properties reject unset after initialization.
+#[test]
+fn test_eval_declared_readonly_property_rejects_unset() {
     let unset = compile_and_run_capture(
         r#"<?php
 eval('class EvalReadonlyUnsetBox {
@@ -16576,8 +16752,12 @@ echo $box->name . ":" . $box->value . ":" . $plain->value;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "box:Ada!:Grace");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies an interface read/write hook cannot be implemented by a read-only hook.
+#[test]
+fn test_eval_interface_property_hook_rejects_missing_setter() {
+    assert_eval_interface_property_hook_contract_failure(
         r#"<?php
 eval('interface EvalIfaceHookSetContract {
     public int $answer { get; set; }
@@ -16589,12 +16769,12 @@ class EvalIfaceHookReadOnlyBox implements EvalIfaceHookSetContract {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies a covariant getter contract rejects a wider abstract property type.
+#[test]
+fn test_eval_interface_property_hook_rejects_wider_getter() {
+    assert_eval_interface_property_hook_contract_failure(
         r#"<?php
 eval('interface EvalIfaceGetInt {
     public int $value { get; }
@@ -16604,12 +16784,12 @@ abstract class EvalIfaceGetWideBad implements EvalIfaceGetInt {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies a contravariant setter contract rejects a narrower abstract property type.
+#[test]
+fn test_eval_interface_property_hook_rejects_narrower_setter() {
+    assert_eval_interface_property_hook_contract_failure(
         r#"<?php
 eval('interface EvalIfaceSetWide {
     public int|string $value { set; }
@@ -16619,12 +16799,12 @@ abstract class EvalIfaceSetNarrowBad implements EvalIfaceSetWide {
 }');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies inherited concrete storage must satisfy an interface getter type.
+#[test]
+fn test_eval_interface_property_hook_rejects_inherited_incompatible_storage() {
+    assert_eval_interface_property_hook_contract_failure(
         r#"<?php
 eval('interface EvalIfaceInheritedGet {
     public int $value { get; }
@@ -16634,10 +16814,6 @@ abstract class EvalIfaceInheritedPropertyBase {
 }
 abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropertyBase implements EvalIfaceInheritedGet {}');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
 }
 
@@ -16951,6 +17127,15 @@ class EvalStaticMismatchImpl implements EvalStaticMismatch {
 }');
 "#,
     );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Compiles one invalid interface property-hook contract and checks the eval fatal.
+fn assert_eval_interface_property_hook_contract_failure(source: &str) {
+    let err = compile_and_run_expect_failure(source);
     assert!(
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
@@ -19267,10 +19452,10 @@ eval('class EvalAotFinalPropertyChild extends EvalAotFinalPropertyBase {
     );
 }
 
-/// Verifies eval validates generated/AOT parent property visibility and storage contracts.
+/// Verifies eval rejects reduced visibility for a generated/AOT parent property.
 #[test]
-fn test_eval_declared_class_rejects_incompatible_aot_parent_property_contracts() {
-    for source in [
+fn test_eval_declared_class_rejects_reduced_aot_parent_property_visibility() {
+    assert_eval_declared_class_rejects_incompatible_aot_parent_property_contract(
         r#"<?php
 class EvalAotPublicPropertyBase {
     public int $value = 1;
@@ -19279,6 +19464,13 @@ eval('class EvalAotProtectedPropertyChild extends EvalAotPublicPropertyBase {
     protected int $value = 2;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects instance storage replacing a generated/AOT static property.
+#[test]
+fn test_eval_declared_class_rejects_aot_parent_property_staticness_change() {
+    assert_eval_declared_class_rejects_incompatible_aot_parent_property_contract(
         r#"<?php
 class EvalAotStaticPropertyBase {
     public static int $value = 1;
@@ -19287,6 +19479,13 @@ eval('class EvalAotInstancePropertyChild extends EvalAotStaticPropertyBase {
     public int $value = 2;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects mutable storage replacing a generated/AOT readonly property.
+#[test]
+fn test_eval_declared_class_rejects_aot_parent_property_readonly_change() {
+    assert_eval_declared_class_rejects_incompatible_aot_parent_property_contract(
         r#"<?php
 class EvalAotReadonlyPropertyBase {
     public readonly int $value;
@@ -19295,6 +19494,13 @@ eval('class EvalAotMutablePropertyChild extends EvalAotReadonlyPropertyBase {
     public int $value = 2;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects redeclaration of a generated/AOT private-set property.
+#[test]
+fn test_eval_declared_class_rejects_aot_parent_private_set_property_redeclaration() {
+    assert_eval_declared_class_rejects_incompatible_aot_parent_property_contract(
         r#"<?php
 class EvalAotPrivateSetPropertyBase {
     public private(set) int $value = 1;
@@ -19303,13 +19509,16 @@ eval('class EvalAotPrivateSetPropertyChild extends EvalAotPrivateSetPropertyBase
     public private(set) int $value = 2;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "stderr did not contain eval runtime fatal diagnostic: {err}"
-        );
-    }
+    );
+}
+
+/// Compiles one incompatible generated/AOT parent-property redeclaration.
+fn assert_eval_declared_class_rejects_incompatible_aot_parent_property_contract(source: &str) {
+    let err = compile_and_run_expect_failure(source);
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval rejects incompatible generated/AOT parent property types.
@@ -19437,23 +19646,37 @@ eval('class EvalAotAbstractPropertyReadonlyBadChild extends EvalAotAbstractPrope
     );
 }
 
-/// Verifies eval rejects global builtin attributes on unsupported OOP targets.
+/// Verifies eval rejects AllowDynamicProperties on interfaces.
 #[test]
-fn test_eval_declared_builtin_attribute_target_validation() {
-    let cases = [
+fn test_eval_declared_builtin_attribute_rejects_allow_dynamic_properties_interface() {
+    assert_eval_declared_builtin_attribute_target_failure(
         r#"eval('#[\AllowDynamicProperties] interface EvalInvalidAttrInterface {}');"#,
+    );
+}
+
+/// Verifies eval rejects Override on properties.
+#[test]
+fn test_eval_declared_builtin_attribute_rejects_override_property() {
+    assert_eval_declared_builtin_attribute_target_failure(
         r#"eval('class EvalInvalidAttrProperty { #[\Override] public int $value; }');"#,
+    );
+}
+
+/// Verifies eval rejects AllowDynamicProperties on methods.
+#[test]
+fn test_eval_declared_builtin_attribute_rejects_allow_dynamic_properties_method() {
+    assert_eval_declared_builtin_attribute_target_failure(
         r#"eval('class EvalInvalidAttrMethod { #[\AllowDynamicProperties] public function run() {} }');"#,
-    ];
+    );
+}
 
-    for source in cases {
-        let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
-
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "stderr did not contain eval runtime fatal diagnostic: {err}"
-        );
-    }
+/// Compiles one builtin attribute attached to an unsupported declaration target.
+fn assert_eval_declared_builtin_attribute_target_failure(source: &str) {
+    let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval object-method callable arrays bind named arguments.
@@ -19551,37 +19774,61 @@ return EvalMultiConstEnum::G + EvalMultiConstEnum::H;');
     assert_eq!(out.stdout, "12:34:56:15");
 }
 
-/// Verifies eval rejects PHP's reserved `class` class-constant name.
+/// Verifies eval rejects PHP's reserved `class` constant name in a class.
 #[test]
-fn test_eval_declared_reserved_class_constant_name_fails() {
-    for source in [
+fn test_eval_declared_reserved_class_constant_name_fails_for_class() {
+    assert_eval_declared_reserved_class_constant_name_fails(
         r#"<?php
 eval('class EvalBadConstName {
     const class = 1;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects PHP's reserved `class` constant name in an interface.
+#[test]
+fn test_eval_declared_reserved_class_constant_name_fails_for_interface() {
+    assert_eval_declared_reserved_class_constant_name_fails(
         r#"<?php
 eval('interface EvalBadIfaceConstName {
     const class = 1;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects PHP's reserved `class` constant name in a trait.
+#[test]
+fn test_eval_declared_reserved_class_constant_name_fails_for_trait() {
+    assert_eval_declared_reserved_class_constant_name_fails(
         r#"<?php
 eval('trait EvalBadTraitConstName {
     const class = 1;
 }');
 "#,
+    );
+}
+
+/// Verifies eval rejects PHP's reserved `class` constant name in an enum.
+#[test]
+fn test_eval_declared_reserved_class_constant_name_fails_for_enum() {
+    assert_eval_declared_reserved_class_constant_name_fails(
         r#"<?php
 eval('enum EvalBadEnumConstName {
     const class = 1;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
+    );
+}
+
+/// Compiles one invalid class-like declaration using the reserved `class` constant name.
+fn assert_eval_declared_reserved_class_constant_name_fails(source: &str) {
+    let err = compile_and_run_expect_failure(source);
+    assert!(
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported-construct diagnostic: {err}"
+    );
 }
 
 /// Asserts one eval fragment rejects a PHP-reserved class-like declaration name.
@@ -19740,9 +19987,9 @@ eval('class EvalAotFinalConstChild extends EvalAotFinalConstBase {
     );
 }
 
-/// Verifies eval-declared class constants preserve PHP visibility redeclaration rules.
+/// Verifies eval-declared class constants may widen inherited and interface visibility.
 #[test]
-fn test_eval_declared_class_constant_visibility_contracts() {
+fn test_eval_declared_class_constant_visibility_can_be_widened() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalConstVisibilityBase {
@@ -19767,7 +20014,11 @@ echo EvalConstVisibilityImpl::TOKEN;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:5");
+}
 
+/// Verifies eval-declared class constants cannot reduce inherited public visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_parent_visibility() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalConstPublicBase {
@@ -19782,7 +20033,11 @@ class EvalConstProtectedChild extends EvalConstPublicBase {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Verifies eval-declared class constants cannot reduce interface visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_interface_visibility() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('interface EvalConstPublicContract {
@@ -19797,7 +20052,11 @@ class EvalConstProtectedImpl implements EvalConstPublicContract {
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
+}
 
+/// Verifies eval rejects protected interface constants as unsupported PHP syntax.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_protected_interface_constant() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('interface EvalConstProtectedIface {
@@ -26277,34 +26536,54 @@ return $second->label;');
     assert_eq!(out, "AB:XY");
 }
 
-/// Verifies eval ReflectionClass::newInstance rejects non-instantiable AOT class-likes.
+/// Verifies eval ReflectionClass::newInstance rejects an abstract AOT class.
 #[test]
-fn test_eval_reflection_class_new_instance_rejects_aot_non_instantiable_class_likes() {
-    let cases = [
-        (
-            "abstract class EvalReflectNewAotAbstract {}",
-            "EvalReflectNewAotAbstract",
-            "Error:Cannot instantiate abstract class EvalReflectNewAotAbstract",
-        ),
-        (
-            "interface EvalReflectNewAotIface {}",
-            "EvalReflectNewAotIface",
-            "Error:Cannot instantiate interface EvalReflectNewAotIface",
-        ),
-        (
-            "trait EvalReflectNewAotTrait {}",
-            "EvalReflectNewAotTrait",
-            "Error:Cannot instantiate trait EvalReflectNewAotTrait",
-        ),
-        (
-            "enum EvalReflectNewAotEnum { case Ready; }",
-            "EvalReflectNewAotEnum",
-            "Error:Cannot instantiate enum EvalReflectNewAotEnum",
-        ),
-    ];
-    for (declaration, class_name, expected) in cases {
-        let source = format!(
-            r#"<?php
+fn test_eval_reflection_class_new_instance_rejects_aot_abstract_class() {
+    assert_eval_reflection_class_new_instance_rejects_aot_class_like(
+        "abstract class EvalReflectNewAotAbstract {}",
+        "EvalReflectNewAotAbstract",
+        "Error:Cannot instantiate abstract class EvalReflectNewAotAbstract",
+    );
+}
+
+/// Verifies eval ReflectionClass::newInstance rejects an AOT interface.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_aot_interface() {
+    assert_eval_reflection_class_new_instance_rejects_aot_class_like(
+        "interface EvalReflectNewAotIface {}",
+        "EvalReflectNewAotIface",
+        "Error:Cannot instantiate interface EvalReflectNewAotIface",
+    );
+}
+
+/// Verifies eval ReflectionClass::newInstance rejects an AOT trait.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_aot_trait() {
+    assert_eval_reflection_class_new_instance_rejects_aot_class_like(
+        "trait EvalReflectNewAotTrait {}",
+        "EvalReflectNewAotTrait",
+        "Error:Cannot instantiate trait EvalReflectNewAotTrait",
+    );
+}
+
+/// Verifies eval ReflectionClass::newInstance rejects an AOT enum.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_aot_enum() {
+    assert_eval_reflection_class_new_instance_rejects_aot_class_like(
+        "enum EvalReflectNewAotEnum { case Ready; }",
+        "EvalReflectNewAotEnum",
+        "Error:Cannot instantiate enum EvalReflectNewAotEnum",
+    );
+}
+
+/// Compiles one non-instantiable AOT class-like and checks newInstance's Error.
+fn assert_eval_reflection_class_new_instance_rejects_aot_class_like(
+    declaration: &str,
+    class_name: &str,
+    expected: &str,
+) {
+    let source = format!(
+        r#"<?php
 {declaration}
 eval('try {{
     $ref = new ReflectionClass("{class_name}");
@@ -26314,10 +26593,9 @@ eval('try {{
     echo get_class($e) . ":" . $e->getMessage();
 }}');
 "#
-        );
-        let out = compile_and_run(&source);
-        assert_eq!(out, expected, "unexpected stdout for {class_name}");
-    }
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, expected, "unexpected stdout for {class_name}");
 }
 
 /// Verifies eval ReflectionClass instantiation rejects eval non-instantiable class-likes like PHP.
@@ -26505,34 +26783,54 @@ echo $ref->isInstantiable() ? "I" : "i";');
     assert_eq!(out, "4:i");
 }
 
-/// Verifies eval ReflectionClass::newInstanceWithoutConstructor rejects non-allocatable AOT class-likes.
+/// Verifies newInstanceWithoutConstructor rejects an abstract AOT class.
 #[test]
-fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes() {
-    let cases = [
-        (
-            "abstract class EvalReflectNoCtorAotAbstract {}",
-            "EvalReflectNoCtorAotAbstract",
-            "Error:Cannot instantiate abstract class EvalReflectNoCtorAotAbstract",
-        ),
-        (
-            "interface EvalReflectNoCtorAotIface {}",
-            "EvalReflectNoCtorAotIface",
-            "Error:Cannot instantiate interface EvalReflectNoCtorAotIface",
-        ),
-        (
-            "trait EvalReflectNoCtorAotTrait {}",
-            "EvalReflectNoCtorAotTrait",
-            "Error:Cannot instantiate trait EvalReflectNoCtorAotTrait",
-        ),
-        (
-            "enum EvalReflectNoCtorAotEnum { case Ready; }",
-            "EvalReflectNoCtorAotEnum",
-            "Error:Cannot instantiate enum EvalReflectNoCtorAotEnum",
-        ),
-    ];
-    for (declaration, class_name, expected) in cases {
-        let source = format!(
-            r#"<?php
+fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_abstract_class() {
+    assert_eval_reflection_class_new_instance_without_constructor_rejects_aot_class_like(
+        "abstract class EvalReflectNoCtorAotAbstract {}",
+        "EvalReflectNoCtorAotAbstract",
+        "Error:Cannot instantiate abstract class EvalReflectNoCtorAotAbstract",
+    );
+}
+
+/// Verifies newInstanceWithoutConstructor rejects an AOT interface.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_interface() {
+    assert_eval_reflection_class_new_instance_without_constructor_rejects_aot_class_like(
+        "interface EvalReflectNoCtorAotIface {}",
+        "EvalReflectNoCtorAotIface",
+        "Error:Cannot instantiate interface EvalReflectNoCtorAotIface",
+    );
+}
+
+/// Verifies newInstanceWithoutConstructor rejects an AOT trait.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_trait() {
+    assert_eval_reflection_class_new_instance_without_constructor_rejects_aot_class_like(
+        "trait EvalReflectNoCtorAotTrait {}",
+        "EvalReflectNoCtorAotTrait",
+        "Error:Cannot instantiate trait EvalReflectNoCtorAotTrait",
+    );
+}
+
+/// Verifies newInstanceWithoutConstructor rejects an AOT enum.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_enum() {
+    assert_eval_reflection_class_new_instance_without_constructor_rejects_aot_class_like(
+        "enum EvalReflectNoCtorAotEnum { case Ready; }",
+        "EvalReflectNoCtorAotEnum",
+        "Error:Cannot instantiate enum EvalReflectNoCtorAotEnum",
+    );
+}
+
+/// Compiles one non-allocatable AOT class-like and checks its constructor-free Error.
+fn assert_eval_reflection_class_new_instance_without_constructor_rejects_aot_class_like(
+    declaration: &str,
+    class_name: &str,
+    expected: &str,
+) {
+    let source = format!(
+        r#"<?php
 {declaration}
 eval('try {{
     $ref = new ReflectionClass("{class_name}");
@@ -26542,10 +26840,9 @@ eval('try {{
     echo get_class($e) . ":" . $e->getMessage();
 }}');
 "#
-        );
-        let out = compile_and_run(&source);
-        assert_eq!(out, expected, "unexpected stdout for {class_name}");
-    }
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, expected, "unexpected stdout for {class_name}");
 }
 
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.

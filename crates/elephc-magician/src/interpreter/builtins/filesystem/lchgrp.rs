@@ -7,6 +7,7 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the ownership/group helper.
 
+#[cfg(not(windows))]
 eval_builtin! {
     name: "lchgrp",
     area: Filesystem,

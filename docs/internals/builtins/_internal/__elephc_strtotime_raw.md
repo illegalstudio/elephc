@@ -2,7 +2,7 @@
 title: "__elephc_strtotime_raw() — internals"
 description: "Compiler internals for __elephc_strtotime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 479
+  order: 486
 ---
 
 ## `__elephc_strtotime_raw()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_strtotime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_strtotime_raw.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:425](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L425) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
+- **Requirements**: `shared`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 

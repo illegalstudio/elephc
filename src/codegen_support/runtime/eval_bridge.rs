@@ -1179,7 +1179,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
     emitter.instruction("fmov d1, d0");                                         // move the exponent into libc pow's second argument
     emitter.instruction("ldr d0, [sp, #8]");                                    // reload the base into libc pow's first argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("fmov x1, d0");                                         // move the pow result bits into mixed value_lo
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
@@ -1197,7 +1197,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the boxed eval value to a PHP numeric double
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the precision-presence flag after the value cast
     emitter.instruction("cbnz x2, __elephc_eval_value_round_precision");        // use the precision path when a second argument is present
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("b __elephc_eval_value_round_box");                     // box the default-precision round result
     emitter.label("__elephc_eval_value_round_precision");
     emitter.instruction("str d0, [sp, #16]");                                   // save the original value while casting the precision
@@ -1205,12 +1205,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_int");                              // cast the optional precision to a PHP integer
     emitter.instruction("scvtf d1, x0");                                        // convert the precision to a floating exponent for pow
     emitter.instruction("fmov d0, #10.0");                                      // materialize 10.0 as the precision multiplier base
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("ldr d1, [sp, #16]");                                   // reload the original value after pow returns the multiplier
     emitter.instruction("fmul d1, d1, d0");                                     // scale the value by the precision multiplier
     emitter.instruction("str d0, [sp, #24]");                                   // save the multiplier for rescaling after round
     emitter.instruction("fmov d0, d1");                                         // move the scaled value into the round argument
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("ldr d1, [sp, #24]");                                   // reload the precision multiplier for rescaling
     emitter.instruction("fdiv d0, d0, d1");                                     // scale the rounded value back to requested precision
     emitter.label("__elephc_eval_value_round_box");
@@ -2830,7 +2830,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
     emitter.instruction("movapd xmm1, xmm0");                                   // move the right divisor into the second fmod argument
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // move the left dividend into the first fmod argument
-    emitter.bl_c("fmod");
+    emitter.emit_call_c("fmod");                                               // route the SysV-staged operands through the MSx64 shim on Windows
     emitter.instruction("ucomisd xmm0, xmm0");                                  // detect NaN so PHP echo prints NAN without a sign
     emitter.instruction("jp __elephc_eval_value_fmod_nan_x86");                 // normalize unordered fmod results before boxing
     emitter.instruction("movq rdi, xmm0");                                      // move the fmod result bits into mixed value_lo
@@ -2934,7 +2934,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
     emitter.instruction("movapd xmm1, xmm0");                                   // move the exponent into libc pow's second argument
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // reload the base into libc pow's first argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("movq rdi, xmm0");                                      // move the pow result bits into mixed value_lo
     emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
     emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
@@ -2953,7 +2953,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the boxed eval value to a PHP numeric double
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // check whether a precision argument was supplied
     emitter.instruction("jne __elephc_eval_value_round_precision_x86");         // use the precision path when a second argument is present
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("jmp __elephc_eval_value_round_box_x86");               // box the default-precision round result
     emitter.label("__elephc_eval_value_round_precision_x86");
     emitter.instruction("movsd QWORD PTR [rbp - 24], xmm0");                    // save the original value while casting the precision
@@ -2962,12 +2962,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cvtsi2sd xmm1, rax");                                  // convert the precision to a floating exponent for pow
     emitter.instruction("mov rax, 0x4024000000000000");                         // materialize the IEEE-754 payload for 10.0
     emitter.instruction("movq xmm0, rax");                                      // move 10.0 into the pow base argument
-    emitter.bl_c("pow");
+    emitter.emit_call_c("pow");
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 24]");                    // reload the original value after pow returns the multiplier
     emitter.instruction("mulsd xmm1, xmm0");                                    // scale the value by the precision multiplier
     emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save the multiplier for rescaling after round
     emitter.instruction("movsd xmm0, xmm1");                                    // move the scaled value into the round argument
-    emitter.bl_c("round");
+    emitter.emit_call_c("round");
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 32]");                    // reload the precision multiplier for rescaling
     emitter.instruction("divsd xmm0, xmm1");                                    // scale the rounded value back to requested precision
     emitter.label("__elephc_eval_value_round_box_x86");
@@ -3730,7 +3730,8 @@ fn emit_aarch64_eval_reflection_class_trait_alias_sources(emitter: &mut Emitter)
 
 /// Emits the ARM64 eval hook that returns the AOT reflection source file.
 fn emit_aarch64_eval_reflection_source_file(emitter: &mut Emitter) {
-    let string_symbol = emitter.target.extern_symbol("__elephc_eval_value_string");
+    let string_symbol =
+        abi::c_callback_internal_symbol(emitter.target, "__elephc_eval_value_string");
     label_c_global(emitter, "__elephc_eval_reflection_source_file");
     abi::emit_symbol_address(emitter, "x9", "_eval_reflection_source_file_len");
     emitter.instruction("ldr x1, [x9]");                                        // load the generated source-file length
@@ -3756,12 +3757,14 @@ fn emit_aarch64_eval_reflection_member_names(
     let skip_label = format!("{label_prefix}_skip");
     let miss_label = format!("{label_prefix}_miss");
     let done_label = format!("{label_prefix}_done");
-    let string_array_new_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_new");
-    let string_array_push_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_push");
+    let string_array_new_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_new",
+    );
+    let string_array_push_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_push",
+    );
     label_c_global(emitter, symbol);
     emitter.instruction("sub sp, sp, #112");                                    // reserve scan state across allocation and string comparisons
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address across helper calls
@@ -4173,7 +4176,8 @@ fn emit_x86_64_eval_reflection_class_trait_alias_sources(emitter: &mut Emitter) 
 
 /// Emits the x86_64 eval hook that returns the AOT reflection source file.
 fn emit_x86_64_eval_reflection_source_file(emitter: &mut Emitter) {
-    let string_symbol = emitter.target.extern_symbol("__elephc_eval_value_string");
+    let string_symbol =
+        abi::c_callback_internal_symbol(emitter.target, "__elephc_eval_value_string");
     label_c_global(emitter, "__elephc_eval_reflection_source_file");
     abi::emit_symbol_address(emitter, "r10", "_eval_reflection_source_file_len");
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the generated source-file length
@@ -4200,12 +4204,14 @@ fn emit_x86_64_eval_reflection_member_names(
     let skip_label = format!("{label_prefix}_skip");
     let miss_label = format!("{label_prefix}_miss");
     let done_label = format!("{label_prefix}_done");
-    let string_array_new_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_new");
-    let string_array_push_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_push");
+    let string_array_new_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_new",
+    );
+    let string_array_push_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_push",
+    );
     label_c_global(emitter, symbol);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable member-name scan frame pointer
@@ -5050,6 +5056,5 @@ fn emit_x86_64_reject_runtime_managed_clone_classes(
 
 /// Emits a global label with platform C-symbol mangling.
 fn label_c_global(emitter: &mut Emitter, name: &str) {
-    let symbol = emitter.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    abi::emit_c_callback_entry(emitter, name);
 }

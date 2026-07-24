@@ -309,20 +309,20 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_get_mixed_key_hash");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
-    emitter.instruction("call __rt_hash_get");                                  // rax=found, rsi=value_lo, rdx=value_hi, rcx=value_tag
+    emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
     emitter.instruction("je __rt_array_get_mixed_key_hash_missing");            // miss → optional warning + null
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_array_get_mixed_key_hash_box");               // no → box (lo, hi, tag) into a fresh Mixed cell
-    emitter.instruction("mov rax, rsi");                                        // yes → move the stored Mixed cell into the return register
+    emitter.instruction("mov rax, rdi");                                        // yes → move the stored Mixed cell (value_lo) into the return register
     emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_array_get_mixed_key_hash_box");
     emitter.instruction("mov rax, rcx");                                        // rax = value_tag (mixed_from_value first arg)
-    emitter.instruction("mov rdi, rsi");                                        // rdi = value_lo from hash_get
-    emitter.instruction("mov rsi, rdx");                                        // rsi = value_hi from hash_get
+    emitter.instruction("mov rdi, rdi");                                        // rdi = value_lo (already in place from __rt_hash_get)
+    emitter.instruction("mov rsi, rsi");                                        // rsi = value_hi (already in place from __rt_hash_get)
     emitter.instruction("call __rt_mixed_from_value");                          // box the hash entry into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

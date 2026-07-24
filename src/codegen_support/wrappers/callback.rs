@@ -10,7 +10,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::types::PhpType;
 
 mod descriptor;
@@ -49,7 +49,7 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
     emitter.instruction("ldr x19, [x20]");                                      // load the original captured closure entry point from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     spill_captures(
         emitter,
         wrapper.visible_arg_types.len(),
@@ -64,7 +64,10 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
         &wrapper.capture_types,
         frame_size,
     );
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, "x19");
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore wrapper callee-saved registers
@@ -107,7 +110,7 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
     emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
     emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the original captured closure entry point from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     spill_captures(
         emitter,
         wrapper.visible_arg_types.len(),
@@ -121,7 +124,10 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
         &target_visible_arg_types,
         &wrapper.capture_types,
     );
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, "r12");
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
 
     abi::load_at_offset(emitter, "r13", saved_env_offset);
@@ -170,15 +176,73 @@ fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'stati
 /// Spills every incoming visible argument from ABI registers to fixed stack slots in the
 /// wrapper frame. This must happen before `spill_captures` loads from the environment struct,
 /// because the environment pointer lives in a register that may clobber one of the arg regs.
-fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
+fn spill_visible_args(
+    emitter: &mut Emitter,
+    visible_arg_types: &[PhpType],
+    native_c_abi: bool,
+) {
     let visible_types: Vec<PhpType> = visible_arg_types
         .iter()
         .map(PhpType::codegen_repr)
         .collect();
-    let assignments =
-        abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0);
+    let assignments = if native_c_abi {
+        abi::build_c_abi_outgoing_arg_assignments_for_target(emitter.target, &visible_types)
+    } else {
+        abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0)
+    };
+    let mut stack_offset = if native_c_abi
+        && (emitter.target.platform, emitter.target.arch)
+            == (Platform::Windows, Arch::X86_64)
+    {
+        48
+    } else {
+        abi::IncomingArgCursor::for_target(emitter.target, 0).caller_stack_offset
+    };
     for (idx, (ty, assignment)) in visible_types.iter().zip(assignments.iter()).enumerate() {
-        debug_assert!(assignment.in_register());
+        if !assignment.in_register() {
+            let scalar_scratch = match emitter.target.arch {
+                Arch::AArch64 => "x9",
+                Arch::X86_64 => "r10",
+            };
+            let float_scratch = match emitter.target.arch {
+                Arch::AArch64 => "d15",
+                Arch::X86_64 => "xmm15",
+            };
+            match ty {
+                PhpType::Float => {
+                    abi::load_from_caller_stack(emitter, float_scratch, stack_offset);
+                    abi::store_at_offset(emitter, float_scratch, frame_arg_slot_offset(idx));
+                }
+                PhpType::Str => {
+                    let high_scratch = match emitter.target.arch {
+                        Arch::AArch64 => "x10",
+                        Arch::X86_64 => "r11",
+                    };
+                    abi::load_from_caller_stack(emitter, scalar_scratch, stack_offset);
+                    abi::load_from_caller_stack(emitter, high_scratch, stack_offset + 8);
+                    abi::store_at_offset(emitter, scalar_scratch, frame_arg_slot_offset(idx));
+                    abi::store_at_offset(
+                        emitter,
+                        high_scratch,
+                        frame_arg_slot_offset(idx) - 8,
+                    );
+                }
+                PhpType::Void | PhpType::Never => {}
+                _ => {
+                    abi::load_from_caller_stack(emitter, scalar_scratch, stack_offset);
+                    abi::store_at_offset(emitter, scalar_scratch, frame_arg_slot_offset(idx));
+                }
+            }
+            stack_offset += if native_c_abi
+                && (emitter.target.platform, emitter.target.arch)
+                    == (Platform::Windows, Arch::X86_64)
+            {
+                ty.register_count() * 8
+            } else {
+                16
+            };
+            continue;
+        }
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);

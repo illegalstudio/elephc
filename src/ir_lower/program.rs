@@ -90,11 +90,7 @@ pub(crate) fn lower(
 
 /// Converts a PHP source path into the canonical display string stored in EIR metadata.
 fn canonical_source_path(source_path: &Path) -> String {
-    source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf())
-        .display()
-        .to_string()
+    crate::source_path::canonical_source_path(source_path)
 }
 
 /// Copies declaration metadata into the EIR module placeholder tables.
@@ -148,6 +144,24 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
         .collect();
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    include_required_library_runtime_features(
+        &mut module.required_runtime_features,
+        &check_result.required_libraries,
+    );
+}
+
+/// Enables optional runtime adapter families implied by native libraries selected
+/// during type checking, keeping EIR-driven runtime generation and final linking
+/// on the same feature set.
+fn include_required_library_runtime_features(
+    features: &mut RuntimeFeatures,
+    required_libraries: &[String],
+) {
+    let requires = |name: &str| required_libraries.iter().any(|library| library == name);
+    features.zlib |= requires("z");
+    features.bzip2 |= requires("bz2");
+    features.iconv |= requires("iconv");
+    features.tls |= requires("elephc_tls");
 }
 
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.
@@ -374,6 +388,7 @@ pub(super) fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
+    module.required_runtime_features.timezone_bridge |= features.timezone_bridge;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -396,6 +411,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
                             typed_builtin_requires_descriptor_invoker(function, inst, target);
+                        features.timezone_bridge |= module.target.platform
+                            == crate::codegen::platform::Platform::Windows
+                            && target.uses_windows_timezone_bridge();
                     }
                 }
                 Op::LanguageConstructCall => {

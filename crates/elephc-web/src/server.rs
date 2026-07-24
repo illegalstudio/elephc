@@ -1,17 +1,20 @@
 //! Purpose:
-//! The `--web` server entry point: parse the binary's runtime args, prefork N
-//! worker processes, and supervise them. Each worker serves HTTP independently.
+//! The `--web` server entry point: parse the binary's runtime args and dispatch
+//! to the Unix prefork supervisor or the Windows single-process event loop.
 //!
 //! Called from:
 //! - The compiled `--web` binary's process entry (tail-call to elephc_web_run).
 //!
 //! Key details:
-//! - fork() happens BEFORE any tokio runtime is created (tokio does not survive
-//!   fork); each child builds its own current-thread runtime in worker::serve.
+//! - On Unix, fork() happens before any tokio runtime is created; each child
+//!   builds its own current-thread runtime in worker::serve.
+//! - On Windows, one current-thread event loop serializes PHP execution while
+//!   allowing concurrent connection I/O; no Unix process or signal API is linked.
 //! - --listen host:port is required; without it the process errors and exits.
 
 use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crate::worker::{self, WorkerConfig};
@@ -20,15 +23,15 @@ use crate::worker::{self, WorkerConfig};
 const HELP: &str = "\
 Usage: <binary> --listen HOST:PORT [options]
 
-A standalone prefork HTTP server compiled from PHP by `elephc --web`.
+A standalone HTTP server compiled from PHP by `elephc --web`.
 
 Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
-  --workers N            Number of prefork worker processes (default: CPU count)
+  --workers N            Number of prefork workers on Unix (default: CPU count; Windows uses one event loop)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
-  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0)
+  --max-requests N       Recycle a Unix worker or stop Windows after N requests; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
-  --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
+  --max-execution-time N Stop the server if a handler runs > N seconds; Unix respawns its worker; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
   --help                 Show this help and exit
   --version              Show the server version and exit";
@@ -36,15 +39,18 @@ Options:
 /// A worker that dies within this window of being spawned counts as a crash-on-
 /// startup; too many in a row (e.g. a bind failure or a handler that crashes on
 /// every request) abort the master instead of fork-looping forever.
+#[cfg(unix)]
 const FAST_DEATH: Duration = Duration::from_millis(1000);
 /// Consecutive fast worker deaths tolerated before the master gives up.
+#[cfg(unix)]
 const MAX_FAST_DEATHS: u32 = 10;
 
 /// Set by the SIGINT/SIGTERM handler so the master supervision loop can break and
 /// shut workers down cleanly. Async-signal-safe: the handler only stores to it.
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+pub(crate) static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 /// Async-signal-safe SIGINT/SIGTERM handler: records the shutdown request only.
+#[cfg(unix)]
 extern "C" fn handle_shutdown_signal(_sig: libc::c_int) {
     SHUTDOWN.store(true, Ordering::SeqCst);
 }
@@ -52,6 +58,7 @@ extern "C" fn handle_shutdown_signal(_sig: libc::c_int) {
 /// Installs `handle_shutdown_signal` for SIGINT and SIGTERM WITHOUT `SA_RESTART`,
 /// so a signal interrupts the master's blocking `waitpid` (returns EINTR) instead
 /// of silently restarting it.
+#[cfg(unix)]
 fn install_signal_handlers() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -67,6 +74,7 @@ fn install_signal_handlers() {
 /// this so it does NOT inherit the master's catch-and-flag handler — otherwise a
 /// worker would catch the master's forwarded SIGTERM and never terminate, hanging
 /// the master's reap. With SIG_DFL a forwarded SIGTERM terminates the worker.
+#[cfg(unix)]
 fn reset_signal_handlers_to_default() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -189,6 +197,7 @@ fn default_workers() -> usize {
 /// (then exits with `worker::RECYCLE_EXIT_CODE`), returning the child pid in the
 /// master. The child restores default signal disposition and never returns. A
 /// fork failure aborts the whole process. Used for both initial spawn and respawn.
+#[cfg(unix)]
 fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> libc::pid_t {
     match unsafe { libc::fork() } {
         -1 => {
@@ -197,7 +206,7 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
         }
         0 => {
             reset_signal_handlers_to_default();
-            worker::serve(listen, handler, cfg);
+            worker::serve(listen, handler, cfg, None);
             // serve() only returns when the worker stopped accepting on purpose
             // after serving its --max-requests quota; exit with the recycle code
             // so the reaper skips the crash-loop accounting for this death.
@@ -213,6 +222,7 @@ fn spawn_worker(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) -> li
 /// the fast-death accounting. Without this distinction, sustained traffic with
 /// a small `--max-requests` recycles workers faster than `FAST_DEATH` and the
 /// master mistakes the healthy recycle churn for a startup crash loop.
+#[cfg(unix)]
 fn is_planned_recycle(status: libc::c_int) -> bool {
     libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == worker::RECYCLE_EXIT_CODE
 }
@@ -232,6 +242,14 @@ pub extern "C" fn elephc_web_run(
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
+    SHUTDOWN.store(false, Ordering::SeqCst);
+    run_server(args, handler)
+}
+
+/// Runs the Unix prefork supervisor while keeping every Unix-only API outside
+/// Windows builds.
+#[cfg(unix)]
+fn run_server(args: ServerArgs, handler: extern "C" fn()) -> i32 {
     install_signal_handlers();
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
@@ -311,7 +329,45 @@ pub extern "C" fn elephc_web_run(
     0
 }
 
+/// Runs the Windows server in one process and one PHP execution thread.
+///
+/// Hyper still multiplexes connection I/O through local tasks, but the compiled
+/// PHP handler and its process-global request state never execute concurrently.
+/// `--max-requests` stops the Windows process cleanly so an external service
+/// manager can restart with fresh state; Ctrl-C sets the shared shutdown flag
+/// and lets the accept poll return cleanly.
+#[cfg(windows)]
+fn run_server(args: ServerArgs, handler: extern "C" fn()) -> i32 {
+    if let Err(error) = ctrlc::set_handler(|| SHUTDOWN.store(true, Ordering::SeqCst)) {
+        eprintln!("elephc-web: failed to install Ctrl-C handler: {error}");
+        return 1;
+    }
+    if args.workers != 1 {
+        eprintln!(
+            "elephc-web: Windows uses one event-loop worker; ignoring --workers {}",
+            args.workers
+        );
+    }
+    eprintln!(
+        "elephc-web: listening on http://{} (Windows event-loop worker)",
+        args.listen
+    );
+    worker::serve(&args.listen, handler, args.worker_config(), Some(&SHUTDOWN));
+    0
+}
+
+/// Names the process model compiled for the current platform for diagnostics
+/// and cfg-focused unit coverage.
 #[cfg(test)]
+fn worker_model_name() -> &'static str {
+    if cfg!(windows) {
+        "windows-event-loop"
+    } else {
+        "unix-prefork"
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -348,5 +404,20 @@ mod tests {
         assert!(!is_planned_recycle(libc::SIGSEGV));
         assert!(!is_planned_recycle(libc::SIGKILL));
         assert!(!is_planned_recycle(libc::SIGTERM));
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    /// Verifies cfg selection exposes exactly one documented server process model.
+    #[test]
+    fn worker_model_matches_target_family() {
+        if cfg!(windows) {
+            assert_eq!(worker_model_name(), "windows-event-loop");
+        } else {
+            assert_eq!(worker_model_name(), "unix-prefork");
+        }
     }
 }

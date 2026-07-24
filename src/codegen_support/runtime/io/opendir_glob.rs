@@ -152,7 +152,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov edi, 2");                                          // duplicate stderr (always available)
-    emitter.instruction("call dup");                                            // rax = new fd (-1 on failure)
+    emitter.emit_call_c("dup");                                                 // rax = new fd (-1 on failure)
     emitter.instruction("test rax, rax");                                       // did dup fail?
     emitter.instruction("js __rt_opendir_glob_fail_x86");                       // negative → bail
     emitter.instruction("cmp rax, 255");                                        // out-of-range for the 256-slot table?

@@ -23,6 +23,9 @@ pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
 /// Fatal error message when `php_uname()` receives a `$mode` argument that is not one of the supported single-character values.
 pub(crate) const PHP_UNAME_MODE_VALUE_MSG: &str =
     "Fatal error: php_uname(): Argument #1 ($mode) must be one of \"a\", \"m\", \"n\", \"r\", \"s\", or \"v\"\n";
+/// Notice emitted when `tempnam()` falls back from the requested directory.
+pub(crate) const TEMPNAM_FALLBACK_NOTICE: &str =
+    "Notice: tempnam(): file created in the system's temporary directory\n";
 /// Fatal error message when `dirname()` receives a `$levels` argument less than 1.
 /// ob_* PHP-parity diagnostics shared by the fixed data section and the
 /// output-buffering runtime emitters (which need the exact byte lengths).
@@ -79,6 +82,12 @@ pub(crate) const DIRNAME_LEVELS_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Fatal error message when `random_bytes()` receives a `$length` argument below 1.
+pub(crate) const RANDOM_BYTES_LENGTH_MSG: &str =
+    "Fatal error: random_bytes(): Argument #1 ($length) must be greater than 0\n";
+/// Fatal error message when `random_bytes()` cannot obtain cryptographically secure random data.
+pub(crate) const RANDOM_BYTES_SOURCE_MSG: &str =
+    "Fatal error: random_bytes(): Cannot gather sufficient random data\n";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";
@@ -92,3 +101,21 @@ pub(crate) const HASH_HMAC_UNKNOWN_ALGO_MSG: &str =
 /// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
 pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
     "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";
+/// Catchable `\ValueError` message when `escapeshellarg()` receives a NUL byte.
+pub(crate) const ESCAPE_SHELL_ARG_NUL_MSG: &str =
+    "escapeshellarg(): Argument #1 ($arg) must not contain any null bytes";
+/// Catchable `\ValueError` message when `escapeshellcmd()` receives a NUL byte.
+pub(crate) const ESCAPE_SHELL_CMD_NUL_MSG: &str =
+    "escapeshellcmd(): Argument #1 ($command) must not contain any null bytes";
+/// Catchable Windows `\ValueError` when `escapeshellarg()` input exceeds php-src's cmd limit.
+pub(crate) const ESCAPE_SHELL_ARG_INPUT_LENGTH_MSG: &str =
+    "Argument exceeds the allowed length of 8192 bytes";
+/// Catchable Windows `\ValueError` when `escapeshellarg()` output exceeds php-src's cmd limit.
+pub(crate) const ESCAPE_SHELL_ARG_OUTPUT_LENGTH_MSG: &str =
+    "Escaped argument exceeds the allowed length of 8192 bytes";
+/// Catchable Windows `\ValueError` when `escapeshellcmd()` input exceeds php-src's cmd limit.
+pub(crate) const ESCAPE_SHELL_CMD_INPUT_LENGTH_MSG: &str =
+    "Command exceeds the allowed length of 8192 bytes";
+/// Catchable Windows `\ValueError` when `escapeshellcmd()` output exceeds php-src's cmd limit.
+pub(crate) const ESCAPE_SHELL_CMD_OUTPUT_LENGTH_MSG: &str =
+    "Escaped command exceeds the allowed length of 8192 bytes";

@@ -481,10 +481,7 @@ pub(super) fn lower_enum_backing_string_to_int(
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&type_error_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
-        Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
-    }
+    emit_throw_static_type_error(ctx, &message_label, message_len);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -494,7 +491,10 @@ pub(super) fn lower_enum_backing_string_to_int(
 /// int-result register and control falls through. On a non-numeric string, control branches
 /// to `invalid_label` with the 16-byte temporary still on the stack — the caller is
 /// responsible for releasing it and emitting the `TypeError` there.
-fn emit_string_result_to_int_checked(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
+pub(super) fn emit_string_result_to_int_checked(
+    ctx: &mut FunctionContext<'_>,
+    invalid_label: &str,
+) {
     let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
     let int_reg = abi::int_result_reg(ctx.emitter);
     // Preserve the input string across the numeric-validity probe, which clobbers the
@@ -701,8 +701,24 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Throws a catchable `TypeError` whose message is stored in static program data.
+pub(super) fn emit_throw_static_type_error(
+    ctx: &mut FunctionContext<'_>,
+    message_label: &str,
+    message_len: usize,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            emit_throw_static_type_error_aarch64(ctx, message_label, message_len);
+        }
+        Arch::X86_64 => {
+            emit_throw_static_type_error_x86_64(ctx, message_label, message_len);
+        }
+    }
+}
+
 /// Emits the AArch64 `TypeError` allocation, static-message stamping, and unwinder handoff.
-fn emit_throw_enum_from_type_error_aarch64(
+fn emit_throw_static_type_error_aarch64(
     ctx: &mut FunctionContext<'_>,
     message_label: &str,
     message_len: usize,
@@ -724,7 +740,7 @@ fn emit_throw_enum_from_type_error_aarch64(
 }
 
 /// Emits the x86_64 `TypeError` allocation, static-message stamping, and unwinder handoff.
-fn emit_throw_enum_from_type_error_x86_64(
+fn emit_throw_static_type_error_x86_64(
     ctx: &mut FunctionContext<'_>,
     message_label: &str,
     message_len: usize,
