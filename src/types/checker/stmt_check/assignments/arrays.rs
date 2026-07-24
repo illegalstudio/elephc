@@ -123,7 +123,7 @@ pub(super) fn check_array_assign(
             },
         );
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
-        if !matches!(idx_ty, PhpType::Int) {
+        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(span, "Buffer index must be integer"));
         }
         match elem_ty.as_ref() {

@@ -269,7 +269,7 @@ impl Checker {
                                 }
                                 PhpType::Buffer(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if idx_ty != PhpType::Int {
+                                    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
                                         first_index_error =
                                             first_index_error.or(Some("Buffer index must be integer"));
                                         continue;
@@ -298,7 +298,7 @@ impl Checker {
                         }
                     }
                     PhpType::Buffer(elem_ty) => {
-                        if idx_ty != PhpType::Int {
+                        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) {
                             return Err(CompileError::new(
                                 expr.span,
                                 "Buffer index must be integer",
