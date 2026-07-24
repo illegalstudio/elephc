@@ -13,9 +13,9 @@ class Renderer {
     public $minimap;
     public $bspWalker;
     public $walls;
-    public $lastTicks;
-    public $fps;
-    public $frameCount;
+    public int $lastTicks;
+    public int $fps;
+    public int $frameCount;
 
     public function __construct() {
         $this->minimap = new MinimapRenderer();
@@ -171,8 +171,8 @@ class Renderer {
                 continue;
             }
 
-            int $relX = $map->things[$ti]->x - $camera->x;
-            int $relY = $map->things[$ti]->y - $camera->y;
+            int $relX = $map->things[(int)$ti]->x - $camera->x;
+            int $relY = $map->things[(int)$ti]->y - $camera->y;
             int $depth = intdiv(($relX * $forwardX) + ($relY * $forwardY), 1024);
 
             // behind camera or too far
