@@ -75,6 +75,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label("__rt_implode_elem");
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the indexed-array value_type tag for this element
+    emitter.instruction("str xzr, [sp, #48]");                                  // clear the owned mixed-cast slot; borrowed element slots release nothing
     emitter.instruction("cmp x13, #7");                                         // are elements boxed Mixed cells?
     emitter.instruction("b.eq __rt_implode_mixed_elem");                        // mixed slots must be cast to string before copying
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
@@ -96,6 +97,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the mixed string cast
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the mixed string cast
     emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the mixed string cast
+    emitter.instruction("str x1, [sp, #48]");                                   // record the persisted mixed-cast string to release once its bytes are copied
 
     // -- copy element bytes to output --
     emitter.label("__rt_implode_copy_value");
@@ -107,8 +109,18 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("sub x12, x12, #1");                                    // decrement byte counter
     emitter.instruction("b __rt_implode_copy");                                 // continue copying element
 
-    // -- advance to next element --
+    // -- advance to next element (releasing any persisted mixed-cast string first) --
     emitter.label("__rt_implode_next");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // load the owned mixed-cast string, or zero for borrowed element slots
+    emitter.instruction("cbz x0, __rt_implode_next_advance");                   // borrowed element slots own no temporary to release
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve destination cursor across the heap release
+    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across the heap release
+    emitter.instruction("str x11, [sp, #72]");                                  // preserve loop index across the heap release
+    emitter.instruction("bl __rt_heap_free");                                   // release the persisted string produced by __rt_mixed_cast_string
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the heap release
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the heap release
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the heap release
+    emitter.label("__rt_implode_next_advance");
     emitter.instruction("add x11, x11, #1");                                    // increment element index
     emitter.instruction("b __rt_implode_loop");                                 // process next element
 
@@ -142,7 +154,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving implode spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, and concat-buffer bookkeeping
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for glue, array, concat destination, array length, and loop index
+    emitter.instruction("sub rsp, 80");                                         // reserve aligned spill slots for glue, array, concat destination, array length, loop index, and the owned mixed-cast string
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
@@ -184,6 +196,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the separator bytes
 
     emitter.label("__rt_implode_elem");
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // clear the owned mixed-cast slot; borrowed element slots release nothing
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before locating the next string element slot
     emitter.instruction("cmp QWORD PTR [rbp - 64], 7");                         // are elements boxed Mixed cells?
     emitter.instruction("je __rt_implode_mixed_elem");                          // mixed slots must be cast to string before copying
@@ -203,6 +216,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array Mixed slot
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the boxed Mixed element pointer for string casting
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed Mixed element to a string payload
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // record the persisted mixed-cast string to release once its bytes are copied
     emitter.instruction("mov r8, rax");                                         // move the cast string pointer into the copy-loop source register
     emitter.instruction("mov r9, rdx");                                         // move the cast string length into the copy-loop counter register
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after casting
@@ -219,6 +233,11 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_implode_next");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the current indexed-array element
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the owned mixed-cast string, or zero for borrowed element slots
+    emitter.instruction("test rax, rax");                                       // borrowed element slots own no temporary to release
+    emitter.instruction("jz __rt_implode_next_advance");                        // skip the release when the current element was copied from borrowed storage
+    emitter.instruction("call __rt_heap_free");                                 // release the persisted string produced by __rt_mixed_cast_string
+    emitter.label("__rt_implode_next_advance");
     emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // advance the indexed-array loop cursor to the next element
     emitter.instruction("jmp __rt_implode_loop");                               // continue joining indexed-array elements into the concat buffer
 
@@ -231,7 +250,46 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload the current concat-buffer write offset after any nested helpers have advanced it
     emitter.instruction("add r9, rdx");                                         // advance the concat-buffer write offset by the joined string length that this implode call produced
     emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after writing the implode output bytes
-    emitter.instruction("add rsp, 64");                                         // release the implode spill slots before returning the joined string
+    emitter.instruction("add rsp, 80");                                         // release the implode spill slots before returning the joined string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the joined string
     emitter.instruction("ret");                                                 // return the joined string in the standard x86_64 string result registers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Verifies the ARM64 implode emitter releases the persisted mixed-cast string:
+    /// it records the cast pointer, guards borrowed slots, and frees owned temporaries
+    /// with a balanced 96-byte frame.
+    #[test]
+    fn test_implode_arm64_releases_mixed_cast_string() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_implode(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("__rt_implode:\n"));
+        assert!(asm.contains("str x1, [sp, #48]"));
+        assert!(asm.contains("cbz x0, __rt_implode_next_advance"));
+        assert!(asm.contains("bl __rt_heap_free"));
+        assert!(asm.contains("__rt_implode_next_advance:\n"));
+        assert_eq!(asm.matches("sub sp, sp, #96").count(), 1);
+    }
+
+    /// Verifies the x86_64 implode emitter releases the persisted mixed-cast string:
+    /// it records the cast pointer in the owned slot, guards borrowed slots, and frees
+    /// owned temporaries with a balanced 80-byte frame.
+    #[test]
+    fn test_implode_x86_64_releases_mixed_cast_string() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_implode(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("__rt_implode:\n"));
+        assert!(asm.contains("mov QWORD PTR [rbp - 72], rax"));
+        assert!(asm.contains("jz __rt_implode_next_advance"));
+        assert!(asm.contains("call __rt_heap_free"));
+        assert!(asm.contains("__rt_implode_next_advance:\n"));
+        assert_eq!(asm.matches("sub rsp, 80").count(), 1);
+        assert_eq!(asm.matches("add rsp, 80").count(), 1);
+    }
 }
