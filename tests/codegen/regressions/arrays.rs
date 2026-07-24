@@ -1268,3 +1268,238 @@ echo "[" . (str_repeat("x", 0) ?? "bad") . "]";
     assert_eq!(out.stdout, "[fallback][][]");
     assert_eq!(out.stderr, "");
 }
+
+// --- Issue #556: by-reference foreach over a missing array element ---
+
+/// Regression for issue #556: a by-reference foreach directly over a missed
+/// element warns for the miss and skips the loop body instead of handing the
+/// null-container sentinel to the copy-on-write helper.
+#[test]
+fn test_byref_foreach_over_first_index_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #556: the `?? []` by-reference form iterates the empty
+/// default silently — the coalesce materializes a real empty array, so the
+/// sentinel never reaches the iterator; this locks that behavior in place.
+#[test]
+fn test_byref_foreach_over_first_index_miss_coalesce_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] ?? [] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #556: a string-keyed miss feeding a by-reference foreach
+/// takes the same null-source path as the indexed form.
+#[test]
+fn test_byref_foreach_over_assoc_key_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = ['k' => ['q' => 1]];
+foreach ($h['nope'] as &$v) { $v = 2; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key \"nope\""));
+}
+
+/// Control for issue #556: the null-source guards must not disturb ordinary
+/// by-reference mutation and aliasing over a real array.
+#[test]
+fn test_byref_foreach_over_present_source_still_mutates() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$ok = ['a', 'b'];
+foreach ($ok as &$v) { $v = strtoupper($v); }
+unset($v);
+echo implode(',', $ok);
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "A,B");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #556: the skipped by-reference loop must leave the heap
+/// clean — the sentinel source must never enter refcount or copy-on-write traffic.
+#[test]
+fn test_byref_foreach_over_first_index_miss_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #556: the null-container sentinel must be recognized before any
+/// array-header load on the by-reference foreach path, on every supported target.
+/// The guard placement follows the #533 convention: the sentinel check lives inside the
+/// copy-on-write runtime helpers (like `__rt_hash_iter_next`), `IterStart` folds a
+/// sentinel source to the canonical zero pointer in the iterator's private slot, and the
+/// per-iteration `IterNext` live-length read needs only the cheap zero check.
+/// Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+#[test]
+fn test_byref_foreach_missing_source_emits_null_container_guards() {
+    let dir = make_cli_test_dir("elephc_byref_foreach_null_guards");
+    let (user_asm, runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // -- runtime: both COW helpers bail on the sentinel before the refcount load --
+    for helper in ["array_ensure_unique", "hash_ensure_unique"] {
+        let start = runtime_asm
+            .find(&format!("runtime: {helper}"))
+            .unwrap_or_else(|| panic!("missing {helper} runtime section"));
+        let section = &runtime_asm[start..];
+        let end = section[10..]
+            .find("--- runtime:")
+            .map(|pos| pos + 10)
+            .unwrap_or(section.len());
+        let section = &section[..end];
+        // Internal labels are `L`-prefixed on macOS only, so the bail branch is
+        // matched as branch mnemonic + label suffix on one line instead of verbatim.
+        let (sentinel_cmp, bail_branch, refcount_load) = match target().arch {
+            Arch::AArch64 => ("cmp x0, x9", "b.eq", "[x0, #-12]"),
+            Arch::X86_64 => ("cmp rdi, r10", "je", "[rdi - 12]"),
+        };
+        let done_label = format!("__rt_{helper}_done");
+        let cmp_pos = section
+            .find(sentinel_cmp)
+            .unwrap_or_else(|| panic!("{helper}: missing sentinel compare:\n{section}"));
+        // Scan for the bail line only after the sentinel compare: the plain null
+        // check earlier in the helper branches to the same done label (on x86_64
+        // with the same `je` mnemonic).
+        let after_cmp = &section[cmp_pos..];
+        let bail_pos = {
+            let mut offset = cmp_pos;
+            let mut found = None;
+            for line in after_cmp.lines() {
+                if line.contains(bail_branch) && line.contains(&done_label) {
+                    found = Some(offset);
+                    break;
+                }
+                offset += line.len() + 1;
+            }
+            found.unwrap_or_else(|| panic!("{helper}: missing sentinel bail branch:\n{section}"))
+        };
+        let refcount_pos = section
+            .find(refcount_load)
+            .unwrap_or_else(|| panic!("{helper}: missing refcount load:\n{section}"));
+        assert!(
+            cmp_pos < bail_pos && bail_pos < refcount_pos,
+            "{helper}: sentinel guard must precede the refcount load:\n{section}"
+        );
+    }
+
+    // -- IterStart: the sentinel source is folded to zero in the iterator slot --
+    let normalize = match target().arch {
+        Arch::AArch64 => "csel x0, xzr, x0, eq",
+        Arch::X86_64 => "cmove rax, r10",
+    };
+    assert!(
+        user_asm.contains(normalize),
+        "missing iter_start sentinel-to-zero normalization:\n{user_asm}"
+    );
+
+    // -- IterNext: the by-reference live-length read keeps its zero-source guard --
+    // Look for the label *definition* (a line ending with ':'), not the branch operand.
+    assert!(
+        user_asm
+            .lines()
+            .any(|line| line.trim_end().ends_with(':') && line.contains("iter_len_null_source")),
+        "missing iter_next zero-length guard label:\n{user_asm}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Regression for issue #556: a missed read assigned to a local and then iterated
+/// by reference exercises the ensure-unique store-back path; the loop is skipped
+/// and the origin local still carries its null marker afterwards (a botched fix
+/// that normalized the local itself would make `??` keep an empty array instead).
+#[test]
+fn test_byref_foreach_over_missing_local_source_keeps_local_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+foreach ($arr as &$v) { $v = 'changed'; }
+$probe = $arr ?? 'was-null';
+echo is_array($probe) ? 'kept-array' : $probe;
+echo '|done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "was-null|done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #556: the keyed by-reference form over a missed element
+/// skips the loop without binding a key or crashing.
+#[test]
+fn test_byref_foreach_keyed_over_first_index_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as $k => &$v) { $v = 'changed'; echo 'k=' . $k; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #556: by-reference foreach still reads the live array length,
+/// so elements appended during iteration are visited exactly like PHP.
+#[test]
+fn test_byref_foreach_still_visits_elements_appended_during_iteration() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [10, 20];
+foreach ($a as &$v) {
+    if (count($a) < 3) { $a[] = 30; }
+    echo $v . ',';
+}
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "10,20,30,done");
+    assert_eq!(out.stderr, "");
+}

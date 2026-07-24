@@ -12,6 +12,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// hash_ensure_unique: split a shared hash table before mutation.
+/// Null hashes and the in-band null-container sentinel that missed reads materialize
+/// (issue #556) are returned unchanged: neither carries a heap header to split.
 /// Input:  x0 = candidate hash pointer
 /// Output: x0 = unique hash pointer (original or cloned)
 pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
@@ -24,8 +26,15 @@ pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_ensure_unique ---");
     emitter.label_global("__rt_hash_ensure_unique");
 
-    // -- null hashes are already trivially unique --
+    // -- null and sentinel-null hashes are already trivially unique --
     emitter.instruction("cbz x0, __rt_hash_ensure_unique_done");                // null inputs do not need copy-on-write splitting
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the hash carry the in-band null-container sentinel?
+    emitter.instruction("b.eq __rt_hash_ensure_unique_done");                   // sentinel-null hashes from missed reads have no header to split
 
     // -- only shared hashes need to be cloned --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current hash refcount from the uniform header
@@ -60,6 +69,13 @@ fn emit_hash_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // default to returning the original associative-array pointer when no copy-on-write split is needed
     emitter.instruction("test rdi, rdi");                                       // null associative-array pointers are already trivially unique
     emitter.instruction("je __rt_hash_ensure_unique_done");                     // return immediately for null inputs without touching heap metadata
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r10");                                        // does the associative array carry the in-band null-container sentinel?
+    emitter.instruction("je __rt_hash_ensure_unique_done");                     // sentinel-null hashes from missed reads have no header to split
     emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current associative-array refcount from the uniform heap header
     emitter.instruction("cmp r10d, 1");                                         // does the associative array have more than one logical owner?
     emitter.instruction("jbe __rt_hash_ensure_unique_done");                    // refcount <= 1 means the associative array can be mutated in place

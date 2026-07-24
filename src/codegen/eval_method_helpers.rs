@@ -68,6 +68,7 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
     "ValueError",
+    "UnhandledMatchError",
     "Exception",
     "LogicException",
     "BadFunctionCallException",

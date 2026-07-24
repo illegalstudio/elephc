@@ -127,13 +127,9 @@ echo $a[0][1] . "\n";
 /// returns the STORED cell (retained), so the leaf array stays uniquely
 /// owned and `__rt_mixed_array_set` mutates it in place.
 ///
-/// Known residual limitation (pre-existing): when an INTERMEDIATE level is a
-/// concrete homogeneous array (raw-pointer slots, e.g. `[[['x', 1]], 7]`),
-/// the intermediate read boxes a fresh retained cell; the retain makes the
-/// leaf look shared, so the write path's `__rt_array_to_mixed` splits it and
-/// the write lands in the split copy. Fixing that shape needs a
-/// fetch-for-write read helper that promotes intermediate slots to boxed
-/// cells in place.
+/// Concrete homogeneous intermediate arrays are normalized to stored Mixed
+/// cells by the fetch-for-write path, so the deepest write remains connected
+/// to the outer container instead of landing in a detached split copy.
 #[test]
 fn test_nested_write_three_levels() {
     let out = compile_and_run_with_heap_debug(

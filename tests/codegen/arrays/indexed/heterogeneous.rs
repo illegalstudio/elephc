@@ -187,3 +187,109 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
 }
+
+/// An indexed array-literal element that is a `$this->prop->method()` call — a property-access
+/// receiver, not `$this` — must be typed by the callee's declared return type. Before the fix,
+/// `instance_callable_object_class` resolved Variable/This/new/function receivers but not a
+/// property-access receiver, so `[$this->factory->link(...)]` fell to the syntactic `Int` default
+/// and int-cast the returned object ("int cast for Object(<x>)"). This exercises both the
+/// `array_literal_element_type_for_ir` method-call arm and the property-access receiver resolution.
+#[test]
+fn test_indexed_array_literal_property_receiver_method_element_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+final class Link { public function __construct(public string $label) {} }
+final class Factory { public function link(string $l): Link { return new Link($l); } }
+final class Row { public function __construct(public array $links) {} }
+final class Composer {
+    public function __construct(private Factory $factory) {}
+    public function row(): Row { return new Row([$this->factory->link('View'), $this->factory->link('Edit')]); }
+}
+$c = new Composer(new Factory());
+echo $c->row()->links[0]->label, '|', $c->row()->links[1]->label;
+"#,
+    );
+    assert_eq!(out, "View|Edit");
+}
+
+/// Verifies a method-call receiver produced by another method keeps the nested callee's declared
+/// object return type when stored in an indexed literal.
+#[test]
+fn test_indexed_array_literal_chained_method_receiver_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class ChainedLink { public function __construct(public string $label) {} }
+final class ChainedFactory {
+    public function link(string $label): ChainedLink { return new ChainedLink($label); }
+}
+final class ChainedComposer {
+    private function factory(): ChainedFactory { return new ChainedFactory(); }
+    public function links(): array { return [$this->factory()->link('Chained')]; }
+}
+$links = (new ChainedComposer())->links();
+echo $links[0]->label;
+"#,
+    );
+    assert_eq!(out, "Chained");
+}
+
+/// Verifies a static method call inside an indexed literal uses the static callee's declared
+/// object return type.
+#[test]
+fn test_indexed_array_literal_static_method_element_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class StaticLink { public function __construct(public string $label) {} }
+final class StaticFactory {
+    public static function link(string $label): StaticLink { return new StaticLink($label); }
+}
+$links = [StaticFactory::link('Static')];
+echo $links[0]->label;
+"#,
+    );
+    assert_eq!(out, "Static");
+}
+
+/// Verifies a nullsafe property receiver and nullsafe method result preserve both the declared
+/// object class and the possible null result when stored in an indexed literal.
+#[test]
+fn test_indexed_array_literal_nullsafe_property_receiver_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class NullsafeLink { public function __construct(public string $label) {} }
+final class NullsafeFactory {
+    public function link(string $label): NullsafeLink { return new NullsafeLink($label); }
+}
+final class NullsafeHolder {
+    public function __construct(public ?NullsafeFactory $factory) {}
+}
+function nullsafe_links(?NullsafeHolder $holder): array {
+    return [$holder?->factory?->link('Present')];
+}
+$present = nullsafe_links(new NullsafeHolder(new NullsafeFactory()));
+$missing = nullsafe_links(null);
+echo $present[0]->label, '|', gettype($missing[0]);
+"#,
+    );
+    assert_eq!(out, "Present|NULL");
+}
+
+/// Verifies spreading only empty generic arrays widens the literal element metadata instead of
+/// attempting to emit an unmaterializable `array<void>` push path.
+#[test]
+fn test_indexed_array_literal_empty_generic_spreads_widen_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+final class EmptySpreadSource {
+    public function none(): array { return []; }
+    public function combined(): array {
+        $local = [];
+        return [...$local, ...$this->none()];
+    }
+}
+echo count((new EmptySpreadSource())->combined());
+"#,
+    );
+    assert_eq!(out, "0");
+}

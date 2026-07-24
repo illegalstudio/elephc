@@ -8,6 +8,9 @@
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - The helper consumes the boxed Mixed value pointer when the write succeeds.
+//! - A string key on an indexed payload promotes the payload to hash storage
+//!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
+//!   of dropping the write.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -72,7 +75,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null array payloads cannot be mutated
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("b.ne __rt_mixed_array_set_drop");                      // string keys are not valid for indexed-array writes
+    emitter.instruction("b.ne __rt_mixed_array_set_promote");                   // string keys promote the indexed payload to hash storage (PHP semantics)
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_drop");                      // negative indexed writes are ignored by this helper
@@ -133,6 +136,12 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x9, #1");                                     // compute the new logical length
     emitter.instruction("str x12, [x10]");                                      // store the extended logical length
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after extending the array
+
+    emitter.label("__rt_mixed_array_set_promote");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell for the promotion helper
+    emitter.instruction("bl __rt_mixed_cell_promote_to_hash");                  // convert the indexed payload to hash storage in the cell
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell (now tag 5)
+    emitter.instruction("b __rt_mixed_array_set_assoc");                        // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the associative-array hash pointer from the Mixed payload
@@ -258,7 +267,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the array payload is absent
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("jne __rt_mixed_array_set_drop");                       // string keys are not valid for indexed-array writes
+    emitter.instruction("jne __rt_mixed_array_set_promote");                    // string keys promote the indexed payload to hash storage (PHP semantics)
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // reject negative indexes before touching storage
     emitter.instruction("jl __rt_mixed_array_set_drop");                        // negative indexed writes are ignored by this helper
@@ -318,6 +327,12 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r8, [r9 + 1]");                                    // compute the new logical length
     emitter.instruction("mov QWORD PTR [r10], r8");                             // store the extended logical length
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after extending the array
+
+    emitter.label("__rt_mixed_array_set_promote");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell for the promotion helper
+    emitter.instruction("call __rt_mixed_cell_promote_to_hash");                // convert the indexed payload to hash storage in the cell
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell (now tag 5)
+    emitter.instruction("jmp __rt_mixed_array_set_assoc");                      // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the associative-array hash pointer from the Mixed payload

@@ -161,6 +161,18 @@ pub(crate) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
 }
 
+/// Returns the `(lib_name, flag_name)` pair for every bridge staticlib present
+/// in `extra_link_libs`, in `BRIDGES` table order. Used to report which bridge
+/// libraries are actually being linked, distinct from the full `extra_link_libs`
+/// list (which also holds plain system libraries like `pthread`).
+pub(crate) fn bridges_in(extra_link_libs: &[String]) -> Vec<(&'static str, &'static str)> {
+    BRIDGES
+        .iter()
+        .filter(|bridge| extra_link_libs.iter().any(|l| l.as_str() == bridge.lib_name))
+        .map(|bridge| (bridge.lib_name, bridge.flag_name))
+        .collect()
+}
+
 impl BridgeStaticlib {
     /// Returns the `lib<name>.a` archive filename this bridge produces.
     fn archive_filename(&self) -> String {
