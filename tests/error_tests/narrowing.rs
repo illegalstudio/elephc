@@ -85,3 +85,21 @@ fn test_no_narrow_when_switch_has_no_default() {
         "List unpacking requires an array",
     );
 }
+
+/// Verifies a nested diverging call in only one arm does not make the enclosing `if` terminal.
+#[test]
+fn test_no_narrow_when_nested_exit_branch_falls_through() {
+    expect_error(
+        "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { if ($flag) { exit(1); } } [$key, $value] = $entry; }",
+        "List unpacking requires an array",
+    );
+}
+
+/// Verifies a literal-true loop that can break may still fall through to the code after the guard.
+#[test]
+fn test_no_narrow_when_literal_true_loop_can_break() {
+    expect_error(
+        "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { while (true) { if ($flag) { break; } } } [$key, $value] = $entry; }",
+        "List unpacking requires an array",
+    );
+}

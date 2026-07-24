@@ -338,6 +338,96 @@ fn test_narrow_after_nested_if_all_branches_terminate() {
     assert_eq!(out, "a=b");
 }
 
+/// Verifies `exit()` and `die()` participate in the shared structural traversal when both paths of
+/// a nested `if` diverge. The old shallow checker overlay did not inspect the inner branches.
+#[test]
+fn test_narrow_after_nested_if_exit_and_die_paths() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    exit(1);
+                } else {
+                    die(2);
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"], true);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies checker-known `never` calls are threaded through nested structural analysis and can
+/// combine with an ordinary terminal branch.
+#[test]
+fn test_narrow_after_nested_if_never_and_return_paths() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    fail("missing");
+                } else {
+                    return "empty";
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"], true);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a statically infinite loop without a reachable `break` is non-fallthrough for
+/// post-guard narrowing, matching the shared function-exit analysis.
+#[test]
+fn test_narrow_after_statically_infinite_loop() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                while (true) {
+                    continue;
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a `do`/`while` whose mandatory first iteration exits through a checker-known `never`
+/// call is non-fallthrough even when its condition is false.
+#[test]
+fn test_narrow_after_do_while_body_never_call() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                do {
+                    fail("missing");
+                } while (false);
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
 /// Verifies a null guard whose nested `switch` exits on its single case and its `default` narrows
 /// the `?array` value for the following list unpack.
 #[test]
@@ -351,6 +441,31 @@ fn test_narrow_after_nested_switch_all_paths_terminate() {
                         return "one";
                     default:
                         throw new Exception("missing");
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"], 1);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a nested exhaustive `switch` combines a checker-known `never` call with shared
+/// `exit()` termination and still preserves the post-guard complement.
+#[test]
+fn test_narrow_after_nested_switch_never_and_exit_paths() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry, int $mode): string {
+            if ($entry === null) {
+                switch ($mode) {
+                    case 1:
+                        fail("missing");
+                    default:
+                        exit(2);
                 }
             }
             [$key, $value] = $entry;
@@ -385,6 +500,30 @@ fn test_narrow_after_nested_try_all_paths_terminate() {
     assert_eq!(out, "a=b|caught");
 }
 
+/// Verifies checker-known `never` divergence is propagated through `try` analysis while the catch
+/// path uses shared `die()` termination.
+#[test]
+fn test_narrow_after_nested_try_never_and_die_paths() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                try {
+                    fail("missing");
+                } catch (Throwable $e) {
+                    die(2);
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
 /// Verifies a null guard ending in `continue` before unreachable trailing code keeps the `?array`
 /// narrowing for the list unpack later in the same loop body. `continue` cannot reach the following
 /// statement even though it does not exit the function, so the complement is still sound.
@@ -412,9 +551,8 @@ fn test_narrow_after_continue_before_unreachable_code() {
     assert_eq!(out, "k1=v1;k2=v2;");
 }
 
-/// Verifies the narrowing-specific `exit()` overlay still fires — and now fires even when the
-/// diverging call is not the block's last statement. The structural termination model does not
-/// model `exit()`, so the checker overlay must keep the `?array` narrowing here.
+/// Verifies shared `exit()` termination still fires when the call is not the block's last
+/// statement, allowing the structural block scan to ignore unreachable trailing code.
 #[test]
 fn test_narrow_after_exit_before_unreachable_code() {
     let out = compile_and_run(
@@ -433,9 +571,8 @@ fn test_narrow_after_exit_before_unreachable_code() {
     assert_eq!(out, "a=b");
 }
 
-/// Verifies the narrowing-specific `never`-function overlay is preserved and now also fires when
-/// the diverging call precedes unreachable trailing code. A user function declared `never` needs
-/// the checker's function table, which the structural termination model does not consult.
+/// Verifies checker-known `never` divergence still fires when the call precedes unreachable
+/// trailing code. The checker supplies the function-table lookup to the shared structural model.
 #[test]
 fn test_narrow_after_never_call_before_unreachable_code() {
     let out = compile_and_run(
