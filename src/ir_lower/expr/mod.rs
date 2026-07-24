@@ -1289,8 +1289,28 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         return left;
     }
     match (&left, &right) {
-        (PhpType::Array(_), PhpType::Array(_)) => right.clone(),
-        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => right.clone(),
+        // Mismatched element types must widen elementwise (issue #549): letting
+        // one side win wholesale relabels the other side's runtime slots, so
+        // typed reads through the merged type misinterpret the payload bytes.
+        (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
+            PhpType::Array(Box::new(merge_ir_indexed_element_type(
+                left_elem.codegen_repr(),
+                right_elem.codegen_repr(),
+            )))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_ir_assoc_value_type(
+                left_key.codegen_repr(),
+                right_key.codegen_repr(),
+            )),
+            value: Box::new(merge_ir_assoc_value_type(
+                left_value.codegen_repr(),
+                right_value.codegen_repr(),
+            )),
+        },
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
@@ -4730,40 +4750,50 @@ pub(crate) fn lower_bound_closure_for_assignment(
     Some(closure_value)
 }
 
-/// Resolves the statically-known class name of an object expression used as the
-/// receiver of an instance first-class callable (`$obj->m(...)`).
-///
-/// Returns the normalized class name for `$var` (from `local_types`), `$this`
-/// (the current class), and `new` expressions; `None` when the receiver class
-/// cannot be determined statically.
+/// Resolves the statically-known class name of an object expression used as an instance-call
+/// receiver, including declared property and chained-call results.
 fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {
-    match &object.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .and_then(class_name_from_php_type),
-        ExprKind::This => ctx.current_class.as_deref().and_then(normalized_class_name),
-        ExprKind::NewObject { class_name, .. } => normalized_class_name(class_name.as_str()),
+    instance_callable_object_class_and_nullability(ctx, object).map(|(class_name, _)| class_name)
+}
+
+/// Resolves one instance-call receiver class and whether its expression may produce `null`.
+fn instance_callable_object_class_and_nullability(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<(String, bool)> {
+    let object_type = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned()?,
+        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
-            normalized_class_name(fallback_class.as_str())
+            PhpType::Object(fallback_class.to_string())
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions
             .get(name.as_str())
-            .and_then(|sig| class_name_from_php_type(&sig.return_type)),
-        _ => class_name_from_php_type(&infer_expr_type_syntactic(object)),
-    }
-}
-
-/// Returns a non-empty normalized class name for an object PHP type.
-fn class_name_from_php_type(ty: &PhpType) -> Option<String> {
-    match ty.codegen_repr() {
-        PhpType::Object(class_name) => normalized_class_name(&class_name),
-        _ => None,
-    }
+            .map(|sig| sig.return_type.clone())?,
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        _ => infer_expr_type_syntactic(object),
+    };
+    let (class_name, nullable) = singular_object_class(&object_type)?;
+    normalized_class_name(class_name).map(|class_name| (class_name, nullable))
 }
 
 /// Trims PHP's optional leading namespace separator from class metadata names.
@@ -7533,7 +7563,15 @@ fn array_literal_element_type_for_ir(
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-            PhpType::Array(elem) => elem.codegen_repr(),
+            // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
+            // bare-`array`-returning method) contributes no element constraint, so widen its
+            // Void/Never element to Mixed rather than collapsing the outer literal to
+            // `array<never>` — which would normalize to a `Void` element and emit an unsupported
+            // `array_push for PHP type Void` (`[...$acc, ...$this->more()]`).
+            PhpType::Array(elem) => match elem.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                other => other,
+            },
             _ => PhpType::Mixed,
         },
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
@@ -7558,6 +7596,23 @@ fn array_literal_element_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
+        // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
+        // or an object result is cast into an incorrectly stamped scalar array.
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7567,6 +7622,19 @@ fn array_literal_element_type_for_ir(
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
+    }
+}
+
+/// Returns the EIR array storage type for a resolved element type, or `None` when the type
+/// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
+/// is nonetheless collected into a literal) has no array-element representation — stamping it
+/// would emit an unsupported `array_push for PHP type Void` — so the caller keeps its syntactic
+/// fallback for that degenerate case, exactly as before this arm existed (no regression).
+fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
+    let stored = ir_array_storage_type(return_type);
+    match stored.codegen_repr() {
+        PhpType::Void | PhpType::Never => None,
+        _ => Some(stored),
     }
 }
 
@@ -7704,6 +7772,21 @@ fn assoc_array_literal_value_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7794,6 +7877,21 @@ pub(super) fn property_access_expr_type_for_ir(
         .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
 }
 
+/// Returns the declared property result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_property_access_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let property_type = property_access_expr_type_for_ir(ctx, object, property)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(property_type))
+    } else {
+        Some(property_type)
+    }
+}
+
 /// Returns the declared result type for an instance method call before its receiver is lowered.
 pub(super) fn method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -7804,6 +7902,21 @@ pub(super) fn method_call_expr_type_for_ir(
     let method_key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &method_key)
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+}
+
+/// Returns the declared method result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<PhpType> {
+    let return_type = method_call_expr_type_for_ir(ctx, object, method)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(return_type))
+    } else {
+        Some(return_type)
+    }
 }
 
 /// Merges associative-array value types for EIR storage metadata.
@@ -8034,9 +8147,25 @@ fn lower_nullable_array_access(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
+/// Lowers a subscript read whose receiver has already been evaluated,
+/// including the nullable-receiver guard. Used by the nested-assign parent
+/// lowering when a receiver produced by a for-write chain turns out not to be
+/// a boxed Mixed cell (e.g. ArrayAccess object intermediates, issue #555).
+pub(crate) fn lower_array_access_from_lowered_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_array_access(ctx, receiver, index, expr, true);
+    }
+    lower_array_access_from_value(ctx, receiver, index, expr, true)
+}
+
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
 }
@@ -14615,15 +14744,129 @@ fn coerce_value_for_temp(
     if source_ty == target_ty {
         return value;
     }
-    match target_ty {
+    match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => value,
+        _ => widen_container_value_for_temp(ctx, value, &source_ty, &target_ty, span),
     }
+}
+
+/// Widens a typed container branch value to a hidden temp's boxed-Mixed
+/// element storage before it is stored.
+///
+/// Mismatched array/array (or assoc/assoc) branch merges declare the temp with
+/// `Mixed` element storage (`wider_type_for_merge`, issue #549), so each
+/// branch's concrete container must box its slots via `ArrayToMixed` /
+/// `HashToMixed`: storing the raw pointer would let Mixed-element reads
+/// misinterpret the typed slot bytes. Borrowed sources (live locals, container
+/// element reads) are retained first so the conversion's copy-on-write split
+/// rewrites a private copy instead of boxing the source's slots in place; the
+/// conversion consumes that reference, and owning temporaries transfer their
+/// reference into the converted result, so no release is emitted here
+/// (mirrors `coerce_container_to_return_type`).
+fn widen_container_value_for_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let target_has_mixed_payload = match target_ty {
+        PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !target_has_mixed_payload {
+        return value;
+    }
+    let op = match (source_ty, target_ty) {
+        (PhpType::Array(source_elem), PhpType::Array(_))
+            if source_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::ArrayToMixed
+        }
+        (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
+            if source_value.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::HashToMixed
+        }
+        (PhpType::Mixed | PhpType::Union(_), _)
+            if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            // Whole-boxed sources (a `?array` value flowing through `??`)
+            // unbox the cell payload and convert it with the same
+            // runtime-call coercion declared container returns use. The
+            // conversion borrows the cell and owns a fresh container
+            // reference, so an owning cell must be consumed here.
+            //
+            // The indexed conversion consumes one owned payload reference
+            // and rewrites sole-owner arrays in place, which is only sound
+            // when the cell owns its payload. A borrowed cell (a `?array`
+            // parameter or local) shares its payload with a live caller
+            // array, so it unboxes through the owned-payload coercion —
+            // which retains the payload — and the consuming `ArrayToMixed`
+            // copy-on-write-splits into a private converted copy. The
+            // associative helper returns a fresh hash without consuming the
+            // payload reference, so borrowed hash cells keep the
+            // single-call coercion.
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
+                let unboxed = ctx.emit_value(
+                    Op::RuntimeCall,
+                    vec![value.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Never)),
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![unboxed.value],
+                    None,
+                    target_ty.clone(),
+                    Op::ArrayToMixed.default_effects(),
+                    Some(span),
+                );
+            }
+            let converted = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return converted;
+        }
+        _ => return value,
+    };
+    // Local loads report as *provisional* owners (their compensating releases
+    // are pruned at builder finalization when the slot stays concrete), so
+    // they must be treated as borrowed here: without a real retain the
+    // conversion's copy-on-write split would never trigger and the local's
+    // own array would be boxed in place while its slot type stays concrete.
+    let source_is_consumable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let source = if source_is_consumable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.emit_value(
+        op,
+        vec![source.value],
+        None,
+        target_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    )
 }
 
 /// Emits a branch to a target block when the current block can still fall through.

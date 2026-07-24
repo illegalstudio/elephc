@@ -40,6 +40,7 @@ const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
     "ValueError",
+    "UnhandledMatchError",
     "Exception",
     "LogicException",
     "BadFunctionCallException",

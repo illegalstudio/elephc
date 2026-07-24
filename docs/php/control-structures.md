@@ -243,6 +243,9 @@ echo $result; // two
 ```
 
 If no arm matches and there is no `default`, elephc aborts with a fatal runtime error.
+That implicit path does not currently construct a catchable `UnhandledMatchError`;
+the builtin class is available for explicit `new`, `throw`, `catch`, and `instanceof`
+expressions.
 
 Arms may produce values of different types (objects, arrays, strings, ints, `null`),
 and an arm may be a `throw` expression. When the arm types are heterogeneous, the

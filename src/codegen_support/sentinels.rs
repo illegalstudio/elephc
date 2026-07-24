@@ -147,6 +147,31 @@ pub(crate) fn emit_branch_if_null_container(
     }
 }
 
+/// Replaces the in-band `NULL_SENTINEL` in `value_reg` with a zero pointer, leaving any
+/// other value untouched. Clobbers `scratch_reg` with the sentinel bit pattern. Used where
+/// a null container must be representable by the cheap zero check alone — e.g. the
+/// by-reference foreach iterator source slot, whose live length is re-read every iteration
+/// (issue #556). Zero-pointer inputs are already normal and pass through unchanged.
+pub(crate) fn emit_normalize_null_container_to_zero(
+    emitter: &mut Emitter,
+    value_reg: &str,
+    scratch_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("csel {}, xzr, {}, eq", value_reg, value_reg)); // fold the sentinel into the canonical zero container pointer
+        }
+        Arch::X86_64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("mov {}, 0", scratch_reg));            // materialize the zero replacement without disturbing the comparison flags
+            emitter.instruction(&format!("cmove {}, {}", value_reg, scratch_reg)); // fold the sentinel into the canonical zero container pointer
+        }
+    }
+}
+
 /// Branches to `label` when the tagged scalar in the result registers is PHP null
 /// (tag register == null tag).
 pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &str) {

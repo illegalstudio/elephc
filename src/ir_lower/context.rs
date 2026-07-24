@@ -1888,6 +1888,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         match inst.immediate {
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+            )) => false,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
                     target.result_ownership(),

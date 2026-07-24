@@ -23,20 +23,21 @@ mod timezone_ids;
 /// `name` is the fully-qualified interface name. `extends` lists parent interfaces.
 /// `properties`, `methods`, and `constants` carry the type contract exposed to user code;
 /// the checker consults these to validate member access without emitting runtime behavior.
-/// Registers the nine builtin exception/error types (Throwable, Error, TypeError,
-/// ValueError, Exception, RuntimeException, JsonException, Fiber, FiberError) in
+/// Registers the builtin throwable hierarchy and Fiber declarations in
 /// `interface_map` and `class_map`.
 ///
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
-/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
-/// extend Error; RuntimeException extends Exception; JsonException extends
-/// RuntimeException; FiberError extends Error. Fiber is final with no parent.
+/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
+/// ArithmeticError/UnhandledMatchError extend Error; RuntimeException/
+/// ReflectionException extend Exception; JsonException extends RuntimeException;
+/// FiberError extends Error. Fiber is final with no parent.
 pub(crate) use declarations::{InterfaceDeclInfo, inject_builtin_throwables};
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, Exception, RuntimeException, JsonException, and FiberError.
+/// ValueError, ArithmeticError, UnhandledMatchError, Exception, RuntimeException,
+/// ReflectionException, JsonException, and FiberError.
 pub(crate) use exception::patch_builtin_exception_signatures;
 
 /// Patches Fiber method signatures in the checker after initial class registration.
