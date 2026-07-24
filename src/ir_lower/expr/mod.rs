@@ -1294,8 +1294,8 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         // typed reads through the merged type misinterpret the payload bytes.
         (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
             PhpType::Array(Box::new(merge_ir_indexed_element_type(
-                left_elem.codegen_repr(),
-                right_elem.codegen_repr(),
+                (**left_elem).clone(),
+                (**right_elem).clone(),
             )))
         }
         (
@@ -1303,12 +1303,12 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
             PhpType::AssocArray { key: right_key, value: right_value },
         ) => PhpType::AssocArray {
             key: Box::new(merge_ir_assoc_value_type(
-                left_key.codegen_repr(),
-                right_key.codegen_repr(),
+                (**left_key).clone(),
+                (**right_key).clone(),
             )),
             value: Box::new(merge_ir_assoc_value_type(
-                left_value.codegen_repr(),
-                right_value.codegen_repr(),
+                (**left_value).clone(),
+                (**right_value).clone(),
             )),
         },
         (
@@ -7650,16 +7650,7 @@ fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 
 /// Merges indexed-array element types for EIR storage metadata.
 fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return right;
-    }
-    if matches!(right.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers an associative array literal.
@@ -7921,16 +7912,7 @@ fn nullsafe_method_call_expr_type_for_ir(
 
 /// Merges associative-array value types for EIR storage metadata.
 fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left, PhpType::Never) {
-        return right;
-    }
-    if matches!(right, PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers a match expression with lazy arm-result evaluation.

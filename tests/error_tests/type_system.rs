@@ -879,3 +879,105 @@ fn test_error_exception_previous_rejects_non_throwable() {
         "previous",
     );
 }
+
+/// Regression for issue #587: a `match` merging two indexed arrays with different
+/// element types (`[1, 2]` vs `["a", "b"]`) must type as `array<mixed>`, so passing
+/// the result to a by-ref `array` parameter type-checks instead of failing with
+/// "expects Array(Mixed), got Mixed".
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_by_ref_array_param() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         function add(array &$a): void { $a[] = 5; } add($r);",
+    );
+}
+
+/// Regression for issue #587: a heterogeneous `match` array merge must satisfy the
+/// `array` argument of `array_sum()` and `in_array()`, which previously rejected the
+/// `mixed`-typed result.
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_array_builtins() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         echo array_sum($r); echo in_array(2, $r);",
+    );
+}
+
+/// Regression for issue #587: spreading a heterogeneous `match` array merge
+/// (`[...$r]`) must type-check. This also clears the misleading follow-on
+/// "Undefined variable: $s" that appeared because the spread's failure left the
+/// assignment target untyped.
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_spread() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         $s = [...$r]; echo count($s);",
+    );
+}
+
+/// Regression for issue #587: the same elementwise widening must apply to a
+/// ternary merge, not just `match`, since both share the merge join.
+#[test]
+fn test_heterogeneous_ternary_array_merge_accepts_array_use() {
+    expect_no_error("<?php $r = $argc > 1 ? [1, 2] : [\"a\", \"b\"]; echo array_sum($r);");
+}
+
+/// Regression for issue #587: `??` must join array element types just like
+/// `match`/ternary after removing null from the value side, instead of retaining
+/// the left branch's `array<int>` type.
+#[test]
+fn test_heterogeneous_null_coalesce_array_merge_widens_element_type() {
+    let tokens = tokenize(
+        "<?php function maybe(int $n) { return $n === 1 ? [1, 2] : null; } \
+         $r = maybe($argc) ?? [\"a\", \"b\"];",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Mixed)))
+    );
+}
+
+/// An empty branch contributes no element values, so `[]` merged with
+/// `array<int>` retains `array<int>` instead of widening unnecessarily.
+#[test]
+fn test_empty_match_array_branch_keeps_populated_element_type() {
+    let tokens = tokenize(
+        "<?php $r = match($argc) { 1 => [], default => [1, 2] };",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Int)))
+    );
+}
+
+/// Regression for issue #587: an associative merge whose value types differ
+/// (`["k" => 1]` vs `["k" => "v"]`) must widen elementwise to `array<string, mixed>`
+/// and stay an array, not collapse to bare `mixed`.
+#[test]
+fn test_heterogeneous_match_assoc_merge_stays_array() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [\"k\" => 1], default => [\"k\" => \"v\"] }; \
+         echo array_sum($r);",
+    );
+}
+
+/// Guards issue #587's fix against over-widening: a merge of non-array scalar arms
+/// (`1` vs `"a"`) must still type as `mixed`, so an array-only use like `array_sum()`
+/// stays rejected.
+#[test]
+fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
+    expect_error(
+        "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
+        "array_sum() argument must be array",
+    );
+}

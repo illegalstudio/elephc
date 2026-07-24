@@ -21,7 +21,7 @@ use crate::codegen_support::{abi, platform::Arch};
 ///
 /// # Input
 /// - ARM64: x0 holds the boxed mixed pointer on entry
-/// - x86_64: rdi holds the boxed mixed pointer on entry
+/// - x86_64: rax holds the boxed mixed pointer on entry
 ///
 /// # Output
 /// - ARM64: integer result returned in x0
@@ -99,7 +99,7 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 /// Results are returned in rax.
 ///
 /// # ABI
-/// - Input: rdi = boxed mixed pointer
+/// - Input: rax = boxed mixed pointer
 /// - Output: rax = integer result
 /// - Clobbers: rax, rdi, rdx, xmm0, rsp; preserves rbp
 fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {

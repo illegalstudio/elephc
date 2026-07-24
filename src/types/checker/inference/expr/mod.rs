@@ -427,11 +427,12 @@ impl Checker {
             ExprKind::NullCoalesce { value, default } => {
                 let vt = self.infer_type(value, env)?;
                 let dt = self.infer_type(default, env)?;
-                if Self::union_contains_void(&vt) {
-                    Ok(wider_type_syntactic(&self.strip_void_from_union(&vt), &dt))
+                let non_null_value = if Self::union_contains_void(&vt) {
+                    self.strip_void_from_union(&vt)
                 } else {
-                    Ok(wider_type_syntactic(&vt, &dt))
-                }
+                    vt
+                };
+                Ok(merge_null_coalesce_result_type(non_null_value, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -832,6 +833,7 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
 /// `Never`-typed arms (`throw`, normalized at the call site) defer to the
 /// other arm's type, `Void`-typed arms (checker `null`) keep the merge
 /// nullable so the null arm's value survives return-type-driven coercion.
+/// Array pairs widen their element types while keeping the array container.
 /// Object pairs, including supported `false`/null sentinels, retain a normalized
 /// union so declared object-union returns and member validation remain precise;
 /// every other heterogeneous pair widens to `Mixed` so each arm's runtime value
@@ -852,10 +854,63 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     if next == PhpType::Void {
         return nullable_match_arm_type(acc);
     }
+    if let Some(merged) = merge_array_branch_types(&acc, &next) {
+        return merged;
+    }
     if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
         return merge_object_union_match_arm_types(checker, acc, next);
     }
     PhpType::Mixed
+}
+
+/// Merges two array branch types elementwise so a heterogeneous `match`/ternary/`?:`/`??`
+/// merge stays an array instead of collapsing to bare `Mixed`.
+///
+/// The checker and lowering share `PhpType::widen_array_branch_element`, so
+/// empty-array placeholders defer to populated branches while real element-type
+/// disagreements widen to `Mixed`. This keeps the result valid for by-ref `array`
+/// parameters, array builtins, and spread. Returns `None` for pairs outside the
+/// indexed/indexed or associative/associative shapes, leaving the caller's existing
+/// object-union and `Mixed` handling untouched.
+fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
+    match (acc, next) {
+        (PhpType::Array(acc_elem), PhpType::Array(next_elem)) => Some(PhpType::Array(Box::new(
+            PhpType::widen_array_branch_element(
+                (**acc_elem).clone(),
+                (**next_elem).clone(),
+            ),
+        ))),
+        (
+            PhpType::AssocArray {
+                key: acc_key,
+                value: acc_value,
+            },
+            PhpType::AssocArray {
+                key: next_key,
+                value: next_value,
+            },
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::widen_array_branch_element(
+                (**acc_key).clone(),
+                (**next_key).clone(),
+            )),
+            value: Box::new(PhpType::widen_array_branch_element(
+                (**acc_value).clone(),
+                (**next_value).clone(),
+            )),
+        }),
+        _ => None,
+    }
+}
+
+/// Joins the non-null value and default types of `??`.
+///
+/// Array pairs use the same elementwise branch join as `match` and ternaries.
+/// Other pairs retain the existing syntactic coalesce rules, including numeric
+/// widening and the historical first-type fallback.
+fn merge_null_coalesce_result_type(value: PhpType, default: PhpType) -> PhpType {
+    merge_array_branch_types(&value, &default)
+        .unwrap_or_else(|| wider_type_syntactic(&value, &default))
 }
 
 /// Joins object/sentinel branch types at their existing compatible supertype
@@ -907,5 +962,120 @@ fn nullable_match_arm_type(ty: PhpType) -> PhpType {
             PhpType::Union(members)
         }
         other => PhpType::Union(vec![other, PhpType::Void]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two indexed arrays with divergent element types must merge to `array<mixed>`
+    /// (issue #587), keeping the branch result usable as an array.
+    #[test]
+    fn test_merge_array_branch_types_widens_heterogeneous_indexed() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::Array(Box::new(PhpType::Str)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Mixed))));
+    }
+
+    /// Two associative arrays whose value types differ must widen elementwise to
+    /// `array<string, mixed>` rather than collapsing to bare `Mixed`.
+    #[test]
+    fn test_merge_array_branch_types_widens_heterogeneous_assoc() {
+        let merged = merge_array_branch_types(
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            },
+        );
+        assert_eq!(
+            merged,
+            Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            })
+        );
+    }
+
+    /// Arrays that agree on their element type keep it (the `widen` no-op), so the
+    /// fix never over-widens a homogeneous merge.
+    #[test]
+    fn test_merge_array_branch_types_keeps_shared_element() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::Array(Box::new(PhpType::Int)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Int))));
+    }
+
+    /// An empty array's `Never` element placeholder contributes no value and must
+    /// defer to the populated branch, matching merge-temp storage.
+    #[test]
+    fn test_merge_array_branch_types_keeps_populated_element_against_empty() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Never)),
+            &PhpType::Array(Box::new(PhpType::Int)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Int))));
+    }
+
+    /// A real null element is not an empty-array placeholder, so null/int
+    /// alternatives require boxed `Mixed` elements.
+    #[test]
+    fn test_merge_array_branch_types_widens_null_and_int_elements() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Void)),
+            &PhpType::Array(Box::new(PhpType::Int)),
+        );
+        assert_eq!(merged, Some(PhpType::Array(Box::new(PhpType::Mixed))));
+    }
+
+    /// Null coalescing uses the same array-specific join instead of letting the
+    /// left element type win through the syntactic fallback.
+    #[test]
+    fn test_merge_null_coalesce_result_type_widens_array_elements() {
+        let merged = merge_null_coalesce_result_type(
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        assert_eq!(merged, PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+
+    /// An indexed-vs-associative mix is not covered by the elementwise rule and must
+    /// return `None`, matching the lowering side and preserving `Mixed` handling.
+    #[test]
+    fn test_merge_array_branch_types_rejects_indexed_assoc_mix() {
+        let merged = merge_array_branch_types(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Str),
+            },
+        );
+        assert_eq!(merged, None);
+    }
+
+    /// Non-array pairs (scalars, objects, `null`) must return `None` so scalar unions,
+    /// object unions, and nullable merges are left to their existing handling.
+    #[test]
+    fn test_merge_array_branch_types_rejects_non_array() {
+        assert_eq!(merge_array_branch_types(&PhpType::Int, &PhpType::Str), None);
+        assert_eq!(
+            merge_array_branch_types(
+                &PhpType::Object("A".to_string()),
+                &PhpType::Object("B".to_string())
+            ),
+            None
+        );
+        assert_eq!(
+            merge_array_branch_types(&PhpType::Array(Box::new(PhpType::Int)), &PhpType::Void),
+            None
+        );
     }
 }

@@ -78,6 +78,7 @@ mod array_slice_refcounted;
 mod array_splice;
 mod array_splice_refcounted;
 mod array_sum;
+mod array_sum_mixed;
 mod array_to_hash;
 mod array_to_mixed;
 mod array_udiff_uintersect;
@@ -116,6 +117,7 @@ mod hash_iter;
 mod hash_new;
 mod hash_set;
 mod hash_spread;
+mod hash_sum_mixed;
 mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
@@ -126,6 +128,7 @@ mod heap_debug_report;
 mod heap_debug_validate_free_list;
 mod heap_kind;
 mod heap_free;
+mod in_array_mixed_int;
 mod ksort;
 mod natsort;
 mod object_free_deep;
@@ -293,6 +296,8 @@ pub use array_splice_refcounted::emit_array_splice_refcounted;
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
 /// Emit array sum helper.
+pub use array_sum_mixed::emit_array_sum_mixed;
+/// Emit boxed-Mixed array sum helper.
 pub use array_to_hash::emit_array_to_hash;
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
 pub use array_to_mixed::emit_array_to_mixed;
@@ -361,6 +366,8 @@ pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.
+pub use hash_sum_mixed::emit_hash_sum_mixed;
+/// Emit boxed-Mixed associative-array sum helper.
 pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
@@ -381,6 +388,8 @@ pub use heap_kind::emit_heap_kind;
 /// Emit heap kind check helper.
 pub use heap_free::emit_heap_free;
 /// Emit heap free helper.
+pub use in_array_mixed_int::emit_in_array_mixed_int;
+/// Emit integer membership over boxed-Mixed indexed arrays.
 pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 /// Emit unsupported iterable kind error helper.
 pub use iterable_write_stdout::emit_iterable_write_stdout;

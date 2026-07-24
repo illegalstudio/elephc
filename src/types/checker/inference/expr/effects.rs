@@ -14,7 +14,7 @@ use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::super::syntactic::wider_type_syntactic;
+use super::merge_null_coalesce_result_type;
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -113,14 +113,15 @@ impl Checker {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?
                 };
-                if Self::union_contains_void(&value_ty) {
-                    Ok(wider_type_syntactic(
-                        &self.strip_void_from_union(&value_ty),
-                        &default_ty,
-                    ))
+                let non_null_value = if Self::union_contains_void(&value_ty) {
+                    self.strip_void_from_union(&value_ty)
                 } else {
-                    Ok(wider_type_syntactic(&value_ty, &default_ty))
-                }
+                    value_ty
+                };
+                Ok(merge_null_coalesce_result_type(
+                    non_null_value,
+                    default_ty,
+                ))
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;

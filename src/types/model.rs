@@ -224,6 +224,31 @@ impl PhpType {
         }
     }
 
+    /// Widens element types contributed by alternative array-producing branches.
+    ///
+    /// `Never` is the placeholder element type of an empty array literal, so it
+    /// contributes no runtime value and defers to the populated branch. The
+    /// `false` subtype and `bool` share the boolean contract; every other
+    /// disagreement requires boxed `Mixed` element storage.
+    pub fn widen_array_branch_element(a: PhpType, b: PhpType) -> PhpType {
+        if a == b {
+            return a;
+        }
+        if a == PhpType::Never {
+            return b;
+        }
+        if b == PhpType::Never {
+            return a;
+        }
+        if matches!(
+            (&a, &b),
+            (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)
+        ) {
+            return PhpType::Bool;
+        }
+        PhpType::Mixed
+    }
+
     /// Computes the result hash type for a two-input hash builtin (the `array_replace` /
     /// `array_diff_assoc` family). The key and value each widen to `Mixed` when the two inputs
     /// disagree, so a `foreach` over the result performs the correct runtime key/value dispatch

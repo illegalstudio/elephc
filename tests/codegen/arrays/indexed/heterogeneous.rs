@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - These fixtures cover literal construction, widening writes, foreach, COW,
-//!   and mutating builtin append paths.
+//!   scalar-consuming builtins, and mutating builtin append paths.
 
 use crate::support::*;
 
@@ -107,6 +107,41 @@ echo $items[0] . "|" . $items[1];
 "#,
     );
     assert_eq!(out, "1|two");
+}
+
+/// Verifies `array_sum()` coerces every boxed Mixed slot through PHP integer
+/// conversion rules rather than rejecting heterogeneous indexed arrays.
+#[test]
+fn test_heterogeneous_indexed_array_sum() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1, "2", "x", true, null];
+echo array_sum($items);
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Verifies integer membership over boxed Mixed slots distinguishes PHP loose
+/// scalar comparison from strict type-and-value comparison.
+#[test]
+fn test_heterogeneous_indexed_array_in_array_integer_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["2", 2.0, true, null, "x"];
+$other = ["x", 1];
+echo in_array(2, $items) ? "1" : "0";
+echo "|";
+echo in_array(2, $items, true) ? "1" : "0";
+echo "|";
+echo in_array(0, $items) ? "1" : "0";
+echo "|";
+echo in_array(0, $items, true) ? "1" : "0";
+echo "|";
+echo in_array(0, $other) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1|0|1|0|0");
 }
 
 /// Verifies that widening an integer slot to string via `[]` append does not
