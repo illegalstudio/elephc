@@ -147,10 +147,12 @@ impl Checker {
             eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
+            current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
+            loop_storage_types: HashMap::new(),
         }
     }
 }

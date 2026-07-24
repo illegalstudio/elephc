@@ -351,6 +351,289 @@ echo $sum;
     assert_eq!(out, "6");
 }
 
+/// Regression for #594: reassigning an array local to a literal built from its own current
+/// element (`$r = [$r[0] - 1, 0]`) inside a `for` loop. The rebuilt literal is `array<mixed>`
+/// (the `$r[0] - 1` overflow-checked subtraction boxes), but a read of `$r[0]` at the top of the
+/// single-pass loop body was still typed against the entry `array<int>`, so from iteration 2 on
+/// it read the boxed cell as a raw int and printed heap addresses. The loop-entry widening must
+/// promote `$r` to `array<mixed>` so every read uses the boxed element representation.
+#[test]
+fn test_loop_reassigned_self_ref_literal_decrement_for() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$out = "";
+for ($k = 0; $k < 6; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [$r[0] - 1, 0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,-1,-2,");
+}
+
+/// Regression for #594: the same self-referential rebind in a `while` condition. Before the fix
+/// the corrupted `$r[0]` read was a heap address (always truthy), so the loop never terminated;
+/// the guard here caps it at 10 to keep the test finite. With the fix the loop terminates after
+/// exactly 3 iterations, matching PHP.
+#[test]
+fn test_loop_reassigned_self_ref_literal_while_terminates() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 0;
+$r = [3, 0];
+$guard = 0;
+while ($r[0] && $guard < 10) {
+    $count++;
+    $guard++;
+    $r = [$r[0] - 1, 0];
+}
+echo $count;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Regression for #594: a pure self-referential swap `$r = [$r[1], $r[0]]`. Each array read is
+/// typed `int|null` (the inline tagged-scalar representation), so the rebuilt literal changes
+/// element shape versus the entry `array<int>` even though no arithmetic is involved. The same
+/// loop-entry widening must promote `$r` so both elements read back correctly each iteration.
+#[test]
+fn test_loop_reassigned_self_ref_literal_swap() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [1, 2];
+$out = "";
+for ($k = 0; $k < 4; $k++) {
+    $out = $out . $r[0] . "-" . $r[1] . ",";
+    $r = [$r[1], $r[0]];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "1-2,2-1,1-2,2-1,");
+}
+
+/// Regression for #594: the float flavour of the self-referential rebind, confirming the
+/// promotion is representation-general (float element boxed into the mixed cell), not int-only.
+#[test]
+fn test_loop_reassigned_self_ref_literal_float() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [1.5, 0.0];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [$r[0] - 1, 0.0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "1.5,0.5,-0.5,");
+}
+
+/// Regression guard for #594: seeding the initializer with a runtime value (`[$argc + 2, 0]`)
+/// already produced correct output before the fix, because the entry array is `array<mixed>`
+/// from the start. This must stay correct so the widening does not depend on a constant-literal
+/// initializer.
+#[test]
+fn test_loop_reassigned_self_ref_literal_runtime_seeded_control() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [$argc + 2, 0];
+$out = "";
+for ($k = 0; $k < 6; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [$r[0] - 1, 0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,-1,-2,");
+}
+
+/// Regression guard for #594: a self-referential rebind whose element stays a raw `int`
+/// (`$r = [count($r), 0]`, still `array<int>`) must NOT be widened — the entry representation is
+/// unchanged, so promoting it would waste a conversion and change nothing. Verifies the widening
+/// triggers on the element-representation change, not on self-reference alone.
+#[test]
+fn test_loop_reassigned_self_ref_same_repr_not_widened() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [count($r), 0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,2,");
+}
+
+/// Regression for #594: the promotion must not leak or double-free the previous array. The
+/// widening converts the entry array in place and each rebind releases the prior array before
+/// storing the new one; a `for` loop over the self-referential rebind must end with a clean heap
+/// (allocations == deallocations).
+#[test]
+fn test_loop_reassigned_self_ref_literal_heap_clean() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$r = [50, 0];
+for ($k = 0; $k < 50; $k++) {
+    $r = [$r[0] - 1, 0];
+}
+echo $r[0];
+"#,
+    );
+    assert_eq!(out.stdout, "0");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression for #607: loop storage inference must iterate when an external scalar widens
+/// before feeding an array rebind. A one-shot scan sees `$v` as the entry `int` and misses that
+/// checked subtraction makes it `mixed`, leaving the next iteration's `$r[0]` read raw.
+#[test]
+fn test_loop_reassigned_array_cascading_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$out = "";
+$v = 3;
+for ($k = 0; $k < 4; $k++) {
+    $out = $out . $r[0] . ",";
+    $v = $v - 1;
+    $r = [$v, 0];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Regression for #608: two different raw array element layouts must join to boxed `mixed`
+/// storage at the loop header. Otherwise the single lowered string read interprets later raw
+/// integers as `{pointer, length}` string descriptors and silently emits empty output.
+#[test]
+fn test_loop_reassigned_array_raw_to_raw_representation_join() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["x", "y"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = [$k, $k];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "x,0,1,");
+}
+
+/// Verifies loop storage inference follows a non-literal RHS through another local instead of
+/// relying on array-literal-only inference in EIR lowering.
+#[test]
+fn test_loop_reassigned_array_non_literal_rhs_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+$r = [3, 0];
+$next = $r;
+$out = "";
+for ($k = 0; $k < 4; $k++) {
+    $out = $out . $r[0] . ",";
+    $next = [$r[0] - 1, 0];
+    $r = $next;
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies a call-produced array rebind consumes the same checker storage contract as literals
+/// and local aliases; EIR must not need to recognize the RHS expression shape independently.
+#[test]
+fn test_loop_reassigned_array_call_rhs_fixed_point() {
+    let out = compile_and_run(
+        r#"<?php
+function makeRow(int $value): array {
+    return [$value, $value];
+}
+$r = ["x", "y"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $r[0] . ",";
+    $r = makeRow($k);
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "x,0,1,");
+}
+
+/// Verifies the checker-recorded fixed-point contract reaches function EIR lowering rather than
+/// depending on main's final top-level environment.
+#[test]
+fn test_loop_reassigned_array_fixed_point_inside_function() {
+    let out = compile_and_run(
+        r#"<?php
+function countdown(array $row): string {
+    $out = "";
+    for ($k = 0; $k < 4; $k++) {
+        $out = $out . $row[0] . ",";
+        $row = [$row[0] - 1, 0];
+    }
+    return $out;
+}
+echo countdown([3, 0]);
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies nested closure scope keys carry the checker contract into the generated closure EIR
+/// function without colliding with loops at the same line/column in other function-like bodies.
+#[test]
+fn test_loop_reassigned_array_fixed_point_inside_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$countdown = function(array $row): string {
+    $out = "";
+    for ($k = 0; $k < 4; $k++) {
+        $out = $out . $row[0] . ",";
+        $row = [$row[0] - 1, 0];
+    }
+    return $out;
+};
+echo $countdown([3, 0]);
+"#,
+    );
+    assert_eq!(out, "3,2,1,0,");
+}
+
+/// Verifies the fixed-point storage join covers associative-array values and materializes
+/// `HashToMixed` before a raw string payload is rebound to raw integers.
+#[test]
+fn test_loop_reassigned_assoc_array_raw_to_raw_representation_join() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$row = ["value" => "x"];
+$out = "";
+for ($k = 0; $k < 3; $k++) {
+    $out = $out . $row["value"] . ",";
+    $row = ["value" => $k];
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out.stdout, "x,0,1,");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Verifies array access on function call result.
 #[test]
 fn test_array_access_on_function_call_result() {

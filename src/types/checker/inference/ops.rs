@@ -381,12 +381,21 @@ impl Checker {
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return =
             matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+        let previous_loop_storage_scope = self.current_loop_storage_scope.clone();
+        let loop_storage_scope = crate::types::nested_loop_storage_scope(
+            &previous_loop_storage_scope,
+            expr.span,
+        );
+        self.loop_storage_types
+            .retain(|(scope, _), _| scope != &loop_storage_scope);
+        self.current_loop_storage_scope = loop_storage_scope;
         let body_result = self.with_local_storage_context(closure_ref_params, |checker| {
             for stmt in body {
                 checker.check_stmt(stmt, &mut closure_sig.env)?;
             }
             Ok(())
         });
+        self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
         body_result?;

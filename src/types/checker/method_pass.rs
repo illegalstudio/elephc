@@ -137,6 +137,13 @@ impl Checker {
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
+                    let loop_storage_scope = format!("{}::{}", class.name, method.name);
+                    self.loop_storage_types
+                        .retain(|(scope, _), _| scope != &loop_storage_scope);
+                    let previous_loop_storage_scope = std::mem::replace(
+                        &mut self.current_loop_storage_scope,
+                        loop_storage_scope,
+                    );
                     let method_ref_params: Vec<String> = method
                         .params
                         .iter()
@@ -162,6 +169,7 @@ impl Checker {
                     self.current_method = None;
                     self.current_method_is_static = false;
                     self.current_by_ref_return = false;
+                    self.current_loop_storage_scope = previous_loop_storage_scope;
                 }
             }
 
