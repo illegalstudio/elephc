@@ -16,10 +16,10 @@
 //!   (`0x7ffffffffffffffe`) passed the plain-zero guard and the header read
 //!   faulted at `sentinel - 8`.
 //! - The fix guards the payload for the null pointer and the null-container
-//!   sentinel and, for a container-shaped tag (indexed, associative, or null),
-//!   autovivifies a fresh empty indexed array into the Mixed cell and appends at
-//!   index 0 through `__rt_mixed_array_set` — mirroring PHP's `$x[] = v` on
-//!   `null`.
+//!   sentinel, normalizes null-shaped containers to canonical Mixed null while
+//!   boxing, and delegates every append to `__rt_mixed_array_append`. The runtime
+//!   helper autovivifies null, writes indexed arrays through the shared setter,
+//!   and appends real associative arrays through `__rt_hash_append`.
 //! - The fixtures make the taken arm `$argc`-dependent so the ternary genuinely
 //!   merges to `Mixed` (constant folding cannot collapse it); the test harness
 //!   runs the binary with no arguments, so `$argc == 1` selects the first arm.
@@ -155,6 +155,49 @@ echo $r[0], $r[1], $r[2], ":", count($r), "\n";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "the real-array append path must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// A canonical tag-8 Mixed null (not a missed-read sentinel) must exercise the
+/// same PHP autovivification contract and transfer the fresh array cleanly.
+#[test]
+fn test_append_autovivifies_canonical_mixed_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function append_to_null(mixed $value): mixed {
+    $value[] = "z";
+    return $value;
+}
+$r = append_to_null(null);
+echo count($r), ":", $r[0], "\n";
+"#,
+    );
+    assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "1:z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "canonical-null autovivification must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// A real associative array inside a Mixed cell must preserve its string and
+/// integer keys while `$r[]` uses PHP's next automatic integer key.
+#[test]
+fn test_append_real_assoc_mixed_cell_uses_next_integer_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = $argc == 1 ? ["x" => 1, 5 => "five"] : 7;
+$r[] = "z";
+echo count($r), ":", $r["x"], ":", $r[5], ":", $r[6], "\n";
+"#,
+    );
+    assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "3:1:five:z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "associative Mixed append must not leak, got: {}",
         out.stderr
     );
 }

@@ -11,10 +11,13 @@
 //! - A string key on an indexed payload promotes the payload to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
+//! - Canonical null and legacy null-container payloads autovivify through the
+//!   shared cell helper before any container header is dereferenced.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
+use crate::codegen_support::NULL_SENTINEL;
 
 /// Emits the `__rt_mixed_array_set` runtime helper for writing into boxed Mixed arrays.
 ///
@@ -40,8 +43,8 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 /// - `x3`: pointer to the boxed `Mixed` value being written
 ///
 /// Behavior:
-/// - If `x0` is null or the payload is neither indexed array (tag 4) nor assoc array (tag 5),
-///   the value is released via `__rt_decref_mixed` and the helper returns.
+/// - If `x0` is null or the payload is not an array/null shape, the value is
+///   released via `__rt_decref_mixed`; null-shaped cells autovivify first.
 /// - For indexed arrays the slot is mutated directly; for assoc arrays `__rt_hash_set` is called.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
@@ -69,10 +72,15 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_assoc");                     // route hash arrays to key-based mutation
     emitter.instruction("cmp x9, #6");                                          // is the Mixed payload an object?
     emitter.instruction("b.eq __rt_mixed_array_set_object");                    // route runtime-managed ArrayAccess objects to offsetSet
+    emitter.instruction("cmp x9, #8");                                          // is the Mixed payload canonical PHP null?
+    emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // direct writes autovivify null into indexed storage
     emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
-    emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null array payloads cannot be mutated
+    emitter.instruction("cbz x10, __rt_mixed_array_set_autovivify");            // legacy null payloads autovivify before header access
+    abi::emit_load_int_immediate(emitter, "x11", NULL_SENTINEL);
+    emitter.instruction("cmp x10, x11");                                        // does the indexed payload carry the null-container sentinel?
+    emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // sentinels are PHP null, never array pointers
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.ne __rt_mixed_array_set_promote");                   // string keys promote the indexed payload to hash storage (PHP semantics)
@@ -137,6 +145,12 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x10]");                                      // store the extended logical length
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after extending the array
 
+    emitter.label("__rt_mixed_array_set_autovivify");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the existing null-shaped Mixed cell
+    emitter.instruction("bl __rt_mixed_cell_autovivify_array");                 // install a fresh empty indexed array in the cell
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-indexed receiver cell
+    emitter.instruction("b __rt_mixed_array_set_indexed");                      // apply the original key/value through the normal setter
+
     emitter.label("__rt_mixed_array_set_promote");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell for the promotion helper
     emitter.instruction("bl __rt_mixed_cell_promote_to_hash");                  // convert the indexed payload to hash storage in the cell
@@ -145,7 +159,10 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_set_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the associative-array hash pointer from the Mixed payload
-    emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null hash payloads cannot be mutated
+    emitter.instruction("cbz x10, __rt_mixed_array_set_autovivify");            // legacy null hashes autovivify to indexed storage
+    abi::emit_load_int_immediate(emitter, "x11", NULL_SENTINEL);
+    emitter.instruction("cmp x10, x11");                                        // does the hash payload carry the null-container sentinel?
+    emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // sentinel hashes are PHP null, never table pointers
     emitter.instruction("mov x0, x10");                                         // pass the current hash table to the hash-set helper
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
@@ -260,11 +277,16 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_assoc");                       // route hash arrays to key-based mutation
     emitter.instruction("cmp r10, 6");                                          // is the Mixed payload an object?
     emitter.instruction("je __rt_mixed_array_set_object");                      // route runtime-managed ArrayAccess objects to offsetSet
+    emitter.instruction("cmp r10, 8");                                          // is the Mixed payload canonical PHP null?
+    emitter.instruction("je __rt_mixed_array_set_autovivify");                  // direct writes autovivify null into indexed storage
     emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
-    emitter.instruction("test r10, r10");                                       // null array payloads cannot be mutated
-    emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the array payload is absent
+    emitter.instruction("test r10, r10");                                       // legacy null payloads are not dereferenceable arrays
+    emitter.instruction("je __rt_mixed_array_set_autovivify");                  // autovivify before any header access
+    abi::emit_load_int_immediate(emitter, "r11", NULL_SENTINEL);
+    emitter.instruction("cmp r10, r11");                                        // does the indexed payload carry the null-container sentinel?
+    emitter.instruction("je __rt_mixed_array_set_autovivify");                  // sentinels are PHP null, never array pointers
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("jne __rt_mixed_array_set_promote");                    // string keys promote the indexed payload to hash storage (PHP semantics)
@@ -328,6 +350,12 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r8");                             // store the extended logical length
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after extending the array
 
+    emitter.label("__rt_mixed_array_set_autovivify");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the existing null-shaped Mixed cell
+    emitter.instruction("call __rt_mixed_cell_autovivify_array");               // install a fresh empty indexed array in the cell
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the now-indexed receiver cell
+    emitter.instruction("jmp __rt_mixed_array_set_indexed");                    // apply the original key/value through the normal setter
+
     emitter.label("__rt_mixed_array_set_promote");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell for the promotion helper
     emitter.instruction("call __rt_mixed_cell_promote_to_hash");                // convert the indexed payload to hash storage in the cell
@@ -336,8 +364,11 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_set_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the associative-array hash pointer from the Mixed payload
-    emitter.instruction("test r10, r10");                                       // null hash payloads cannot be mutated
-    emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the hash payload is absent
+    emitter.instruction("test r10, r10");                                       // legacy null hashes are not dereferenceable tables
+    emitter.instruction("je __rt_mixed_array_set_autovivify");                  // autovivify null hashes to indexed storage
+    abi::emit_load_int_immediate(emitter, "r11", NULL_SENTINEL);
+    emitter.instruction("cmp r10, r11");                                        // does the hash payload carry the null-container sentinel?
+    emitter.instruction("je __rt_mixed_array_set_autovivify");                  // sentinel hashes are PHP null, never table pointers
     emitter.instruction("mov rdi, r10");                                        // pass the current hash table to the hash-set helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
