@@ -3,23 +3,23 @@
 namespace Showcases\Doom\Map;
 
 class MapData {
-    public $mapName;
-    public $markerIndex;
-    public $thingCount;
-    public $linedefCount;
-    public $sidedefCount;
-    public $vertexCount;
-    public $segCount;
-    public $subSectorCount;
-    public $nodeCount;
-    public $sectorCount;
-    public $minX;
-    public $maxX;
-    public $minY;
-    public $maxY;
-    public $playerStartX;
-    public $playerStartY;
-    public $playerStartAngle;
+    public string $mapName;
+    public int $markerIndex;
+    public int $thingCount;
+    public int $linedefCount;
+    public int $sidedefCount;
+    public int $vertexCount;
+    public int $segCount;
+    public int $subSectorCount;
+    public int $nodeCount;
+    public int $sectorCount;
+    public int $minX;
+    public int $maxX;
+    public int $minY;
+    public int $maxY;
+    public int $playerStartX;
+    public int $playerStartY;
+    public int $playerStartAngle;
     public $things;
     public $linedefs;
     public $sidedefs;
@@ -31,7 +31,7 @@ class MapData {
     public $paletteReds;
     public $paletteGreens;
     public $paletteBlues;
-    public $paletteCount;
+    public int $paletteCount;
 
     public function __construct(string $mapName, int $markerIndex) {
         $this->mapName = $mapName;
