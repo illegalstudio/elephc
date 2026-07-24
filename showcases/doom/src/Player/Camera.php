@@ -3,16 +3,12 @@
 namespace Showcases\Doom\Player;
 
 class Camera {
-    public $x;
-    public $y;
-    public $z;
-    public $angle;
+    public int $x = 0;
+    public int $y = 0;
+    public int $z = 0;
+    public int $angle = 0;
 
     public function __construct() {
-        $this->x = 0;
-        $this->y = 0;
-        $this->z = 0;
-        $this->angle = 0;
     }
 
     public function setSpawn(int $x, int $y, int $angle): void {
