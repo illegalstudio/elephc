@@ -271,3 +271,39 @@ echo $value;
         "a user-call result borrowed from a local argument must not be released"
     );
 }
+
+/// Verifies a freshly boxed owned Mixed argument to a callee that returns it is not
+/// released as an argument temporary (issue #604). The argument box and the returned
+/// box are the same allocation, so the caller must let ownership flow through the
+/// result; releasing the argument as well frees the box once too often.
+#[test]
+fn owned_mixed_argument_returned_by_callee_is_not_released_as_arg_temp() {
+    let module = super::lower_source(
+        r#"<?php
+function idv(mixed $value): mixed { return $value; }
+function run(int $i): void {
+    $r = idv($i + 1);
+    echo $r;
+}
+run(5);
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("expected the run EIR function");
+    let argument = function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::Call)
+        .and_then(|inst| inst.operands.first().copied())
+        .expect("expected the idv call argument value");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(argument)),
+        "a fresh owned Mixed argument returned by the callee must not also be released as an arg temporary"
+    );
+}

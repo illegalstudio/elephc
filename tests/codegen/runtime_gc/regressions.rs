@@ -3801,3 +3801,173 @@ echo "Total: " . $total . "\n";
         out.stderr
     );
 }
+
+/// Regression test for issue #604: a freshly boxed owned Mixed value passed
+/// *directly* as a call argument to a function that returns that parameter, with the
+/// result consumed, must not over-release the shared box. The argument box and the
+/// returned box are the same allocation (`return $x` hands the parameter straight
+/// back); releasing it both as the argument temporary and as the call result frees it
+/// once too often. Before the fix, the caller released the argument box after the
+/// call and then re-acquired the same freed box to store the result — heap debug
+/// aborts with `bad refcount` (incref on a freed block).
+#[test]
+fn test_direct_owned_mixed_call_arg_with_consumed_result_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = idv($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the shared argument/return box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (single-call shape): the same over-release without a
+/// loop. The argument `$i + 1` is a fresh owned Mixed box passed directly to a callee
+/// that returns it, and the result is stored and echoed. Before the fix the stored
+/// value read back empty because the box was freed before the result was claimed.
+#[test]
+fn test_direct_owned_mixed_call_arg_single_call_is_correct() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+function test($i) {
+    $r = idv($i + 1);
+    echo $r, "\n";
+}
+test(5);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the single-call shared box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (method dispatch): a method that returns its
+/// parameter exercises the same shared argument/return box through the method-call
+/// argument-release path.
+#[test]
+fn test_direct_owned_mixed_method_arg_returns_arg_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { function idv($x) { return $x; } }
+$b = new Box();
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = $b->idv($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the shared method argument/return box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (discarded result): a side-effecting callee that
+/// returns its parameter is called with a fresh owned Mixed box whose result is
+/// discarded. The single shared box must be released exactly once (by the discarded
+/// call result), not twice.
+#[test]
+fn test_direct_owned_mixed_call_arg_discarded_result_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function tap($x) { global $seen; $seen = $seen + 1; return $x; }
+$seen = 0;
+for ($i = 0; $i < 20; $i++) { tap($i + 1); }
+echo $seen, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the discarded shared box to be released exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Control for issue #604: routing the fresh owned box through a local first stays
+/// clean. The argument is then a borrowed local load (not an owning temporary), so the
+/// argument-release suppression must not apply and the box stays owned by the local
+/// and by `$r`. Guards against the fix over-releasing the borrowed-argument path.
+#[test]
+fn test_owned_mixed_call_arg_via_local_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $x = $i + 1; $r = idv($x); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the via-local borrowed argument path to stay clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Control for issue #604: a callee that does *not* return its argument (returns a
+/// constant) must still release the fresh owned Mixed box argument — the fix must not
+/// suppress the argument release for an unproven/non-aliasing return, or the box would
+/// leak once per call (the sibling leak, issue #486).
+#[test]
+fn test_owned_mixed_call_arg_callee_returns_constant_releases_arg() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function konst($x) { return 7; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = konst($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the fresh argument box to be released when the callee drops it, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (conditional-return callee, alias path): a callee
+/// that returns its parameter on one branch (`if ($c) return $x;`) is summarized as
+/// possibly returning that parameter, so the fix suppresses the argument release. When
+/// the runtime always takes the aliasing branch, the fresh boxed `$i + 1` flows through
+/// the result and is released exactly once — heap stays clean. (When a call instead
+/// takes the non-aliasing branch, the suppressed box leaks; that is the deliberate
+/// leak-over-crash trade-off documented at the suppression site.)
+#[test]
+fn test_conditional_return_callee_alias_path_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, 1); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the conditional-return alias path to stay balanced, got: {}",
+        out.stderr
+    );
+}

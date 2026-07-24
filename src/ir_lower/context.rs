@@ -1726,6 +1726,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns whether a call result can legally reuse one argument's refcounted payload.
+    ///
+    /// This is the conservative check used on the *may-alias* path (a callee whose
+    /// summary is `Unknown` or only possibly returns the parameter). A freshly boxed
+    /// checked-arithmetic operand is excluded here: without a proof that the callee
+    /// hands it back, the caller must still release that owning temporary after the
+    /// call, or it leaks once per call (issue #486). When the callee is *proven* to
+    /// return the parameter, callers use [`Self::arg_and_result_types_can_alias`]
+    /// instead, which admits those fresh boxes (issue #604).
     pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
         if matches!(
             self.builder.value_defining_op(argument),
@@ -1733,6 +1741,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         ) {
             return false;
         }
+        self.arg_and_result_types_can_alias(argument, result)
+    }
+
+    /// Returns whether the argument and result runtime types permit a shared payload.
+    ///
+    /// This is the pure type-compatibility half of [`Self::call_result_may_alias_arg`],
+    /// without the fresh-arithmetic-box exclusion. It is consulted on the proven-return
+    /// path: a callee proven to return this parameter (`return $x;`) genuinely hands the
+    /// same box straight back even when the argument was a freshly boxed `$i + 1`, so the
+    /// caller must not also release it as an argument temporary (issue #604).
+    pub(crate) fn arg_and_result_types_can_alias(
+        &self,
+        argument: ValueId,
+        result: ValueId,
+    ) -> bool {
         let argument_type = self.builder.value_php_type(argument).codegen_repr();
         let result_type = self.builder.value_php_type(result).codegen_repr();
         if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
