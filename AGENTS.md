@@ -579,3 +579,28 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+
+## Cursor Cloud specific instructions
+
+The dependency-refresh update script runs `cargo build` on startup, which also
+materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
+compiled programs. Standard build/test/run commands are documented above and in
+`CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
+
+- **Rust toolchain is version-pinned.** CI pins the toolchain in
+  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
+  greps build output, so use that exact toolchain rather than a floating
+  `stable`. The cloud VM has it installed and set as the rustup default.
+- **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
+  On Linux, compiling a program prints benign linker warnings
+  (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,
+  executable stack). They are not errors — the produced binary runs fine.
+- **`php` is not installed.** PHP-equivalence cross-check tests
+  (`ELEPHC_PHP_CHECK=1 cargo test ...`) will not run without installing a PHP
+  interpreter first. Normal codegen tests do not need it.
+- **Docker-based Linux cross-test scripts are unavailable by default.**
+  `scripts/test-linux-x86_64.sh` / `-arm64.sh` require Docker, which is not set
+  up here. Rely on host `cargo test`/`cargo nextest` (this VM is `linux-x86_64`)
+  and CI for the full target matrix.
+- **Quick end-to-end sanity check:** `cargo run -- examples/fizzbuzz/main.php`
+  then `./examples/fizzbuzz/main`.
