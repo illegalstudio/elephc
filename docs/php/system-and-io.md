@@ -157,6 +157,7 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 |---|---|---|
 | `JsonSerializable` | Interface | Implementing classes can override `jsonSerialize(): mixed`; `json_encode()` dispatches to it instead of walking public properties. |
 | `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. `FiberError` extends this class. |
+| `UnhandledMatchError` | Class | `extends Error` and inherits its constructor and standard `Throwable` API. Explicit instances can be thrown and caught; an implicit unmatched `match` currently remains a fatal runtime error. |
 | `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. |
 | `RuntimeException` | Class | `extends Exception`. Standard PHP "runtime errors" base class. |
 | `JsonException` | Class | `extends RuntimeException`. Carries the originating `JSON_ERROR_*` code; `getCode()` returns it (e.g. 4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN). |

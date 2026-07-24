@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
-    Terminator,
+    RuntimeCallTarget, Terminator,
 };
 use crate::ir_lower::context::{
     FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext,
@@ -21,7 +21,8 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, array_access_expr_value_type_for_ir, call_return_type,
-    coerce_to_int_at_span, lower_callable_array_for_assignment,
+    coerce_to_int_at_span, index_expr_key_type, lower_array_access_from_lowered_receiver,
+    lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
     method_call_expr_type_for_ir, property_access_expr_type_for_ir,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
@@ -1027,9 +1028,11 @@ fn lower_nested_array_assign(
     // silently lost (#529). Splitting off the innermost key writes through the
     // parent cell instead (`__rt_mixed_array_set` for Mixed parents,
     // `offsetSet` for ArrayAccess objects), which mutates the aliased
-    // container for every slot representation.
+    // container for every slot representation. The parent chain itself is
+    // lowered with fetch-for-write semantics so missing or null intermediate
+    // elements autovivify as arrays instead of dropping the write (#555).
     if let ExprKind::ArrayAccess { array, index } = &target.kind {
-        let parent = lower_expr(ctx, array);
+        let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
         let value = lower_expr(ctx, value);
         ctx.emit_void(
@@ -1043,9 +1046,10 @@ fn lower_nested_array_assign(
         release_persisted_string_operand(ctx, value, span);
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
-        // reference). The set helper mutates through the cell/object without
-        // consuming that reference, so release it here. Non-owning parents
-        // (plain locals, `$this`) are left to normal scope cleanup.
+        // reference — fresh, retained, or installed by autovivification). The
+        // set helper mutates through the cell/object without consuming that
+        // reference, so release it here. Non-owning parents (plain locals,
+        // `$this`) are left to normal scope cleanup.
         if ctx.value_is_owning_temporary(parent) {
             crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
         }
@@ -1060,6 +1064,177 @@ fn lower_nested_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Lowers the parent chain of a nested array assignment with write-context
+/// (fetch-for-write) semantics (issue #555): missing indexed elements, null
+/// gap slots, boxed `Mixed(null)` elements, and missing hash keys autovivify
+/// as empty arrays installed into the parent storage, and the STORED cell is
+/// returned so the leaf write lands in the parent container. PHP emits no
+/// undefined-key warning for these legal writes, and neither does this path.
+/// Shapes without a for-write lowering fall back to the plain read used
+/// before (ArrayAccess objects, non-container receivers).
+fn lower_nested_assign_parent(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        return lower_expr(ctx, expr);
+    };
+    // Concrete container locals: ensure the element exists through the
+    // runtime wrapper and store the possibly reallocated container back.
+    if let ExprKind::Variable(name) = &array.kind {
+        let name = name.clone();
+        if let Some(parent) = lower_local_parent_fetch_for_write(ctx, &name, index, expr) {
+            return parent;
+        }
+    }
+    // Boxed Mixed receivers: chains recurse with for-write semantics; other
+    // receiver shapes evaluate once as plain reads of the receiver cell.
+    let receiver = if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
+        lower_nested_assign_parent(ctx, array, span)
+    } else {
+        lower_expr(ctx, array)
+    };
+    if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
+        let key = lower_expr(ctx, index);
+        let parent = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![receiver.value, key.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(expr.span),
+        );
+        release_persisted_string_operand(ctx, key, span);
+        if ctx.value_is_owning_temporary(receiver) {
+            crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+        }
+        return parent;
+    }
+    // The receiver is already evaluated but not a boxed Mixed cell: finish as
+    // the plain subscript read the pre-#555 lowering produced.
+    lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
+}
+
+/// Lowers `$local[key]` as the parent of a nested assignment when the local
+/// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
+/// `__rt_array_ensure_elem_for_write` autovivifies the element in write
+/// context, the possibly promoted/reallocated container is stored back into
+/// the local, and the guaranteed-present element is re-read as the parent
+/// cell. Returns `None` for shapes without a concrete for-write lowering
+/// (typed element arrays, non-Int/Str key expressions).
+fn lower_local_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    index: &Expr,
+    parent_expr: &Expr,
+) -> Option<LoweredValue> {
+    let span = parent_expr.span;
+    let local_ty = ctx.local_type(name);
+    match local_ty.codegen_repr() {
+        PhpType::Array(elem_ty)
+            if elem_ty.codegen_repr() == PhpType::Mixed
+                || is_empty_indexed_array_element(elem_ty.as_ref()) =>
+        {
+            match index_expr_key_type(ctx, index) {
+                PhpType::Int => {
+                    let array_value = ctx.load_local(name, Some(span));
+                    let key = lower_expr(ctx, index);
+                    let key = coerce_to_int_at_span(ctx, key, Some(index.span));
+                    // Autovivification makes the element type effectively
+                    // Mixed even when the array started empty-typed. The
+                    // ensure call consumes the loaded container (in-place
+                    // mutation or realloc), so the previous boxed owner of a
+                    // Mixed-storage slot must be released up front and the
+                    // storeback must not release again.
+                    let ensured_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                    ctx.prepare_mutated_local_owner(name, array_value, ensured_ty.clone(), Some(span));
+                    let ensured = ctx.emit_value(
+                        Op::RuntimeCall,
+                        vec![array_value.value, key.value],
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+                        ensured_ty.clone(),
+                        effects_lookup::runtime_effects(),
+                        Some(span),
+                    );
+                    ctx.store_prepared_mutated_local(name, ensured, ensured_ty, Some(span));
+                    // The element now exists: the in-bounds read returns the
+                    // STORED cell (retained) without an undefined-key warning.
+                    let cell = ctx.emit_value(
+                        Op::ArrayGet,
+                        vec![ensured.value, key.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::ArrayGet.default_effects(),
+                        Some(span),
+                    );
+                    Some(cell)
+                }
+                PhpType::Str => {
+                    // A literal string key on an indexed local is always a
+                    // hash key: promote the local to a Mixed-valued hash
+                    // first (mirrors `lower_string_key_array_promotion`),
+                    // then ensure the element through the hash path. The
+                    // promoted hash flows straight into the ensure call and
+                    // is stored back exactly once at the end.
+                    let array_value = ctx.load_local(name, Some(span));
+                    let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
+                    ctx.prepare_mutated_local_owner(name, array_value, assoc_ty.clone(), Some(span));
+                    let hash = ctx.emit_value(
+                        Op::ArrayToHash,
+                        vec![array_value.value],
+                        None,
+                        assoc_ty.clone(),
+                        Op::ArrayToHash.default_effects(),
+                        Some(span),
+                    );
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                }
+                _ => None,
+            }
+        }
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+            let hash_value = ctx.load_local(name, Some(span));
+            let assoc_ty = ctx.local_type(name);
+            ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
+            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
+        }
+        _ => None,
+    }
+}
+
+/// Ensures a hash element exists for a nested write parent, stores the
+/// possibly reallocated hash back into the local (the previous owner was
+/// already released by `prepare_mutated_local_owner`), and re-reads the
+/// stored cell (retained by `Op::HashGet`) as the parent of the leaf write.
+fn lower_hash_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    hash_value: LoweredValue,
+    assoc_ty: PhpType,
+    index: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let key = lower_expr(ctx, index);
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![hash_value.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        assoc_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
+    ctx.emit_value(
+        Op::HashGet,
+        vec![ensured.value, key.value],
+        None,
+        PhpType::Mixed,
+        Op::HashGet.default_effects(),
+        Some(span),
+    )
 }
 
 /// Lowers `$array[] = value`.
@@ -1915,6 +2090,7 @@ fn lower_try_catch(
         .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
+    let mut after_reachable = false;
 
     ctx.emit_void(
         Op::TryPushHandler,
@@ -1927,13 +2103,17 @@ fn lower_try_catch(
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
+        after_reachable = true;
     }
 
     ctx.builder.position_at_end(handler_block);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
-    lower_catch_dispatch(ctx, catches, after_block, span);
+    after_reachable |= lower_catch_dispatch(ctx, catches, after_block, span);
     ctx.builder.position_at_end(after_block);
+    if !after_reachable {
+        ctx.builder.terminate(Terminator::Unreachable);
+    }
     ctx.clear_static_callable_locals();
 }
 
@@ -1979,6 +2159,7 @@ fn lower_try_catch_finally(
         .create_named_block("try.catch_dispatch", Vec::new());
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
+    let mut after_reachable = false;
 
     ctx.emit_void(
         Op::TryPushHandler,
@@ -1993,14 +2174,21 @@ fn lower_try_catch_finally(
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
-        branch_to(ctx, after_block);
+        if !ctx.builder.insertion_block_is_terminated() {
+            branch_to(ctx, after_block);
+            after_reachable = true;
+        }
     }
 
     ctx.builder.position_at_end(handler_block);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
-    lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
+    after_reachable |=
+        lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
     ctx.builder.position_at_end(after_block);
+    if !after_reachable {
+        ctx.builder.terminate(Terminator::Unreachable);
+    }
     ctx.clear_static_callable_locals();
 }
 
@@ -2015,13 +2203,14 @@ fn emit_try_pop_handler(ctx: &mut LoweringContext<'_, '_>, handler_token: i64, s
     );
 }
 
-/// Lowers ordered catch matching from the current exception handler block.
+/// Lowers ordered catch matching and reports whether any catch reaches the post-try join.
 fn lower_catch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     catches: &[CatchClause],
     after_block: BlockId,
     span: Span,
-) {
+) -> bool {
+    let mut after_reachable = false;
     for catch in catches {
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
@@ -2031,6 +2220,7 @@ fn lower_catch_dispatch(
         lower_block(ctx, &catch.body);
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
+            after_reachable = true;
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);
@@ -2040,16 +2230,18 @@ fn lower_catch_dispatch(
     ctx.builder.terminate(Terminator::Throw {
         value: current.value,
     });
+    after_reachable
 }
 
-/// Lowers catch dispatch for `try`/`catch`/`finally`.
+/// Lowers catch dispatch with finalizers and reports whether any catch reaches the post-try join.
 fn lower_catch_dispatch_with_finally(
     ctx: &mut LoweringContext<'_, '_>,
     catches: &[CatchClause],
     after_block: BlockId,
     finally_body: &[Stmt],
     span: Span,
-) {
+) -> bool {
+    let mut after_reachable = false;
     for catch in catches {
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
@@ -2061,7 +2253,10 @@ fn lower_catch_dispatch_with_finally(
         pop_finally_frame_if_active(ctx, depth);
         if !ctx.builder.insertion_block_is_terminated() {
             lower_block(ctx, finally_body);
-            branch_to(ctx, after_block);
+            if !ctx.builder.insertion_block_is_terminated() {
+                branch_to(ctx, after_block);
+                after_reachable = true;
+            }
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);
@@ -2074,6 +2269,7 @@ fn lower_catch_dispatch_with_finally(
             value: current.value,
         });
     }
+    after_reachable
 }
 
 /// Emits the match tests for one catch clause and branches to body or next clause.

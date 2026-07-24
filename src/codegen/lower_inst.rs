@@ -2476,6 +2476,70 @@ fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// Lowers typed fetch-for-write parent reads of nested array writes (issue #555).
+///
+/// Two receiver shapes share the `ArrayFetchForWrite` runtime target:
+/// - boxed `Mixed` receiver → `__rt_mixed_array_get_for_write(cell, key)`
+///   autovivifies missing/null elements inside the receiver cell and returns
+///   an owned boxed cell (the STORED one whenever storage is boxed);
+/// - concrete `Array`/`AssocArray` receiver → `__rt_array_ensure_elem_for_write
+///   (container, tag, key)` autovivifies the element and returns the possibly
+///   promoted/reallocated container pointer for the local storeback.
+fn lower_array_fetch_for_write_runtime_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let receiver = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
+    match receiver_ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    hashes::materialize_hash_key_aarch64(ctx, key)?;
+                    ctx.load_value_to_reg(receiver, "x0")?;
+                }
+                Arch::X86_64 => {
+                    hashes::materialize_hash_key_x86_64(ctx, key)?;
+                    ctx.load_value_to_reg(receiver, "rdi")?;
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get_for_write");
+            cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            let tag: i64 = if matches!(receiver_ty, PhpType::Array(_)) {
+                4
+            } else {
+                5
+            };
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    hashes::materialize_hash_key_aarch64(ctx, key)?;
+                    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+                    ctx.load_value_to_reg(receiver, "x0")?;
+                    abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+                    abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");
+                }
+                Arch::X86_64 => {
+                    hashes::materialize_hash_key_x86_64(ctx, key)?;
+                    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+                    ctx.load_value_to_reg(receiver, "rdi")?;
+                    abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+                    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_ensure_elem_for_write");
+            store_if_result(ctx, inst)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "fetch-for-write runtime_call with receiver PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Lowers `$mixed[$key] = $value` through the shared boxed Mixed array/hash/stdClass writer.
 fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;

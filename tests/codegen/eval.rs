@@ -13853,6 +13853,22 @@ try {
     );
 }
 
+/// Verifies eval can construct, catch, inspect, and call inherited methods on
+/// the builtin `UnhandledMatchError` class through the native bridge.
+#[test]
+fn test_eval_fragment_constructs_unhandled_match_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try {
+    throw new UnhandledMatchError("eval");
+} catch (UnhandledMatchError $error) {
+    echo ($error instanceof Error ? "yes:" : "no:") . $error->getMessage();
+}');
+"#,
+    );
+    assert_eq!(out, "yes:eval");
+}
+
 /// Verifies eval-declared enums reject magic methods PHP forbids on enums.
 #[test]
 fn test_eval_fragment_rejects_forbidden_enum_magic_method() {

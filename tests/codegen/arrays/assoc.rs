@@ -35,6 +35,26 @@ echo $m["a"] + $m["b"] + $m["c"];
     assert_eq!(out, "6");
 }
 
+/// Verifies an associative literal stores the declared object result of a method call instead of
+/// stamping the hash value layout from the syntactic integer fallback.
+#[test]
+fn test_assoc_array_literal_property_receiver_method_element_typed_by_return() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+final class Link { public function __construct(public string $label) {} }
+final class Factory { public function link(string $label): Link { return new Link($label); } }
+final class Composer {
+    public function __construct(private Factory $factory) {}
+    public function links(): array { return ['view' => $this->factory->link('View')]; }
+}
+$links = (new Composer(new Factory()))->links();
+echo $links['view']->label;
+"#,
+    );
+    assert_eq!(out, "View");
+}
+
 /// Compiles a PHP script that creates an assoc array with one entry then appends a second key and verifies both values are summed.
 #[test]
 fn test_assoc_array_assign() {

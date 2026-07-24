@@ -110,6 +110,9 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
     if inst.op == Op::RuntimeCall {
         let result_is_fresh = match inst.immediate {
             Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+            )) => false,
+            Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
             )) => matches!(
                 target.result_ownership(),

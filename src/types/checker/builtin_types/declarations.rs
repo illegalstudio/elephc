@@ -59,10 +59,10 @@ impl Clone for InterfaceDeclInfo {
 ///
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
-/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
-/// extend Error; RuntimeException/ReflectionException extend Exception;
-/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
-/// final with no parent.
+/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
+/// ArithmeticError/UnhandledMatchError extend Error; RuntimeException/
+/// ReflectionException extend Exception; JsonException extends RuntimeException;
+/// FiberError extends Error. Fiber is final with no parent.
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -73,6 +73,7 @@ pub(crate) fn inject_builtin_throwables(
         "TypeError",
         "ValueError",
         "ArithmeticError",
+        "UnhandledMatchError",
         "Exception",
         "RuntimeException",
         "ReflectionException",
@@ -268,6 +269,27 @@ pub(crate) fn inject_builtin_throwables(
         "ArithmeticError".to_string(),
         FlattenedClass {
             name: "ArithmeticError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    // UnhandledMatchError is a PHP builtin Error subclass. Declaring it lets explicit new, throw,
+    // catch, and instanceof expressions resolve the class and inherit the Throwable API. The
+    // current implicit no-match path remains a fatal EIR terminator and does not construct it.
+    class_map.insert(
+        "UnhandledMatchError".to_string(),
+        FlattenedClass {
+            name: "UnhandledMatchError".to_string(),
             span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
