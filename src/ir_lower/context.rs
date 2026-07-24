@@ -1685,6 +1685,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Publishes lowering's owning-temporary proof into final EIR ownership metadata.
+    ///
+    /// Ordinary local loads stay conservative because their provisional ownership is
+    /// repaired separately after final slot widening. One-shot `OwnedTemp` loads are
+    /// exact and can be promoted along with non-load producers. String results stay
+    /// conservative because `Owned` cannot distinguish heap strings from concat scratch
+    /// storage; their Mixed-box transfer remains classified by the string-specific path.
+    pub(crate) fn finalize_value_ownership_metadata(&mut self) {
+        let owned_values = (0..self.builder.value_count())
+            .filter_map(|raw| {
+                let value = ValueId::from_raw(raw as u32);
+                if self.builder.value_ownership(value) != Ownership::MaybeOwned {
+                    return None;
+                }
+                if self.builder.value_php_type(value).codegen_repr() == PhpType::Str {
+                    return None;
+                }
+                let op = self.builder.value_defining_op(value);
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                    && !self.value_is_owned_temp_load(value)
+                {
+                    return None;
+                }
+                let lowered = LoweredValue {
+                    value,
+                    ir_type: self.builder.value_type(value),
+                };
+                self.value_is_owning_temporary(lowered).then_some(value)
+            })
+            .collect::<Vec<_>>();
+        for value in owned_values {
+            self.builder.set_value_ownership(value, Ownership::Owned);
+        }
+    }
+
     /// Returns whether a user-call result can alias a borrowed visible argument.
     ///
     /// User functions currently return refcounted parameter storage without

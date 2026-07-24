@@ -409,7 +409,7 @@ fn emit_runtime_closure_descriptor_with_captures(
             continue;
         }
         ctx.load_value_to_result(*operand)?;
-        if ctx.value_ownership(*operand)? != Ownership::Owned {
+        if !ctx.value_can_transfer_ownership_to_consumer(*operand)? {
             if capture_ty.codegen_repr() == PhpType::Str {
                 abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             } else {
@@ -1852,7 +1852,7 @@ pub(super) fn emit_runtime_descriptor_with_receiver_capture(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
     ctx.load_value_to_result(receiver)?;
-    if ctx.value_ownership(receiver)? != Ownership::Owned {
+    if !ctx.value_can_transfer_ownership_to_consumer(receiver)? {
         abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
@@ -7105,7 +7105,7 @@ fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     } else {
         let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
-            if ctx.value_ownership(value)? == Ownership::Owned {
+            if ctx.value_can_transfer_ownership_to_consumer(value)? {
                 emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
