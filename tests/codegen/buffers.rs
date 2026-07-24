@@ -19,6 +19,16 @@ fn test_buffer_int_direct_read_write() {
     assert_eq!(out, "10");
 }
 
+/// Regression test for issue #497: checked integer arithmetic can supply a
+/// runtime-narrowed Mixed index to both buffer writes and reads.
+#[test]
+fn test_buffer_mixed_arithmetic_index_read_write() {
+    let out = compile_and_run(
+        "<?php buffer<int> $values = buffer_new<int>(2); $values[$argc - 1] = 41; echo $values[$argc - 1] + 1;",
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies buffer\<float\> stores and retrieves two floating-point values,
 /// then casts their sum to int.
 #[test]

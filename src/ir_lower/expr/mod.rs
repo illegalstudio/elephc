@@ -8068,7 +8068,10 @@ fn lower_array_access_from_value(
                 Op::HashGetSilent
             }
         }
-        IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
+        IrType::Heap(IrHeapKind::Buffer) => {
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            Op::BufferGet
+        }
         IrType::Str => {
             index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
             Op::StrCharAt
