@@ -1426,6 +1426,11 @@ fn lower_array_push_unboxed_mixed_x86_64(
 }
 
 /// Appends to an indexed array stored inside a boxed Mixed cell on AArch64.
+///
+/// A Mixed cell whose payload is a null container — a null pointer, the in-band
+/// null-container sentinel from a missed array read (issue #592), or an
+/// unset/null cell — autovivifies a fresh single-element array instead of
+/// dereferencing the payload, matching PHP's `$x[] = v` on `null`.
 fn lower_mixed_array_append_aarch64(
     ctx: &mut FunctionContext<'_>,
     receiver: ValueId,
@@ -1433,14 +1438,20 @@ fn lower_mixed_array_append_aarch64(
 ) -> Result<()> {
     let drop_label = ctx.next_label("mixed_array_append_drop");
     let done_label = ctx.next_label("mixed_array_append_done");
+    let marker_label = ctx.next_label("mixed_array_append_null_container");
+    let autoviv_label = ctx.next_label("mixed_array_append_autovivify");
+    let set_label = ctx.next_label("mixed_array_append_set");
     prepare_boxed_mixed_value_for_container(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(receiver, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before deriving the append key
+    ctx.emitter.instruction(&format!("cbz x1, {}", marker_label));              // a null or missing indexed payload autovivifies a fresh array
+    abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+    ctx.emitter.instruction("cmp x1, x9");                                      // does the payload carry the in-band null-container sentinel?
+    ctx.emitter.instruction(&format!("b.eq {}", marker_label));                 // missed-read sentinels autovivify instead of dereferencing
+    ctx.emitter.instruction("cmp x0, #4");                                      // only a real indexed-array payload is appended to in place
     ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // drop the boxed value when the Mixed cell is not an indexed array
-    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // drop the boxed value when the indexed-array payload is null
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
     ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
@@ -1449,9 +1460,28 @@ fn lower_mixed_array_append_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x10");
     ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted indexed array back into the Mixed cell
     ctx.emitter.instruction("ldr x1, [x0]");                                    // use the current logical length as the append index
+    ctx.emitter.instruction(&format!("b {}", set_label));                       // share the runtime setter with the autovivified path
+    ctx.emitter.label(&marker_label);
+    ctx.emitter.instruction("cmp x0, #4");                                      // an indexed null-container payload autovivifies a fresh array
+    ctx.emitter.instruction(&format!("b.eq {}", autoviv_label));                // route indexed null containers to autovivification
+    ctx.emitter.instruction("cmp x0, #5");                                      // an associative null-container payload autovivifies a fresh array
+    ctx.emitter.instruction(&format!("b.eq {}", autoviv_label));                // route associative null containers to autovivification
+    ctx.emitter.instruction("cmp x0, #8");                                      // an unset or null cell autovivifies a fresh array (PHP semantics)
+    ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // a scalar whose payload is zero or the sentinel is not a container
+    ctx.emitter.label(&autoviv_label);
+    ctx.emitter.instruction("mov x0, #0");                                      // request a zero-capacity indexed array (grown on demand)
+    ctx.emitter.instruction("mov x1, #8");                                      // autovivified arrays use 8-byte slots (boxed cells fit)
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    abi::emit_pop_reg(ctx.emitter, "x10");
+    ctx.emitter.instruction("mov x9, #4");                                      // runtime value tag 4 = indexed-array payload
+    ctx.emitter.instruction("str x9, [x10]");                                   // retag the Mixed cell as an indexed array
+    ctx.emitter.instruction("str x0, [x10, #8]");                               // transfer the fresh array reference into the Mixed cell
+    ctx.emitter.instruction("str xzr, [x10, #16]");                             // clear the unused high payload word
+    ctx.emitter.instruction("mov x1, #0");                                      // the autovivified array receives the appended value at index 0
+    ctx.emitter.label(&set_label);
     ctx.emitter.instruction("mov x0, x10");                                     // pass the target Mixed cell to the runtime setter
-    abi::emit_pop_reg(ctx.emitter, "x3");
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi = -1 marks an integer array key
+    abi::emit_pop_reg(ctx.emitter, "x3");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the failure cleanup after the setter consumes the value
     ctx.emitter.label(&drop_label);
@@ -1463,6 +1493,11 @@ fn lower_mixed_array_append_aarch64(
 }
 
 /// Appends to an indexed array stored inside a boxed Mixed cell on x86_64.
+///
+/// A Mixed cell whose payload is a null container — a null pointer, the in-band
+/// null-container sentinel from a missed array read (issue #592), or an
+/// unset/null cell — autovivifies a fresh single-element array instead of
+/// dereferencing the payload, matching PHP's `$x[] = v` on `null`.
 fn lower_mixed_array_append_x86_64(
     ctx: &mut FunctionContext<'_>,
     receiver: ValueId,
@@ -1470,15 +1505,21 @@ fn lower_mixed_array_append_x86_64(
 ) -> Result<()> {
     let drop_label = ctx.next_label("mixed_array_append_drop");
     let done_label = ctx.next_label("mixed_array_append_done");
+    let marker_label = ctx.next_label("mixed_array_append_null_container");
+    let autoviv_label = ctx.next_label("mixed_array_append_autovivify");
+    let set_label = ctx.next_label("mixed_array_append_set");
     prepare_boxed_mixed_value_for_container(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, "rax");
     ctx.load_value_to_reg(receiver, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before deriving the append key
+    ctx.emitter.instruction("test rdi, rdi");                                   // a null or missing indexed payload autovivifies a fresh array
+    ctx.emitter.instruction(&format!("je {}", marker_label));                   // route null payloads to the null-container check
+    abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+    ctx.emitter.instruction("cmp rdi, r10");                                    // does the payload carry the in-band null-container sentinel?
+    ctx.emitter.instruction(&format!("je {}", marker_label));                   // missed-read sentinels autovivify instead of dereferencing
+    ctx.emitter.instruction("cmp rax, 4");                                      // only a real indexed-array payload is appended to in place
     ctx.emitter.instruction(&format!("jne {}", drop_label));                    // drop the boxed value when the Mixed cell is not an indexed array
-    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", drop_label));                     // drop the boxed value when the indexed-array payload is null
     ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
@@ -1486,9 +1527,27 @@ fn lower_mixed_array_append_x86_64(
     abi::emit_pop_reg(ctx.emitter, "r10");
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted indexed array back into the Mixed cell
     ctx.emitter.instruction("mov rsi, QWORD PTR [rax]");                        // use the current logical length as the append index
+    ctx.emitter.instruction(&format!("jmp {}", set_label));                     // share the runtime setter with the autovivified path
+    ctx.emitter.label(&marker_label);
+    ctx.emitter.instruction("cmp rax, 4");                                      // an indexed null-container payload autovivifies a fresh array
+    ctx.emitter.instruction(&format!("je {}", autoviv_label));                  // route indexed null containers to autovivification
+    ctx.emitter.instruction("cmp rax, 5");                                      // an associative null-container payload autovivifies a fresh array
+    ctx.emitter.instruction(&format!("je {}", autoviv_label));                  // route associative null containers to autovivification
+    ctx.emitter.instruction("cmp rax, 8");                                      // an unset or null cell autovivifies a fresh array (PHP semantics)
+    ctx.emitter.instruction(&format!("jne {}", drop_label));                    // a scalar whose payload is zero or the sentinel is not a container
+    ctx.emitter.label(&autoviv_label);
+    ctx.emitter.instruction("mov rdi, 0");                                      // request a zero-capacity indexed array (grown on demand)
+    ctx.emitter.instruction("mov rsi, 8");                                      // autovivified arrays use 8-byte slots (boxed cells fit)
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    abi::emit_pop_reg(ctx.emitter, "r10");
+    ctx.emitter.instruction("mov QWORD PTR [r10], 4");                          // retag the Mixed cell as an indexed array
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // transfer the fresh array reference into the Mixed cell
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");                     // clear the unused high payload word
+    ctx.emitter.instruction("mov rsi, 0");                                      // the autovivified array receives the appended value at index 0
+    ctx.emitter.label(&set_label);
     ctx.emitter.instruction("mov rdi, r10");                                    // pass the target Mixed cell to the runtime setter
-    abi::emit_pop_reg(ctx.emitter, "rcx");
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi = -1 marks an integer array key
+    abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the failure cleanup after the setter consumes the value
     ctx.emitter.label(&drop_label);

@@ -13,6 +13,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
 const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
@@ -262,7 +263,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 is an object payload
     emitter.instruction("b.ne __elephc_eval_value_object_class_name_miss");     // non-objects cannot provide a class name
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_class_name_miss");  // reject malformed object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_class_name_miss",
+    );
     emitter.instruction("ldr x10, [x9]");                                       // load the object's runtime class id
     abi::emit_symbol_address(emitter, "x11", "_class_name_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the dense class-name table length
@@ -471,6 +477,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // pass the boxed key to the eval key normalizer
     emitter.instruction("bl __elephc_eval_key_normalize");                      // normalize eval array key to key_lo/key_hi
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver
+    emitter.instruction("mov x3, xzr");                                         // eval bridge lookup reports misses through its own result contract
     emitter.instruction("bl __rt_mixed_array_get");                             // read the boxed Mixed element or Mixed(null)
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
@@ -498,14 +505,24 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.ne __elephc_eval_value_array_key_exists_false");     // non-integer keys never exist in indexed arrays
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed indexed-array receiver
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing payload cannot contain a key
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized integer key to the bounds helper
     emitter.instruction("bl __rt_array_key_exists");                            // return whether the integer key is in bounds
     emitter.instruction("b __elephc_eval_value_array_key_exists_box");          // box the existence flag for Rust
     emitter.label("__elephc_eval_value_array_key_exists_assoc");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed associative-array receiver
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the hash payload pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing hash payload cannot contain a key
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized key_lo to the hash lookup
     emitter.instruction("ldr x2, [sp, #16]");                                   // pass normalized key_hi to the hash lookup
     emitter.instruction("bl __rt_hash_get");                                    // return hash found flag in x0
@@ -542,7 +559,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_value_array_iter_key_done");           // return the boxed key to Rust
     emitter.label("__elephc_eval_value_array_iter_key_assoc");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the hash payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_array_iter_key_null");     // null hash payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_array_iter_key_null",
+    );
     emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
     emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order position counter at zero
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the hash head entry
@@ -614,7 +636,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty length to Rust
     emitter.label("__elephc_eval_value_array_len_load");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the array/hash payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_array_len_zero");          // null payloads are treated as empty containers
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_array_len_zero",
+    );
     emitter.instruction("ldr x0, [x9]");                                        // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
 
@@ -624,7 +651,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-objects expose no JSON-visible properties here
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null object payloads have no visible properties
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_property_len_zero",
+    );
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
@@ -649,7 +681,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_property_iter_key_null",
+    );
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
@@ -1748,7 +1785,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 means the concrete payload is a PHP object
     emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-object releases have no dynamic destructor
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_final_object_none");       // null object payloads are treated as non-final
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_final_object_none",
+    );
     emitter.instruction("ldr w10, [x9, #-12]");                                 // load the object refcount that the Mixed release will decrement
     emitter.instruction("cmp w10, #1");                                         // only the final object owner can run the destructor
     emitter.instruction("csel x0, x9, xzr, eq");                                // return object identity only for the final release
@@ -1992,8 +2034,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 is an object payload
     emitter.instruction("jne __elephc_eval_value_object_class_name_miss_x86");  // non-objects cannot provide a class name
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // check the unboxed object pointer before dereferencing it
-    emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // reject malformed object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_class_name_miss_x86",
+    );
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the object's runtime class id
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
     emitter.instruction("cmp r11, rdx");                                        // check whether the class id is in table bounds
@@ -2203,6 +2249,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __elephc_eval_key_normalize");                    // normalize eval array key to key_lo/key_hi
     emitter.instruction("mov rsi, rax");                                        // pass normalized key_lo to the reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver
+    emitter.instruction("xor ecx, ecx");                                        // eval bridge lookup reports misses through its own result contract
     emitter.instruction("call __rt_mixed_array_get");                           // read the boxed Mixed element or Mixed(null)
     emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
@@ -2230,16 +2277,24 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jne __elephc_eval_value_array_key_exists_false");      // non-integer keys never exist in indexed arrays
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed indexed-array receiver
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload pointer
-    emitter.instruction("test rdi, rdi");                                       // missing payload cannot contain a key
-    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing indexed-array payloads
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized integer key to the bounds helper
     emitter.instruction("call __rt_array_key_exists");                          // return whether the integer key is in bounds
     emitter.instruction("jmp __elephc_eval_value_array_key_exists_box");        // box the existence flag for Rust
     emitter.label("__elephc_eval_value_array_key_exists_assoc");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed associative-array receiver
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the hash payload pointer
-    emitter.instruction("test rdi, rdi");                                       // missing hash payload cannot contain a key
-    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing associative-array payloads
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized key_lo to the hash lookup
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass normalized key_hi to the hash lookup
     emitter.instruction("call __rt_hash_get");                                  // return hash found flag in rax
@@ -2277,8 +2332,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_value_array_iter_key_done");         // return the boxed key to Rust
     emitter.label("__elephc_eval_value_array_iter_key_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the hash payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // null hash payloads produce a null key
-    emitter.instruction("jz __elephc_eval_value_array_iter_key_null");          // branch to boxed null for missing hash payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_array_iter_key_null",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // start the insertion-order position counter at zero
     emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the hash head entry
@@ -2352,8 +2411,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty length to Rust
     emitter.label("__elephc_eval_value_array_len_load");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the array/hash payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // is the container payload null?
-    emitter.instruction("jz __elephc_eval_value_array_len_zero");               // null payloads are treated as empty containers
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_array_len_zero",
+    );
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
 
@@ -2364,8 +2427,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_property_len_zero");    // non-objects expose no JSON-visible properties here
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // is the object payload null?
-    emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null object payloads have no visible properties
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_property_len_zero",
+    );
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
@@ -2391,8 +2458,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // is the object payload null?
-    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_property_iter_key_null",
+    );
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
@@ -3585,8 +3656,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 means the concrete payload is a PHP object
     emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-object releases have no dynamic destructor
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the object payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // null object payloads are treated as non-final
-    emitter.instruction("jz __elephc_eval_value_final_object_none_x86");        // return zero for null object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_final_object_none_x86",
+    );
     emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");                      // load the object refcount that the Mixed release will decrement
     emitter.instruction("cmp r11d, 1");                                         // only the final object owner can run the destructor
     emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // defer destructor execution until object refcount is final
@@ -4746,7 +4821,12 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-object values cannot be cloned by this bridge
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); // malformed object payloads cannot be cloned
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_clone_shallow_null",
+    );
     emitter.instruction("str x9, [sp, #0]");                                    // save the source object payload pointer
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
     emitter.instruction("str x11, [sp, #56]");                                  // save class id across allocation and ownership calls
@@ -4887,8 +4967,12 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-object values cannot be cloned by this bridge
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // malformed object payloads cannot be cloned
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for missing payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_clone_shallow_null_x86",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the source object payload pointer
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save class id across allocation and ownership calls

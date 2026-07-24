@@ -20,6 +20,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
@@ -63,6 +64,23 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_value (tag/lo/hi -> serialize() wire bytes) ---");
     emitter.label_global("__rt_serialize_value");
+
+    emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("b.lt __rt_serialize_value_input_ready");               // scalar payloads preserve their original bits
+    emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("b.gt __rt_serialize_value_input_ready");               // nested Mixed and other tags use ordinary dispatch
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x9",
+        "__rt_serialize_value_null_input",
+    );
+    emitter.instruction("b __rt_serialize_value_input_ready");                  // serialize the valid container payload
+    emitter.label("__rt_serialize_value_null_input");
+    emitter.instruction("mov x0, #8");                                          // normalize a legacy container-shaped null before serialization
+    emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
+    emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
+    emitter.label("__rt_serialize_value_input_ready");
 
     // -- set up stack frame --
     // [sp+0]=output start, [sp+8]=write pos, [sp+16]=tag, [sp+24]=lo, [sp+32]=hi
@@ -910,6 +928,23 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_value (tag/lo/hi -> serialize() wire bytes) ---");
     emitter.label_global("__rt_serialize_value");
+
+    emitter.instruction("cmp rdi, 4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("jl __rt_serialize_value_input_ready");                 // scalar payloads preserve their original bits
+    emitter.instruction("cmp rdi, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("jg __rt_serialize_value_input_ready");                 // nested Mixed and other tags use ordinary dispatch
+    emit_branch_if_null_container(
+        emitter,
+        "rsi",
+        "r11",
+        "__rt_serialize_value_null_input",
+    );
+    emitter.instruction("jmp __rt_serialize_value_input_ready");                // serialize the valid container payload
+    emitter.label("__rt_serialize_value_null_input");
+    emitter.instruction("mov rdi, 8");                                          // normalize a legacy container-shaped null before serialization
+    emitter.instruction("xor esi, esi");                                        // canonical null has no low payload word
+    emitter.instruction("xor edx, edx");                                        // canonical null has no high payload word
+    emitter.label("__rt_serialize_value_input_ready");
 
     // -- set up stack frame --
     // [rbp-8]=output start, [rbp-16]=write pos, [rbp-24]=tag, [rbp-32]=lo, [rbp-40]=hi

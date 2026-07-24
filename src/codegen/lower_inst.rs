@@ -2051,6 +2051,9 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         return Ok(());
     }
     if inst.operands.len() == 3 {
+        if inst.result_php_type.codegen_repr() != PhpType::Void {
+            return lower_mixed_array_runtime_get(ctx, inst);
+        }
         return lower_mixed_array_runtime_set(ctx, inst);
     }
     if inst.operands.len() == 2 {
@@ -2141,6 +2144,13 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 }
 
 /// Lowers generic EIR runtime calls that represent PHP `ArrayAccess` object indexing.
+///
+/// Subscript reads carry a trailing warn-on-missing flag that only the boxed-`Mixed`
+/// runtime reader consumes, so operand count alone no longer separates a read from
+/// `offsetSet`. Reads are identified structurally instead: subscript writes lower
+/// through `emit_void` and carry no result value, while reads always produce one.
+/// The flag operand is stripped before dispatch so `offsetGet` keeps its
+/// single-argument PHP signature.
 fn try_lower_array_access_runtime_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2152,11 +2162,29 @@ fn try_lower_array_access_runtime_call(
     let Some(dispatch) = array_access_runtime_dispatch(ctx, &receiver_ty) else {
         return Ok(None);
     };
+    // A result value marks a subscript read: `$obj[$k] = v` and `$obj[] = v` lower
+    // through `emit_void`. Keying off the result PHP type instead would misread a
+    // read whose declared `offsetGet` return type has no runtime representation.
+    let is_read = inst.result.is_some();
     let method_name = match inst.operands.len() {
-        2 if inst.result_php_type.codegen_repr() == PhpType::Void => "append",
-        2 => "offsetGet",
+        2 if is_read => "offsetGet",
+        2 => "append",
+        3 if is_read => "offsetGet",
         3 => "offsetSet",
         _ => return Ok(None),
+    };
+    // Drop the read's warn-on-missing operand before argument materialization:
+    // `offsetGet($offset)` takes one argument, and the shared method-call
+    // lowerers resolve arity straight from `inst.operands`.
+    let read_without_warning_flag;
+    let inst = if is_read && inst.operands.len() == 3 {
+        read_without_warning_flag = Instruction {
+            operands: inst.operands[..2].to_vec(),
+            ..inst.clone()
+        };
+        &read_without_warning_flag
+    } else {
+        inst
     };
     match dispatch {
         ArrayAccessRuntimeDispatch::Concrete(class_name) => {
@@ -2461,13 +2489,16 @@ fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
+    let warn_on_missing = expect_operand(inst, 2)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "x3")?;
             ctx.load_value_to_reg(receiver, "x0")?;
         }
         Arch::X86_64 => {
             hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(warn_on_missing, "rcx")?;
             ctx.load_value_to_reg(receiver, "rdi")?;
         }
     }

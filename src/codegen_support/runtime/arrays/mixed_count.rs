@@ -12,6 +12,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_mixed_count` runtime helper for `count()` on a boxed Mixed receiver.
 /// Dispatches to the target-specific implementation.
@@ -51,13 +52,13 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed payload pointer (array or hash)
-    emitter.instruction("cbz x9, __rt_mixed_count_zero");                       // defensive null guard for the payload pointer
+    emit_branch_if_null_container(emitter, "x9", "x10", "__rt_mixed_count_zero");
     emitter.instruction("ldr x0, [x9]");                                        // count lives at offset 0 of both array and hash headers
     emitter.instruction("ret");                                                 // return count in x0
 
     emitter.label("__rt_mixed_count_object");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load object payload from the Mixed cell
-    emitter.instruction("cbz x10, __rt_mixed_count_zero");                      // defensive null object guard
+    emit_branch_if_null_container(emitter, "x10", "x11", "__rt_mixed_count_zero");
     emitter.instruction("ldr x11, [x10]");                                      // load object class id
     abi::emit_symbol_address(emitter, "x12", "_spl_fixed_array_class_id");
     emitter.instruction("ldr x12, [x12]");                                      // load SplFixedArray class id
@@ -117,15 +118,13 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_count_payload");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed payload pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_count_zero");                            // branch on the current mixed count helper condition
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_count_zero");
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // count lives at offset 0 of both array and hash headers
     emitter.instruction("ret");                                                 // return count in rax
 
     emitter.label("__rt_mixed_count_object");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load object payload from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // defensive null object guard
-    emitter.instruction("je __rt_mixed_count_zero");                            // null object payloads count as zero
+    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_count_zero");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load object class id
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is this a SplFixedArray object?

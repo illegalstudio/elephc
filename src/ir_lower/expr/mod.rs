@@ -8076,9 +8076,14 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let mut operands = vec![array_value.value, index_value.value];
+    if matches!(op, Op::RuntimeCall) {
+        let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
+        operands.push(warning_flag.value);
+    }
     let result = ctx.emit_value(
         op,
-        vec![array_value.value, index_value.value],
+        operands,
         None,
         result_type,
         op.default_effects(),
@@ -14896,7 +14901,11 @@ fn merge_initialized_slots_for_expr(
 }
 
 /// Emits a boolean literal value for control-expression lowering.
-fn emit_bool_literal(
+///
+/// Also emits the trailing warn-on-missing flag that boxed-`Mixed` subscript reads
+/// pass to `__rt_mixed_array_get`, so every producer of such a read builds the
+/// operand the same way.
+pub(crate) fn emit_bool_literal(
     ctx: &mut LoweringContext<'_, '_>,
     value: bool,
     span: Option<crate::span::Span>,

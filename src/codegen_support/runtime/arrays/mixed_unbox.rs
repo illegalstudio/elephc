@@ -7,14 +7,19 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - Legacy container-shaped boxes with a null/sentinel payload unbox as canonical
+//!   PHP null, so every tag-dispatch consumer receives a safe structural shape.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
-/// Unwraps a boxed mixed cell into a concrete runtime payload triple, peeling nested mixed wrappers until a concrete tag is reached.
+/// Unwraps a boxed Mixed cell into a concrete runtime payload triple.
+///
+/// Nested Mixed wrappers are peeled until a concrete tag is reached, and any
+/// legacy container-shaped zero/sentinel payload is returned as canonical null.
 /// Input:  x0 = boxed mixed pointer (may be null)
 /// Output: x0 = runtime value tag, x1 = value_lo, x2 = value_hi
-/// Handles null pointers and nested mixed cells by peeling wrappers until the concrete payload is exposed.
 pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_unbox_linux_x86_64(emitter);
@@ -42,6 +47,12 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x9");                                          // return the concrete runtime tag in x0
     emitter.instruction("ldr x1, [x10, #8]");                                   // return the concrete payload low word in x1
     emitter.instruction("ldr x2, [x10, #16]");                                  // return the concrete payload high word in x2
+    emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can encode null in their payload pointer
+    emitter.instruction("b.lt __rt_mixed_unbox_return");                        // scalar payloads preserve sentinel-colliding integer bit patterns
+    emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("b.gt __rt_mixed_unbox_return");                        // other heap tags are not null-container encodings
+    emit_branch_if_null_container(emitter, "x1", "x9", "__rt_mixed_unbox_null");
+    emitter.label("__rt_mixed_unbox_return");
     emitter.instruction("ret");                                                 // return the unboxed payload triple
 
     emitter.label("__rt_mixed_unbox_null");
@@ -74,6 +85,12 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r11");                                        // return the concrete runtime tag in rax
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // return the concrete payload low word in rdi
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // return the concrete payload high word in rdx
+    emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can encode null in their payload pointer
+    emitter.instruction("jl __rt_mixed_unbox_return");                          // scalar payloads preserve sentinel-colliding integer bit patterns
+    emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("jg __rt_mixed_unbox_return");                          // other heap tags are not null-container encodings
+    emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_mixed_unbox_null");
+    emitter.label("__rt_mixed_unbox_return");
     emitter.instruction("ret");                                                 // return the unboxed payload triple
 
     emitter.label("__rt_mixed_unbox_null");

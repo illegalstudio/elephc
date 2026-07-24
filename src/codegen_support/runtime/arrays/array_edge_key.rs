@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// array_edge_key: box the first or last key of a container as a Mixed cell.
 /// Input:  x0 = container pointer (indexed array, hash, or boxed mixed cell)
@@ -86,15 +87,13 @@ pub fn emit_array_edge_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_edge_key_null");                          // non-array mixed payloads have no key
     emitter.label("__rt_array_edge_key_unwrap");
     emitter.instruction("ldr x0, [x0, #8]");                                    // unbox the container pointer from mixed[8]
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_array_edge_key_null");
     emitter.instruction("b __rt_array_edge_key");                               // re-dispatch with the same which selector in x1
     emitter.label("__rt_array_edge_key_null");
     emitter.instruction("mov x0, #8");                                          // value_tag = 8 (null)
-    emitter.instruction("movz x1, #0xFFFE");                                    // value_lo = null sentinel bits [15:0]
-    emitter.instruction("movk x1, #0xFFFF, lsl #16");                           // value_lo = null sentinel bits [31:16]
-    emitter.instruction("movk x1, #0xFFFF, lsl #32");                           // value_lo = null sentinel bits [47:32]
-    emitter.instruction("movk x1, #0x7FFF, lsl #48");                           // value_lo = null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+    emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
     emitter.instruction("mov x2, #0");                                          // value_hi unused
-    emitter.instruction("b __rt_mixed_from_value");                             // box the null sentinel and return it to the caller
+    emitter.instruction("b __rt_mixed_from_value");                             // box canonical null and return it to the caller
 }
 
 /// x86_64 Linux implementation of `__rt_array_edge_key`.
@@ -164,11 +163,11 @@ fn emit_array_edge_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_edge_key_null");                        // non-array mixed payloads have no key
     emitter.label("__rt_array_edge_key_unwrap");
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // unbox the container pointer from mixed[8]
+    emit_branch_if_null_container(emitter, "rdi", "r10", "__rt_array_edge_key_null");
     emitter.instruction("jmp __rt_array_edge_key");                             // re-dispatch with the same which selector in rsi
     emitter.label("__rt_array_edge_key_null");
-    emitter.instruction("mov rdi, 0x7ffffffffffffffe");                         // value_lo = shared null sentinel
+    emitter.instruction("xor edi, edi");                                        // canonical null has no low payload word
     emitter.instruction("xor esi, esi");                                        // value_hi unused
     emitter.instruction("mov rax, 8");                                          // value_tag = 8 (null)
-    emitter.instruction("jmp __rt_mixed_from_value");                           // box the null sentinel and return it to the caller
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box canonical null and return it to the caller
 }
-

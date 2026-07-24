@@ -11,6 +11,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 
 /// Emits the `__rt_hash_to_mixed` runtime helper.
@@ -71,6 +72,22 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the converted hash pointer
 
     emitter.label("__rt_hash_to_mixed_box_owned");
+    emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("b.lt __rt_hash_to_mixed_box_owned_frame");             // preserve scalar payloads verbatim
+    emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("b.gt __rt_hash_to_mixed_box_owned_frame");             // nested Mixed and other tags use their ordinary payload
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x9",
+        "__rt_hash_to_mixed_box_owned_null",
+    );
+    emitter.instruction("b __rt_hash_to_mixed_box_owned_frame");                // box the valid transferred container payload
+    emitter.label("__rt_hash_to_mixed_box_owned_null");
+    emitter.instruction("mov x0, #8");                                          // normalize the transferred entry to canonical PHP null
+    emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
+    emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
+    emitter.label("__rt_hash_to_mixed_box_owned_frame");
     emitter.instruction("sub sp, sp, #48");                                     // reserve a helper frame for tag and payload words
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save helper frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
@@ -139,6 +156,22 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the converted hash pointer
 
     emitter.label("__rt_hash_to_mixed_x86_box_owned");
+    emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
+    emitter.instruction("jl __rt_hash_to_mixed_x86_box_owned_frame");           // preserve scalar payloads verbatim
+    emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
+    emitter.instruction("jg __rt_hash_to_mixed_x86_box_owned_frame");           // nested Mixed and other tags use their ordinary payload
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__rt_hash_to_mixed_x86_box_owned_null",
+    );
+    emitter.instruction("jmp __rt_hash_to_mixed_x86_box_owned_frame");          // box the valid transferred container payload
+    emitter.label("__rt_hash_to_mixed_x86_box_owned_null");
+    emitter.instruction("mov rax, 8");                                          // normalize the transferred entry to canonical PHP null
+    emitter.instruction("xor edi, edi");                                        // canonical null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // canonical null has no high payload word
+    emitter.label("__rt_hash_to_mixed_x86_box_owned_frame");
     emitter.instruction("push rbp");                                            // preserve the conversion frame before allocating a Mixed box
     emitter.instruction("mov rbp, rsp");                                        // establish a helper frame for tag and payload words
     emitter.instruction("sub rsp, 32");                                         // reserve helper slots for tag, payload, and alignment
