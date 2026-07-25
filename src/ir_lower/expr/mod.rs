@@ -1039,7 +1039,7 @@ fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    let value = ctx.truthy(value, Some(expr.span));
+    let value = ctx.truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
         Op::ICmp,
@@ -1097,7 +1097,7 @@ fn lower_logical_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let lhs = ctx.truthy(lhs, Some(left.span));
+    let lhs = ctx.truthy_consuming(lhs, Some(left.span));
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let rhs_block = ctx.builder.create_named_block("logical.rhs", Vec::new());
     let const_block = ctx.builder.create_named_block("logical.const", Vec::new());
@@ -1117,7 +1117,7 @@ fn lower_logical_binary(
 
     ctx.builder.position_at_end(rhs_block);
     let rhs = lower_expr(ctx, right);
-    let rhs = ctx.truthy(rhs, Some(right.span));
+    let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
     branch_to(ctx, merge);
 
@@ -1151,13 +1151,14 @@ fn lower_logical_xor(
     )
 }
 
-/// Converts a lowered PHP value into a canonical boolean value for value-level logical ops.
+/// Converts a lowered PHP value into a canonical boolean and releases an owned input.
 fn lower_truthy_bool(
     ctx: &mut LoweringContext<'_, '_>,
     input: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    match ctx.builder.value_php_type(input.value).codegen_repr() {
+    let owns_input = ctx.value_is_owning_temporary(input);
+    let result = match ctx.builder.value_php_type(input.value).codegen_repr() {
         PhpType::Bool => input,
         PhpType::Int => {
             let zero = ctx
@@ -1191,7 +1192,11 @@ fn lower_truthy_bool(
             Op::IsTruthy.default_effects(),
             span,
         ),
+    };
+    if owns_input && result.value != input.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, input, span);
     }
+    result
 }
 
 /// Lowers null coalesce so the default expression is evaluated only for null values.
@@ -3070,7 +3075,7 @@ fn lower_magic_property_isset(
     )];
     let result =
         lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
-    ctx.truthy(result, Some(arg.span))
+    ctx.truthy_consuming(result, Some(arg.span))
 }
 
 /// Lowers `__isset` for nullable receivers, returning false instead of calling on null.
@@ -3118,7 +3123,7 @@ fn lower_nullable_magic_property_isset(
     )];
     let result =
         lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
-    let result = ctx.truthy(result, Some(arg.span));
+    let result = ctx.truthy_consuming(result, Some(arg.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, result, arg.span);
     branch_to(ctx, merge);
 
@@ -8397,7 +8402,7 @@ fn lower_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy(cond, Some(condition.span));
+    let cond = ctx.truthy_consuming(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();

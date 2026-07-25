@@ -2265,6 +2265,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         )
     }
+
+    /// Computes truthiness and releases `input` when this path owns it.
+    ///
+    /// `IsTruthy` reads its operand and yields a fresh, non-aliasing boolean, so
+    /// a branch condition that consumes an owned temporary — e.g. the boxed
+    /// `Mixed` result of `$x[0] ?? default` fed into an `if`/ternary/`&&`/`!` —
+    /// must release that temporary here or it leaks on the truthiness path
+    /// (issue #586). Use this at condition sites that discard the original
+    /// value; callers that also forward it (short ternary `?:`) must keep using
+    /// [`Self::truthy`], which never releases.
+    pub(crate) fn truthy_consuming(
+        &mut self,
+        input: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let owns_input = self.value_is_owning_temporary(input);
+        let result = self.truthy(input, span);
+        // Only release when a distinct boolean was produced; the `I64` fast path
+        // in `truthy` returns `input` itself (and non-heap values never own).
+        if owns_input && result.value != input.value {
+            crate::ir_lower::ownership::release_if_owned(self, input, span);
+        }
+        result
+    }
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
