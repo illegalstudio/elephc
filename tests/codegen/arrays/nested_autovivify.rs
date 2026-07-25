@@ -411,6 +411,60 @@ echo $r[7][1] . "\n";
     );
 }
 
+/// A missed-read sentinel boxed through a branch merge must normalize to
+/// Mixed(null), then a direct string-key set must autovivify and promote it.
+#[test]
+fn test_mixed_set_autovivifies_missed_read_sentinel() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["fallback"];
+$r["key"] = "value";
+echo count($r), ":", $r["key"], "\n";
+"#,
+    );
+    assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "1:value\n");
+    assert!(
+        out.stderr.contains("Undefined array key 5"),
+        "the read that produced the null value must still warn, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "direct Mixed-null set must not leak, got: {}",
+        out.stderr
+    );
+}
+
+/// Fetch-for-write must autovivify a canonical Mixed null receiver before
+/// installing the first nested string-key child.
+#[test]
+fn test_mixed_fetch_for_write_autovivifies_canonical_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function build_nested(mixed $value): mixed {
+    $value["outer"]["inner"] = 7;
+    return $value;
+}
+$r = build_nested(null);
+echo $r["outer"]["inner"], ":", count($r), "\n";
+"#,
+    );
+    assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "7:1\n");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "legal nested autovivification must stay silent, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "nested Mixed-null autovivification must not leak, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies the issue repro stays silent and heap-clean with EIR optimization on and off.
 #[test]
 fn test_autovivify_with_optimizer_on_and_off() {

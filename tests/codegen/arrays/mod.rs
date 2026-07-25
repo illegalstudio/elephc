@@ -18,4 +18,5 @@ mod list_and_keys;
 mod list_unpack;
 mod nested_autovivify;
 mod nested_mixed_write;
+mod mixed_append_autovivify;
 mod assoc_set_ops;
