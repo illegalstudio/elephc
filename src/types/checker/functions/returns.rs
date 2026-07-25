@@ -273,8 +273,9 @@ impl Checker {
     }
 
     /// Checks that a function or closure body ends with a return on every control-flow path
-    /// when the declared return type is not Void or Never. Uses `block_guarantees_function_exit`
-    /// to determine if the body always exits; emits a "must return a value" error if not.
+    /// when the declared return type is not Void or Never. Uses the shared function-exit analysis,
+    /// extended with checker-known `never` calls, to determine if the body always exits; emits a
+    /// "must return a value" error if not.
     pub(crate) fn require_declared_return_coverage(
         &self,
         declared_ret: &PhpType,
@@ -286,7 +287,9 @@ impl Checker {
             return Ok(());
         }
 
-        if crate::termination::block_guarantees_function_exit(body) {
+        if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
+            self.expr_is_declared_never_call(expr)
+        }) {
             Ok(())
         } else {
             Err(CompileError::new(

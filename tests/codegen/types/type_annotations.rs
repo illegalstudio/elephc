@@ -515,6 +515,32 @@ fn test_declared_return_type_allows_infinite_loop_body() {
     assert_eq!(out, "ok");
 }
 
+/// Verifies a declared value-returning function may terminate solely by calling a user function
+/// declared `never`, including when the call is nested in exhaustive branches.
+#[test]
+fn test_declared_return_type_allows_nested_never_calls() {
+    let out = compile_and_run(
+        "<?php
+        function fail(string $message): never {
+            throw new \\Exception($message);
+        }
+        function value(bool $flag): int {
+            if ($flag) {
+                fail(\"left\");
+            } else {
+                fail(\"right\");
+            }
+        }
+        try {
+            echo value(true);
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "left");
+}
+
 /// Verifies a function with a declared return type whose body is an exhaustive `switch`
 /// (all cases return) compiles and runs correctly for both case arms.
 #[test]

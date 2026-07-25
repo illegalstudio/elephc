@@ -24,66 +24,152 @@ pub(crate) fn stmt_guarantees_termination(stmt: &Stmt) -> bool {
     !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
 }
 
-/// Checks if a block guarantees function exit.
-pub(crate) fn block_guarantees_function_exit(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_guarantees_function_exit)
+/// Checks if a block guarantees function exit, including caller-known diverging expressions.
+///
+/// Unlike [`block_terminal_effect_with_divergence`], this analysis does not treat `break` or
+/// `continue` as function exits. The callback only enriches expression statements whose semantic
+/// return type is known by the caller, such as user functions declared `never`.
+pub(crate) fn block_guarantees_function_exit_with_divergence(
+    stmts: &[Stmt],
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| stmt_guarantees_function_exit(stmt, additional_expr_diverges))
 }
 
 /// Computes the terminal effect of a block of statements.
 pub(crate) fn block_terminal_effect(stmts: &[Stmt]) -> TerminalEffect {
+    block_terminal_effect_with_divergence(stmts, &|_| false)
+}
+
+/// Computes the terminal effect of a block, including caller-known diverging expressions.
+///
+/// The callback extends the shared syntax-only model for consumers with semantic information
+/// unavailable here, such as calls to user functions declared `never`. It is consulted recursively,
+/// so nested `if`/`switch`/`try` structures use the same definition of expression divergence.
+pub(crate) fn block_terminal_effect_with_divergence(
+    stmts: &[Stmt],
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
+) -> TerminalEffect {
     stmts
         .iter()
-        .map(stmt_terminal_effect)
+        .map(|stmt| stmt_terminal_effect_with_divergence(stmt, additional_expr_diverges))
         .find(|effect| !matches!(effect, TerminalEffect::FallsThrough))
         .unwrap_or(TerminalEffect::FallsThrough)
 }
 
 /// Computes the terminal effect of a single statement.
 pub(crate) fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
+    stmt_terminal_effect_with_divergence(stmt, &|_| false)
+}
+
+/// Computes one statement's terminal effect with caller-known expression divergence.
+fn stmt_terminal_effect_with_divergence(
+    stmt: &Stmt,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
+) -> TerminalEffect {
     match &stmt.kind {
-        StmtKind::Synthetic(stmts) => block_terminal_effect(stmts),
+        StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
+            block_terminal_effect_with_divergence(stmts, additional_expr_diverges)
+        }
         StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue(_) => {
             TerminalEffect::ExitsCurrentBlock
         }
         StmtKind::Break(1) => TerminalEffect::Breaks,
         StmtKind::Break(_) => TerminalEffect::ExitsCurrentBlock,
+        StmtKind::ExprStmt(expr)
+            if expr_guarantees_function_exit(expr) || additional_expr_diverges(expr) =>
+        {
+            TerminalEffect::ExitsCurrentBlock
+        }
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
         } => combine_branch_effects(
-            std::iter::once(block_terminal_effect(then_body))
-                .chain(elseif_clauses.iter().map(|(_, body)| block_terminal_effect(body))),
-            else_body.as_ref().map(|body| block_terminal_effect(body)),
+            std::iter::once(block_terminal_effect_with_divergence(
+                then_body,
+                additional_expr_diverges,
+            ))
+            .chain(elseif_clauses.iter().map(|(_, body)| {
+                block_terminal_effect_with_divergence(body, additional_expr_diverges)
+            })),
+            else_body.as_ref().map(|body| {
+                block_terminal_effect_with_divergence(body, additional_expr_diverges)
+            }),
         ),
         StmtKind::IfDef {
             then_body,
             else_body,
             ..
         } => combine_branch_effects(
-            std::iter::once(block_terminal_effect(then_body)),
-            else_body.as_ref().map(|body| block_terminal_effect(body)),
+            std::iter::once(block_terminal_effect_with_divergence(
+                then_body,
+                additional_expr_diverges,
+            )),
+            else_body.as_ref().map(|body| {
+                block_terminal_effect_with_divergence(body, additional_expr_diverges)
+            }),
         ),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => try_terminal_effect(try_body, catches, finally_body),
-        StmtKind::Switch { cases, default, .. } => switch_terminal_effect(cases, default),
+        } => try_terminal_effect(
+            try_body,
+            catches,
+            finally_body,
+            additional_expr_diverges,
+        ),
+        StmtKind::Switch { cases, default, .. } => {
+            switch_terminal_effect(cases, default, additional_expr_diverges)
+        }
+        StmtKind::While { condition, body }
+            if expr_is_truthy_literal(condition)
+                && (block_guarantees_function_exit_with_divergence(
+                    body,
+                    additional_expr_diverges,
+                ) || !block_may_break_current_loop(body)) =>
+        {
+            TerminalEffect::ExitsCurrentBlock
+        }
+        StmtKind::DoWhile { condition, body }
+            if block_guarantees_function_exit_with_divergence(
+                body,
+                additional_expr_diverges,
+            ) || (expr_is_truthy_literal(condition) && !block_may_break_current_loop(body)) =>
+        {
+            TerminalEffect::ExitsCurrentBlock
+        }
+        StmtKind::For {
+            condition, body, ..
+        } if condition.as_ref().is_none_or(expr_is_truthy_literal)
+            && (block_guarantees_function_exit_with_divergence(
+                body,
+                additional_expr_diverges,
+            ) || !block_may_break_current_loop(body)) =>
+        {
+            TerminalEffect::ExitsCurrentBlock
+        }
         _ => TerminalEffect::FallsThrough,
     }
 }
 
-/// Returns true if the given statement guarantees that the current function will exit.
-/// Walks into synthetic blocks, namespace blocks, and expressions (for `throw`, `exit`, `die`).
-fn stmt_guarantees_function_exit(stmt: &Stmt) -> bool {
+/// Returns true if the statement guarantees function exit under the supplied divergence model.
+fn stmt_guarantees_function_exit(
+    stmt: &Stmt,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
+) -> bool {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
-            block_guarantees_function_exit(stmts)
+            block_guarantees_function_exit_with_divergence(stmts, additional_expr_diverges)
         }
         StmtKind::Return(_) | StmtKind::Throw(_) => true,
-        StmtKind::ExprStmt(expr) => expr_guarantees_function_exit(expr),
+        StmtKind::ExprStmt(expr) => {
+            expr_guarantees_function_exit(expr) || additional_expr_diverges(expr)
+        }
         StmtKind::If {
             then_body,
             elseif_clauses,
@@ -92,34 +178,57 @@ fn stmt_guarantees_function_exit(stmt: &Stmt) -> bool {
         } => {
             else_body
                 .as_ref()
-                .is_some_and(|body| block_guarantees_function_exit(body))
-                && block_guarantees_function_exit(then_body)
-                && elseif_clauses
-                    .iter()
-                    .all(|(_, body)| block_guarantees_function_exit(body))
+                .is_some_and(|body| {
+                    block_guarantees_function_exit_with_divergence(
+                        body,
+                        additional_expr_diverges,
+                    )
+                })
+                && block_guarantees_function_exit_with_divergence(
+                    then_body,
+                    additional_expr_diverges,
+                )
+                && elseif_clauses.iter().all(|(_, body)| {
+                    block_guarantees_function_exit_with_divergence(
+                        body,
+                        additional_expr_diverges,
+                    )
+                })
         }
         StmtKind::IfDef {
             then_body,
             else_body,
             ..
         } => {
-            block_guarantees_function_exit(then_body)
-                && else_body
-                    .as_ref()
-                    .is_some_and(|body| block_guarantees_function_exit(body))
+            block_guarantees_function_exit_with_divergence(
+                then_body,
+                additional_expr_diverges,
+            ) && else_body.as_ref().is_some_and(|body| {
+                block_guarantees_function_exit_with_divergence(body, additional_expr_diverges)
+            })
         }
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => try_guarantees_function_exit(try_body, catches, finally_body),
-        StmtKind::Switch { cases, default, .. } => switch_guarantees_function_exit(cases, default),
+        } => try_guarantees_function_exit(
+            try_body,
+            catches,
+            finally_body,
+            additional_expr_diverges,
+        ),
+        StmtKind::Switch { cases, default, .. } => {
+            switch_guarantees_function_exit(cases, default, additional_expr_diverges)
+        }
         StmtKind::While { condition, body } => {
             expr_is_truthy_literal(condition)
-                && !block_may_break_current_loop(body)
+                && (block_guarantees_function_exit_with_divergence(
+                    body,
+                    additional_expr_diverges,
+                ) || !block_may_break_current_loop(body))
         }
         StmtKind::DoWhile { body, condition } => {
-            block_guarantees_function_exit(body)
+            block_guarantees_function_exit_with_divergence(body, additional_expr_diverges)
                 || (expr_is_truthy_literal(condition) && !block_may_break_current_loop(body))
         }
         StmtKind::For {
@@ -128,7 +237,10 @@ fn stmt_guarantees_function_exit(stmt: &Stmt) -> bool {
             condition
                 .as_ref()
                 .is_none_or(expr_is_truthy_literal)
-                && !block_may_break_current_loop(body)
+                && (block_guarantees_function_exit_with_divergence(
+                    body,
+                    additional_expr_diverges,
+                ) || !block_may_break_current_loop(body))
         }
         _ => false,
     }
@@ -153,18 +265,21 @@ fn try_guarantees_function_exit(
     try_body: &[Stmt],
     catches: &[CatchClause],
     finally_body: &Option<Vec<Stmt>>,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
 ) -> bool {
-    if finally_body
-        .as_ref()
-        .is_some_and(|body| block_guarantees_function_exit(body))
-    {
+    if finally_body.as_ref().is_some_and(|body| {
+        block_guarantees_function_exit_with_divergence(body, additional_expr_diverges)
+    }) {
         return true;
     }
 
-    block_guarantees_function_exit(try_body)
-        && catches
-            .iter()
-            .all(|catch| block_guarantees_function_exit(&catch.body))
+    block_guarantees_function_exit_with_divergence(try_body, additional_expr_diverges)
+        && catches.iter().all(|catch| {
+            block_guarantees_function_exit_with_divergence(
+                &catch.body,
+                additional_expr_diverges,
+            )
+        })
 }
 
 /// Returns true if a switch block guarantees function exit.
@@ -173,19 +288,28 @@ fn try_guarantees_function_exit(
 fn switch_guarantees_function_exit(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
 ) -> bool {
     if cases
         .iter()
-        .any(|(_, body)| block_may_leave_current_switch_before_function_exit(body))
-        || default
-            .as_ref()
-            .is_some_and(|body| block_may_leave_current_switch_before_function_exit(body))
+        .any(|(_, body)| {
+            block_may_leave_current_switch_before_function_exit(
+                body,
+                additional_expr_diverges,
+            )
+        })
+        || default.as_ref().is_some_and(|body| {
+            block_may_leave_current_switch_before_function_exit(
+                body,
+                additional_expr_diverges,
+            )
+        })
     {
         return false;
     }
 
     matches!(
-        switch_terminal_effect(cases, default),
+        switch_terminal_effect(cases, default, additional_expr_diverges),
         TerminalEffect::ExitsCurrentBlock
     )
 }
@@ -212,9 +336,12 @@ fn block_may_break_current_loop(stmts: &[Stmt]) -> bool {
 
 /// Returns true if any statement in the block may leave the current switch before
 /// a function exit is reached, blocking guaranteed exit analysis.
-fn block_may_leave_current_switch_before_function_exit(stmts: &[Stmt]) -> bool {
+fn block_may_leave_current_switch_before_function_exit(
+    stmts: &[Stmt],
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
+) -> bool {
     for stmt in stmts {
-        if stmt_guarantees_function_exit(stmt) {
+        if stmt_guarantees_function_exit(stmt, additional_expr_diverges) {
             return false;
         }
         if stmt_may_leave_current_switch(stmt, 1) {
@@ -417,17 +544,24 @@ fn try_terminal_effect(
     try_body: &[Stmt],
     catches: &[CatchClause],
     finally_body: &Option<Vec<Stmt>>,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
 ) -> TerminalEffect {
     if let Some(finally_body) = finally_body {
-        let finally_effect = block_terminal_effect(finally_body);
+        let finally_effect =
+            block_terminal_effect_with_divergence(finally_body, additional_expr_diverges);
         if !matches!(finally_effect, TerminalEffect::FallsThrough) {
             return finally_effect;
         }
     }
 
     merge_terminal_effects(
-        std::iter::once(block_terminal_effect(try_body))
-            .chain(catches.iter().map(|catch| block_terminal_effect(&catch.body))),
+        std::iter::once(block_terminal_effect_with_divergence(
+            try_body,
+            additional_expr_diverges,
+        ))
+        .chain(catches.iter().map(|catch| {
+            block_terminal_effect_with_divergence(&catch.body, additional_expr_diverges)
+        })),
     )
 }
 
@@ -483,18 +617,24 @@ fn merge_terminal_effects(effects: impl Iterator<Item = TerminalEffect>) -> Term
 fn switch_terminal_effect(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
+    additional_expr_diverges: &dyn Fn(&Expr) -> bool,
 ) -> TerminalEffect {
     let Some(default_body) = default.as_ref() else {
         return TerminalEffect::FallsThrough;
     };
 
-    let mut suffix_exits = block_terminal_effect(default_body) == TerminalEffect::ExitsCurrentBlock;
+    let mut suffix_exits =
+        block_terminal_effect_with_divergence(default_body, additional_expr_diverges)
+            == TerminalEffect::ExitsCurrentBlock;
     if !suffix_exits {
         return TerminalEffect::FallsThrough;
     }
 
     for (_, body) in cases.iter().rev() {
-        suffix_exits = match block_terminal_effect(body) {
+        suffix_exits = match block_terminal_effect_with_divergence(
+            body,
+            additional_expr_diverges,
+        ) {
             TerminalEffect::ExitsCurrentBlock => true,
             TerminalEffect::FallsThrough => suffix_exits,
             TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => false,
