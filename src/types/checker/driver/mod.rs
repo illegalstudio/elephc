@@ -300,7 +300,7 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
-    let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
+    let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
@@ -308,7 +308,7 @@ pub(super) fn check_types_impl(
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
     methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
-    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
+    checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 

@@ -19,6 +19,15 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+/// Binds an otherwise-unbound local as `Mixed` after its assignment fails.
+///
+/// Error recovery must preserve a valid earlier binding, while ensuring a name
+/// introduced by the failed statement does not trigger misleading follow-on
+/// `Undefined variable` diagnostics.
+fn poison_unbound_local(env: &mut TypeEnv, name: &str) {
+    env.entry(name.to_string()).or_insert(PhpType::Mixed);
+}
+
 /// Extracts the default expression from a null-coalescing assignment to a specific variable.
 ///
 /// Returns `Some(&default)` if `value` is a `NullCoalesce` expression where the current
@@ -180,8 +189,24 @@ pub(super) fn check_assign(
             }
         }
     }
-    let ty = ty_result?;
-    metadata_result?;
+    let ty = match ty_result {
+        Ok(ty) => ty,
+        Err(error) => {
+            // Error recovery: the initializer failed to type, but the assignment
+            // still names `$name`, so register it before propagating the real RHS
+            // error. Without this, every later use of `$name` produces a
+            // misleading follow-on `Undefined variable: $name` that buries the one
+            // genuine diagnostic. Poison it as `Mixed` (unknown) only when it is
+            // not already bound, so a valid earlier binding is preserved and no new
+            // false diagnostics appear downstream.
+            poison_unbound_local(env, name);
+            return Err(error);
+        }
+    };
+    if let Err(error) = metadata_result {
+        poison_unbound_local(env, name);
+        return Err(error);
+    }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     merge_local_assignment_type(checker, name, &ty, span, env)
 }
@@ -200,7 +225,7 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    match &source.kind {
+    let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
         }
@@ -255,7 +280,12 @@ pub(super) fn check_ref_assign(
             span,
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         )),
+    };
+    if let Err(error) = result {
+        poison_unbound_local(env, target);
+        return Err(error);
     }
+    Ok(())
 }
 
 /// Type-checks `$target =& $source` where the source is a plain variable.
@@ -766,8 +796,25 @@ pub(super) fn check_typed_assign(
         span,
         &format!("Typed local ${}", name),
     )?;
-    let value_ty = checker.infer_type(value, env)?;
+    let value_ty = match checker.infer_type(value, env) {
+        Ok(value_ty) => value_ty,
+        Err(error) => {
+            // Error recovery: the initializer failed to type. Bind `$name` before
+            // propagating the real RHS error so later uses do not cascade into
+            // misleading `Undefined variable: $name` diagnostics. Poison it as
+            // `Mixed` (unknown) rather than the declared type: a poisoned target
+            // must not spawn new follow-on type errors downstream (e.g. a declared
+            // `int` would make a later `count($name)` a spurious second error).
+            // Only bind when unbound so a valid earlier binding is preserved.
+            poison_unbound_local(env, name);
+            return Err(error);
+        }
+    };
     if !checker.type_accepts(&declared_ty, &value_ty) {
+        // The initializer typed successfully but violates the declared type. Poison
+        // `$name` as `Mixed` for recovery so later uses do not cascade, then report
+        // the initialization mismatch as the one real diagnostic.
+        poison_unbound_local(env, name);
         return Err(CompileError::new(
             span,
             &format!(
@@ -810,13 +857,24 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = checker.infer_type(value, env)?;
+    let arr_ty = match checker.infer_type(value, env) {
+        Ok(arr_ty) => arr_ty,
+        Err(error) => {
+            for var in vars {
+                poison_unbound_local(env, var);
+            }
+            return Err(error);
+        }
+    };
     let unpack_ty = match &arr_ty {
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
         PhpType::AssocArray { .. } => PhpType::Mixed,
         _ => {
+            for var in vars {
+                poison_unbound_local(env, var);
+            }
             return Err(CompileError::new(
                 span,
                 "List unpacking requires an array on the right-hand side",
@@ -937,7 +995,14 @@ pub(super) fn check_static_var(
     init: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let ty = checker.infer_type(init, env)?;
+    let ty = match checker.infer_type(init, env) {
+        Ok(ty) => ty,
+        Err(error) => {
+            poison_unbound_local(env, name);
+            checker.active_statics.insert(name.to_string());
+            return Err(error);
+        }
+    };
     checker.active_statics.insert(name.to_string());
     env.insert(name.to_string(), ty);
     Ok(())

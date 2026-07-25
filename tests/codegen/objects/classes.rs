@@ -523,6 +523,26 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Regression for #597: an ordinary top-level local must not seed a method's local
+/// environment. The method can reuse the same name with a different type and return
+/// its own value without a false reassignment error.
+#[test]
+fn test_method_local_is_isolated_from_same_named_top_level_local() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "top-level";
+class LocalScope {
+    public function value(): int {
+        $value = 5;
+        return $value;
+    }
+}
+echo (new LocalScope())->value();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies that a private property is inaccessible from outside the class
 /// but can be read via a public accessor method, ensuring visibility rules are enforced.
 #[test]
