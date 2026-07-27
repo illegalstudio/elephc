@@ -862,7 +862,7 @@ $r = date_format($d, "Y-m-d H:i");
 date_timezone_set($d, timezone_open("Europe/Paris"));
 echo $r, "|", date_format($d, "H:i"), "|", timezone_name_get(date_timezone_get($d)), "|",
      date_offset_get($d), "|",
-     date_diff(date_create("@1704067200"), date_create("@1719835200"))->days;
+     date_diff(new DateTime("@1704067200"), new DateTime("@1719835200"))->days;
 "#,
     );
     assert_eq!(out, "2024-07-01 12:00|14:00|Europe/Paris|7200|182");
@@ -875,7 +875,7 @@ fn test_procedural_date_mutation_aliases() {
     let out = compile_and_run(
         r#"<?php
 date_default_timezone_set("UTC");
-$d = date_create();
+$d = new DateTime();
 date_date_set($d, 2024, 1, 15);
 date_time_set($d, 9, 30, 0);
 date_add($d, new DateInterval("P1M"));

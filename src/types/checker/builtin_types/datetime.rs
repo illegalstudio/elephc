@@ -2099,6 +2099,102 @@ fn datetime_gettimeofday() -> ClassMethod {
     }
 }
 
+/// PHP source backing `date_create()` / `date_create_immutable()`. The procedural aliases return
+/// `DateTime|false` (false on an unparseable string), unlike `new DateTime()` which throws
+/// `DateMalformedStringException` (PHP 8.3+). The wrapper catches the exception and returns `false`.
+/// `__CLASS__` is substituted with the concrete class so each alias builds its own type.
+const DATE_CREATE_SRC: &str = r#"<?php
+try {
+    if ($timezone === null) {
+        return new __CLASS__($datetime);
+    }
+    return new __CLASS__($datetime, $timezone);
+} catch (\DateMalformedStringException $e) {
+    return false;
+}
+"#;
+
+/// Builds the internal static `__elephc_date_create($datetime = "now", $timezone = null)` method on
+/// the given class, backing the `date_create()` / `date_create_immutable()` procedural aliases. They
+/// return the constructed instance or `false` on an unparseable string (catching the ctor's
+/// `DateMalformedStringException`). Self-contained parsed source.
+fn datetime_date_create(class_name: &str) -> ClassMethod {
+    let src = DATE_CREATE_SRC.replace("__CLASS__", class_name);
+    let tokens = crate::lexer::tokenize(&src).expect("date_create body source must tokenize");
+    let body = crate::parser::parse(&tokens).expect("date_create body source must parse");
+    ClassMethod {
+        name: "__elephc_date_create".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "datetime".to_string(),
+                Some(TypeExpr::Str),
+                Some(Expr::new(ExprKind::StringLiteral("now".to_string()), dummy())),
+                false,
+            ),
+            (
+                "timezone".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+                    "DateTimeZone",
+                ))))),
+                Some(Expr::new(ExprKind::Null, dummy())),
+                false,
+            ),
+        ],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// PHP source backing `date_modify()`. The procedural alias returns `DateTime|false` (false on an
+/// unparseable modifier), unlike `DateTime::modify()` which throws `DateMalformedStringException`
+/// (PHP 8.3+). The wrapper catches the exception and returns `false`.
+const DATE_MODIFY_SRC: &str = r#"<?php
+try {
+    return $object->modify($modifier);
+} catch (\DateMalformedStringException $e) {
+    return false;
+}
+"#;
+
+/// Builds the internal static `__elephc_date_modify($object, $modifier)` method on `DateTime`, backing
+/// the `date_modify()` procedural alias. Returns the modified object or `false` on an unparseable
+/// modifier (catching `modify()`'s `DateMalformedStringException`). `$object` is typed `mixed` so the
+/// alias composes with `date_create()` (which returns `DateTime|false` aka `mixed`). Self-contained
+/// parsed source.
+fn datetime_date_modify() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATE_MODIFY_SRC).expect("date_modify body source must tokenize");
+    let body = crate::parser::parse(&tokens).expect("date_modify body source must parse");
+    ClassMethod {
+        name: "__elephc_date_modify".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("object".to_string(), Some(TypeExpr::Named(Name::unqualified("mixed"))), None, false),
+            ("modifier".to_string(), Some(TypeExpr::Str), None, false),
+        ],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Translates the strftime `%`-format into a `date()` format, then calls `date()`/`gmdate()`.
 /// Common specifiers map 1:1 (or to a composite like `%T` -> `H:i:s`); `%j`/`%C` are computed and
 /// inlined as literal digits (digits pass through `date()`). Literal letters are backslash-escaped so
@@ -3985,6 +4081,7 @@ pub(crate) fn inject_builtin_datetime(
                     m.push(datetime_create_from_object("createFromInterface", "DateTimeImmutable"));
                     m.push(datetime_create_from_object("createFromMutable", "DateTimeImmutable"));
                     m.push(datetime_set_isodate("DateTimeImmutable"));
+                    m.push(datetime_date_create("DateTimeImmutable"));
                     m
                 },
                 attributes: Vec::new(),
@@ -4007,6 +4104,8 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_date_parse_from_format());
         methods.push(datetime_date_parse());
         methods.push(datetime_gettimeofday());
+        methods.push(datetime_date_create("DateTime"));
+        methods.push(datetime_date_modify());
         methods.push(datetime_strftime());
         methods.push(datetime_extract_micros());
         methods.push(datetime_strip_micros());

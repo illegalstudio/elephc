@@ -549,8 +549,10 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
                 args: full,
             })
         }
-        "date_create" if args.len() <= 2 => Some(new_object("DateTime")),
-        "date_create_immutable" if args.len() <= 2 => Some(new_object("DateTimeImmutable")),
+        "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
+        "date_create_immutable" if args.len() <= 2 => {
+            Some(static_call("DateTimeImmutable", "__elephc_date_create"))
+        }
         "date_create_from_format" if args.len() == 2 || args.len() == 3 => {
             Some(static_call("DateTime", "createFromFormat"))
         }
@@ -721,7 +723,7 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
         "date_format" if args.len() == 2 => Some(method(0, "format", &[1])),
         "date_add" if args.len() == 2 => Some(method(0, "add", &[1])),
         "date_sub" if args.len() == 2 => Some(method(0, "sub", &[1])),
-        "date_modify" if args.len() == 2 => Some(method(0, "modify", &[1])),
+        "date_modify" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_modify")),
         "date_timestamp_get" if args.len() == 1 => Some(method(0, "getTimestamp", &[])),
         "date_timestamp_set" if args.len() == 2 => Some(method(0, "setTimestamp", &[1])),
         "date_timezone_get" if args.len() == 1 => Some(method(0, "getTimezone", &[])),

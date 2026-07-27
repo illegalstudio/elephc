@@ -280,12 +280,39 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                     // receiver such as a `?DateTimeZone` parameter collapses to `Mixed` under
                     // codegen_repr(), which would hide methods (e.g. the constructor's internal
                     // `$timezone->getName()`) and leave their symbols unemitted.
-                    let Some(normalized) = function
-                        .value(receiver)
-                        .and_then(|value| builtin_datetime_class_in_type(&value.php_type))
+                    let receiver_ty = function.value(receiver).map(|v| &v.php_type);
+                    let Some(normalized) = receiver_ty
+                        .and_then(builtin_datetime_class_in_type)
+                        .or_else(|| {
+                            // When the receiver is `Mixed` (e.g. the result of `date_create()`
+                            // which returns `DateTime|false`), the codegen dispatches via
+                            // `lower_mixed_method_call` which tries every class that defines the
+                            // method. Scan all builtin date/time classes for a matching method so
+                            // their symbols are emitted even though the receiver type is erased.
+                            let ty = receiver_ty?;
+                            if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                                return None;
+                            }
+                            let method_name = string_data_name(module, inst)?;
+                            let method_key = php_method_key(method_name);
+                            // Record every builtin date/time class that defines this method.
+                            for class_name in BUILTIN_DATETIME_CLASSES {
+                                let class_info = module.class_infos.get(*class_name)?;
+                                if class_info.methods.contains_key(&method_key) {
+                                    let impl_class = method_impl_class(module, class_name, &method_key);
+                                    methods.push((impl_class, method_key.clone()));
+                                }
+                            }
+                            // Return a non-None sentinel to skip the duplicate push below.
+                            Some(String::new())
+                        })
                     else {
                         continue;
                     };
+                    if normalized.is_empty() {
+                        // The Mixed-receiver branch already pushed all candidates above.
+                        continue;
+                    }
                     let Some(method_name) = string_data_name(module, inst) else {
                         continue;
                     };

@@ -3207,6 +3207,14 @@ fn lower_mixed_method_call(
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    // Retain the unboxed object payload for the duration of the method call. The mixed cell owns
+    // the original reference; the unbox is a borrow. A mutating method (e.g. `DateTime::modify`)
+    // writes through `$this`, and the method body may release other references that drop the mixed
+    // cell's refcount to zero before the call returns — without this retain the object would be
+    // freed mid-call. The retain is balanced by the decref after the candidate dispatch below.
+    move_reg_to_int_result(ctx, receiver_reg);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object("".to_string()));
+    move_int_result_to_reg(ctx, receiver_reg);
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -3233,6 +3241,11 @@ fn lower_mixed_method_call(
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
+    // Balance the retain emitted after `__rt_mixed_unbox`: release the borrowed object payload now
+    // that the method call and result boxing are complete. The original mixed cell still owns its
+    // own reference, so this decref drops only the call-scoped retain.
+    move_reg_to_int_result(ctx, receiver_reg);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Object("".to_string()));
     Ok(())
 }
 
@@ -6372,6 +6385,24 @@ fn move_reg_to_int_result(ctx: &mut FunctionContext<'_>, source_reg: &str) {
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
+        }
+    }
+}
+
+/// Moves the canonical integer result register back into a scratch register.
+fn move_int_result_to_reg(ctx: &mut FunctionContext<'_>, dest_reg: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if dest_reg == result_reg {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", dest_reg, result_reg)); // restore the unboxed receiver pointer after an incref/decref helper call
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", dest_reg, result_reg)); // restore the unboxed receiver pointer after an incref/decref helper call
         }
     }
 }

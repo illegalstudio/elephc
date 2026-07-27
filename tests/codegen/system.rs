@@ -3223,17 +3223,9 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 }
 
 /// G19: the procedural `date_create()` alias returns `false` (not a throw) when the string fails to
-/// parse, matching PHP-src's `DateTime|false` contract. The `DateTime::__construct` ctor itself
-/// throws `DateMalformedStringException`; PHP's wrapper catches it and returns `false`.
-///
-/// Currently `#[ignore]`: the EIR backend segfaults when a method that returns an `Object` is called
-/// on a `mixed`-typed value. A synthetic `__elephc_date_create` wrapper that catches the exception
-/// and returns `false` would have to return `mixed` (to admit `false`), and every downstream
-/// `$d->modify()` / `$d->format()` on that `mixed` value would segfault when the method returns an
-/// object. `date_create` currently propagates `DateMalformedStringException` instead of returning
-/// `false` — a documented limitation (see DATETIME_PHP_SRC_COMPLIANCE_SPEC.md §5 / G19).
+/// parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_create` wrapper
+/// catches the ctor's `DateMalformedStringException` and returns `false`.
 #[test]
-#[ignore]
 fn test_date_create_invalid_returns_false() {
     let out = compile_and_run(
         r#"<?php
@@ -3244,11 +3236,10 @@ echo ($d === false) ? "false" : "other";
     assert_eq!(out, "false");
 }
 
-/// G19: the procedural `date_create_immutable()` alias returns `false` on an unparseable string.
-/// See `test_date_create_invalid_returns_false` for the `#[ignore]` rationale (EIR backend
-/// limitation on method calls returning `Object` on a `mixed` value).
+/// G19: the procedural `date_create_immutable()` alias returns `false` on an unparseable string,
+/// matching PHP-src's `DateTimeImmutable|false` contract (via the synthetic
+/// `__elephc_date_create` wrapper on `DateTimeImmutable`).
 #[test]
-#[ignore]
 fn test_date_create_immutable_invalid_returns_false() {
     let out = compile_and_run(
         r#"<?php
@@ -3260,12 +3251,9 @@ echo ($d === false) ? "false" : "other";
 }
 
 /// G19b: the procedural `date_modify()` alias returns `false` (not a throw) when the modifier fails
-/// to parse, matching PHP-src's `DateTime|false` contract. See
-/// `test_date_create_invalid_returns_false` for the `#[ignore]` rationale (same EIR backend
-/// limitation: `date_modify` desugars to `$d->modify()` which returns an `Object` on a `mixed`
-/// value when `$d` comes from `date_create()`).
+/// to parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_modify`
+/// wrapper catches `modify()`'s `DateMalformedStringException` and returns `false`.
 #[test]
-#[ignore]
 fn test_date_modify_invalid_returns_false() {
     let out = compile_and_run(
         r#"<?php
