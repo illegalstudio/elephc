@@ -2861,3 +2861,20 @@ echo $a["start"]->format("Y-m-d"), "|", $a["interval"]->format("%d"), "|", $a["r
     );
     assert_eq!(out, "2024-01-01|1|3|1|0");
 }
+
+/// G5: `new DatePeriod("R3/...")` — the deprecated PHP 8.3 string-overload constructor is rewritten
+/// to `DatePeriod::createFromISO8601String(...)` by the name resolver when the first arg is a string
+/// literal.
+#[test]
+fn test_dateperiod_ctor_string_form() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod("R3/2020-01-01T00:00:00Z/P1D");
+$n = 0;
+foreach ($p as $d) { $n++; }
+echo $n;
+"#,
+    );
+    assert_eq!(out, "4");
+}

@@ -213,18 +213,47 @@ pub(super) fn resolve_expr(
             imports,
             symbols,
         ))),
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name: resolved_name(resolve_special_or_class_name(
+        ExprKind::NewObject { class_name, args } => {
+            let resolved_class = resolved_name(resolve_special_or_class_name(
                 class_name,
                 current_namespace,
                 imports,
                 symbols,
-            )),
-            args: args
+            ));
+            let resolved_args: Vec<Expr> = args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
-                .collect(),
-        },
+                .collect();
+            // G5: `new DatePeriod("R4/...", $options)` — the deprecated PHP 8.3 string-overload
+            // constructor. When the first argument is a string literal, rewrite to
+            // `DatePeriod::createFromISO8601String(...)` since a PHP constructor cannot `return` a
+            // different instance, and `createFromISO8601String` is the supported factory.
+            let bare_class = resolved_class.trim_start_matches('\\');
+            if bare_class.eq_ignore_ascii_case("DatePeriod")
+                && !resolved_args.is_empty()
+                && matches!(resolved_args[0].kind, ExprKind::StringLiteral(_))
+            {
+                let method_args = if resolved_args.len() >= 2 {
+                    resolved_args
+                } else {
+                    // Single-arg form: `new DatePeriod("R4/...")` → createFromISO8601String with
+                    // default options=0.
+                    let mut with_options = resolved_args;
+                    with_options.push(Expr::new(ExprKind::IntLiteral(0), crate::span::Span::dummy()));
+                    with_options
+                };
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Named(resolved_class.clone()),
+                    method: php_symbol_key("createFromISO8601String"),
+                    args: method_args,
+                }
+            } else {
+                ExprKind::NewObject {
+                    class_name: resolved_class,
+                    args: resolved_args,
+                }
+            }
+        }
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),
