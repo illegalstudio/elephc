@@ -327,12 +327,12 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 
 | Gap | Raison | Statut |
 |---|---|---|
-| G19/G19b (date_create/date_modify false) | EIR backend ne supporte pas `return new X()` dans try/catch (Object return type non lowered) | `#[ignore]` + doc §5 |
+| G19/G19b (date_create/date_modify false) | **Bug EIR backend**: un appel de méthode qui retourne un `Object` sur une valeur `mixed` boxée segfault au runtime. Un wrapper `__elephc_date_create` retournant `mixed` (pour admettre `false`) casserait toutes les chaînes `$d->modify()`/`$d->format()` suivantes. Correction nécessite de modifier le lowering EIR des appels de méthode sur `mixed` avec retour Object. | `#[ignore]` + doc §5 |
 | R1 (strtotime 2-digit ISO YY-MM-DD) | Runtime assembly `__rt_strtotime_iso_entry` exige 4-digit year; modification ARM64+x86_64 parser substantielle | `#[ignore]` + doc §5 |
 | G5 (DatePeriod string ctor overload) | Deprecated PHP 8.3; `createFromISO8601String` existe déjà comme alternative | doc §5 |
-| G11 (getLastErrors détaillé) | Body `CREATE_FROM_FORMAT_SRC` complexe à modifier pour tracker positions | doc §5 (count 0/1 fonctionne) |
-| G12 (serialize stubs) | Pas d'infra serialize/unserialize | doc §5 |
-| G17 (timezone_name_from_abbr disambiguation) | Edge case rare; offset/DST disambiguation non implémentée | doc §5 |
+| G11 (getLastErrors détaillé) | Body `CREATE_FROM_FORMAT_SRC` complexe (~370 lignes) à modifier pour tracker positions; risque élevé de casser les tests createFromFormat existants | doc §5 (count 0/1 fonctionne) |
+| G12 (serialize stubs) | Pas d'infra serialize/unserialize/var_export | doc §5 |
+| G17 (timezone_name_from_abbr disambiguation) | Table de disambiguation abbr→[zones avec offsets] complexe; edge case rare | doc §5 |
 | G22/G23 (deprecation notices/attributes) | Pas de système de notices PHP | doc §5 |
 
 ### Tests ignorés (`#[ignore]` avec docblock)
