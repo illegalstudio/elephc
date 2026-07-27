@@ -2440,3 +2440,310 @@ echo ($a <=> $b);
     );
     assert_eq!(out, "101-1");
 }
+
+/// G10: `new DateTime("totoro")` throws `DateMalformedStringException` (PHP 8.3+).
+#[test]
+fn test_datetime_invalid_string_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $d = new DateTime("totoro");
+    echo "no-throw";
+} catch (DateMalformedStringException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G10b: `new DateTimeImmutable("totoro")` throws `DateMalformedStringException` (PHP 8.3+).
+#[test]
+fn test_datetime_immutable_invalid_string_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $d = new DateTimeImmutable("totoro");
+    echo "no-throw";
+} catch (DateMalformedStringException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G9: `new DateTimeZone("garbage")` throws `DateInvalidTimeZoneException` (PHP 8.3+).
+#[test]
+fn test_datetimezone_invalid_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $tz = new DateTimeZone("garbage");
+    echo "no-throw";
+} catch (DateInvalidTimeZoneException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G9 regression: a `+HHMM` offset is a valid `DateTimeZone` identifier (PHP type-1 zone).
+#[test]
+fn test_datetimezone_offset_valid() {
+    let out = compile_and_run(
+        r#"<?php
+$tz = new DateTimeZone("+0200");
+echo $tz->getName();
+"#,
+    );
+    assert_eq!(out, "+0200");
+}
+
+/// G24: `DateTime::createFromTimestamp(float)` preserves the fractional part as microseconds.
+#[test]
+fn test_create_from_timestamp_float_keeps_micros() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo DateTime::createFromTimestamp(1700000000.123456)->format("u");
+"#,
+    );
+    assert_eq!(out, "123456");
+}
+
+/// G25: `DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY)` without a country code throws
+/// `ValueError` (PHP 8.0+). Reinforces the existing per-country test with the bare no-code path.
+#[test]
+fn test_list_identifiers_per_country_no_code_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $x = DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY);
+    echo "no-throw";
+} catch (ValueError $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G19c: the `date_create_from_format` procedural alias returns `false` (not a throw) when the
+/// subject fails to match the format, matching `DateTime::createFromFormat`.
+#[test]
+fn test_date_create_from_format_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$bad = date_create_from_format("Y-m-d", "not-a-date");
+echo ($bad === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G2: `DateInterval::createFromDateString()` sets the PHP 8.2+ `from_string` property to `true`.
+#[test]
+fn test_dateinterval_from_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = DateInterval::createFromDateString("2 days");
+echo $iv->from_string ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "true");
+}
+
+/// G2: `DateInterval::createFromDateString()` sets the PHP 8.2+ `date_string` property to the source
+/// text. A directly constructed interval (`new DateInterval(...)`) keeps `from_string=false` and
+/// `date_string=""`.
+#[test]
+fn test_dateinterval_date_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+$a = DateInterval::createFromDateString("2 days");
+echo $a->date_string, "|", ($a->from_string ? "t" : "f"), "|";
+$b = new DateInterval("P1Y");
+echo $b->date_string, "|", ($b->from_string ? "t" : "f");
+"#,
+    );
+    assert_eq!(out, "2 days|t||f");
+}
+
+/// G6: `DatePeriod::getEndDate()` return type is `?DateTimeInterface` — the returned object satisfies
+/// `instanceof DateTimeInterface` (it is a `DateTime`, which implements the interface).
+#[test]
+fn test_dateperiod_get_end_date_returns_interface() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+$e = $p->getEndDate();
+echo ($e instanceof DateTimeInterface) ? "iface" : "no";
+"#,
+    );
+    assert_eq!(out, "iface");
+}
+
+/// G7: `DatePeriod::getStartDate()` return type is `DateTimeInterface` — the returned object
+/// satisfies `instanceof DateTimeInterface`.
+#[test]
+fn test_dateperiod_get_start_date_returns_interface() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+$s = $p->getStartDate();
+echo ($s instanceof DateTimeInterface) ? "iface" : "no";
+"#,
+    );
+    assert_eq!(out, "iface");
+}
+
+/// G8: `DatePeriod` implements `IteratorAggregate` (PHP 5.3+, formally since 8.0) in addition to
+/// `Iterator`. `instanceof IteratorAggregate` must be true.
+#[test]
+fn test_dateperiod_instanceof_iterator_aggregate() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo ($p instanceof IteratorAggregate) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// G4: `DatePeriod::$start` exposes the start instant (PHP 8.2+ public readonly virtual property).
+#[test]
+fn test_dateperiod_start_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$start = new DateTime("2024-01-01");
+$p = new DatePeriod($start, new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->start->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-01-01");
+}
+
+/// G4: `DatePeriod::$end` exposes the end instant (null in the recurrence-count form).
+#[test]
+fn test_dateperiod_end_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->end->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-01-04");
+}
+
+/// G4: `DatePeriod::$interval` exposes the step interval.
+#[test]
+fn test_dateperiod_interval_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->interval->format("%d");
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// G4: `DatePeriod::$current` reflects the live cursor during iteration.
+#[test]
+fn test_dateperiod_current_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+foreach ($p as $d) {
+    echo $p->current->format("Y-m-d"), "|";
+}
+"#,
+    );
+    assert_eq!(out, "2024-01-01|2024-01-02|2024-01-03|");
+}
+
+/// G4: `DatePeriod::$recurrences` is the recurrence count in the count form.
+#[test]
+fn test_dateperiod_recurrences_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), 3);
+echo $p->recurrences;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// G4: `DatePeriod::$include_start_date` / `$include_end_date` reflect the option flags.
+#[test]
+fn test_dateperiod_include_start_end_date_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(
+    new DateTime("2024-01-01"),
+    new DateInterval("P1D"),
+    new DateTime("2024-01-04"),
+    DatePeriod::EXCLUDE_START_DATE | DatePeriod::INCLUDE_END_DATE,
+);
+echo $p->include_start_date ? "1" : "0", "|", $p->include_end_date ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "0|1");
+}
+
+/// G13: `DateTime::diff()` produces a `DateInterval` whose `$days` is the whole-day total (int),
+/// and `format("%a")` renders that total. Directly constructed intervals keep `days === false`.
+#[test]
+fn test_diff_days_is_int() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$a = new DateTime("2020-01-01");
+$b = new DateTime("2021-03-15");
+$d = $a->diff($b);
+echo $d->days, "|", $d->format("%a");
+"#,
+    );
+    assert_eq!(out, "439|439");
+}
+
+/// G13: a directly constructed `DateInterval` has `days === false`, and `format("%a")` renders
+/// `(unknown)`, matching PHP.
+#[test]
+fn test_diff_format_a_unknown_when_days_false() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = new DateInterval("P2W");
+echo ($iv->days === false) ? "F" : "T", "|", $iv->format("%a");
+"#,
+    );
+    assert_eq!(out, "F|(unknown)");
+}
+
+/// R3/R4: `DateTimeZone::getTransitions()` with no arguments reproduces PHP's full transition list
+/// — row 0 `ts = PHP_INT_MIN` (= `i64::MIN` on 64-bit), the count for the bundled tz data, and the
+/// expanded-year `time` format. Non-regression for the bridge's `format_utc_iso` formatter.
+#[test]
+fn test_get_transitions_row0_ts_php_int_min() {
+    let out = compile_and_run(
+        r#"<?php
+$t = (new DateTimeZone("Europe/Paris"))->getTransitions();
+echo $t[0]["ts"], "\n", $t[0]["time"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "-9223372036854775808\n-292277022657-01-27T08:29:52+00:00"
+    );
+}

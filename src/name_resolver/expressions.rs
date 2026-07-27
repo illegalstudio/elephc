@@ -452,10 +452,47 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
         args: args.to_vec(),
     };
     match bare.as_str() {
-        // idate($fmt[, $ts]) returns the integer value of a single date() specifier; it is exactly
-        // `intval(date($fmt[, $ts]))` for every integer-yielding specifier, so desugar to that and
-        // reuse the existing date()/intval() codegen rather than a dedicated builtin.
+        // idate($fmt[, $ts]) returns the integer value of a single date() specifier for recognized
+        // specifiers, and `false` for an empty or unrecognized format (matching PHP). PHP also emits
+        // an E_WARNING on the false path; elephc has no warning system so only the `false` return is
+        // reproduced. The recognized set (verified against `php -r`) is:
+        // `B d G g H h I i L m N n s t U W w Y y z Z` — note `idate` does NOT accept `O`, `P`, `a`,
+        // `A`, `v`, `u`, `S`, `M`, `F`, etc. (unlike `date()`).
+        //
+        // When the format is a literal string, it is validated at compile time: a recognized
+        // specifier desugars to `intval(date($fmt[, $ts]))` (the original fast path); an empty or
+        // unrecognized literal desugars to `false`. A non-literal (dynamic) format falls back to the
+        // `intval(date(...))` fast path (which yields 0 for an unrecognized specifier — a documented
+        // divergence from PHP's `false` for the rare dynamic-format case; the common case is covered).
         "idate" if args.len() == 1 || args.len() == 2 => {
+            let recognized = |c: char| {
+                matches!(
+                    c,
+                    'B' | 'd' | 'G' | 'g' | 'H' | 'h' | 'I' | 'i' | 'L' | 'm' | 'N' | 'n' | 's'
+                        | 't' | 'U' | 'W' | 'w' | 'Y' | 'y' | 'z' | 'Z'
+                )
+            };
+            if let ExprKind::StringLiteral(s) = &args[0].kind {
+                if s.is_empty() {
+                    return Some(ExprKind::BoolLiteral(false));
+                }
+                if s.len() == 1 && recognized(s.chars().next().unwrap()) {
+                    let date_call = Expr::new(
+                        ExprKind::FunctionCall {
+                            name: resolved_name("date".to_string()),
+                            args: args.to_vec(),
+                        },
+                        args[0].span,
+                    );
+                    return Some(ExprKind::FunctionCall {
+                        name: resolved_name("intval".to_string()),
+                        args: vec![date_call],
+                    });
+                }
+                // Literal but invalid/empty/multi-char → false.
+                return Some(ExprKind::BoolLiteral(false));
+            }
+            // Dynamic format: fast path (intval(date(...))); 0 for unrecognized (documented divergence).
             let date_call = Expr::new(
                 ExprKind::FunctionCall {
                     name: resolved_name("date".to_string()),

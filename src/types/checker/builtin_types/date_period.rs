@@ -325,6 +325,45 @@ fn date_period_constructor() -> ClassMethod {
     body.push(assign_this("includeEnd", bin(var("options"), BinOp::BitAnd, int_lit(2))));
     body.push(assign_this("curTs", this_prop("startTs")));
     body.push(assign_this("idx", int_lit(0)));
+    // Populate the PHP 8.2+ public mirror properties from the constructor arguments.
+    body.push(assign_this("start", var("start")));
+    body.push(assign_this("interval", var("interval")));
+    // include_start_date = !excludeStart; include_end_date = (includeEnd != 0).
+    body.push(assign_this(
+        "include_start_date",
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(this_prop("excludeStart")),
+                op: BinOp::Eq,
+                right: Box::new(int_lit(0)),
+            },
+            dummy(),
+        ),
+    ));
+    body.push(assign_this(
+        "include_end_date",
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(this_prop("includeEnd")),
+                op: BinOp::NotEq,
+                right: Box::new(int_lit(0)),
+            },
+            dummy(),
+        ),
+    ));
+    // `end` and `recurrences` depend on the form: count form → end=null, recurrences=int; end-date
+    // form → end=DateTimeInterface, recurrences=null-equivalent (0).
+    body.push(if_else(
+        call("is_int", vec![var("end")]),
+        vec![
+            assign_this("end", null_lit()),
+            assign_this("_recurrences_pub", cast_int(var("end"))),
+        ],
+        Some(vec![
+            assign_this("end", var("end")),
+            assign_this("_recurrences_pub", int_lit(0)),
+        ]),
+    ));
     method(
         "__construct",
         vec![
@@ -396,10 +435,13 @@ fn date_period_valid() -> ClassMethod {
 const CURRENT_SRC: &str = r#"<?php
 if ($this->startIsImmutable) {
     $d = new DateTimeImmutable();
-    return $d->setTimestamp($this->curTs);
+    $d = $d->setTimestamp($this->curTs);
+    $this->current = $d;
+    return $d;
 }
 $d = new DateTime();
 $d->setTimestamp($this->curTs);
+$this->current = $d;
 return $d;
 "#;
 
@@ -464,15 +506,18 @@ fn date_period_get_start_date() -> ClassMethod {
     )
 }
 
-/// `DatePeriod::getEndDate(): ?DateTime` — returns the end bound for the end-date form, or `null`
-/// when the period was constructed with a recurrence count.
+/// `DatePeriod::getEndDate(): ?DateTimeInterface` — returns the end bound for the end-date form, or
+/// `null` when the period was constructed with a recurrence count (matching PHP's nullable interface
+/// return type).
 fn date_period_get_end_date() -> ClassMethod {
     let tokens = crate::lexer::tokenize(GET_END_DATE_SRC).expect("getEndDate body must tokenize");
     let body = crate::parser::parse(&tokens).expect("getEndDate body must parse");
     method(
         "getEndDate",
         Vec::new(),
-        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("DateTime"))))),
+        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        ))))),
         body,
     )
 }
@@ -649,6 +694,28 @@ fn date_period_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds a public object property defaulting to `null` (for the `DateTimeInterface`/`DateInterval`
+/// mirror properties exposed by PHP's `DatePeriod`).
+fn nullable_object_property(name: &str, class_name: &str) -> ClassProperty {
+    ClassProperty {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        set_visibility: None,
+        type_expr: Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            class_name,
+        ))))),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        default: Some(null_lit()),
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds the `DatePeriod` integer state properties.
 fn date_period_properties() -> Vec<ClassProperty> {
     let mut props = vec![int_property("startTs"), int_property("endTs"), bool_property("startIsImmutable")];
@@ -662,6 +729,15 @@ fn date_period_properties() -> Vec<ClassProperty> {
     // useCount selects the count form; recurrences holds its repeat count.
     props.push(int_property("useCount"));
     props.push(int_property("recurrences"));
+    // PHP 8.2+ public readonly virtual properties, exposed here as public mirror properties
+    // populated by the constructor and `current()`/`_advance` so the userland surface matches PHP.
+    props.push(nullable_object_property("start", "DateTimeInterface"));
+    props.push(nullable_object_property("current", "DateTimeInterface"));
+    props.push(nullable_object_property("end", "DateTimeInterface"));
+    props.push(nullable_object_property("interval", "DateInterval"));
+    props.push(int_property("_recurrences_pub"));
+    props.push(bool_property("include_start_date"));
+    props.push(bool_property("include_end_date"));
     props
 }
 
@@ -680,7 +756,11 @@ pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, Flatten
             name: "DatePeriod".to_string(),
             span: dummy(),
             extends: None,
-            implements: vec!["Iterator".to_string(), "Traversable".to_string()],
+            implements: vec![
+                "Iterator".to_string(),
+                "IteratorAggregate".to_string(),
+                "Traversable".to_string(),
+            ],
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,

@@ -13,7 +13,7 @@ Holds a time-zone identifier.
 
 | Method | Description |
 |---|---|
-| `__construct(string $name)` | Store the zone identifier (e.g. `"UTC"`, `"Europe/Paris"`). |
+| `__construct(string $name)` | Store the zone identifier (e.g. `"UTC"`, `"Europe/Paris"`, `"+0200"`, or a known abbreviation like `"CET"`). Throws `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier. |
 | `getName(): string` | Return the stored identifier. |
 | `getOffset(DateTimeInterface $datetime): int` | UTC offset (seconds) of this zone at the given instant — positive east of UTC, negative west — resolved daylight-saving aware from the system timezone database. |
 | `static listIdentifiers(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | IANA timezone identifiers as an indexed array. With no arguments returns every zone in `ALL`. `$timezoneGroup` filters by region-group bitmask (e.g. `DateTimeZone::EUROPE`, or several OR'd together); `ALL_WITH_BC` additionally includes the backward-compat zones. With `DateTimeZone::PER_COUNTRY` set, results are filtered to `$countryCode` (an uppercase ISO 3166-1 code, matched case-sensitively); a missing country code then throws `ValueError`, as in PHP. |
@@ -56,7 +56,7 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 
 | Method | Description |
 |---|---|
-| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. |
+| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. Throws `DateMalformedStringException` (PHP 8.3+) on an unparseable string. |
 | `getTimestamp(): int` | UNIX timestamp. |
 | `setTimestamp(int $ts): static` | Set the moment from a UNIX timestamp. |
 | `getMicrosecond(): int` | Sub-second component (0–999999). |
@@ -73,7 +73,7 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 | `modify(string $modifier): static` | Apply a relative modifier (e.g. `"+1 day"`) parsed by `strtotime()`. |
 | `diff(DateTimeInterface $target): DateInterval` | Difference between two moments. |
 | `static createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null): static\|false` | Parse a string per a `date()`-style format, returning a new instance or `false` on mismatch. With a `$timezone`, the wall-clock is interpreted in that zone and it becomes the display zone. |
-| `static createFromTimestamp(int\|float $timestamp): static` | Build a new instance set to a UNIX timestamp (the fractional part is dropped — second resolution). |
+| `static createFromTimestamp(int\|float $timestamp): static` | Build a new instance set to a UNIX timestamp. The integer part becomes the second-resolution timestamp; the fractional part (for a `float` argument) is preserved as microseconds via `setMicrosecond()`, matching PHP 8.4+. |
 | `static createFromInterface(DateTimeInterface $object): static` | Copy any date object's instant and timezone into this class (mutable ↔ immutable). |
 | `static getLastErrors(): array` | `['warning_count', 'warnings', 'error_count', 'errors']` for the last `createFromFormat()` on this class — `error_count` is 1 after a format mismatch, 0 after success. |
 | `DateTime::createFromImmutable(DateTimeImmutable $object): DateTime` | Mutable copy of an immutable date. |
@@ -160,7 +160,9 @@ Represents a span of time. The constructor parses an ISO 8601 duration string `P
 | `h`, `i`, `s` | Hours, minutes, seconds. |
 | `f` | Fraction of a second (float). Set by `diff()`, applied by `add()`/`sub()`, and rendered by `format()`'s `%f`/`%F`. |
 | `invert` | `1` when the interval is negative, else `0`. |
-| `days` | Total whole days (set by `diff()`). |
+| `days` | Total whole days (set by `diff()`); `false` for a directly constructed interval. |
+| `from_string` | `true` when the interval was built by `createFromDateString()` (PHP 8.2+), else `false`. |
+| `date_string` | The source string passed to `createFromDateString()`, or `""` for a directly constructed interval (PHP 8.2+). |
 
 ```php
 $iv = new DateInterval("P1Y2M3DT4H5M6S");
@@ -286,12 +288,14 @@ Each iteration yields a fresh `DateTime`, so collecting the values keeps every s
 | Method | Description |
 |---|---|
 | `__construct(DateTimeInterface $start, DateInterval $interval, DateTimeInterface\|int $end, int $options = 0)` | Build a period either over `[start, end)` or for an integer recurrence count. |
-| `getStartDate(): DateTime` | The start date. |
-| `getEndDate(): DateTime` | The end date. |
+| `getStartDate(): DateTimeInterface` | The start date. |
+| `getEndDate(): ?DateTimeInterface` | The end date (or `null` in the recurrence-count form). |
 | `getDateInterval(): DateInterval` | The step interval. |
 | `getRecurrences(): ?int` | The recurrence count for the count form, or `null` for the end-date form. |
 | `getIterator(): Iterator` | An iterator over the period's dates, for `foreach ($p->getIterator() ...)` / `iterator_to_array($p->getIterator())`. (PHP exposes `DatePeriod` as an `IteratorAggregate`; elephc's `DatePeriod` is itself an `Iterator`, so `getIterator()` returns the rewound period — a single live iterator rather than an independent copy.) |
 | `createFromISO8601String(string $isostr): static` | Build a period from an RFC 5545 repeating-interval specification (`R<n>/start[/interval[/end]]`). Forwards to the regular constructor; throws `DateMalformedPeriodStringException` on a malformed specification (PHP 8.3+) — a recurrence-count message for `R0/...` and `Unknown or bad format (...)` for `R/...`, `R-1/...`, or anything not matching `R<digits>/`. The deprecated `new DatePeriod(string)` constructor is not registered; use this static factory instead. |
+
+`DatePeriod` also exposes PHP 8.2+'s public readonly properties: `$start`, `$current`, `$end`, `$interval`, `$recurrences`, `$include_start_date`, and `$include_end_date`. `$current` reflects the live cursor during iteration; the others are set at construction.
 
 Both the `(start, interval, end)` and `(start, interval, recurrences)` constructor forms are supported, plus `createFromISO8601String()` for the RFC 5545 string form.
 
@@ -382,9 +386,15 @@ date_sunset($ts, SUNFUNCS_RET_DOUBLE, $lat, $lon);                        // hou
 
 ### Not currently supported
 
-A few corners of PHP's date/time API are not implemented:
+A few corners of PHP's date/time API are not implemented or diverge from PHP:
 
 - **Detailed parse warnings**: `getLastErrors()`/`date_get_last_errors()` report whether the last `createFromFormat()` succeeded or failed (`error_count` 0/1) but do not retain PHP's per-character warning/error positions — only the pass/fail count, which covers the common `if (DateTime::getLastErrors()['error_count'])` guard.
 - **Serialization hooks**: the `__serialize()`/`__unserialize()`/`__wakeup()`/`__set_state()` magic methods are not defined on the date classes, because elephc has no object `serialize()`/`unserialize()`/`var_export()` round-trip for any class.
+- **`date_create()`/`date_create_immutable()`/`date_modify()` false-on-invalid**: PHP's procedural aliases return `false` on an unparseable string (catching the constructor's `DateMalformedStringException`); elephc's aliases currently propagate the exception instead, because the EIR backend cannot lower `return new DateTime()` inside a try/catch. Use the OOP constructor with a try/catch, or `createFromFormat()` (which returns `false` on mismatch), for the same effect.
+- **`strtotime()` two-digit ISO year `YY-MM-DD`**: PHP remaps 2-digit ISO years (70→1970, 0→2000); elephc's ISO parser requires a 4-digit year and rejects `YY-MM-DD`. The shorthand is still applied to `M/D/YY` slash dates and `mktime()`/`gmmktime()` year arguments.
+- **`DatePeriod` string constructor overload**: the deprecated `new DatePeriod("R4/...", $options)` form (PHP 8.3) is not registered; use `DatePeriod::createFromISO8601String()` instead.
+- **`timezone_name_from_abbr()` offset/DST disambiguation**: the `$utcOffset`/`$isDST` arguments are accepted but not used to disambiguate ambiguous abbreviations (e.g. `CST`).
+- **Deprecation notices**: `strftime()`/`gmstrftime()` (PHP 8.1), `SUNFUNCS_RET_*` constants (8.4), and the `DatePeriod` string constructor (8.3) are deprecated in PHP but emit no runtime notice in elephc (elephc has no PHP notice system). The functions/constants remain available.
+- **`idate()` warnings**: `idate()` returns `false` for an empty or unrecognized format (matching PHP), but does not emit PHP's `E_WARNING` (elephc has no warning system). The recognized specifier set is `B d G g H h I i L m N n s t U W w Y y z Z`.
 
 A complete runnable program is in [`examples/datetime/main.php`](https://github.com/illegalstudio/elephc/tree/main/examples/datetime).

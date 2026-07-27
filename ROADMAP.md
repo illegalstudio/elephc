@@ -723,6 +723,11 @@ binaries never link the bridge.
 Full OOP + procedural date/time surface (`DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, and ~45 procedural functions/aliases), plus the complete `ext/calendar` extension, implemented as synthetic classes/methods over the `date()`/`mktime()`/`gmmktime()` runtime — no new codegen or assembly.
 
 - [x] `DateTime` / `DateTimeImmutable` — construct (string + `?DateTimeZone`), `format`, `getTimestamp` / `setTimestamp`, `getTimezone` / `setTimezone`, `getOffset`, `getMicrosecond` / `setMicrosecond`, `setTime`, `setDate`, `setISODate`, `add` / `sub`, `modify`, `diff`, `createFromFormat`, `createFromInterface`, `createFromMutable` / `createFromImmutable`, `createFromTimestamp`, `getLastErrors`; per-object timezone honored in `format()`
+- [x] PHP 8.3+ constructor/`modify()` validation — `DateTime` / `DateTimeImmutable::__construct` and `modify()` throw `DateMalformedStringException` on an unparseable string; `DateTimeZone::__construct` throws `DateInvalidTimeZoneException` on an unrecognized identifier
+- [x] `DateTime::createFromTimestamp(int|float)` preserves the fractional part as microseconds (PHP 8.4+ parity)
+- [x] `idate()` returns `false` for an empty or unrecognized format (PHP parity; no `E_WARNING` emitted — documented limitation)
+- [x] `DateInterval` PHP 8.2+ public properties `from_string` and `date_string` (set by `createFromDateString`)
+- [x] `DatePeriod` PHP 8.2+ public readonly properties `start`, `current`, `end`, `interval`, `recurrences`, `include_start_date`, `include_end_date`; `implements IteratorAggregate`; `getStartDate(): DateTimeInterface` / `getEndDate(): ?DateTimeInterface` return types
 - [x] `DateTimeInterface` format constants (`ATOM`, `COOKIE`, `ISO8601`, `ISO8601_EXPANDED`, the `RFC*` family, `RSS`, `W3C`) on the interface and both classes
 - [x] `DateInterval` — ISO 8601 duration parsing, `format()` (`%y %m %d %h %i %s %a %R %r %f %F` …), `createFromDateString`
 - [x] `DatePeriod` — `Iterator` over a date range, end-date and recurrence-count forms, `EXCLUDE_START_DATE` / `INCLUDE_END_DATE`, `createFromISO8601String`

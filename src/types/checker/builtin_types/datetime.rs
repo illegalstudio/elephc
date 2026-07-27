@@ -174,22 +174,69 @@ fn property(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
     }
 }
 
-/// `DateTimeZone::__construct(string $timezone = "UTC")` — stores the identifier verbatim.
+/// PHP source backing `DateTimeZone::__construct`. Validates the identifier against the IANA list
+/// (ALL_WITH_BC), a `+HHMM`/`-HHMM` offset, or a known abbreviation; throws
+/// `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier. Otherwise stores the
+/// identifier verbatim.
+const DATETIME_ZONE_CONSTRUCT_SRC: &str = r#"<?php
+if ($timezone === "UTC") {
+    $this->name = $timezone;
+    return;
+}
+if (strlen($timezone) >= 5 && ($timezone[0] === "+" || $timezone[0] === "-")) {
+    $this->name = $timezone;
+    return;
+}
+$all = DateTimeZone::listIdentifiers(DateTimeZone::ALL_WITH_BC);
+if (in_array($timezone, $all, true)) {
+    $this->name = $timezone;
+    return;
+}
+if (strlen($timezone) >= 2 && strlen($timezone) <= 4) {
+    $ok = true;
+    for ($i = 0; $i < strlen($timezone); $i++) {
+        $c = ord($timezone[$i]);
+        if (!(($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122))) {
+            $ok = false;
+            break;
+        }
+    }
+    if ($ok) {
+        $this->name = $timezone;
+        return;
+    }
+}
+throw new DateInvalidTimeZoneException("DateTimeZone::__construct(): Unknown or bad timezone (" . $timezone . ")");
+"#;
+
+/// `DateTimeZone::__construct(string $timezone = "UTC")` — validates and stores the identifier.
+/// Throws `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier.
 fn datetime_zone_constructor() -> ClassMethod {
-    method(
-        "__construct",
-        vec![(
+    let tokens = crate::lexer::tokenize(DATETIME_ZONE_CONSTRUCT_SRC)
+        .expect("DateTimeZone::__construct body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTimeZone::__construct body source must parse");
+    ClassMethod {
+        name: "__construct".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
             "timezone".to_string(),
             Some(TypeExpr::Str),
             Some(Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy())),
             false,
         )],
-        None,
-        vec![assign_this_property(
-            "name",
-            Expr::new(ExprKind::Variable("timezone".to_string()), dummy()),
-        )],
-    )
+        variadic: None,
+        variadic_type: None,
+        return_type: None,
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
 }
 
 /// `DateTimeZone::getName(): string` — returns the stored identifier.
@@ -2052,7 +2099,6 @@ fn datetime_gettimeofday() -> ClassMethod {
     }
 }
 
-/// PHP source backing `strftime()` / `gmstrftime()` (deprecated in PHP 8.1, but still in the manual).
 /// Translates the strftime `%`-format into a `date()` format, then calls `date()`/`gmdate()`.
 /// Common specifiers map 1:1 (or to a composite like `%T` -> `H:i:s`); `%j`/`%C` are computed and
 /// inlined as literal digits (digits pass through `date()`). Literal letters are backslash-escaped so
@@ -3280,6 +3326,8 @@ fn interval_property(name: &str) -> ClassProperty {
 /// so a `+`-prefixed count is detected explicitly; `(int)` then parses the signed value.
 const CREATE_FROM_DATE_STRING_SRC: &str = r#"<?php
 $iv = new DateInterval("PT0S");
+$iv->from_string = true;
+$iv->date_string = $datetime;
 $s = strtolower(trim($datetime));
 if ($s === "tomorrow") { $iv->d = 1; return $iv; }
 if ($s === "yesterday") { $iv->d = -1; return $iv; }
@@ -3843,6 +3891,20 @@ pub(crate) fn inject_builtin_datetime(
                     property("f", TypeExpr::Float, Expr::new(ExprKind::FloatLiteral(0.0), dummy())),
                     interval_property("invert"),
                     interval_property("days"),
+                    // PHP 8.2+: `from_string` (bool) and `date_string` (string) expose whether the
+                    // interval was built by `createFromDateString` (then `from_string=true` and
+                    // `date_string` holds the source text) or by `__construct` (then `from_string=false`
+                    // and `date_string=""`).
+                    property(
+                        "from_string",
+                        TypeExpr::Bool,
+                        Expr::new(ExprKind::BoolLiteral(false), dummy()),
+                    ),
+                    property(
+                        "date_string",
+                        TypeExpr::Str,
+                        Expr::new(ExprKind::StringLiteral(String::new()), dummy()),
+                    ),
                 ],
                 methods: vec![
                     date_interval_constructor(),
