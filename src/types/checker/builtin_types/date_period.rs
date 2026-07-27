@@ -677,7 +677,7 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
 
 /// Builds the full `DatePeriod` method list.
 fn date_period_methods() -> Vec<ClassMethod> {
-    vec![
+    let mut methods = vec![
         date_period_constructor(),
         date_period_advance(),
         date_period_rewind(),
@@ -691,6 +691,155 @@ fn date_period_methods() -> Vec<ClassMethod> {
         date_period_get_recurrences(),
         date_period_get_iterator(),
         date_period_create_from_iso8601_string(),
+    ];
+    methods.extend(date_period_serialize_methods());
+    methods
+}
+
+/// PHP source backing `DatePeriod::__serialize()`. Returns the period's state as an array with
+/// `start`, `current`, `end`, `interval`, `recurrences`, `include_start_date`, `include_end_date`.
+const DATEPERIOD_SERIALIZE_SRC: &str = r#"<?php
+return [
+    "start" => $this->start,
+    "current" => $this->current,
+    "end" => $this->end,
+    "interval" => $this->interval,
+    "recurrences" => $this->_recurrences_pub,
+    "include_start_date" => $this->include_start_date,
+    "include_end_date" => $this->include_end_date,
+];
+"#;
+
+/// PHP source backing `DatePeriod::__set_state()`. Reconstructs from the array by forwarding to the
+/// constructor with the start/interval/end or start/interval/recurrences form.
+const DATEPERIOD_SET_STATE_SRC: &str = r#"<?php
+if ($array["end"] === null) {
+    return new DatePeriod($array["start"], $array["interval"], $array["recurrences"]);
+}
+return new DatePeriod($array["start"], $array["interval"], $array["end"]);
+"#;
+
+/// Builds `DatePeriod::__wakeup(): void` (no-op, reusing the datetime wakeup builder).
+fn date_period_wakeup() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(r#"<?php
+"#)
+        .expect("DatePeriod::__wakeup body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod::__wakeup body source must parse");
+    ClassMethod {
+        name: "__wakeup".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `DatePeriod::__serialize(): array`.
+fn date_period_serialize() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEPERIOD_SERIALIZE_SRC)
+        .expect("DatePeriod::__serialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod::__serialize body source must parse");
+    ClassMethod {
+        name: "__serialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `DatePeriod::__unserialize(array $data): void`. Restores the mirror properties.
+fn date_period_unserialize() -> ClassMethod {
+    let src = r#"<?php
+$this->start = $data["start"];
+$this->current = $data["current"];
+$this->end = $data["end"];
+$this->interval = $data["interval"];
+$this->_recurrences_pub = $data["recurrences"];
+$this->include_start_date = $data["include_start_date"];
+$this->include_end_date = $data["include_end_date"];
+"#;
+    let tokens = crate::lexer::tokenize(src).expect("DatePeriod::__unserialize body source must tokenize");
+    let body = crate::parser::parse(&tokens).expect("DatePeriod::__unserialize body source must parse");
+    ClassMethod {
+        name: "__unserialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "data".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `static DatePeriod::__set_state(array $array): static`.
+fn date_period_set_state() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEPERIOD_SET_STATE_SRC)
+        .expect("DatePeriod::__set_state body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod::__set_state body source must parse");
+    ClassMethod {
+        name: "__set_state".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "array".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the serialization methods for `DatePeriod`.
+fn date_period_serialize_methods() -> Vec<ClassMethod> {
+    vec![
+        date_period_wakeup(),
+        date_period_serialize(),
+        date_period_unserialize(),
+        date_period_set_state(),
     ]
 }
 

@@ -2099,6 +2099,270 @@ fn datetime_gettimeofday() -> ClassMethod {
     }
 }
 
+/// PHP source backing `DateTime::__serialize()` / `DateTimeImmutable::__serialize()`. Returns the
+/// PHP-shaped array `["date" => "Y-m-d H:i:s.u", "timezone_type" => 3, "timezone" => $this->timezone_name]`.
+const DATETIME_SERIALIZE_SRC: &str = r#"<?php
+$__tz = (string)$this->timezone_name;
+$__saved = date_default_timezone_get();
+date_default_timezone_set($__tz);
+$__date = date("Y-m-d H:i:s", $this->timestamp);
+$__us = str_pad((string)$this->microsecond, 6, "0", 1);
+$__date = $__date . "." . $__us;
+date_default_timezone_set($__saved);
+return ["date" => $__date, "timezone_type" => 3, "timezone" => $__tz];
+"#;
+
+/// PHP source backing `DateTime::__unserialize()` / `DateTimeImmutable::__unserialize()`.
+/// Reconstructs the object from the serialize array by re-parsing the `date` string in the
+/// `timezone` and storing the resulting timestamp + microsecond + timezone_name.
+const DATETIME_UNSERIALIZE_SRC: &str = r#"<?php
+$__date = $data["date"];
+$__tz = $data["timezone"];
+$__tmp = __CLASS__::__elephc_date_create($__date, new DateTimeZone($__tz));
+$this->timestamp = $__tmp->getTimestamp();
+$this->microsecond = $__tmp->getMicrosecond();
+$this->timezone_name = $__tz;
+"#;
+
+/// PHP source backing `DateTime::__set_state()` / `DateTimeImmutable::__set_state()`.
+/// `__CLASS__` is substituted with the concrete class.
+const DATETIME_SET_STATE_SRC: &str = r#"<?php
+$__tz = (string)$array["timezone"];
+$__saved = date_default_timezone_get();
+date_default_timezone_set($__tz);
+$__d = new __CLASS__((string)$array["date"], new DateTimeZone($__tz));
+date_default_timezone_set($__saved);
+return $__d;
+"#;
+
+/// PHP source backing `__wakeup()`. In PHP 8.5 this is deprecated and throws on invalid data, but
+/// in a normal (non-unserialize) context it's a no-op. elephc implements it as a no-op since the
+/// `__unserialize` hook handles the real reconstruction.
+const DATETIME_WAKEUP_SRC: &str = r#"<?php
+"#;
+
+/// Builds `__serialize(): array` for the given date/time class.
+fn datetime_serialize() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATETIME_SERIALIZE_SRC)
+        .expect("DateTime::__serialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime::__serialize body source must parse");
+    ClassMethod {
+        name: "__serialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `__unserialize(array $data): void` for the given date/time class. `class_name` is
+/// substituted into the body for the `__CLASS__` token.
+fn datetime_unserialize(class_name: &str) -> ClassMethod {
+    let src = DATETIME_UNSERIALIZE_SRC.replace("__CLASS__", class_name);
+    let tokens = crate::lexer::tokenize(&src)
+        .expect("DateTime::__unserialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime::__unserialize body source must parse");
+    ClassMethod {
+        name: "__unserialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "data".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `static __set_state(array $array): static` for the given date/time class.
+fn datetime_set_state(class_name: &str) -> ClassMethod {
+    let src = DATETIME_SET_STATE_SRC.replace("__CLASS__", class_name);
+    let tokens = crate::lexer::tokenize(&src)
+        .expect("DateTime::__set_state body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime::__set_state body source must parse");
+    ClassMethod {
+        name: "__set_state".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "array".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `__wakeup(): void` for the given date/time class (no-op in elephc).
+fn datetime_wakeup() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATETIME_WAKEUP_SRC)
+        .expect("DateTime::__wakeup body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime::__wakeup body source must parse");
+    ClassMethod {
+        name: "__wakeup".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the 4 serialization methods for a date/time class.
+fn datetime_serialize_methods(class_name: &str) -> Vec<ClassMethod> {
+    vec![
+        datetime_wakeup(),
+        datetime_serialize(),
+        datetime_unserialize(class_name),
+        datetime_set_state(class_name),
+    ]
+}
+
+/// PHP source backing `DateTimeZone::__serialize()`. Returns `["timezone_type" => 3, "timezone" => $this->name]`.
+const DATETIMEZONE_SERIALIZE_SRC: &str = r#"<?php
+return ["timezone_type" => 3, "timezone" => $this->name];
+"#;
+
+/// PHP source backing `DateTimeZone::__set_state()`. Creates a new zone from the array's `timezone` key.
+const DATETIMEZONE_SET_STATE_SRC: &str = r#"<?php
+return new DateTimeZone((string)$array["timezone"]);
+"#;
+
+/// Builds `DateTimeZone::__serialize(): array`.
+fn datetimezone_serialize() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATETIMEZONE_SERIALIZE_SRC)
+        .expect("DateTimeZone::__serialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTimeZone::__serialize body source must parse");
+    ClassMethod {
+        name: "__serialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `DateTimeZone::__unserialize(array $data): void`.
+fn datetimezone_unserialize() -> ClassMethod {
+    let src = r#"<?php
+$this->name = (string)$data["timezone"];
+"#;
+    let tokens = crate::lexer::tokenize(src).expect("DateTimeZone::__unserialize body source must tokenize");
+    let body = crate::parser::parse(&tokens).expect("DateTimeZone::__unserialize body source must parse");
+    ClassMethod {
+        name: "__unserialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "data".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `static DateTimeZone::__set_state(array $array): static`.
+fn datetimezone_set_state() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATETIMEZONE_SET_STATE_SRC)
+        .expect("DateTimeZone::__set_state body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTimeZone::__set_state body source must parse");
+    ClassMethod {
+        name: "__set_state".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "array".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the serialization methods for `DateTimeZone`.
+fn datetimezone_serialize_methods() -> Vec<ClassMethod> {
+    vec![
+        datetime_wakeup(),
+        datetimezone_serialize(),
+        datetimezone_unserialize(),
+        datetimezone_set_state(),
+    ]
+}
+
 /// PHP source backing `date_create()` / `date_create_immutable()`. The procedural aliases return
 /// `DateTime|false` (false on an unparseable string), unlike `new DateTime()` which throws
 /// `DateMalformedStringException` (PHP 8.3+). The wrapper catches the exception and returns `false`.
@@ -3228,6 +3492,136 @@ fn datetime_get_offset() -> ClassMethod {
 ///
 /// Scans `P[nY][nM][nW][nD][T[nH][nM][nS]]`, accumulating each number and assigning it to the
 /// matching component on the unit letter; `M` before `T` is months, after `T` is minutes; `W`
+/// PHP source backing `DateInterval::__serialize()`. Returns all public properties as an array.
+const DATEINTERVAL_SERIALIZE_SRC: &str = r#"<?php
+return [
+    "y" => $this->y, "m" => $this->m, "d" => $this->d,
+    "h" => $this->h, "i" => $this->i, "s" => $this->s,
+    "f" => $this->f, "invert" => $this->invert,
+    "days" => $this->days, "from_string" => $this->from_string,
+    "date_string" => $this->date_string,
+];
+"#;
+
+/// PHP source backing `DateInterval::__unserialize()`. Restores all public properties from the array.
+const DATEINTERVAL_UNSERIALIZE_SRC: &str = r#"<?php
+$this->y = $data["y"];
+$this->m = $data["m"];
+$this->d = $data["d"];
+$this->h = $data["h"];
+$this->i = $data["i"];
+$this->s = $data["s"];
+$this->f = $data["f"];
+$this->invert = $data["invert"];
+$this->days = $data["days"];
+$this->from_string = $data["from_string"];
+$this->date_string = $data["date_string"];
+"#;
+
+/// PHP source backing `DateInterval::__set_state()`. Creates a dummy interval then copies all props.
+const DATEINTERVAL_SET_STATE_SRC: &str = r#"<?php
+$iv = new DateInterval("PT0S");
+$iv->y = $array["y"];
+$iv->m = $array["m"];
+$iv->d = $array["d"];
+$iv->h = $array["h"];
+$iv->i = $array["i"];
+$iv->s = $array["s"];
+$iv->f = $array["f"];
+$iv->invert = $array["invert"];
+$iv->days = $array["days"];
+$iv->from_string = $array["from_string"];
+$iv->date_string = $array["date_string"];
+return $iv;
+"#;
+
+/// Builds `DateInterval::__wakeup(): void` (no-op).
+fn dateinterval_wakeup() -> ClassMethod {
+    datetime_wakeup()
+}
+
+/// Builds `DateInterval::__serialize(): array`.
+fn dateinterval_serialize() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_SERIALIZE_SRC)
+        .expect("DateInterval::__serialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval::__serialize body source must parse");
+    ClassMethod {
+        name: "__serialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `DateInterval::__unserialize(array $data): void`.
+fn dateinterval_unserialize() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_UNSERIALIZE_SRC)
+        .expect("DateInterval::__unserialize body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval::__unserialize body source must parse");
+    ClassMethod {
+        name: "__unserialize".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "data".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `static DateInterval::__set_state(array $array): static`.
+fn dateinterval_set_state() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_SET_STATE_SRC)
+        .expect("DateInterval::__set_state body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval::__set_state body source must parse");
+    ClassMethod {
+        name: "__set_state".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "array".to_string(),
+            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            None,
+            false,
+        )],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// contributes 7 days each. The leading `P` is required (a missing/lowercase `P` throws); the
 /// `T` time separator is consumed as a no-op and unknown letters throw.
 fn date_interval_constructor() -> ClassMethod {
@@ -4006,6 +4400,10 @@ pub(crate) fn inject_builtin_datetime(
                     date_interval_constructor(),
                     date_interval_format(),
                     date_interval_create_from_date_string(),
+                    dateinterval_wakeup(),
+                    dateinterval_serialize(),
+                    dateinterval_unserialize(),
+                    dateinterval_set_state(),
                 ],
                 attributes: Vec::new(),
                 constants: Vec::new(),
@@ -4038,6 +4436,7 @@ pub(crate) fn inject_builtin_datetime(
                         datetime_zone_get_offset(),
                         datetime_zone_list_identifiers(),
                     ];
+                    methods.extend(datetimezone_serialize_methods());
                     // getLocation/getTransitions/listAbbreviations call the
                     // tz_prelude marshalling helpers, which are only declared when
                     // the introspection prelude is injected. Adding them
@@ -4082,6 +4481,7 @@ pub(crate) fn inject_builtin_datetime(
                     m.push(datetime_create_from_object("createFromMutable", "DateTimeImmutable"));
                     m.push(datetime_set_isodate("DateTimeImmutable"));
                     m.push(datetime_date_create("DateTimeImmutable"));
+                    m.extend(datetime_serialize_methods("DateTimeImmutable"));
                     m
                 },
                 attributes: Vec::new(),
@@ -4105,6 +4505,7 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_date_parse());
         methods.push(datetime_gettimeofday());
         methods.push(datetime_date_create("DateTime"));
+        methods.extend(datetime_serialize_methods("DateTime"));
         methods.push(datetime_date_modify());
         methods.push(datetime_strftime());
         methods.push(datetime_extract_micros());

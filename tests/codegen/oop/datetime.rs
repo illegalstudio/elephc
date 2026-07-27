@@ -2747,3 +2747,117 @@ echo $t[0]["ts"], "\n", $t[0]["time"];
         "-9223372036854775808\n-292277022657-01-27T08:29:52+00:00"
     );
 }
+
+/// G12: `DateTime::__serialize()` returns the PHP-shaped array with `date`, `timezone_type`, and
+/// `timezone` keys.
+#[test]
+fn test_datetime_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime("2024-01-01 12:00:00.5", new DateTimeZone("Europe/Paris"));
+$a = $d->__serialize();
+echo $a["date"], "|", $a["timezone_type"], "|", $a["timezone"];
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|3|Europe/Paris");
+}
+
+/// G12: `DateTime::__unserialize()` reconstructs the object from the serialize array.
+#[test]
+fn test_datetime_unserialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime();
+$d->__unserialize(["date" => "2024-01-01 12:00:00.500000", "timezone_type" => 3, "timezone" => "Europe/Paris"]);
+echo $d->format("Y-m-d H:i:s.u"), "|", $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|Europe/Paris");
+}
+
+/// G12: `DateTime::__set_state()` reconstructs from an array (used by `var_export`).
+#[test]
+fn test_datetime_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = DateTime::__set_state(["date" => "2024-01-01 12:00:00.500000", "timezone_type" => 3, "timezone" => "Europe/Paris"]);
+echo $d->format("Y-m-d H:i:s.u"), "|", $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|Europe/Paris");
+}
+
+/// G12: `DateTimeImmutable::__serialize()` / `__unserialize()` / `__set_state()` round-trip.
+#[test]
+fn test_datetime_immutable_serialize_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTimeImmutable("2024-06-15 08:30:00", new DateTimeZone("America/New_York"));
+$a = $d->__serialize();
+$d2 = DateTimeImmutable::__set_state($a);
+echo $d2->format("Y-m-d H:i:s"), "|", $d2->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-06-15 08:30:00|America/New_York");
+}
+
+/// G12: `DateTimeZone::__serialize()` / `__set_state()` round-trip.
+#[test]
+fn test_datetimezone_serialize_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+$tz = new DateTimeZone("Europe/Paris");
+$a = $tz->__serialize();
+$tz2 = DateTimeZone::__set_state($a);
+echo $tz2->getName();
+"#,
+    );
+    assert_eq!(out, "Europe/Paris");
+}
+
+/// G12: `DateInterval::__serialize()` returns all public properties as an array.
+#[test]
+fn test_dateinterval_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = new DateInterval("P1Y2M3DT4H5M6S");
+$a = $iv->__serialize();
+echo $a["y"], "|", $a["m"], "|", $a["d"], "|", $a["h"], "|", $a["i"], "|", $a["s"], "|",
+     $a["f"], "|", $a["invert"], "|", ($a["days"] === false ? "F" : "T"), "|",
+     ($a["from_string"] === false ? "F" : "T");
+"#,
+    );
+    assert_eq!(out, "1|2|3|4|5|6|0|0|F|F");
+}
+
+/// G12: `DateInterval::__set_state()` reconstructs from an array.
+#[test]
+fn test_dateinterval_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = DateInterval::__set_state(["y"=>1,"m"=>2,"d"=>3,"h"=>4,"i"=>5,"s"=>6,"f"=>0,"invert"=>0,"days"=>false,"from_string"=>false]);
+echo $iv->format("%y-%m-%d %h:%i:%s");
+"#,
+    );
+    assert_eq!(out, "1-2-3 4:5:6");
+}
+
+/// G12: `DatePeriod::__serialize()` returns the period's state as an array with `start`,
+/// `interval`, `recurrences`, `include_start_date`, `include_end_date`.
+#[test]
+fn test_dateperiod_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), 3);
+$a = $p->__serialize();
+echo $a["start"]->format("Y-m-d"), "|", $a["interval"]->format("%d"), "|", $a["recurrences"], "|",
+     $a["include_start_date"] ? "1" : "0", "|", $a["include_end_date"] ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "2024-01-01|1|3|1|0");
+}
