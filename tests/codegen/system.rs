@@ -3304,14 +3304,7 @@ echo (idate("Y", 1718452800) > 2020) ? "int" : "other";
 
 /// R1: `strtotime` accepts a two-digit ISO year `YY-MM-DD` and applies PHP's shorthand (70-100 →
 /// 1970-2000, 0-69 → 2000-2069), matching PHP-src. `gmdate` is used to avoid local-timezone noise.
-///
-/// Currently `#[ignore]`: the `__rt_strtotime_iso_entry` runtime parser requires a 4-digit year
-/// (`YYYY-MM-DD`, 10-byte minimum). Accepting `YY-MM-DD` (8 bytes) requires modifying the ARM64 and
-/// x86_64 assembly parsers in `src/codegen_support/runtime/system/strtotime/iso_date.rs` to handle a
-/// 2-digit-year path with the shorthand remap. This is a documented limitation (see
-/// DATETIME_PHP_SRC_COMPLIANCE_SPEC.md §5 / R1).
 #[test]
-#[ignore]
 fn test_strtotime_two_digit_iso_year() {
     let out = compile_and_run(
         r#"<?php

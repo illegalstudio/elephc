@@ -75,6 +75,75 @@ fn emit_x86_64_reject_if_above(emitter: &mut Emitter, reg: &str, max: u32) {
 fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");
+
+    // -- R1: YY-MM-DD 2-digit ISO year path --
+    // Parses a 2-digit year (YY), applies PHP's shorthand (70-100 → 1970-2000, 0-69 → 2000-2069),
+    // then parses month and day and falls through to the shared mktime path.
+    emitter.label("__rt_strtotime_iso_2digit_entry");
+    emitter.instruction("ldr x1, [sp, #48]");                                   // reload trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reload trimmed length (== 8)
+    // -- validate separators at offsets 2 and 5 --
+    emitter.instruction("ldrb w9, [x1, #2]");                                   // load first separator (offset 2)
+    emitter.instruction("cmp w9, #45");                                         // require '-'
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // reject malformed
+    emitter.instruction("ldrb w9, [x1, #5]");                                   // load second separator (offset 5)
+    emitter.instruction("cmp w9, #45");                                         // require '-'
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // reject malformed
+    // -- parse YY (2 digits at offset 0-1) --
+    emitter.instruction("ldrb w9, [x1, #0]");                                   // load 1st year digit
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w9");
+    emitter.instruction("mov w10, #10");                                        // multiplier for tens
+    emitter.instruction("mul w9, w9, w10");                                     // tens place
+    emitter.instruction("ldrb w10, [x1, #1]");                                  // load 2nd year digit
+    emitter.instruction("sub w10, w10, #48");                                   // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w10");
+    emitter.instruction("add w9, w9, w10");                                     // w9 = YY (0-99)
+    // -- apply PHP 2-digit year shorthand: 70-100 → 1970-2000, 0-69 → 2000-2069 --
+    emitter.instruction("cmp w9, #70");                                         // is YY >= 70 ?
+    emitter.instruction("b.ge __rt_strtotime_iso_2digit_19xx");                  // → 19YY
+    emitter.instruction("add w9, w9, #2000");                                   // YY < 70 → 20YY
+    emitter.instruction("b __rt_strtotime_iso_2digit_year_done");
+    emitter.label("__rt_strtotime_iso_2digit_19xx");
+    emitter.instruction("add w9, w9, #1900");                                   // YY >= 70 → 19YY
+    emitter.label("__rt_strtotime_iso_2digit_year_done");
+    emitter.instruction("sub w9, w9, #1900");                                   // tm_year = year - 1900
+    emitter.instruction("str w9, [sp, #20]");                                   // store tm_year
+    // -- parse MM (2 digits at offset 3-4) --
+    emitter.instruction("ldrb w9, [x1, #3]");                                   // load 1st month digit
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w9");
+    emitter.instruction("mov w10, #10");                                        // multiplier for tens
+    emitter.instruction("mul w9, w9, w10");                                     // tens place
+    emitter.instruction("ldrb w10, [x1, #4]");                                  // load 2nd month digit
+    emitter.instruction("sub w10, w10, #48");                                   // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w10");
+    emitter.instruction("add w9, w9, w10");                                     // w9 = MM (1-12)
+    emitter.instruction("cmp w9, #12");                                         // validate month ≤ 12
+    emitter.instruction("b.gt __rt_strtotime_fail");                            // reject invalid month
+    emitter.instruction("sub w9, w9, #1");                                      // tm_mon = month - 1 (0-based)
+    emitter.instruction("str w9, [sp, #16]");                                   // store tm_mon
+    // -- parse DD (2 digits at offset 6-7) --
+    emitter.instruction("ldrb w9, [x1, #6]");                                   // load 1st day digit
+    emitter.instruction("sub w9, w9, #48");                                     // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w9");
+    emitter.instruction("mov w10, #10");                                        // multiplier for tens
+    emitter.instruction("mul w9, w9, w10");                                     // tens place
+    emitter.instruction("ldrb w10, [x1, #7]");                                  // load 2nd day digit
+    emitter.instruction("sub w10, w10, #48");                                   // convert from ASCII
+    emit_arm64_reject_unless_decimal_digit(emitter, "w10");
+    emitter.instruction("add w9, w9, w10");                                     // w9 = DD (1-31)
+    emitter.instruction("cmp w9, #31");                                         // validate day ≤ 31
+    emitter.instruction("b.gt __rt_strtotime_fail");                            // reject invalid day
+    emitter.instruction("str w9, [sp, #12]");                                   // store tm_mday
+    // -- no time component for YY-MM-DD; zero out tm_hour/tm_min/tm_sec --
+    emitter.instruction("str wzr, [sp, #8]");                                   // tm_sec = 0
+    emitter.instruction("str wzr, [sp, #4]");                                   // tm_min = 0
+    emitter.instruction("str wzr, [sp, #0]");                                   // tm_hour = 0
+    emitter.instruction("str wzr, [sp, #80]");                                  // no explicit zone offset
+    emitter.instruction("str wzr, [sp, #84]");                                  // explicit-zone flag = 0 (use default zone)
+    emitter.instruction("b __rt_strtotime_iso_mktime");                         // → shared mktime + return path
+
     emitter.label("__rt_strtotime_iso_entry");
 
     // -- reload trimmed ptr/len from dispatcher slots --
@@ -446,6 +515,70 @@ fn emit_iso_date_arm64(emitter: &mut Emitter) {
 fn emit_iso_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");
+
+    // -- R1: YY-MM-DD 2-digit ISO year path (x86_64) --
+    emitter.label("__rt_strtotime_iso_2digit_entry_linux_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 48]");                       // reload trimmed input pointer
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 56]");                       // reload trimmed length (== 8)
+    // -- validate separators at offsets 2 and 5 --
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 2]");                       // load first separator
+    emitter.instruction("cmp al, 45");                                          // require '-'
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // reject malformed
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 5]");                       // load second separator
+    emitter.instruction("cmp al, 45");                                          // require '-'
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // reject malformed
+    // -- parse YY (2 digits at offset 0-1) --
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 0]");                       // load 1st year digit
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "eax");
+    emitter.instruction("imul eax, eax, 10");                                   // tens place
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 1]");                       // load 2nd year digit
+    emitter.instruction("sub r8d, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "r8d");
+    emitter.instruction("add eax, r8d");                                        // eax = YY (0-99)
+    // -- apply PHP 2-digit year shorthand: 70-100 → 1970-2000, 0-69 → 2000-2069 --
+    emitter.instruction("cmp eax, 70");                                         // is YY >= 70 ?
+    emitter.instruction("jge __rt_strtotime_iso_2digit_19xx_x86_64");           // → 19YY
+    emitter.instruction("add eax, 2000");                                       // YY < 70 → 20YY
+    emitter.instruction("jmp __rt_strtotime_iso_2digit_year_done_x86_64");
+    emitter.label("__rt_strtotime_iso_2digit_19xx_x86_64");
+    emitter.instruction("add eax, 1900");                                       // YY >= 70 → 19YY
+    emitter.label("__rt_strtotime_iso_2digit_year_done_x86_64");
+    emitter.instruction("sub eax, 1900");                                       // tm_year = year - 1900
+    emitter.instruction("mov DWORD PTR [rsp + 20], eax");                       // store tm_year
+    // -- parse MM (2 digits at offset 3-4) --
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 3]");                       // load 1st month digit
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "eax");
+    emitter.instruction("imul eax, eax, 10");                                   // tens place
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 4]");                       // load 2nd month digit
+    emitter.instruction("sub r8d, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "r8d");
+    emitter.instruction("add eax, r8d");                                        // eax = MM (1-12)
+    emitter.instruction("cmp eax, 12");                                         // validate month ≤ 12
+    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                 // reject invalid month
+    emitter.instruction("sub eax, 1");                                          // tm_mon = month - 1 (0-based)
+    emitter.instruction("mov DWORD PTR [rsp + 16], eax");                       // store tm_mon
+    // -- parse DD (2 digits at offset 6-7) --
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 6]");                       // load 1st day digit
+    emitter.instruction("sub eax, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "eax");
+    emitter.instruction("imul eax, eax, 10");                                   // tens place
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 7]");                       // load 2nd day digit
+    emitter.instruction("sub r8d, 48");                                         // convert from ASCII
+    emit_x86_64_reject_unless_decimal_digit(emitter, "r8d");
+    emitter.instruction("add eax, r8d");                                        // eax = DD (1-31)
+    emitter.instruction("cmp eax, 31");                                         // validate day ≤ 31
+    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                 // reject invalid day
+    emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // store tm_mday
+    // -- no time component; zero out tm_hour/tm_min/tm_sec --
+    emitter.instruction("mov DWORD PTR [rsp + 8], 0");                          // tm_sec = 0
+    emitter.instruction("mov DWORD PTR [rsp + 4], 0");                          // tm_min = 0
+    emitter.instruction("mov DWORD PTR [rsp + 0], 0");                          // tm_hour = 0
+    emitter.instruction("mov DWORD PTR [rsp + 80], 0");                         // no explicit zone offset
+    emitter.instruction("mov DWORD PTR [rsp + 84], 0");                         // explicit-zone flag = 0 (use default zone)
+    emitter.instruction("jmp __rt_strtotime_iso_mktime_linux_x86_64");          // → shared mktime + return path
+
     emitter.label("__rt_strtotime_iso_entry_linux_x86_64");
 
     // -- reload trimmed ptr/len from dispatcher slots --
