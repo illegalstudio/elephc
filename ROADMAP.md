@@ -726,6 +726,7 @@ Full OOP + procedural date/time surface (`DateTime`, `DateTimeImmutable`, `DateT
 - [x] PHP 8.3+ constructor/`modify()` validation — `DateTime` / `DateTimeImmutable::__construct` and `modify()` throw `DateMalformedStringException` on an unparseable string; `DateTimeZone::__construct` throws `DateInvalidTimeZoneException` on an unrecognized identifier
 - [x] `DateTime::createFromTimestamp(int|float)` preserves the fractional part as microseconds (PHP 8.4+ parity)
 - [x] `idate()` returns `false` for an empty or unrecognized format (PHP parity; no `E_WARNING` emitted — documented limitation)
+- [x] `date_create()` / `date_create_immutable()` / `date_modify()` return `false` on invalid input (PHP `DateTime|false` parity via synthetic wrappers catching `DateMalformedStringException`; EIR mixed-receiver method dispatch fix ensures the wrappers compose with downstream method calls)
 - [x] `DateInterval` PHP 8.2+ public properties `from_string` and `date_string` (set by `createFromDateString`)
 - [x] `DatePeriod` PHP 8.2+ public readonly properties `start`, `current`, `end`, `interval`, `recurrences`, `include_start_date`, `include_end_date`; `implements IteratorAggregate`; `getStartDate(): DateTimeInterface` / `getEndDate(): ?DateTimeInterface` return types
 - [x] `DateTimeInterface` format constants (`ATOM`, `COOKIE`, `ISO8601`, `ISO8601_EXPANDED`, the `RFC*` family, `RSS`, `W3C`) on the interface and both classes

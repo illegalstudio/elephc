@@ -304,7 +304,7 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 
 ## 9. Statut d'implémentation (post-TDD)
 
-### Implémenté et testé (P0/P1/P2)
+### Implémenté et testé (P0/P1/P2 + G19/G19b)
 
 | Gap | Statut | Tests |
 |---|---|---|
@@ -314,6 +314,8 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 | G15 (idate false) | ✅ Implémenté (compile-time literal check) | `test_idate_empty_format_returns_false`, `test_idate_unknown_format_returns_false`, `test_idate_valid_format_returns_int` |
 | G24 (createFromTimestamp float micros) | ✅ Implémenté (préexistant vérifié) | `test_create_from_timestamp_float_keeps_micros` |
 | G25 (listIdentifiers PER_COUNTRY ValueError) | ✅ Implémenté (préexistant) | `test_list_identifiers_per_country_no_code_throws` |
+| G19 (date_create false) | ✅ Implémenté (EIR fix + wrapper) | `test_date_create_invalid_returns_false`, `test_date_create_immutable_invalid_returns_false` |
+| G19b (date_modify false) | ✅ Implémenté (EIR fix + wrapper) | `test_date_modify_invalid_returns_false` |
 | G19c (date_create_from_format false) | ✅ Implémenté (préexistant) | `test_date_create_from_format_invalid_returns_false` |
 | G2 (DateInterval from_string/date_string) | ✅ Implémenté | `test_dateinterval_from_string_property`, `test_dateinterval_date_string_property` |
 | G4 (DatePeriod 7 readonly props) | ✅ Implémenté (mirror props) | `test_dateperiod_start_property`, `_end_property`, `_interval_property`, `_current_property`, `_recurrences_property`, `_include_start_end_date_property` |
@@ -323,13 +325,12 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 | G13 (diff days int|false) | ✅ Implémenté (préexistant vérifié) | `test_diff_days_is_int`, `test_diff_format_a_unknown_when_days_false` |
 | R3/R4 (getTransitions row0 ts, borne sup) | ✅ Conforme (non-régression) | `test_get_transitions_row0_ts_php_int_min` |
 
-### Limitations documentées (non implémenté — EIR backend / infra)
+### Limitations documentées (non implémenté — runtime assembly / complexité)
 
 | Gap | Raison | Statut |
 |---|---|---|
-| G19/G19b (date_create/date_modify false) | **Bug EIR backend**: un appel de méthode qui retourne un `Object` sur une valeur `mixed` boxée segfault au runtime. Un wrapper `__elephc_date_create` retournant `mixed` (pour admettre `false`) casserait toutes les chaînes `$d->modify()`/`$d->format()` suivantes. Correction nécessite de modifier le lowering EIR des appels de méthode sur `mixed` avec retour Object. | `#[ignore]` + doc §5 |
-| R1 (strtotime 2-digit ISO YY-MM-DD) | Runtime assembly `__rt_strtotime_iso_entry` exige 4-digit year; modification ARM64+x86_64 parser substantielle | `#[ignore]` + doc §5 |
-| G5 (DatePeriod string ctor overload) | Deprecated PHP 8.3; `createFromISO8601String` existe déjà comme alternative | doc §5 |
+| R1 (strtotime 2-digit ISO YY-MM-DD) | Runtime assembly `__rt_strtotime_iso_entry` exige 4-digit year; modification ARM64+x86_64 dispatcher + nouveau path 2-digit ~40 lignes/arch | `#[ignore]` + doc §5 |
+| G5 (DatePeriod string ctor overload) | Deprecated PHP 8.3; `createFromISO8601String` existe déjà comme alternative; nécessite rendre `interval` optionnel + détecter string dans le ctor | doc §5 |
 | G11 (getLastErrors détaillé) | Body `CREATE_FROM_FORMAT_SRC` complexe (~370 lignes) à modifier pour tracker positions; risque élevé de casser les tests createFromFormat existants | doc §5 (count 0/1 fonctionne) |
 | G12 (serialize stubs) | Pas d'infra serialize/unserialize/var_export | doc §5 |
 | G17 (timezone_name_from_abbr disambiguation) | Table de disambiguation abbr→[zones avec offsets] complexe; edge case rare | doc §5 |
