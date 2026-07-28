@@ -1200,11 +1200,11 @@ $ok = DateTime::getLastErrors();
 DateTime::createFromFormat("Y-m-d", "not-a-date");
 $bad = DateTime::getLastErrors();
 $alias = date_get_last_errors();
-echo $ok["error_count"], "|", $ok["warning_count"], "|", $bad["error_count"], "|",
-     count($bad["errors"]), "|", $alias["error_count"];
+echo ($ok === false) ? "false" : "other", "|",
+     $bad["error_count"], "|", count($bad["errors"]), "|", $alias["error_count"];
 "#,
     );
-    assert_eq!(out, "0|0|1|1|1");
+    assert_eq!(out, "false|1|1|1");
 }
 
 /// Verifies the procedural `date_create_from_format` alias desugars to `DateTime::createFromFormat`,
@@ -2877,4 +2877,49 @@ echo $n;
 "#,
     );
     assert_eq!(out, "4");
+}
+
+/// G11: `getLastErrors()` returns a detailed error array with positions. Trailing data on a
+/// `createFromFormat` mismatch is reported as an error at the trailing position.
+#[test]
+fn test_get_last_errors_trailing_data() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-01-01X");
+$e = DateTime::getLastErrors();
+echo $e["error_count"], "|", $e["errors"]["10"];
+"#,
+    );
+    assert_eq!(out, "1|Trailing data");
+}
+
+/// G11: `getLastErrors()` returns `false` when the last `createFromFormat` succeeded (no errors,
+/// no warnings).
+#[test]
+fn test_get_last_errors_no_errors_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-01-15");
+$r = DateTime::getLastErrors();
+echo ($r === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G11: `getLastErrors()` reports a warning "The parsed date was invalid" when the date overflows
+/// (e.g. month 13 → normalized to next year).
+#[test]
+fn test_get_last_errors_invalid_date_warning() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-13-99");
+$e = DateTime::getLastErrors();
+echo $e["warning_count"], "|", $e["warnings"]["10"];
+"#,
+    );
+    assert_eq!(out, "1|The parsed date was invalid");
 }

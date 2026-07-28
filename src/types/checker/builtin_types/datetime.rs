@@ -1201,6 +1201,8 @@ fn datetime_shared_methods() -> Vec<ClassMethod> {
 /// mismatch returns `false`, matching PHP.
 const CREATE_FROM_FORMAT_SRC: &str = r##"<?php
 __CFF_CLASS__::$lastErrorCount = 1;
+$__errs = [];
+$__warns = [];
 $now = time();
 $Y = intval(date("Y", $now));
 $mo = intval(date("n", $now));
@@ -1512,7 +1514,12 @@ while ($fp < $flen) {
     else if ($c === " ") { }
     else { return false; }
 }
-if (!$junkOk && $dp < $dlen) { return false; }
+if (!$junkOk && $dp < $dlen) {
+    $__errs[(string)$dp] = "Trailing data";
+    __CFF_CLASS__::$lastErrors = $__errs;
+    __CFF_CLASS__::$lastWarnings = $__warns;
+    return false;
+}
 if ($pH || $pmi || $pse) {
     if (!$pH) { $H = 0; }
     if (!$pmi) { $mi = 0; }
@@ -1559,6 +1566,18 @@ if ($parsedO !== "" || $parsedP !== "" || $parsedZ !== "" || $parsedT !== "" || 
 }
 $o = new __CFF_CLASS__();
 $o = $o->setTimestamp($ts);
+// G11: PHP emits a warning "The parsed date was invalid" when the normalized date does not
+// round-trip (e.g. month 13 → overflow, day 99 → overflow). Check by re-rendering the date
+// components and comparing against the parsed input.
+if (!$hasU) {
+    $__checkY = intval(date("Y", $ts));
+    $__checkM = intval(date("n", $ts));
+    $__checkD = intval(date("j", $ts));
+    if (($pY && $__checkY !== $Y) || ($pmo && $__checkM !== $mo) || ($pda && $__checkD !== $da)) {
+        $__warns[(string)$dlen] = "The parsed date was invalid";
+        __CFF_CLASS__::$lastErrorCount = 0;
+    }
+}
 if ($timezone !== null) {
     // Set the display zone via getName() rather than setTimezone($timezone): the parameter is
     // `?DateTimeZone`, whose value reaches here boxed as Mixed, and setTimezone reads the
@@ -1567,6 +1586,8 @@ if ($timezone !== null) {
     $o->timezone_name = $timezone->getName();
 }
 __CFF_CLASS__::$lastErrorCount = 0;
+__CFF_CLASS__::$lastErrors = $__errs;
+__CFF_CLASS__::$lastWarnings = $__warns;
 return $o->setMicrosecond($umicro);
 "##;
 
@@ -1625,9 +1646,15 @@ fn datetime_create_from_format(class_name: &str) -> ClassMethod {
 /// `if (DateTime::getLastErrors()['error_count'])` check after a parse.
 const GET_LAST_ERRORS_SRC: &str = r#"<?php
 $ec = __GLE_CLASS__::$lastErrorCount;
-$errs = [];
-if ($ec > 0) { $errs = [0 => "The date string failed to match the format"]; }
-return ["warning_count" => 0, "warnings" => [], "error_count" => $ec, "errors" => $errs];
+$errs = __GLE_CLASS__::$lastErrors;
+$warns = __GLE_CLASS__::$lastWarnings;
+if ($ec > 0 && count($errs) === 0) {
+    $errs = [0 => "The date string failed to match the format"];
+}
+if ($ec === 0 && count($warns) === 0) {
+    return false;
+}
+return ["warning_count" => count($warns), "warnings" => $warns, "error_count" => $ec, "errors" => $errs];
 "#;
 
 /// Builds the static `getLastErrors(): array` method for `class_name`, reading the per-class
@@ -3402,6 +3429,25 @@ fn datetime_backing_properties() -> Vec<ClassProperty> {
         {
             let mut p =
                 property("lastErrorCount", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy()));
+            p.is_static = true;
+            p
+        },
+        // Per-class static arrays backing getLastErrors() detailed warnings/errors with positions.
+        {
+            let mut p = property(
+                "lastErrors",
+                TypeExpr::Named(Name::unqualified("mixed")),
+                Expr::new(ExprKind::Null, dummy()),
+            );
+            p.is_static = true;
+            p
+        },
+        {
+            let mut p = property(
+                "lastWarnings",
+                TypeExpr::Named(Name::unqualified("mixed")),
+                Expr::new(ExprKind::Null, dummy()),
+            );
             p.is_static = true;
             p
         },
