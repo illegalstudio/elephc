@@ -16,6 +16,10 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
+const DATE_PERIOD_CONSTRUCTOR_OVERLOAD_ERROR: &str =
+    "DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or \
+     (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments";
+
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
@@ -810,6 +814,17 @@ impl Checker {
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
         let method_key = php_symbol_key(method);
+        let is_date_period_string_constructor = class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("DatePeriod")
+            && method_key == "__elephc_deprecated_string_constructor";
+        let map_date_period_constructor_error = |error: CompileError| {
+            if is_date_period_string_constructor {
+                CompileError::new(expr.span, DATE_PERIOD_CONSTRUCTOR_OVERLOAD_ERROR)
+            } else {
+                error
+            }
+        };
         let late_static_receiver_type = if parent_call {
             self.current_class
                 .clone()
@@ -891,7 +906,8 @@ impl Checker {
                     expr.span,
                     &format!("Static method {}::{}", class_name, method),
                     env,
-                )?;
+                )
+                .map_err(&map_date_period_constructor_error)?;
                 if allow_by_ref_spread {
                     self.check_known_callable_call_allowing_by_ref_spread(
                         &effective_sig,
@@ -899,7 +915,8 @@ impl Checker {
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
-                    )?;
+                    )
+                    .map_err(&map_date_period_constructor_error)?;
                 } else {
                     self.check_known_callable_call(
                         &effective_sig,
@@ -907,7 +924,8 @@ impl Checker {
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
-                    )?;
+                    )
+                    .map_err(&map_date_period_constructor_error)?;
                 }
             } else if parent_call || self_call {
                 if self.current_method_is_static {

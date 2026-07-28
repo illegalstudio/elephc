@@ -246,12 +246,12 @@ fn test_error_new_static_validates_child_constructor() {
     );
 }
 
-/// Verifies the builtin `DatePeriod` constructor enforces its 3-to-4 argument arity.
+/// Verifies an invalid one-argument `DatePeriod` call reports php-src's overload diagnostic.
 #[test]
 fn test_error_date_period_too_few_args() {
     expect_error(
         "<?php $p = new DatePeriod(new DateTime(\"2024-01-01\"));",
-        "Constructor 'DatePeriod::__construct' expects 3 to 4 arguments, got 1",
+        "DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments",
     );
 }
 
