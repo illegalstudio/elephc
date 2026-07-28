@@ -2992,12 +2992,10 @@ return sprintf("%02d:%02d", $hh, $mm);
 "#;
 
 /// Synthetic-PHP body of `timezone_name_from_abbr($abbr, $utcOffset, $isDST)`. Maps a common
-/// timezone abbreviation to the IANA zone name PHP returns for it (the first match in PHP's internal
-/// table), or `false` when the abbreviation is not recognized. The `$utcOffset`/`$isDST` arguments
-/// are accepted for signature compatibility; offset/DST disambiguation is a documented gap because
-/// the full abbreviation table (built on demand via `timezone_abbreviations_list()`) is not
-/// released between calls and exhausts the runtime heap when built repeatedly. The abbreviation's
-/// default zone is returned. The lookup is case-insensitive.
+/// timezone abbreviation to the IANA zone name PHP returns for it. When `$utcOffset >= 0`, the
+/// method disambiguates ambiguous abbreviations (those that map to different IANA zones depending
+/// on the UTC offset) by checking a disambiguation table. When `$utcOffset == -1` (the default),
+/// the abbreviation's default zone is returned. The lookup is case-insensitive.
 const TZ_NAME_FROM_ABBR_SRC: &str = r#"<?php
 $key = strtoupper($abbr);
 $map = [
@@ -3025,10 +3023,35 @@ $map = [
     "NZST" => "Pacific/Auckland", "NZDT" => "Pacific/Auckland",
     "GST" => "Pacific/Guam", "CHST" => "Pacific/Guam", "SST" => "Pacific/Samoa",
 ];
-if (isset($map[$key])) {
+if (!isset($map[$key])) {
+    return false;
+}
+// Default zone (no offset given).
+if ($utcOffset == -1) {
     return $map[$key];
 }
-return false;
+// G17: disambiguate ambiguous abbreviations by UTC offset.
+// PHP's listAbbreviations() maps each abbr to multiple zones; when $utcOffset != -1,
+// the offset selects the zone. These if/elseif chains encode the disambiguation
+// for the 12 ambiguous abbreviations (verified against php -r).
+if ($utcOffset != -1) {
+    if ($key === "CST") {
+        if ($utcOffset == -18000) { return "America/Havana"; }
+        if ($utcOffset == 28800) { return "Asia/Chongqing"; }
+    }
+    if ($key === "PST" && $utcOffset == 28800) { return "Asia/Manila"; }
+    if ($key === "BST" && $utcOffset == -39600) { return "America/Adak"; }
+    if ($key === "IST" && $utcOffset == 3600) { return "Europe/Dublin"; }
+    if ($key === "CET" && $utcOffset == 7200) { return "Europe/Kaliningrad"; }
+    if ($key === "CEST" && $utcOffset == 10800) { return "Europe/Kaliningrad"; }
+    if ($key === "WET" && $utcOffset == 3600) { return "Europe/Luxembourg"; }
+    if ($key === "WEST" && $utcOffset == 7200) { return "Europe/Luxembourg"; }
+    if ($key === "KST" && $utcOffset == 32400) { return "Asia/Pyongyang"; }
+    if ($key === "AST" && $utcOffset == -36000) { return "America/Anchorage"; }
+    if ($key === "NST" && $utcOffset == -39600) { return "America/Adak"; }
+    if ($key === "NPT" && $utcOffset == -36000) { return "America/Adak"; }
+}
+return $map[$key];
 "#;
 
 /// Builds the internal static `__elephc_timezone_name_from_abbr(...)` method on `DateTime` backing

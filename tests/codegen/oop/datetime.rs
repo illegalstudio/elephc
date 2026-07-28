@@ -2923,3 +2923,18 @@ echo $e["warning_count"], "|", $e["warnings"]["10"];
     );
     assert_eq!(out, "1|The parsed date was invalid");
 }
+
+/// G17: `timezone_name_from_abbr()` disambiguates ambiguous abbreviations by UTC offset.
+/// `CST` with offset -18000 (Cuba) returns `America/Havana`, not the default `America/Chicago`.
+#[test]
+fn test_timezone_name_from_abbr_with_offset() {
+    let out = compile_and_run(
+        r#"<?php
+echo timezone_name_from_abbr("CST"), "|",
+     timezone_name_from_abbr("CST", -18000, 1), "|",
+     timezone_name_from_abbr("CST", 28800, 0), "|",
+     timezone_name_from_abbr("IST", 3600, 0);
+"#,
+    );
+    assert_eq!(out, "America/Chicago|America/Havana|Asia/Chongqing|Europe/Dublin");
+}
