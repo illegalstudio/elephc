@@ -33,7 +33,7 @@ impl Checker {
             self.canonical_function_name_folded(function_name.trim_start_matches('\\'))
         else {
             let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
-            if crate::types::first_class_callable_builtin_sig(&builtin_key).is_some() {
+            if crate::types::reflection_builtin_function_sig(&builtin_key).is_some() {
                 return Ok(());
             }
             return Err(CompileError::new(
@@ -124,6 +124,15 @@ impl Checker {
     ) -> Result<(), CompileError> {
         let method_key = php_symbol_key(method_name);
         if let Some(class_info) = self.classes.get(class_name) {
+            if crate::types::php_src_date_method_visible(class_name, &method_key) == Some(false) {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!(
+                        "ReflectionMethod::__construct(): undefined method '{}::{}'",
+                        class_name, method_name
+                    ),
+                ));
+            }
             if !class_info.methods.contains_key(&method_key)
                 && !class_info.static_methods.contains_key(&method_key)
             {
@@ -360,7 +369,16 @@ impl Checker {
     ) -> Option<(Vec<String>, ReflectionAttributeArgs)> {
         if let Some(info) = self.interfaces.get(interface_name) {
             if info.constants.contains_key(constant_name) {
-                return Some((Vec::new(), Vec::new()));
+                return Some((
+                    info.constant_attribute_names
+                        .get(constant_name)
+                        .cloned()
+                        .unwrap_or_default(),
+                    info.constant_attribute_args
+                        .get(constant_name)
+                        .cloned()
+                        .unwrap_or_default(),
+                ));
             }
         }
         let class_info = self.classes.get(interface_name)?;
@@ -368,7 +386,18 @@ impl Checker {
             self.interfaces
                 .get(implemented)
                 .filter(|info| info.constants.contains_key(constant_name))
-                .map(|_| (Vec::new(), Vec::new()))
+                .map(|info| {
+                    (
+                        info.constant_attribute_names
+                            .get(constant_name)
+                            .cloned()
+                            .unwrap_or_default(),
+                        info.constant_attribute_args
+                            .get(constant_name)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                })
         })
     }
 

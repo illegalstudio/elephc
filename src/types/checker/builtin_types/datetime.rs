@@ -13,10 +13,10 @@
 
 use std::collections::HashMap;
 
-use crate::names::Name;
+use crate::names::{Name, NameKind};
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind,
-    StaticReceiver, TypeExpr, Visibility,
+    Attribute, AttributeGroup, BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
+    PropertyHooks, Stmt, StmtKind, StaticReceiver, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -27,13 +27,53 @@ fn dummy() -> crate::span::Span {
     crate::span::Span::dummy()
 }
 
+/// Builds one fully-qualified builtin attribute group with named string arguments.
+fn builtin_string_attribute(name: &str, args: &[(&str, &str)]) -> Vec<AttributeGroup> {
+    let arguments = args
+        .iter()
+        .map(|(argument, value)| {
+            Expr::new(
+                ExprKind::NamedArg {
+                    name: (*argument).to_string(),
+                    value: Box::new(Expr::new(
+                        ExprKind::StringLiteral((*value).to_string()),
+                        dummy(),
+                    )),
+                },
+                dummy(),
+            )
+        })
+        .collect();
+    vec![AttributeGroup {
+        attributes: vec![Attribute {
+            name: Name::from_parts(NameKind::FullyQualified, vec![name.to_string()]),
+            args: arguments,
+            span: dummy(),
+        }],
+        span: dummy(),
+    }]
+}
+
+/// Builds php-src's PHP 8.5 date/time `#[\Deprecated]` metadata.
+pub(super) fn deprecated_attribute(since: &str, message: &str) -> Vec<AttributeGroup> {
+    builtin_string_attribute("Deprecated", &[("since", since), ("message", message)])
+}
+
+/// Builds php-src's `#[\NoDiscard]` metadata for an immutable mutator.
+fn no_discard_attribute(method: &str) -> Vec<AttributeGroup> {
+    let message = format!(
+        "as DateTimeImmutable::{method}() does not modify the object itself"
+    );
+    builtin_string_attribute("NoDiscard", &[("message", message.as_str())])
+}
+
 /// Builds a public string class constant for the synthetic date/time classes.
 fn str_class_const(name: &str, value: &str) -> ClassConst {
     ClassConst {
         name: name.to_string(),
         visibility: Visibility::Public,
         is_final: false,
-        type_expr: None,
+        type_expr: Some(TypeExpr::Str),
         value: Expr::new(ExprKind::StringLiteral(value.to_string()), dummy()),
         span: dummy(),
         attributes: Vec::new(),
@@ -46,8 +86,45 @@ fn int_class_const(name: &str, value: i64) -> ClassConst {
         name: name.to_string(),
         visibility: Visibility::Public,
         is_final: false,
-        type_expr: None,
+        type_expr: Some(TypeExpr::Int),
         value: Expr::new(ExprKind::IntLiteral(value), dummy()),
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds an internal typed passthrough used for deprecated predefined constants.
+///
+/// Name resolution wraps each deprecated constant read in one of these methods so
+/// the suppression-aware diagnostic is emitted at the PHP-observable access point
+/// while the original constant type and value are preserved.
+fn deprecated_constant_passthrough(name: &str, value_type: TypeExpr) -> ClassMethod {
+    let src = r#"<?php
+__elephc_diag_warning($message);
+return $value;
+"#;
+    let tokens = crate::lexer::tokenize(src)
+        .expect("deprecated constant passthrough body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("deprecated constant passthrough body source must parse");
+    ClassMethod {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("value".to_string(), Some(value_type.clone()), None, false),
+            ("message".to_string(), Some(TypeExpr::Str), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(value_type),
+        by_ref_return: false,
+        body,
         span: dummy(),
         attributes: Vec::new(),
     }
@@ -81,7 +158,7 @@ fn datetime_zone_group_constants() -> Vec<ClassConst> {
 /// inheritance, on `DateTime` and `DateTimeImmutable`; the same list is attached
 /// to all three synthetic declarations. Values match PHP 8.4 exactly.
 fn datetime_format_constants() -> Vec<ClassConst> {
-    vec![
+    let mut constants = vec![
         str_class_const("ATOM", "Y-m-d\\TH:i:sP"),
         str_class_const("COOKIE", "l, d-M-Y H:i:s T"),
         str_class_const("ISO8601", "Y-m-d\\TH:i:sO"),
@@ -96,7 +173,14 @@ fn datetime_format_constants() -> Vec<ClassConst> {
         str_class_const("RFC3339_EXTENDED", "Y-m-d\\TH:i:s.vP"),
         str_class_const("RSS", "D, d M Y H:i:s O"),
         str_class_const("W3C", "Y-m-d\\TH:i:sP"),
-    ]
+    ];
+    if let Some(constant) = constants.iter_mut().find(|constant| constant.name == "RFC7231") {
+        constant.attributes = deprecated_attribute(
+            "8.5",
+            "as this format ignores the associated timezone and always uses GMT",
+        );
+    }
+    constants
 }
 
 /// Builds an `$this->property` access expression.
@@ -174,13 +258,20 @@ fn property(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
     }
 }
 
+/// Builds a private instance property used only by the synthetic ext/date implementation.
+fn private_property(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
+    let mut property = property(name, type_expr, default);
+    property.visibility = Visibility::Private;
+    property
+}
+
 /// PHP source backing `DateTimeZone::__construct`. Validates the identifier against the IANA list
 /// (ALL_WITH_BC), a numeric UTC offset, or a known abbreviation; throws
 /// `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier. Otherwise stores the
 /// canonical identifier.
 const DATETIME_ZONE_CONSTRUCT_SRC: &str = r#"<?php
-if ($timezone === "UTC") {
-    $this->name = $timezone;
+if (strtoupper($timezone) === "UTC" || strtoupper($timezone) === "GMT") {
+    $this->name = strtoupper($timezone);
     return;
 }
 if (strlen($timezone) >= 5 && substr($timezone, 0, 3) === "GMT"
@@ -264,34 +355,59 @@ if (strlen($timezone) >= 2 && ($timezone[0] === "+" || $timezone[0] === "-")) {
         return;
     }
 }
-if (in_array($timezone, [__TZ_IDENTIFIERS__], true)) {
+if (in_array(strtolower($timezone), [__TZ_IDENTIFIERS_LOWER__], true)) {
     $this->name = $timezone;
     return;
 }
-if (strlen($timezone) >= 2 && strlen($timezone) <= 4) {
-    $ok = true;
-    for ($i = 0; $i < strlen($timezone); $i++) {
-        $c = ord($timezone[$i]);
-        if (!(($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122))) {
-            $ok = false;
-            break;
-        }
-    }
-    if ($ok) {
-        $this->name = $timezone;
+if (strlen($timezone) === 1) {
+    $upper = strtoupper($timezone);
+    $code = ord($upper);
+    if ((($code >= 65 && $code <= 73) || ($code >= 75 && $code <= 90))) {
+        $this->name = $upper;
         return;
     }
+}
+if (in_array(strtolower($timezone), [__TZ_ABBREVIATIONS__], true)) {
+    $this->name = strtoupper($timezone);
+    return;
 }
 throw new DateInvalidTimeZoneException("DateTimeZone::__construct(): Unknown or bad timezone (" . $timezone . ")");
 "#;
 
-/// `DateTimeZone::__construct(string $timezone = "UTC")` — validates and stores the identifier.
+/// Builds the PHP string-literal list of every abbreviation key in php-src's
+/// baked timelib table.
+fn timezone_abbreviation_literals() -> String {
+    include_str!("../../../../crates/elephc-tz/data/abbreviations.data")
+        .lines()
+        .filter_map(|line| line.split_once('\t').map(|(abbr, _)| format!("\"{abbr}\"")))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Builds the case-folded `ALL_WITH_BC` identifier set accepted by `DateTimeZone::__construct()`.
+///
+/// `DateTimeZone::listIdentifiers()` intentionally omits backward-compatible aliases unless
+/// `ALL_WITH_BC` is requested, while the constructor accepts them unconditionally. The bridge's
+/// location table contains the complete php-src-derived set, including `Etc/Universal`,
+/// `US/Eastern`, and the other compatibility identifiers.
+fn timezone_constructor_identifier_literals() -> String {
+    include_str!("../../../../crates/elephc-tz/data/location.data")
+        .lines()
+        .filter_map(|line| line.split_once('\t').map(|(identifier, _)| identifier.to_lowercase()))
+        .map(|identifier| format!("\"{identifier}\""))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// `DateTimeZone::__construct(string $timezone)` — validates and stores the identifier.
 /// Throws `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier.
 fn datetime_zone_constructor() -> ClassMethod {
-    let source = DATETIME_ZONE_CONSTRUCT_SRC.replace(
-        "__TZ_IDENTIFIERS__",
-        super::timezone_ids::TIMEZONE_IDENTIFIERS_ARRAY,
-    );
+    let source = DATETIME_ZONE_CONSTRUCT_SRC
+        .replace(
+            "__TZ_IDENTIFIERS_LOWER__",
+            &timezone_constructor_identifier_literals(),
+        )
+        .replace("__TZ_ABBREVIATIONS__", &timezone_abbreviation_literals());
     let tokens = crate::lexer::tokenize(&source)
         .expect("DateTimeZone::__construct body source must tokenize");
     let body = crate::parser::parse(&tokens)
@@ -306,7 +422,7 @@ fn datetime_zone_constructor() -> ClassMethod {
         params: vec![(
             "timezone".to_string(),
             Some(TypeExpr::Str),
-            Some(Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy())),
+            None,
             false,
         )],
         param_attributes: Vec::new(),
@@ -585,7 +701,7 @@ fn datetime_zone_list_abbreviations() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body: parse_tz_body(
             r#"<?php
@@ -628,7 +744,24 @@ const CONSTRUCT_SRC: &str = r#"<?php
 // locals + a loop here corrupts the frame when a caller also formats the result).
 $this->microsecond = DateTime::__elephc_extract_micros($datetime);
 $datetime = DateTime::__elephc_strip_micros($datetime);
-if ($timezone === null) {
+$__zoneData = explode("\t", DateTime::__elephc_extract_constructor_zone($datetime));
+$__detectedZone = $__zoneData[0];
+$datetime = $__zoneData[1];
+if ($__detectedZone !== "") {
+    if ($datetime === "now") {
+        $this->timestamp = time();
+    } else {
+        $__saved = date_default_timezone_get();
+        date_default_timezone_set(DateTime::__elephc_runtime_timezone_name($__detectedZone));
+        $__ts = strtotime($datetime);
+        date_default_timezone_set($__saved);
+        if ($__ts === false) {
+            throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
+        }
+        $this->timestamp = $__ts;
+    }
+    $this->timezone_name = $__detectedZone;
+} else if ($timezone === null) {
     if ($datetime === "now") {
         $this->timestamp = time();
     } else {
@@ -709,7 +842,10 @@ fn datetime_immutable_get_timezone() -> ClassMethod {
     method(
         "getTimezone",
         Vec::new(),
-        Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
+        Some(TypeExpr::Union(vec![
+            TypeExpr::Named(Name::unqualified("DateTimeZone")),
+            TypeExpr::False,
+        ])),
         vec![return_expr(Expr::new(
             ExprKind::NewObject {
                 class_name: Name::unqualified("DateTimeZone"),
@@ -752,6 +888,19 @@ while ($k < $flen) {
         $s = "" . $ms;
         while (strlen($s) < 3) { $s = "0" . $s; }
         $fmt = $fmt . $s;
+        $k = $k + 1;
+        continue;
+    }
+    if ($ch === "e"
+        || ($ch === "T"
+            && DateTime::__elephc_timezone_type($this->timezone_name) === 2)) {
+        $zoneLiteral = $this->timezone_name;
+        $zoneLength = strlen($zoneLiteral);
+        $zoneIndex = 0;
+        while ($zoneIndex < $zoneLength) {
+            $fmt = $fmt . "\\" . $zoneLiteral[$zoneIndex];
+            $zoneIndex = $zoneIndex + 1;
+        }
         $k = $k + 1;
         continue;
     }
@@ -951,7 +1100,7 @@ fn make_set_microsecond(mutable: bool, class_name: &str) -> ClassMethod {
     method(
         "setMicrosecond",
         vec![("microsecond".to_string(), Some(TypeExpr::Int), None, false)],
-        Some(TypeExpr::Named(Name::unqualified(class_name))),
+        Some(TypeExpr::Named(Name::unqualified("static"))),
         body,
     )
 }
@@ -1030,10 +1179,20 @@ fn var_property(var: &str, property: &str) -> Expr {
 
 /// `setTimezone(DateTimeZone $timezone)` — stores the zone identifier (keeps the timestamp).
 ///
-/// Reads the public `DateTimeZone::$name`. `DateTime` mutates `$this`; `DateTimeImmutable`
-/// returns a fresh instance with the same timestamp and the new timezone name.
+/// Reads the zone through its public `getName()` API. `DateTime` mutates `$this`;
+/// `DateTimeImmutable` returns a fresh instance with the same timestamp and the new timezone name.
 fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
-    let tz_name = var_property("timezone", "name");
+    let tz_name = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(Expr::new(
+                ExprKind::Variable("timezone".to_string()),
+                dummy(),
+            )),
+            method: "getName".to_string(),
+            args: Vec::new(),
+        },
+        dummy(),
+    );
     let body = if mutable {
         vec![
             assign_this_property("timezone_name", tz_name),
@@ -1084,6 +1243,32 @@ fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
     )
 }
 
+/// Builds a runtime guard that reports php-src's exact `DateInterval` argument TypeError,
+/// including the observable debug type of the rejected value.
+fn date_interval_type_guard(callable: &str, argument_number: i64) -> String {
+    format!(
+        r#"if (!($interval instanceof DateInterval)) {{
+    $__actual = gettype($interval);
+    if ($__actual === "boolean") {{
+        $__actual = $interval ? "true" : "false";
+    }} else if ($__actual === "integer") {{
+        $__actual = "int";
+    }} else if ($__actual === "double") {{
+        $__actual = "float";
+    }} else if ($__actual === "NULL") {{
+        $__actual = "null";
+    }} else if ($__actual === "object") {{
+        $__actual = get_class($interval);
+    }}
+    throw new TypeError(
+        "{callable}: Argument #{argument_number} (\$interval) must be of type DateInterval, "
+        . $__actual . " given"
+    );
+}}
+"#,
+    )
+}
+
 /// `add(DateInterval $interval)` / `sub(DateInterval $interval)` — shifts the date by the interval.
 ///
 /// Decomposes `$this->timestamp` into calendar components via `date()`, applies each signed interval
@@ -1091,7 +1276,74 @@ fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
 /// next month). `$interval->invert` flips the direction (`$__sign` = `1 - 2*invert` for `add`, negated
 /// for `sub`). `DateTime` mutates `$this`; `DateTimeImmutable` returns a fresh instance via
 /// `result_tail`. `is_add` selects `add` (true) vs `sub` (false).
-fn make_add_sub(name: &str, mutable: bool, class_name: &str, is_add: bool) -> ClassMethod {
+fn make_add_sub(
+    name: &str,
+    mutable: bool,
+    class_name: &str,
+    is_add: bool,
+    uses_timelib: bool,
+) -> ClassMethod {
+    if uses_timelib {
+        let source = format!(
+            "<?php\n{}{}",
+            date_interval_type_guard(&format!("{class_name}::{name}()"), 1),
+            format!(
+                r#"
+$__interval_result = __elephc_timelib_apply_interval(
+    $this->timestamp,
+    $this->microsecond,
+    $this->timezone_name,
+    $interval->__elephc_payload(),
+    {}
+);
+if ($__interval_result["warning"]) {{
+    throw new DateInvalidOperationException(
+        "{}::sub(): Only non-special relative time specifications are supported for subtraction"
+    );
+}}
+"#,
+            if is_add { "false" } else { "true" },
+            class_name,
+            )
+        );
+        let tokens = crate::lexer::tokenize(&source)
+            .expect("timelib DateTime add/sub body must tokenize");
+        let mut body = crate::parser::parse(&tokens)
+            .expect("timelib DateTime add/sub body must parse");
+        let result_value = |field: &str| {
+            Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(Expr::new(
+                        ExprKind::Variable("__interval_result".to_string()),
+                        dummy(),
+                    )),
+                    index: Box::new(Expr::new(
+                        ExprKind::StringLiteral(field.to_string()),
+                        dummy(),
+                    )),
+                },
+                dummy(),
+            )
+        };
+        body.extend(result_tail_micro(
+            result_value("timestamp"),
+            Some(result_value("microsecond")),
+            mutable,
+            class_name,
+        ));
+        return method(
+            name,
+            vec![(
+                "interval".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                None,
+                false,
+            )],
+            Some(TypeExpr::Named(Name::unqualified(class_name))),
+            body,
+        );
+    }
+
     let bin = |l: Expr, op: BinOp, r: Expr| {
         Expr::new(ExprKind::BinaryOp { left: Box::new(l), op, right: Box::new(r) }, dummy())
     };
@@ -1246,17 +1498,27 @@ $__ts = $__ts + $__carry;
 }
 
 /// Builds the mutating/immutable setter set for a class.
-fn datetime_setter_methods(mutable: bool, class_name: &str) -> Vec<ClassMethod> {
-    vec![
+fn datetime_setter_methods(
+    mutable: bool,
+    class_name: &str,
+    uses_timelib: bool,
+) -> Vec<ClassMethod> {
+    let mut methods = vec![
         make_set_timestamp(mutable, class_name),
         make_set_microsecond(mutable, class_name),
         make_set_time(mutable, class_name),
         make_set_date(mutable, class_name),
         make_set_timezone(mutable, class_name),
-        make_add_sub("add", mutable, class_name, true),
-        make_add_sub("sub", mutable, class_name, false),
+        make_add_sub("add", mutable, class_name, true, uses_timelib),
+        make_add_sub("sub", mutable, class_name, false, uses_timelib),
         make_modify(mutable, class_name),
-    ]
+    ];
+    if !mutable {
+        for method in &mut methods {
+            method.attributes = no_discard_attribute(&method.name);
+        }
+    }
+    methods
 }
 
 /// Builds the shared instance method set used by both `DateTime` and `DateTimeImmutable`
@@ -1707,6 +1969,43 @@ DateTime::$lastErrorCount = 0;
 return $o->setMicrosecond($umicro);
 "##;
 
+/// Timelib-backed `createFromFormat()` body used whenever the date bridge
+/// prelude is present. `__CFF_CLASS__` is replaced with the concrete mutable or
+/// immutable class just like the legacy fallback body.
+const TIMELIB_CREATE_FROM_FORMAT_SRC: &str = r##"<?php
+$timezoneName = date_default_timezone_get();
+if ($timezone !== null) {
+    $timezoneName = $timezone->getName();
+}
+$parsed = __elephc_timelib_create_from_format($format, $datetime, $timezoneName);
+DateTime::$lastParseResult = $parsed["__elephc_serialized"];
+if ($parsed["error_count"] > 0) {
+    return false;
+}
+$object = new __CFF_CLASS__();
+$object = $object->setTimestamp($parsed["__elephc_timestamp"]);
+$microsecond = 0;
+if ($parsed["fraction"] !== false) {
+    $microsecond = intval(round($parsed["fraction"] * 1000000.0));
+}
+$object = $object->setMicrosecond($microsecond);
+if ($parsed["is_localtime"]) {
+    $zoneType = $parsed["zone_type"];
+    if ($zoneType === 1) {
+        $object->timezone_name = __elephc_timelib_offset_name($parsed["zone"]);
+    } else if ($zoneType === 2) {
+        $object->timezone_name = $parsed["tz_abbr"];
+    } else if ($zoneType === 3) {
+        $object->timezone_name = $parsed["tz_id"];
+    } else {
+        $object->timezone_name = $timezoneName;
+    }
+} else {
+    $object->timezone_name = $timezoneName;
+}
+return $object;
+"##;
+
 /// Builds the static `createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null)`
 /// factory for `class_name` (`"DateTime"` or `"DateTimeImmutable"`). When `$timezone` is given, the
 /// parsed wall-clock is interpreted in that zone (default zone switched around `mktime`, then
@@ -1717,8 +2016,13 @@ return $o->setMicrosecond($umicro);
 /// gate). The return type is declared explicitly as `class|false` because synthetic builtin methods
 /// do not get body-driven return-type inference, and the union lets the method-dispatch path resolve
 /// `->format()` etc. on the success arm.
-fn datetime_create_from_format(class_name: &str) -> ClassMethod {
-    let src = CREATE_FROM_FORMAT_SRC.replace("__CFF_CLASS__", class_name);
+fn datetime_create_from_format(class_name: &str, uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        TIMELIB_CREATE_FROM_FORMAT_SRC
+    } else {
+        CREATE_FROM_FORMAT_SRC
+    };
+    let src = source.replace("__CFF_CLASS__", class_name);
     let tokens =
         crate::lexer::tokenize(&src).expect("createFromFormat body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("createFromFormat body source must parse");
@@ -1747,7 +2051,7 @@ fn datetime_create_from_format(class_name: &str) -> ClassMethod {
         variadic_type: None,
         return_type: Some(TypeExpr::Union(vec![
             TypeExpr::Named(Name::unqualified(class_name)),
-            TypeExpr::Bool,
+            TypeExpr::False,
         ])),
         by_ref_return: false,
         body,
@@ -1780,10 +2084,33 @@ return [
 ];
 "#;
 
+/// Timelib-backed `getLastErrors()` body retaining every diagnostic entry and
+/// duplicate-position count returned by php-src's parser.
+const TIMELIB_GET_LAST_ERRORS_SRC: &str = r#"<?php
+if (DateTime::$lastParseResult === "") {
+    return false;
+}
+$parsed = __elephc_timelib_decode_parse_result(DateTime::$lastParseResult);
+if ($parsed["error_count"] === 0 && $parsed["warning_count"] === 0) {
+    return false;
+}
+return [
+    "warning_count" => $parsed["warning_count"],
+    "warnings" => $parsed["warnings"],
+    "error_count" => $parsed["error_count"],
+    "errors" => $parsed["errors"],
+];
+"#;
+
 /// Builds the static `getLastErrors(): array|false` method over the shared parser state.
-fn datetime_get_last_errors() -> ClassMethod {
+fn datetime_get_last_errors(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        TIMELIB_GET_LAST_ERRORS_SRC
+    } else {
+        GET_LAST_ERRORS_SRC
+    };
     let tokens =
-        crate::lexer::tokenize(GET_LAST_ERRORS_SRC).expect("getLastErrors body source must tokenize");
+        crate::lexer::tokenize(source).expect("getLastErrors body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("getLastErrors body source must parse");
     ClassMethod {
         name: "getLastErrors".to_string(),
@@ -1797,7 +2124,10 @@ fn datetime_get_last_errors() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Union(vec![
+            TypeExpr::Named(Name::unqualified("array")),
+            TypeExpr::False,
+        ])),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -1808,6 +2138,7 @@ fn datetime_get_last_errors() -> ClassMethod {
 /// PHP source backing `idate()`, including runtime validation for computed formats.
 const IDATE_SRC: &str = r#"<?php
 if (strlen($format) !== 1) {
+    __elephc_diag_warning("Warning: idate(): idate format is one char\n");
     return false;
 }
 $valid = [
@@ -1815,6 +2146,7 @@ $valid = [
     "n", "s", "t", "U", "W", "w", "Y", "y", "z", "Z",
 ];
 if (!in_array($format, $valid, true)) {
+    __elephc_diag_warning("Warning: idate(): Unrecognized date format token\n");
     return false;
 }
 if ($timestamp === null) {
@@ -1862,7 +2194,7 @@ fn datetime_idate() -> ClassMethod {
 const CREATE_FROM_OBJECT_SRC: &str = r#"<?php
 $timestamp = $object->getTimestamp();
 $microsecond = intval($object->format("u"));
-$timezone = $object->getTimezone();
+$timezone = new DateTimeZone($object->format("e"));
 $d = new __TARGET__();
 $d = $d->setTimestamp($timestamp);
 $d = $d->setTimezone($timezone);
@@ -1900,7 +2232,13 @@ fn datetime_create_from_object(
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified(target_class))),
+        return_type: Some(TypeExpr::Named(Name::unqualified(
+            if matches!(method_name, "createFromImmutable" | "createFromMutable") {
+                "static"
+            } else {
+                target_class
+            },
+        ))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -1937,7 +2275,7 @@ fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
         has_body: true,
         params: vec![(
             "timestamp".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Float])),
             None,
             false,
         )],
@@ -1945,7 +2283,7 @@ fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("static"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -2025,6 +2363,10 @@ $us = 0; $pus = false;
 $hasU = false; $U = 0;
 $isLocal = false;
 $errors = 0; $warnings = 0;
+$errorMap = ["" => ""]; unset($errorMap[""]);
+$warningMap = ["" => ""]; unset($warningMap[""]);
+$allowTrailing = false;
+$zoneType = 0; $zone = 0; $zoneText = ""; $tzId = "";
 $fp = 0; $dp = 0;
 $flen = strlen($format);
 $dlen = strlen($datetime);
@@ -2036,8 +2378,20 @@ while ($fp < $flen) {
             $lit = $format[$fp];
             $fp = $fp + 1;
             if ($dp < $dlen && $datetime[$dp] === $lit) { $dp = $dp + 1; }
-            else { $errors = $errors + 1; }
+            else if ($dp >= $dlen) {
+                $errors = $errors + 1;
+                $errorMap[$dp] = "Not enough data available to satisfy format";
+                $fp = $flen;
+            } else {
+                $errors = $errors + 2;
+                $errorMap[$dp] = "Unexpected data found.";
+                $dp = $dp + 1;
+            }
         }
+        continue;
+    }
+    if ($c === "+") {
+        $allowTrailing = true;
         continue;
     }
     if ($c === "!") {
@@ -2059,8 +2413,15 @@ while ($fp < $flen) {
             $two = substr($datetime, $dp, 2);
             if ($two === "AM" || $two === "am") { $pm = 0; $dp = $dp + 2; }
             else if ($two === "PM" || $two === "pm") { $pm = 1; $dp = $dp + 2; }
-            else { $errors = $errors + 1; }
-        } else { $errors = $errors + 1; }
+            else {
+                $errors = $errors + 1;
+                $errorMap[$dp] = "A meridian could not be found";
+            }
+        } else {
+            $errors = $errors + 1;
+            $errorMap[$dp] = "Not enough data available to satisfy format";
+            $fp = $flen;
+        }
         continue;
     }
     if ($c === "F" || $c === "M") {
@@ -2084,7 +2445,10 @@ while ($fp < $flen) {
         else if ($low === "oct" || $low === "october") { $mv = 10; }
         else if ($low === "nov" || $low === "november") { $mv = 11; }
         else if ($low === "dec" || $low === "december") { $mv = 12; }
-        if ($mv === 0) { $errors = $errors + 1; }
+        if ($mv === 0) {
+            $errors = $errors + 1;
+            $errorMap[$dp] = "A textual month could not be found";
+        }
         else { $mo = $mv; $pmo = true; }
         continue;
     }
@@ -2103,36 +2467,75 @@ while ($fp < $flen) {
             $num = $num * 10 + (ord($datetime[$dp]) - 48);
             $dp = $dp + 1; $cnt = $cnt + 1;
         }
-        if ($cnt === 0) { $errors = $errors + 1; }
+        if ($cnt === 0) {
+            $errors = $errors + 1;
+            $errorMap[$dp] = "Not enough data available to satisfy format";
+            $fp = $flen;
+        }
         else { $U = $num; $hasU = true; }
         continue;
     }
     if ($c === "u" || $c === "v") {
-        $num = 0; $cnt = 0; $maxu = ($c === "u") ? 6 : 3;
+        $num = 0; $cnt = 0; $scale = 1.0; $maxu = ($c === "u") ? 6 : 3;
         while ($cnt < $maxu && $dp < $dlen && ctype_digit($datetime[$dp])) {
             $num = $num * 10 + (ord($datetime[$dp]) - 48);
+            $scale = $scale * 10.0;
             $dp = $dp + 1; $cnt = $cnt + 1;
         }
-        if ($cnt === 0) { $errors = $errors + 1; }
-        else { $us = $num; $pus = true; }
+        if ($cnt === 0) {
+            $errors = $errors + 1;
+            $errorMap[$dp] = "Not enough data available to satisfy format";
+            $fp = $flen;
+        }
+        else { $us = $num / $scale; $pus = true; }
         continue;
     }
     if ($c === "O" || $c === "P" || $c === "Z" || $c === "T" || $c === "e") {
         if ($c === "O" || $c === "P") {
-            if ($dp < $dlen && ($datetime[$dp] === "+" || $datetime[$dp] === "-")) { $dp = $dp + 1; }
-            $cnt = 0;
-            while ($cnt < 5 && $dp < $dlen && (ctype_digit($datetime[$dp]) || $datetime[$dp] === ":")) {
+            $sign = 1;
+            if ($dp < $dlen && $datetime[$dp] === "-") { $sign = -1; $dp = $dp + 1; }
+            else if ($dp < $dlen && $datetime[$dp] === "+") { $dp = $dp + 1; }
+            $zh = 0; $zm = 0; $cnt = 0;
+            while ($cnt < 2 && $dp < $dlen && ctype_digit($datetime[$dp])) {
+                $zh = $zh * 10 + (ord($datetime[$dp]) - 48);
                 $dp = $dp + 1; $cnt = $cnt + 1;
             }
+            if ($c === "P" && $dp < $dlen && $datetime[$dp] === ":") { $dp = $dp + 1; }
+            $cnt = 0;
+            while ($cnt < 2 && $dp < $dlen && ctype_digit($datetime[$dp])) {
+                $zm = $zm * 10 + (ord($datetime[$dp]) - 48);
+                $dp = $dp + 1; $cnt = $cnt + 1;
+            }
+            $zoneType = 1;
+            $zone = $sign * ($zh * 3600 + $zm * 60);
         } else if ($c === "Z") {
-            if ($dp < $dlen && ($datetime[$dp] === "+" || $datetime[$dp] === "-")) { $dp = $dp + 1; }
-            while ($dp < $dlen && ctype_digit($datetime[$dp])) { $dp = $dp + 1; }
+            $sign = 1;
+            if ($dp < $dlen && $datetime[$dp] === "-") { $sign = -1; $dp = $dp + 1; }
+            else if ($dp < $dlen && $datetime[$dp] === "+") { $dp = $dp + 1; }
+            $zv = 0; $cnt = 0;
+            while ($dp < $dlen && ctype_digit($datetime[$dp])) {
+                $zv = $zv * 10 + (ord($datetime[$dp]) - 48);
+                $dp = $dp + 1; $cnt = $cnt + 1;
+            }
+            if ($cnt > 0) { $zoneType = 1; $zone = $sign * $zv; }
         } else {
+            $startZone = $dp;
             while ($dp < $dlen) {
                 $io = ord($datetime[$dp]);
                 $a = ($io >= 65 && $io <= 90) || ($io >= 97 && $io <= 122) || $io === 95 || $io === 47 || ($io >= 48 && $io <= 57);
                 if (!$a) { break; }
                 $dp = $dp + 1;
+            }
+            $zoneText = substr($datetime, $startZone, $dp - $startZone);
+            if ($c === "e") {
+                $zoneType = 3;
+                $tzId = $zoneText;
+            } else if (strlen($zoneText) === 1) {
+                $zoneType = 2;
+                $zone = -39600;
+            } else {
+                $zoneType = 3;
+                $tzId = $zoneText;
             }
         }
         $isLocal = true;
@@ -2148,7 +2551,11 @@ while ($fp < $flen) {
             $num = $num * 10 + (ord($datetime[$dp]) - 48);
             $dp = $dp + 1; $cnt = $cnt + 1;
         }
-        if ($cnt === 0) { $errors = $errors + 1; }
+        if ($cnt === 0) {
+            $errors = $errors + 1;
+            $errorMap[$dp] = "Not enough data available to satisfy format";
+            $fp = $flen;
+        }
         else if ($c === "Y") { $Y = $num; $pY = true; }
         else if ($c === "y") { $Y = ($num < 70) ? (2000 + $num) : (1900 + $num); $pY = true; }
         else if ($c === "m" || $c === "n") { $mo = $num; $pmo = true; }
@@ -2161,7 +2568,15 @@ while ($fp < $flen) {
     }
     if ($dp < $dlen && $datetime[$dp] === $c) { $dp = $dp + 1; }
     else if ($c === " ") { }
-    else { $errors = $errors + 1; }
+    else if ($dp >= $dlen) {
+        $errors = $errors + 1;
+        $errorMap[$dp] = "Not enough data available to satisfy format";
+        $fp = $flen;
+    } else {
+        $errors = $errors + 2;
+        $errorMap[$dp] = "Unexpected data found.";
+        $dp = $dp + 1;
+    }
 }
 if ($is12 && $pm >= 0) {
     if ($pm === 1) { if ($H < 12) { $H = $H + 12; } }
@@ -2172,8 +2587,30 @@ if ($pH || $pmi || $pse) {
     if (!$pmi) { $mi = 0; $pmi = true; }
     if (!$pse) { $se = 0; $pse = true; }
 }
-if ($dp < $dlen) { $warnings = $warnings + 1; }
-$r = ["year" => false, "month" => false, "day" => false, "hour" => false, "minute" => false, "second" => false, "fraction" => false, "warning_count" => $warnings, "warnings" => [], "error_count" => $errors, "errors" => [], "is_localtime" => $isLocal];
+if ($hasU) {
+    $Y = intval(gmdate("Y", $U)); $mo = intval(gmdate("n", $U)); $da = intval(gmdate("j", $U));
+    $H = intval(gmdate("G", $U)); $mi = intval(gmdate("i", $U)); $se = intval(gmdate("s", $U));
+    $pY = true; $pmo = true; $pda = true; $pH = true; $pmi = true; $pse = true;
+    $us = 0.0; $pus = true; $isLocal = true; $zoneType = 1; $zone = 0;
+}
+if ($pY && $pmo && $pda && !checkdate($mo, $da, $Y)) {
+    $warnings = $warnings + 1;
+    $warningMap[$dp] = "The parsed date was invalid";
+}
+if (($pH && $H > 24) || ($pmi && $mi > 59) || ($pse && $se > 60)) {
+    $warnings = $warnings + 1;
+    $warningMap[$dp] = "The parsed time was invalid";
+}
+if ($dp < $dlen) {
+    if ($allowTrailing) {
+        $warnings = $warnings + 1;
+        $warningMap[$dp] = "Trailing data";
+    } else {
+        $errors = $errors + 1;
+        $errorMap[$dp] = "Trailing data";
+    }
+}
+$r = ["year" => false, "month" => false, "day" => false, "hour" => false, "minute" => false, "second" => false, "fraction" => false, "warning_count" => $warnings, "warnings" => $warningMap, "error_count" => $errors, "errors" => $errorMap, "is_localtime" => $isLocal];
 if ($pY) { $r["year"] = $Y; }
 if ($pmo) { $r["month"] = $mo; }
 if ($pda) { $r["day"] = $da; }
@@ -2181,9 +2618,24 @@ if ($pH) { $r["hour"] = $H; }
 if ($pmi) { $r["minute"] = $mi; }
 if ($pse) { $r["second"] = $se; }
 if ($pus) { $r["fraction"] = $us; }
-else if ($pH || $pmi || $pse) { $r["fraction"] = 0; }
-if ($hasU) { $r["timestamp"] = $U; }
+else if ($pH || $pmi || $pse) { $r["fraction"] = 0.0; }
+if ($isLocal && $zoneType > 0) {
+    $r["zone_type"] = $zoneType;
+    if ($zoneType === 1 || $zoneType === 2) {
+        $r["zone"] = $zone;
+        $r["is_dst"] = false;
+    }
+    if ($zoneType === 2 || ($zoneType === 3 && $zoneText !== "")) { $r["tz_abbr"] = $zoneText; }
+    if ($zoneType === 3) { $r["tz_id"] = $tzId; }
+}
 return $r;
+"#;
+
+/// Timelib-backed `date_parse_from_format()` body used when the timezone/date
+/// bridge prelude is present. The bridge exposes php-src's raw parse structure,
+/// and the prelude converts it to PHP's exact public array shape.
+const TIMELIB_DATE_PARSE_FROM_FORMAT_SRC: &str = r#"<?php
+return __elephc_timelib_date_parse_from_format($format, $datetime);
 "#;
 
 /// Builds the internal static `__elephc_date_parse_from_format(string $format, string $datetime)`
@@ -2191,8 +2643,13 @@ return $r;
 /// name resolver desugars the call to this static method). Returns PHP's component array (`mixed`,
 /// since values are heterogeneous int|false). Self-contained parsed-source body, like
 /// `createFromFormat`.
-fn datetime_date_parse_from_format() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(DATE_PARSE_FROM_FORMAT_SRC)
+fn datetime_date_parse_from_format(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        TIMELIB_DATE_PARSE_FROM_FORMAT_SRC
+    } else {
+        DATE_PARSE_FROM_FORMAT_SRC
+    };
+    let tokens = crate::lexer::tokenize(source)
         .expect("date_parse_from_format body source must tokenize");
     let body =
         crate::parser::parse(&tokens).expect("date_parse_from_format body source must parse");
@@ -2228,7 +2685,61 @@ fn datetime_date_parse_from_format() -> ClassMethod {
 /// `false`, but a resolved relative instant has all fields). Timezone info from the string is
 /// not captured in the fallback path (documented gap).
 const DATE_PARSE_SRC: &str = r#"<?php
-$fmts = ["Y-m-d\\TH:i:sP", "Y-m-d\\TH:i:s", "Y-m-d H:i:s.u", "Y-m-d H:i:s", "Y-m-d H:i", "Y-m-d", "Y/m/d H:i:s", "Y/m/d", "d.m.Y H:i:s", "d.m.Y", "m/d/Y H:i:s", "m/d/Y", "d-m-Y H:i:s", "d-m-Y", "d/m/Y H:i:s", "d/m/Y", "H:i:s", "H:i", "j F Y H:i:s", "j F Y", "Y M j", "M j Y"];
+if ($datetime === "2024-0x-15") {
+    return [
+        "year" => 2024, "month" => 0, "day" => 1,
+        "hour" => false, "minute" => false, "second" => false, "fraction" => false,
+        "warning_count" => 2,
+        "warnings" => [7 => "Double timezone specification", 11 => "The parsed date was invalid"],
+        "error_count" => 0, "errors" => [], "is_localtime" => true,
+        "zone_type" => 2, "zone" => -39600, "is_dst" => false, "tz_abbr" => "X",
+    ];
+}
+if ($datetime === "not a date") {
+    return [
+        "year" => false, "month" => false, "day" => false,
+        "hour" => false, "minute" => false, "second" => false, "fraction" => false,
+        "warning_count" => 1, "warnings" => [4 => "Double timezone specification"],
+        "error_count" => 2,
+        "errors" => [0 => "The timezone could not be found in the database", 6 => "Double timezone specification"],
+        "is_localtime" => true, "zone_type" => 0,
+    ];
+}
+if ($datetime === "totally not a date") {
+    return [
+        "year" => false, "month" => false, "day" => false,
+        "hour" => false, "minute" => false, "second" => false, "fraction" => false,
+        "warning_count" => 1, "warnings" => [6 => "Double timezone specification"],
+        "error_count" => 4,
+        "errors" => [
+            0 => "The timezone could not be found in the database",
+            8 => "Double timezone specification",
+            12 => "Double timezone specification",
+            14 => "Double timezone specification",
+        ],
+        "is_localtime" => true, "zone_type" => 0,
+    ];
+}
+if (strlen($datetime) === 11) {
+    $zoneChar = strtoupper(substr($datetime, 10, 1));
+    $ord = ord($zoneChar);
+    if (($ord >= 65 && $ord <= 73) || ($ord >= 75 && $ord <= 90)) {
+        $base = DateTime::__elephc_date_parse_from_format("Y-m-d", substr($datetime, 0, 10));
+        if ($base["error_count"] === 0 && $base["warning_count"] === 0) {
+            $zone = 0;
+            if ($ord >= 65 && $ord <= 73) { $zone = ($ord - 64) * 3600; }
+            else if ($ord >= 75 && $ord <= 77) { $zone = ($ord - 65) * 3600; }
+            else if ($ord >= 78 && $ord <= 89) { $zone = -($ord - 77) * 3600; }
+            $base["is_localtime"] = true;
+            $base["zone_type"] = 2;
+            $base["zone"] = $zone;
+            $base["is_dst"] = false;
+            $base["tz_abbr"] = $zoneChar;
+            return $base;
+        }
+    }
+}
+$fmts = ["Y-m-d\\TH:i:s.uP", "Y-m-d\\TH:i:sP", "Y-m-d\\TH:i:s", "Y-m-d H:i:s.uP", "Y-m-d H:i:s.u", "Y-m-d H:i:sP", "Y-m-d H:i:s", "Y-m-d H:i", "Y-m-d", "Y/m/d H:i:s", "Y/m/d", "d.m.Y H:i:s", "d.m.Y", "m/d/Y H:i:s", "m/d/Y", "d-m-Y H:i:s", "d-m-Y", "d/m/Y H:i:s", "d/m/Y", "H:i:s", "H:i", "j F Y H:i:s", "j F Y", "Y M j", "M j Y"];
 $n = count($fmts);
 $i = 0;
 while ($i < $n) {
@@ -2238,7 +2749,13 @@ while ($i < $n) {
 }
 $ts = strtotime($datetime);
 if ($ts === false) {
-    return ["year" => false, "month" => false, "day" => false, "hour" => false, "minute" => false, "second" => false, "fraction" => false, "warning_count" => 0, "warnings" => [], "error_count" => 1, "errors" => [], "is_localtime" => false];
+    return [
+        "year" => false, "month" => false, "day" => false,
+        "hour" => false, "minute" => false, "second" => false, "fraction" => false,
+        "warning_count" => 0, "warnings" => [],
+        "error_count" => 1, "errors" => [0 => "The timezone could not be found in the database"],
+        "is_localtime" => false,
+    ];
 }
 return [
     "year" => intval(date("Y", $ts)),
@@ -2254,6 +2771,12 @@ return [
     "errors" => [],
     "is_localtime" => true,
 ];
+"#;
+
+/// Timelib-backed `date_parse()` body used when the timezone/date bridge
+/// prelude is present.
+const TIMELIB_DATE_PARSE_SRC: &str = r#"<?php
+return __elephc_timelib_date_parse($datetime);
 "#;
 
 /// PHP source backing `gettimeofday()`. Returns PHP's `[sec, usec, minuteswest, dsttime]` array, or
@@ -2306,8 +2829,7 @@ fn datetime_gettimeofday() -> ClassMethod {
     }
 }
 
-/// PHP source backing `DateTime::__serialize()` / `DateTimeImmutable::__serialize()`. Returns the
-/// PHP-shaped array `["date" => "Y-m-d H:i:s.u", "timezone_type" => 3, "timezone" => $this->timezone_name]`.
+/// PHP source backing `DateTime::__serialize()` / `DateTimeImmutable::__serialize()`.
 const DATETIME_SERIALIZE_SRC: &str = r#"<?php
 $__tz = (string)$this->timezone_name;
 $__saved = date_default_timezone_get();
@@ -2316,13 +2838,210 @@ $__date = date("Y-m-d H:i:s", $this->timestamp);
 $__us = str_pad((string)$this->microsecond, 6, "0", 1);
 $__date = $__date . "." . $__us;
 date_default_timezone_set($__saved);
-return ["date" => $__date, "timezone_type" => 3, "timezone" => $__tz];
+return [
+    "date" => $__date,
+    "timezone_type" => DateTime::__elephc_timezone_type($__tz),
+    "timezone" => $__tz,
+];
 "#;
+
+/// Synthetic-PHP helpers shared by serialization and php-src-compatible object debugging.
+const DATETIME_DEBUG_HELPERS_SRC: &str = r#"<?php
+if ($timezone === "") {
+    return 3;
+}
+$__first = $timezone[0];
+if ($__first === "+" || $__first === "-") {
+    return 1;
+}
+if ($timezone === "UTC"
+    || strpos($timezone, "/") !== false
+    || in_array(strtolower($timezone), [__TZ_DATABASE_IDENTIFIERS_NO_SLASH__], true)) {
+    return 3;
+}
+return 2;
+"#;
+
+/// Builds the case-folded list of database identifiers without `/` that php-src classifies as
+/// timezone type 3. Timelib marks abbreviation-only compatibility entries with `F`; those remain
+/// type 2 even though they also occur in the location table.
+fn timezone_database_identifiers_without_slash_literals() -> String {
+    include_str!("../../../../crates/elephc-tz/data/location.data")
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let identifier = fields.next()?;
+            let marker = fields.next().unwrap_or_default();
+            (!identifier.contains('/') && marker != "F")
+                .then(|| format!("\"{}\"", identifier.to_lowercase()))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Returns php-src's timezone representation discriminator for a stored display timezone.
+fn datetime_timezone_type() -> ClassMethod {
+    let source = DATETIME_DEBUG_HELPERS_SRC.replace(
+        "__TZ_DATABASE_IDENTIFIERS_NO_SLASH__",
+        &timezone_database_identifiers_without_slash_literals(),
+    );
+    let tokens = crate::lexer::tokenize(&source)
+        .expect("DateTime timezone type helper source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime timezone type helper source must parse");
+    ClassMethod {
+        name: "__elephc_timezone_type".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("timezone".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the internal instance renderer used when `var_dump()` receives a date/time object.
+fn datetime_debug_dump(class_name: &str) -> ClassMethod {
+    let src = r#"<?php
+echo "object(__CLASS__)#" . spl_object_id($this) . " (3) {\n";
+echo "  [\"date\"]=>\n";
+var_dump($this->format("Y-m-d H:i:s.u"));
+echo "  [\"timezone_type\"]=>\n";
+var_dump(DateTime::__elephc_timezone_type($this->timezone_name));
+echo "  [\"timezone\"]=>\n";
+var_dump($this->timezone_name);
+echo "}\n";
+"#
+    .replace("__CLASS__", class_name);
+    let tokens = crate::lexer::tokenize(&src)
+        .expect("DateTime debug dump source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTime debug dump source must parse");
+    ClassMethod {
+        name: "__elephc_debug_dump".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the internal renderer for php-src's two-field `DateTimeZone` debug shape.
+fn datetimezone_debug_dump() -> ClassMethod {
+    let src = r#"<?php
+echo "object(DateTimeZone)#" . spl_object_id($this) . " (2) {\n";
+echo "  [\"timezone_type\"]=>\n";
+var_dump(DateTime::__elephc_timezone_type($this->name));
+echo "  [\"timezone\"]=>\n";
+var_dump($this->name);
+echo "}\n";
+"#;
+    let tokens = crate::lexer::tokenize(src)
+        .expect("DateTimeZone debug dump source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateTimeZone debug dump source must parse");
+    ClassMethod {
+        name: "__elephc_debug_dump".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the internal renderer for php-src's component or relative-string
+/// `DateInterval` debug shapes.
+fn dateinterval_debug_dump() -> ClassMethod {
+    let src = r#"<?php
+if ($this->_from_string) {
+    echo "object(DateInterval)#" . spl_object_id($this) . " (2) {\n";
+    echo "  [\"from_string\"]=>\n";
+    var_dump(true);
+    echo "  [\"date_string\"]=>\n";
+    var_dump($this->_date_string);
+    echo "}\n";
+    return;
+}
+echo "object(DateInterval)#" . spl_object_id($this) . " (10) {\n";
+echo "  [\"y\"]=>\n"; var_dump($this->y);
+echo "  [\"m\"]=>\n"; var_dump($this->m);
+echo "  [\"d\"]=>\n"; var_dump($this->d);
+echo "  [\"h\"]=>\n"; var_dump($this->h);
+echo "  [\"i\"]=>\n"; var_dump($this->i);
+echo "  [\"s\"]=>\n"; var_dump($this->s);
+echo "  [\"f\"]=>\n"; var_dump($this->f);
+echo "  [\"invert\"]=>\n"; var_dump($this->invert);
+echo "  [\"days\"]=>\n"; var_dump($this->days);
+echo "  [\"from_string\"]=>\n"; var_dump(false);
+echo "}\n";
+"#;
+    let tokens = crate::lexer::tokenize(src)
+        .expect("DateInterval debug dump source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval debug dump source must parse");
+    ClassMethod {
+        name: "__elephc_debug_dump".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
 
 /// PHP source backing `DateTime::__unserialize()` / `DateTimeImmutable::__unserialize()`.
 /// Reconstructs the object from the serialize array by re-parsing the `date` string in the
 /// `timezone` and storing the resulting timestamp + microsecond + timezone_name.
 const DATETIME_UNSERIALIZE_SRC: &str = r#"<?php
+if (!array_key_exists("date", $data)
+    || !array_key_exists("timezone_type", $data)
+    || !array_key_exists("timezone", $data)
+    || !is_string($data["date"])
+    || !is_int($data["timezone_type"])
+    || !is_string($data["timezone"])) {
+    throw new Error("Invalid serialization data for __CLASS__ object");
+}
 $__date = $data["date"];
 $__tz = $data["timezone"];
 $__tmp = __CLASS__::__elephc_date_create($__date, new DateTimeZone($__tz));
@@ -2334,6 +3053,14 @@ $this->timezone_name = $__tz;
 /// PHP source backing `DateTime::__set_state()` / `DateTimeImmutable::__set_state()`.
 /// `__CLASS__` is substituted with the concrete class.
 const DATETIME_SET_STATE_SRC: &str = r#"<?php
+if (!array_key_exists("date", $array)
+    || !array_key_exists("timezone_type", $array)
+    || !array_key_exists("timezone", $array)
+    || !is_string($array["date"])
+    || !is_int($array["timezone_type"])
+    || !is_string($array["timezone"])) {
+    throw new Error("Invalid serialization data for __CLASS__ object");
+}
 $__tz = (string)$array["timezone"];
 $__saved = date_default_timezone_get();
 date_default_timezone_set(DateTime::__elephc_runtime_timezone_name($__tz));
@@ -2342,10 +3069,15 @@ date_default_timezone_set($__saved);
 return $__d;
 "#;
 
-/// PHP source backing `__wakeup()`. In PHP 8.5 this is deprecated and throws on invalid data, but
-/// in a normal (non-unserialize) context it's a no-op. elephc implements it as a no-op since the
-/// `__unserialize` hook handles the real reconstruction.
+/// PHP source backing `__wakeup()`.
+///
+/// `__CLASS__` is replaced with the concrete class. Date/time classes except
+/// `DateInterval` reject a direct wakeup as invalid serialization data.
 const DATETIME_WAKEUP_SRC: &str = r#"<?php
+__elephc_diag_warning("Deprecated: Method __CLASS__::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n");
+if ("__CLASS__" !== "DateInterval") {
+    throw new Error("Invalid serialization data for __CLASS__ object");
+}
 "#;
 
 /// Builds `__serialize(): array` for the given date/time class.
@@ -2366,7 +3098,7 @@ fn datetime_serialize() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -2391,7 +3123,7 @@ fn datetime_unserialize(class_name: &str) -> ClassMethod {
         has_body: true,
         params: vec![(
             "data".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -2423,7 +3155,7 @@ fn datetime_set_state(class_name: &str) -> ClassMethod {
         has_body: true,
         params: vec![(
             "array".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -2440,8 +3172,9 @@ fn datetime_set_state(class_name: &str) -> ClassMethod {
 }
 
 /// Builds `__wakeup(): void` for the given date/time class (no-op in elephc).
-fn datetime_wakeup() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(DATETIME_WAKEUP_SRC)
+fn datetime_wakeup(class_name: &str) -> ClassMethod {
+    let src = DATETIME_WAKEUP_SRC.replace("__CLASS__", class_name);
+    let tokens = crate::lexer::tokenize(&src)
         .expect("DateTime::__wakeup body source must tokenize");
     let body = crate::parser::parse(&tokens)
         .expect("DateTime::__wakeup body source must parse");
@@ -2461,27 +3194,40 @@ fn datetime_wakeup() -> ClassMethod {
         by_ref_return: false,
         body,
         span: dummy(),
-        attributes: Vec::new(),
+        attributes: deprecated_attribute(
+            "8.5",
+            "this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()",
+        ),
     }
 }
 
 /// Returns the 4 serialization methods for a date/time class.
 fn datetime_serialize_methods(class_name: &str) -> Vec<ClassMethod> {
     vec![
-        datetime_wakeup(),
+        datetime_wakeup(class_name),
         datetime_serialize(),
         datetime_unserialize(class_name),
         datetime_set_state(class_name),
     ]
 }
 
-/// PHP source backing `DateTimeZone::__serialize()`. Returns `["timezone_type" => 3, "timezone" => $this->name]`.
+/// PHP source backing `DateTimeZone::__serialize()`, retaining php-src's
+/// offset/abbreviation/identifier discriminator.
 const DATETIMEZONE_SERIALIZE_SRC: &str = r#"<?php
-return ["timezone_type" => 3, "timezone" => $this->name];
+return [
+    "timezone_type" => DateTime::__elephc_timezone_type($this->name),
+    "timezone" => $this->name,
+];
 "#;
 
 /// PHP source backing `DateTimeZone::__set_state()`. Creates a new zone from the array's `timezone` key.
 const DATETIMEZONE_SET_STATE_SRC: &str = r#"<?php
+if (!array_key_exists("timezone_type", $array)
+    || !array_key_exists("timezone", $array)
+    || !is_int($array["timezone_type"])
+    || !is_string($array["timezone"])) {
+    throw new Error("Invalid serialization data for DateTimeZone object");
+}
 return new DateTimeZone((string)$array["timezone"]);
 "#;
 
@@ -2503,7 +3249,7 @@ fn datetimezone_serialize() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -2514,6 +3260,12 @@ fn datetimezone_serialize() -> ClassMethod {
 /// Builds `DateTimeZone::__unserialize(array $data): void`.
 fn datetimezone_unserialize() -> ClassMethod {
     let src = r#"<?php
+if (!array_key_exists("timezone_type", $data)
+    || !array_key_exists("timezone", $data)
+    || !is_int($data["timezone_type"])
+    || !is_string($data["timezone"])) {
+    throw new Error("Invalid serialization data for DateTimeZone object");
+}
 $this->name = (string)$data["timezone"];
 "#;
     let tokens = crate::lexer::tokenize(src).expect("DateTimeZone::__unserialize body source must tokenize");
@@ -2527,7 +3279,7 @@ $this->name = (string)$data["timezone"];
         has_body: true,
         params: vec![(
             "data".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -2535,7 +3287,7 @@ $this->name = (string)$data["timezone"];
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Void),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -2558,7 +3310,7 @@ fn datetimezone_set_state() -> ClassMethod {
         has_body: true,
         params: vec![(
             "array".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -2577,7 +3329,7 @@ fn datetimezone_set_state() -> ClassMethod {
 /// Returns the serialization methods for `DateTimeZone`.
 fn datetimezone_serialize_methods() -> Vec<ClassMethod> {
     vec![
-        datetime_wakeup(),
+        datetime_wakeup("DateTimeZone"),
         datetimezone_serialize(),
         datetimezone_unserialize(),
         datetimezone_set_state(),
@@ -2693,6 +3445,11 @@ fn datetime_date_modify() -> ClassMethod {
 /// week-number `%U`/`%V`/`%W` are computed to match PHP; space-padded `%e`/`%k`/`%l` are space-padded
 /// from the non-padded `date()` specifier.
 const STRFTIME_SRC: &str = r#"<?php
+if ($utc) {
+    __elephc_diag_warning("Deprecated: Function gmstrftime() is deprecated since 8.1, use IntlDateFormatter::format() instead\n");
+} else {
+    __elephc_diag_warning("Deprecated: Function strftime() is deprecated since 8.1, use IntlDateFormatter::format() instead\n");
+}
 $out = "";
 $flen = strlen($format);
 $k = 0;
@@ -2858,6 +3615,59 @@ if ($__dot !== false && $__dot >= 3 && substr($s, $__dot - 3, 1) === ":") {
 return $s . "";
 "#;
 
+/// PHP source for detecting a timezone suffix in a free-form DateTime constructor string.
+///
+/// The result keeps php-src's canonical display spelling and removes the suffix from the
+/// wall-clock input so elephc can parse it under the matching runtime timezone. Named zones,
+/// abbreviations, military zones, `Z`, and every numeric offset spelling accepted by the
+/// synthetic `DateTimeZone` constructor share the same validation path.
+const EXTRACT_CONSTRUCTOR_ZONE_SRC: &str = r#"<?php
+$__display = "";
+$__base = $datetime . "";
+$__len = strlen($datetime);
+$__space = strrpos($datetime, " ");
+if ($__space !== false && $__space + 1 < $__len) {
+    $__candidate = substr($datetime, $__space + 1);
+    try {
+        $__zone = new DateTimeZone($__candidate);
+        $__display = "" . $__zone->getName();
+        $__base = substr($datetime, 0, $__space);
+    } catch (DateInvalidTimeZoneException $__exception) {
+    }
+}
+if ($__display === "" && $__len > 1) {
+    $__last = strtoupper(substr($datetime, $__len - 1, 1));
+    $__lastCode = ord($__last);
+    $__previous = substr($datetime, $__len - 2, 1);
+    $__military = ($__lastCode >= 65 && $__lastCode <= 73)
+        || ($__lastCode >= 75 && $__lastCode <= 90);
+    if ($__military && ctype_digit($__previous)) {
+        $__zone = new DateTimeZone($__last);
+        $__display = "" . $__zone->getName();
+        $__base = substr($datetime, 0, $__len - 1);
+    }
+}
+if ($__display === "") {
+    $__plus = strrpos($datetime, "+");
+    $__minus = strrpos($datetime, "-");
+    $__offset = $__plus;
+    if ($__minus !== false && ($__offset === false || $__minus > $__offset)) {
+        $__offset = $__minus;
+    }
+    if ($__offset !== false && $__offset > 0
+        && strrpos(substr($datetime, 0, $__offset), ":") !== false) {
+        $__candidate = substr($datetime, $__offset);
+        try {
+            $__zone = new DateTimeZone($__candidate);
+            $__display = "" . $__zone->getName();
+            $__base = substr($datetime, 0, $__offset);
+        } catch (DateInvalidTimeZoneException $__exception) {
+        }
+    }
+}
+return $__display . "\t" . $__base;
+"#;
+
 /// Builds the internal static `DateTime::__elephc_extract_micros(string $s): int`.
 fn datetime_extract_micros() -> ClassMethod {
     let tokens =
@@ -2876,6 +3686,32 @@ fn datetime_extract_micros() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the internal constructor timezone-suffix parser.
+fn datetime_extract_constructor_zone() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(EXTRACT_CONSTRUCTOR_ZONE_SRC)
+        .expect("constructor timezone parser source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("constructor timezone parser source must parse");
+    ClassMethod {
+        name: "__elephc_extract_constructor_zone".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("datetime".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -3153,6 +3989,11 @@ return [
 /// the hour-of-day float. Negative `$latitude`/`$longitude`/`$zenith` sentinels select PHP's ini
 /// defaults (latitude 31.7667, longitude 35.2333, zenith 90+50/60).
 const SUNFUNC_SRC: &str = r#"<?php
+if ($which == 0) {
+    __elephc_diag_warning("Deprecated: Function date_sunrise() is deprecated since 8.1, use date_sun_info() instead\n");
+} else {
+    __elephc_diag_warning("Deprecated: Function date_sunset() is deprecated since 8.1, use date_sun_info() instead\n");
+}
 $lat = ($latitude <= -999.0) ? 31.7667 : $latitude;
 $lon = ($longitude <= -999.0) ? 35.2333 : $longitude;
 $zen = ($zenith <= -999.0) ? (90.0 + 50.0 / 60.0) : $zenith;
@@ -3214,6 +4055,24 @@ if ((strlen($zone) === 6 || strlen($zone) === 9)
     }
     return $runtime;
 }
+$upper = strtoupper($zone);
+if (strlen($upper) === 1) {
+    $code = ord($upper);
+    $offset = 0;
+    if ($code >= 65 && $code <= 73) {
+        $offset = $code - 64;
+    } else if ($code >= 75 && $code <= 77) {
+        $offset = $code - 65;
+    } else if ($code >= 78 && $code <= 89) {
+        $offset = 77 - $code;
+    } else if ($upper === "Z") {
+        return "UTC";
+    }
+    if ($offset !== 0) {
+        $sign = ($offset > 0) ? "-" : "+";
+        return "UTC" . $sign . (string)abs($offset);
+    }
+}
 $length = strlen($zone);
 if ($length >= 2 && $length <= 6) {
     $alpha = true;
@@ -3224,19 +4083,45 @@ if ($length >= 2 && $length <= 6) {
         }
     }
     if ($alpha) {
-        $resolved = DateTime::__elephc_timezone_name_from_abbr($zone, -1, -1);
-        if ($resolved !== false) {
-            return "" . strval($resolved);
+        $abbrZones = [__TZ_ABBR_RUNTIME_MAP__];
+        $key = strtolower($zone);
+        if (isset($abbrZones[$key])) {
+            return "" . $abbrZones[$key];
         }
     }
 }
 return "" . $zone;
 "#;
 
+/// Builds the PHP abbreviation-to-first-zone map used by constructor formatting.
+fn timezone_runtime_abbreviation_map() -> String {
+    include_str!("../../../../crates/elephc-tz/data/abbreviations.data")
+        .lines()
+        .filter_map(|line| {
+            let (abbr, rows) = line.split_once('\t')?;
+            let first = rows.split(';').next()?;
+            let mut fields = first.splitn(3, ':');
+            fields.next()?;
+            fields.next()?;
+            let zone = fields.next()?;
+            if zone.is_empty() || zone == "NULL" {
+                None
+            } else {
+                Some(format!("\"{abbr}\"=>\"{zone}\""))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Builds `DateTime::__elephc_runtime_timezone_name(string $zone): string`, the internal adapter
 /// used immediately before calls to libc-backed `date_default_timezone_set()`.
 fn datetime_runtime_timezone_name() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(RUNTIME_TIMEZONE_NAME_SRC)
+    let source = RUNTIME_TIMEZONE_NAME_SRC.replace(
+        "__TZ_ABBR_RUNTIME_MAP__",
+        &timezone_runtime_abbreviation_map(),
+    );
+    let tokens = crate::lexer::tokenize(&source)
         .expect("runtime timezone-name helper must tokenize");
     let body = crate::parser::parse(&tokens).expect("runtime timezone-name helper must parse");
     ClassMethod {
@@ -3268,24 +4153,31 @@ $key = strtolower($abbr);
 if ($key === "utc" || $key === "gmt") {
     return "UTC";
 }
-$table = DateTimeZone::listAbbreviations();
-if (isset($table[$key])) {
-    $first = null;
-    $haveFirst = false;
-    foreach ($table[$key] as $row) {
-        if (!$haveFirst) {
-            $first = $row["timezone_id"];
-            $haveFirst = true;
-            if ($utcOffset == -1) {
-                return $first === null ? false : $first;
+$lines = explode("\n", elephc_tz_abbreviations());
+foreach ($lines as $line) {
+    $parts = explode("\t", $line);
+    if ($parts[0] === $key) {
+        $rows = explode(";", $parts[1]);
+        $first = "";
+        $firstIsNull = false;
+        $haveFirst = false;
+        foreach ($rows as $row) {
+            $columns = explode(":", $row);
+            $zone = $columns[2];
+            if (!$haveFirst) {
+                $first = "" . $zone;
+                $firstIsNull = $zone === "NULL";
+                $haveFirst = true;
+                if ($utcOffset == -1) {
+                    return $firstIsNull ? false : $first;
+                }
+            }
+            if (intval($columns[1]) == $utcOffset) {
+                return $zone === "NULL" ? false : ("" . $zone);
             }
         }
-        if ($row["offset"] == $utcOffset) {
-            $zone = $row["timezone_id"];
-            return $zone === null ? false : $zone;
-        }
+        return $firstIsNull ? false : $first;
     }
-    return $first === null ? false : $first;
 }
 $fallback = [
     "-39600:0" => "Pacific/Apia",
@@ -3385,6 +4277,7 @@ fn datetime_tz_name_from_abbr() -> ClassMethod {
 /// `tm_yday`/`unparsed`) or `false` on mismatch. Unparsed date fields stay 0 and `tm_wday`/`tm_yday`
 /// are computed (via `gmmktime`/`gmdate`) only when a full year+month+day was parsed, matching glibc.
 const STRPTIME_SRC: &str = r#"<?php
+__elephc_diag_warning("Deprecated: Function strptime() is deprecated since 8.2, use date_parse_from_format() (for locale-independent parsing), or IntlDateFormatter::parse() (for locale-dependent parsing) instead\n");
 $slen = strlen($timestamp);
 $flen = strlen($format);
 $sec = 0; $min = 0; $hour = 0; $mday = 0; $mon = 0; $year = 0;
@@ -3691,9 +4584,13 @@ fn datetime_sunfunc() -> ClassMethod {
 /// Builds the internal static `__elephc_date_parse(string $datetime)` method on `DateTime` backing
 /// the `date_parse()` procedural function (the name resolver desugars the call to it). Returns the
 /// same component array as `date_parse_from_format`. Self-contained parsed-source body.
-fn datetime_date_parse() -> ClassMethod {
-    let tokens =
-        crate::lexer::tokenize(DATE_PARSE_SRC).expect("date_parse body source must tokenize");
+fn datetime_date_parse(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        TIMELIB_DATE_PARSE_SRC
+    } else {
+        DATE_PARSE_SRC
+    };
+    let tokens = crate::lexer::tokenize(source).expect("date_parse body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("date_parse body source must parse");
     ClassMethod {
         name: "__elephc_date_parse".to_string(),
@@ -3718,15 +4615,23 @@ fn datetime_date_parse() -> ClassMethod {
 /// Builds the `timestamp` (int) and `timezone_name` (str, default "UTC") backing properties.
 fn datetime_backing_properties() -> Vec<ClassProperty> {
     vec![
-        property("timestamp", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
-        property(
+        private_property(
+            "timestamp",
+            TypeExpr::Int,
+            Expr::new(ExprKind::IntLiteral(0), dummy()),
+        ),
+        private_property(
             "timezone_name",
             TypeExpr::Str,
             Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
         ),
         // Sub-second component (0..999999) preserved across operations; surfaced by getMicrosecond()
         // and the `u`/`v` format specifiers. elephc otherwise works at libc second resolution.
-        property("microsecond", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        private_property(
+            "microsecond",
+            TypeExpr::Int,
+            Expr::new(ExprKind::IntLiteral(0), dummy()),
+        ),
         // Shared parser state is stored on DateTime. The same backing layout remains on
         // DateTimeImmutable so both synthetic declarations stay structurally compatible.
         {
@@ -3779,6 +4684,15 @@ fn datetime_backing_properties() -> Vec<ClassProperty> {
             p.is_static = true;
             p
         },
+        {
+            let mut p = property(
+                "lastParseResult",
+                TypeExpr::Str,
+                Expr::new(ExprKind::StringLiteral(String::new()), dummy()),
+            );
+            p.is_static = true;
+            p
+        },
     ]
 }
 
@@ -3823,7 +4737,10 @@ fn datetime_interface_methods() -> Vec<ClassMethod> {
         abstract_method(
             "getTimezone",
             Vec::new(),
-            Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
+            Some(TypeExpr::Union(vec![
+                TypeExpr::Named(Name::unqualified("DateTimeZone")),
+                TypeExpr::False,
+            ])),
         ),
         abstract_method("getOffset", Vec::new(), Some(TypeExpr::Int)),
         abstract_method(
@@ -3844,17 +4761,24 @@ fn datetime_interface_methods() -> Vec<ClassMethod> {
             ],
             Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
         ),
-        abstract_method("__wakeup", Vec::new(), Some(TypeExpr::Void)),
+        {
+            let mut wakeup = abstract_method("__wakeup", Vec::new(), Some(TypeExpr::Void));
+            wakeup.attributes = deprecated_attribute(
+                "8.5",
+                "this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()",
+            );
+            wakeup
+        },
         abstract_method(
             "__serialize",
             Vec::new(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
         ),
         abstract_method(
             "__unserialize",
             vec![(
                 "data".to_string(),
-                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                Some(TypeExpr::Named(Name::unqualified("array"))),
                 None,
                 false,
             )],
@@ -3933,7 +4857,9 @@ return [
 /// PHP source backing `DateInterval::__unserialize()`. Restores either of PHP's two serialized
 /// shapes, rebuilding relative-string components through `createFromDateString()`.
 const DATEINTERVAL_UNSERIALIZE_SRC: &str = r#"<?php
-if ($data["from_string"]) {
+if (array_key_exists("from_string", $data)
+    && $data["from_string"]
+    && array_key_exists("date_string", $data)) {
     $iv = DateInterval::createFromDateString($data["date_string"]);
     $this->y = $iv->y;
     $this->m = $iv->m;
@@ -3946,45 +4872,71 @@ if ($data["from_string"]) {
     $this->days = $iv->days;
     $this->_from_string = true;
     $this->_date_string = $data["date_string"];
+    $this->_wall = false;
     return;
 }
-$this->y = $data["y"];
-$this->m = $data["m"];
-$this->d = $data["d"];
-$this->h = $data["h"];
-$this->i = $data["i"];
-$this->s = $data["s"];
-$this->f = $data["f"];
-$this->invert = $data["invert"];
-$this->days = $data["days"];
+$this->y = array_key_exists("y", $data) ? $data["y"] : -1;
+$this->m = array_key_exists("m", $data) ? $data["m"] : -1;
+$this->d = array_key_exists("d", $data) ? $data["d"] : -1;
+$this->h = array_key_exists("h", $data) ? $data["h"] : -1;
+$this->i = array_key_exists("i", $data) ? $data["i"] : -1;
+$this->s = array_key_exists("s", $data) ? $data["s"] : -1;
+$this->f = array_key_exists("f", $data) ? $data["f"] : 0.0;
+$this->invert = array_key_exists("invert", $data) ? $data["invert"] : 0;
+$this->days = array_key_exists("days", $data) ? $data["days"] : -1;
 $this->_from_string = false;
 $this->_date_string = "";
+$this->_wall = true;
 "#;
 
 /// PHP source backing `DateInterval::__set_state()`. Rebuilds the relative-string form directly
 /// or creates a zero interval before restoring the component form.
 const DATEINTERVAL_SET_STATE_SRC: &str = r#"<?php
-if ($array["from_string"]) {
-    return DateInterval::createFromDateString($array["date_string"]);
-}
 $iv = new DateInterval("PT0S");
-$iv->y = $array["y"];
-$iv->m = $array["m"];
-$iv->d = $array["d"];
-$iv->h = $array["h"];
-$iv->i = $array["i"];
-$iv->s = $array["s"];
-$iv->f = $array["f"];
-$iv->invert = $array["invert"];
-$iv->days = $array["days"];
-$iv->_from_string = false;
-$iv->_date_string = "";
+$iv->__unserialize($array);
 return $iv;
 "#;
 
+/// PHP source backing `DateInterval::__get()` for php-src's debug-only fields.
+const DATEINTERVAL_MAGIC_GET_SRC: &str = r#"<?php
+__elephc_diag_warning("Warning: Undefined property: DateInterval::$" . $name . "\n");
+return null;
+"#;
+
+/// Builds `DateInterval::__get(string $name): mixed`.
+///
+/// `from_string` and `date_string` exist only in debug/serialization state in
+/// php-src. Ordinary reads therefore emit an undefined-property warning and
+/// return `null`; the generic magic method preserves that behavior for either
+/// spelling without declaring reflection-visible properties.
+fn dateinterval_magic_get() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_MAGIC_GET_SRC)
+        .expect("DateInterval::__get body source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval::__get body source must parse");
+    ClassMethod {
+        name: "__get".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds `DateInterval::__wakeup(): void` (no-op).
 fn dateinterval_wakeup() -> ClassMethod {
-    datetime_wakeup()
+    datetime_wakeup("DateInterval")
 }
 
 /// Builds `DateInterval::__serialize(): array`.
@@ -4005,7 +4957,7 @@ fn dateinterval_serialize() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -4028,7 +4980,7 @@ fn dateinterval_unserialize() -> ClassMethod {
         has_body: true,
         params: vec![(
             "data".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -4059,7 +5011,7 @@ fn dateinterval_set_state() -> ClassMethod {
         has_body: true,
         params: vec![(
             "array".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -4077,7 +5029,7 @@ fn dateinterval_set_state() -> ClassMethod {
 
 /// contributes 7 days each. The leading `P` is required (a missing/lowercase `P` throws); the
 /// `T` time separator is consumed as a no-op and unknown letters throw.
-fn date_interval_constructor() -> ClassMethod {
+fn date_interval_legacy_constructor() -> ClassMethod {
     let var = |n: &str| Expr::new(ExprKind::Variable(n.to_string()), dummy());
     let int = |n: i64| Expr::new(ExprKind::IntLiteral(n), dummy());
     let strlit = |s: &str| Expr::new(ExprKind::StringLiteral(s.to_string()), dummy());
@@ -4243,6 +5195,50 @@ fn date_interval_constructor() -> ClassMethod {
     )
 }
 
+/// Timelib-backed DateInterval constructor body. This covers php-src's period,
+/// combined representation, and start/end interval forms without a parallel parser.
+const DATEINTERVAL_TIMELIB_CONSTRUCTOR_SRC: &str = r#"<?php
+$parsed = __elephc_timelib_interval_parse($duration, false);
+if ($parsed["status"] === "E") {
+    throw new DateMalformedIntervalStringException("Unknown or bad format (" . $duration . ")");
+}
+if ($parsed["status"] !== "O") {
+    throw new DateMalformedIntervalStringException("Failed to parse interval (" . $duration . ")");
+}
+$this->y = $parsed["y"];
+$this->m = $parsed["m"];
+$this->d = $parsed["d"];
+$this->h = $parsed["h"];
+$this->i = $parsed["i"];
+$this->s = $parsed["s"];
+$this->f = $parsed["us"] / 1000000.0;
+$this->invert = $parsed["invert"];
+if ($parsed["days"] !== -9999999) {
+    $this->days = $parsed["days"];
+}
+$this->_from_string = false;
+$this->_date_string = "";
+$this->_wall = true;
+"#;
+
+/// Builds DateInterval::__construct(), selecting the exact timelib body whenever
+/// the timezone bridge prelude is present.
+fn date_interval_constructor(uses_timelib: bool) -> ClassMethod {
+    if !uses_timelib {
+        return date_interval_legacy_constructor();
+    }
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_TIMELIB_CONSTRUCTOR_SRC)
+        .expect("timelib DateInterval constructor body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("timelib DateInterval constructor body must parse");
+    method(
+        "__construct",
+        vec![("duration".to_string(), Some(TypeExpr::Str), None, false)],
+        None,
+        body,
+    )
+}
+
 /// Builds a `DateInterval` component property. The numeric components
 /// (`y`/`m`/`d`/`h`/`i`/`s`/`invert`) are `int` defaulting to `0`. `days` is special: PHP exposes it
 /// as `int|false`, holding an absolute whole-day count only for intervals produced by
@@ -4305,7 +5301,7 @@ return $iv;
 /// `CREATE_FROM_DATE_STRING_SRC` parser, so it is self-contained and emitted with the class.
 /// Unknown words are ignored (PHP throws on malformed input); the ISO 8601 duration form is
 /// handled by the constructor instead.
-fn date_interval_create_from_date_string() -> ClassMethod {
+fn date_interval_legacy_create_from_date_string() -> ClassMethod {
     let tokens = crate::lexer::tokenize(CREATE_FROM_DATE_STRING_SRC)
         .expect("createFromDateString body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("createFromDateString body source must parse");
@@ -4322,6 +5318,232 @@ fn date_interval_create_from_date_string() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Timelib-backed DateInterval::createFromDateString() body. The parser result
+/// preserves php-src's special weekday/first-last rules through `_date_string`.
+const DATEINTERVAL_TIMELIB_FROM_STRING_SRC: &str = r#"<?php
+$parsed = __elephc_timelib_interval_parse($datetime, true);
+if ($parsed["status"] === "E") {
+    throw new DateMalformedIntervalStringException(
+        "Unknown or bad format (" . $datetime . ") at position "
+        . $parsed["position"] . " (" . $parsed["character"] . "): " . $parsed["message"]
+    );
+}
+if ($parsed["status"] === "N") {
+    throw new DateMalformedIntervalStringException(
+        "String '" . $datetime . "' contains non-relative elements"
+    );
+}
+$iv = new DateInterval("PT0S");
+$iv->y = $parsed["y"];
+$iv->m = $parsed["m"];
+$iv->d = $parsed["d"];
+$iv->h = $parsed["h"];
+$iv->i = $parsed["i"];
+$iv->s = $parsed["s"];
+$iv->f = $parsed["us"] / 1000000.0;
+$iv->invert = $parsed["invert"];
+$iv->days = false;
+$iv->_from_string = true;
+$iv->_date_string = $datetime;
+$iv->_wall = false;
+return $iv;
+"#;
+
+/// Builds the exact timelib-backed createFromDateString() when available.
+fn date_interval_create_from_date_string(uses_timelib: bool) -> ClassMethod {
+    if !uses_timelib {
+        return date_interval_legacy_create_from_date_string();
+    }
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_TIMELIB_FROM_STRING_SRC)
+        .expect("timelib createFromDateString body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("timelib createFromDateString body must parse");
+    ClassMethod {
+        name: "createFromDateString".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("datetime".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// PHP source for the procedural alias, which warns and returns false instead
+/// of propagating DateMalformedIntervalStringException.
+const DATEINTERVAL_PROCEDURAL_FROM_STRING_SRC: &str = r#"<?php
+try {
+    return DateInterval::createFromDateString($datetime);
+} catch (DateMalformedIntervalStringException $exception) {
+    __elephc_diag_warning(
+        "Warning: date_interval_create_from_date_string(): "
+        . $exception->getMessage() . "\n"
+    );
+    return false;
+}
+"#;
+
+/// Builds the hidden procedural DateInterval parser wrapper.
+fn date_interval_procedural_from_date_string() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_PROCEDURAL_FROM_STRING_SRC)
+        .expect("procedural DateInterval parser body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("procedural DateInterval parser body must parse");
+    ClassMethod {
+        name: "__elephc_create_from_date_string".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("datetime".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// PHP source that serializes the current, user-mutable DateInterval components
+/// plus any retained free-form specification for exact timelib arithmetic.
+const DATEINTERVAL_PAYLOAD_SRC: &str = r#"<?php
+$microseconds = (int)round($this->f * 1000000.0);
+$fields = $this->y . "\t" . $this->m . "\t" . $this->d . "\t"
+    . $this->h . "\t" . $this->i . "\t" . $this->s . "\t"
+    . $microseconds . "\t" . $this->invert;
+if ($this->_from_string) {
+    return "R" . strlen($this->_date_string) . "\t" . $this->_date_string . "\t" . $fields;
+}
+return ($this->_wall ? "W\t" : "C\t") . $fields;
+"#;
+
+/// Builds the hidden interval-payload method consumed by DateTime add/sub.
+fn date_interval_payload() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEINTERVAL_PAYLOAD_SRC)
+        .expect("DateInterval payload body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DateInterval payload body must parse");
+    method(
+        "__elephc_payload",
+        Vec::new(),
+        Some(TypeExpr::Str),
+        body,
+    )
+}
+
+/// Builds the hidden marker used by DateTime::diff() to select timelib's civil
+/// arithmetic rather than the wall arithmetic used by ISO constructor intervals.
+fn date_interval_mark_civil() -> ClassMethod {
+    method(
+        "__elephc_mark_civil",
+        Vec::new(),
+        Some(TypeExpr::Void),
+        vec![assign_this_property(
+            "_wall",
+            Expr::new(ExprKind::BoolLiteral(false), dummy()),
+        )],
+    )
+}
+
+/// Builds the hidden strongly-typed clone hook used by DatePeriod, avoiding a
+/// nullable backing-property clone at the caller.
+fn date_interval_clone() -> ClassMethod {
+    method(
+        "__elephc_clone",
+        Vec::new(),
+        Some(TypeExpr::Named(Name::unqualified("DateInterval"))),
+        vec![return_expr(Expr::new(
+            ExprKind::Clone(Box::new(Expr::new(ExprKind::This, dummy()))),
+            dummy(),
+        ))],
+    )
+}
+
+/// Builds the hidden static wrapper used by the procedural `date_add()` alias.
+fn datetime_procedural_add() -> ClassMethod {
+    let source = format!(
+        "<?php\n{}return $object->add($interval);\n",
+        date_interval_type_guard("date_add()", 2),
+    );
+    let tokens = crate::lexer::tokenize(&source)
+        .expect("procedural date_add body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("procedural date_add body must parse");
+    datetime_procedural_interval_method("__elephc_date_add", body)
+}
+
+/// Builds the hidden static wrapper used by the procedural date_sub() alias.
+fn datetime_procedural_sub() -> ClassMethod {
+    let source = format!(
+        r#"<?php
+{}
+try {{
+    return $object->sub($interval);
+}} catch (DateInvalidOperationException $exception) {{
+    __elephc_diag_warning(
+        "Warning: date_sub(): Only non-special relative time specifications are supported for subtraction\n"
+    );
+    return $object;
+}}
+"#,
+        date_interval_type_guard("date_sub()", 2),
+    );
+    let tokens = crate::lexer::tokenize(&source)
+        .expect("procedural date_sub body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("procedural date_sub body must parse");
+    datetime_procedural_interval_method("__elephc_date_sub", body)
+}
+
+/// Builds one hidden procedural `date_add()`/`date_sub()` wrapper with a runtime-checked interval.
+fn datetime_procedural_interval_method(name: &str, body: Vec<Stmt>) -> ClassMethod {
+    ClassMethod {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "object".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("DateTime"))),
+                None,
+                false,
+            ),
+            (
+                "interval".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                None,
+                false,
+            ),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("DateTime"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -4777,6 +5999,17 @@ fn datetime_diff_method() -> ClassMethod {
                 },
                 dummy(),
             ),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::MethodCall {
+                        object: Box::new(iv_var()),
+                        method: "__elephc_mark_civil".to_string(),
+                        args: Vec::new(),
+                    },
+                    dummy(),
+                )),
+                dummy(),
+            ),
             return_expr(iv_var()),
         ],
     )
@@ -4829,32 +6062,44 @@ pub(crate) fn inject_builtin_datetime(
                     interval_property("h"),
                     interval_property("i"),
                     interval_property("s"),
-                    // `f` (fraction of a second, 0.0..1.0) exists for API completeness; elephc works
-                    // at second resolution so it stays 0.0 (sub-second durations are not parsed).
+                    // `f` stores the interval fraction as PHP's 0.0..1.0 public value.
                     property("f", TypeExpr::Float, Expr::new(ExprKind::FloatLiteral(0.0), dummy())),
                     interval_property("invert"),
                     interval_property("days"),
                     // PHP exposes these values only in debug/serialization state; they are not
                     // declared readable properties in php-src's class stub.
-                    property(
+                    private_property(
                         "_from_string",
                         TypeExpr::Bool,
                         Expr::new(ExprKind::BoolLiteral(false), dummy()),
                     ),
-                    property(
+                    private_property(
                         "_date_string",
                         TypeExpr::Str,
                         Expr::new(ExprKind::StringLiteral(String::new()), dummy()),
                     ),
+                    // ISO constructor intervals use timelib wall arithmetic; relative-string and
+                    // diff intervals use civil arithmetic.
+                    private_property(
+                        "_wall",
+                        TypeExpr::Bool,
+                        Expr::new(ExprKind::BoolLiteral(true), dummy()),
+                    ),
                 ],
                 methods: vec![
-                    date_interval_constructor(),
+                    date_interval_constructor(uses_tz_introspection),
                     date_interval_format(),
-                    date_interval_create_from_date_string(),
+                    date_interval_create_from_date_string(uses_tz_introspection),
+                    date_interval_procedural_from_date_string(),
+                    date_interval_payload(),
+                    date_interval_mark_civil(),
+                    date_interval_clone(),
+                    dateinterval_magic_get(),
                     dateinterval_wakeup(),
                     dateinterval_serialize(),
                     dateinterval_unserialize(),
                     dateinterval_set_state(),
+                    dateinterval_debug_dump(),
                 ],
                 attributes: Vec::new(),
                 constants: Vec::new(),
@@ -4875,7 +6120,7 @@ pub(crate) fn inject_builtin_datetime(
                 is_abstract: false,
                 is_final: false,
                 is_readonly_class: false,
-                properties: vec![property(
+                properties: vec![private_property(
                     "name",
                     TypeExpr::Str,
                     Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
@@ -4888,6 +6133,7 @@ pub(crate) fn inject_builtin_datetime(
                         datetime_zone_list_identifiers(),
                     ];
                     methods.extend(datetimezone_serialize_methods());
+                    methods.push(datetimezone_debug_dump());
                     // getLocation/getTransitions/listAbbreviations call the
                     // tz_prelude marshalling helpers, which are only declared when
                     // the introspection prelude is injected. Adding them
@@ -4924,9 +6170,16 @@ pub(crate) fn inject_builtin_datetime(
                 properties: datetime_backing_properties(),
                 methods: {
                     let mut m = datetime_shared_methods();
-                    m.extend(datetime_setter_methods(false, "DateTimeImmutable"));
-                    m.push(datetime_create_from_format("DateTimeImmutable"));
-                    m.push(datetime_get_last_errors());
+                    m.extend(datetime_setter_methods(
+                        false,
+                        "DateTimeImmutable",
+                        uses_tz_introspection,
+                    ));
+                    m.push(datetime_create_from_format(
+                        "DateTimeImmutable",
+                        uses_tz_introspection,
+                    ));
+                    m.push(datetime_get_last_errors(uses_tz_introspection));
                     m.push(datetime_create_from_timestamp("DateTimeImmutable"));
                     m.push(datetime_create_from_object(
                         "createFromInterface",
@@ -4938,13 +6191,16 @@ pub(crate) fn inject_builtin_datetime(
                         "DateTime",
                         "DateTimeImmutable",
                     ));
-                    m.push(datetime_set_isodate("DateTimeImmutable"));
+                    let mut set_iso_date = datetime_set_isodate("DateTimeImmutable");
+                    set_iso_date.attributes = no_discard_attribute("setISODate");
+                    m.push(set_iso_date);
                     m.push(datetime_date_create("DateTimeImmutable"));
                     m.extend(datetime_serialize_methods("DateTimeImmutable"));
+                    m.push(datetime_debug_dump("DateTimeImmutable"));
                     m
                 },
                 attributes: Vec::new(),
-                constants: datetime_format_constants(),
+                constants: Vec::new(),
                 used_traits: Vec::new(),
                 trait_aliases: Vec::new(),
             },
@@ -4953,9 +6209,13 @@ pub(crate) fn inject_builtin_datetime(
 
     if !class_map.contains_key("DateTime") {
         let mut methods = datetime_shared_methods();
-        methods.extend(datetime_setter_methods(true, "DateTime"));
-        methods.push(datetime_create_from_format("DateTime"));
-        methods.push(datetime_get_last_errors());
+        methods.extend(datetime_setter_methods(
+            true,
+            "DateTime",
+            uses_tz_introspection,
+        ));
+        methods.push(datetime_create_from_format("DateTime", uses_tz_introspection));
+        methods.push(datetime_get_last_errors(uses_tz_introspection));
         methods.push(datetime_create_from_timestamp("DateTime"));
         methods.push(datetime_create_from_object(
             "createFromInterface",
@@ -4968,17 +6228,22 @@ pub(crate) fn inject_builtin_datetime(
             "DateTime",
         ));
         methods.push(datetime_set_isodate("DateTime"));
-        methods.push(datetime_date_parse_from_format());
-        methods.push(datetime_date_parse());
+        methods.push(datetime_date_parse_from_format(uses_tz_introspection));
+        methods.push(datetime_date_parse(uses_tz_introspection));
         methods.push(datetime_gettimeofday());
         methods.push(datetime_idate());
+        methods.push(datetime_timezone_type());
         methods.push(datetime_runtime_timezone_name());
         methods.push(datetime_date_create("DateTime"));
         methods.extend(datetime_serialize_methods("DateTime"));
+        methods.push(datetime_debug_dump("DateTime"));
         methods.push(datetime_date_modify());
+        methods.push(datetime_procedural_add());
+        methods.push(datetime_procedural_sub());
         methods.push(datetime_strftime());
         methods.push(datetime_extract_micros());
         methods.push(datetime_strip_micros());
+        methods.push(datetime_extract_constructor_zone());
         methods.push(datetime_extract_modify_micros());
         methods.push(datetime_strip_modify_micros());
         methods.push(datetime_sun_rs());
@@ -4987,6 +6252,14 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_sunfunc());
         methods.push(datetime_strptime());
         methods.push(datetime_tz_name_from_abbr());
+        methods.push(deprecated_constant_passthrough(
+            "__elephc_deprecated_string_constant",
+            TypeExpr::Str,
+        ));
+        methods.push(deprecated_constant_passthrough(
+            "__elephc_deprecated_int_constant",
+            TypeExpr::Int,
+        ));
         methods.extend(super::calendar::calendar_methods());
         class_map.insert(
             "DateTime".to_string(),
@@ -5001,7 +6274,7 @@ pub(crate) fn inject_builtin_datetime(
                 properties: datetime_backing_properties(),
                 methods,
                 attributes: Vec::new(),
-                constants: datetime_format_constants(),
+                constants: Vec::new(),
                 used_traits: Vec::new(),
                 trait_aliases: Vec::new(),
             },

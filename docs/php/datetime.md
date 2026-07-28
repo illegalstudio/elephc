@@ -53,9 +53,14 @@ $abbr = DateTimeZone::listAbbreviations();
 echo $abbr["cest"][0]["timezone_id"];               // Europe/Berlin
 ```
 
-The identifier is resolved against the system timezone database, so `getOffset()` is DST-correct and `DateTime::format()` honors the zone (see [`setTimezone()`](#datetime--datetimeimmutable) and [Limitations](#limitations)).
+The identifier is resolved with the bundled php-src/timelib data at parsing and arithmetic
+boundaries, while `DateTime::format()` applies the corresponding runtime zone and honors
+daylight-saving transitions (see [`setTimezone()`](#datetime--datetimeimmutable)).
 
-The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from PHP's own timelib data (so they are byte-for-byte identical to PHP) and ship in a small bridge. The bridge is linked on demand for timezone introspection, abbreviation resolution, and date/time object paths that may normalize an abbreviation or a fixed UTC offset before calling the system timezone runtime.
+The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from the
+normative php-src timelib data and ship with the same vendored timelib parser/arithmetic bridge.
+The bridge is linked on demand for timezone introspection, parsing, abbreviation resolution,
+interval arithmetic, and normalization of fixed UTC offsets.
 
 ## DateTime and DateTimeImmutable
 
@@ -349,7 +354,7 @@ The procedural date/time functions are supported as aliases for the OOP API:
 | `timezone_identifiers_list()` | `DateTimeZone::listIdentifiers()` |
 | `timezone_name_from_abbr($abbr [, $utcOffset, $isDST])` | the IANA zone selected by PHP's complete abbreviation and offset/DST lookup, or `false` |
 | `timezone_location_get($tz)`, `timezone_transitions_get($tz [, $begin, $end])`, `timezone_abbreviations_list()` | `$tz->getLocation()`, `$tz->getTransitions(…)`, `DateTimeZone::listAbbreviations()` |
-| `timezone_version_get()` | `"2026.1"` (the IANA release the bundled introspection data was baked from) |
+| `timezone_version_get()` | `"2026.3"` (the IANA release bundled by the normative php-src snapshot) |
 | `date_interval_format($i, $f)` | `$i->format($f)` |
 
 `timezone_name_from_abbr()` searches the complete bundled timelib-derived abbreviation table in PHP order. An explicit `$utcOffset` selects the first row with that offset; an unknown abbreviation falls back to php-src's `(offset, isDST)` map.
@@ -366,7 +371,10 @@ $d = date_parse("2024-03-15");
 var_dump($d["hour"]);                                 // bool(false) — not specified
 ```
 
-`date_parse_from_format` uses the same format characters as [`createFromFormat()`](#datetime-and-datetimeimmutable). Its component array is useful for the supported forms, but it does not yet reproduce every PHP 8.5 field-shape detail (for example the fractional representation and the absence of a `timestamp` key for a `U` parse). `date_parse` does not implement PHP's full free-form grammar or exhaustive error counts — it recognizes common formats (`Y-m-d H:i:s`, `Y-m-d`, `H:i`, and similar) by trying them in turn.
+Both functions delegate to the vendored php-src timelib parser. Format tokens, optional fields,
+fractional values, relative components, timezone metadata, byte-positioned warning/error maps,
+duplicate-position counts, and the absence of fields not produced by php-src retain the upstream
+shape.
 
 ### Sunrise, sunset, and twilight
 
@@ -386,27 +394,18 @@ date_sunrise($ts, SUNFUNCS_RET_TIMESTAMP, $lat, $lon);                    // Uni
 date_sunset($ts, SUNFUNCS_RET_DOUBLE, $lat, $lon);                        // hour-of-day float
 ```
 
-`$returnFormat` is one of `SUNFUNCS_RET_TIMESTAMP` (0), `SUNFUNCS_RET_STRING` (1, the default), or `SUNFUNCS_RET_DOUBLE` (2); omitted latitude/longitude/zenith fall back to PHP's defaults. Both functions return `false` when the sun does not reach the requested altitude that day. The implementation is a faithful port of PHP's timelib astronomical algorithm, so `date_sun_info()` and the `RET_TIMESTAMP`/`RET_STRING` formats match PHP exactly; `RET_DOUBLE` may differ only in the last floating-point digit.
+`$returnFormat` is one of `SUNFUNCS_RET_TIMESTAMP` (0), `SUNFUNCS_RET_STRING` (1, the default), or `SUNFUNCS_RET_DOUBLE` (2); omitted latitude/longitude/zenith fall back to PHP's defaults. Both functions return `false` when the sun does not reach the requested altitude that day. The implementation follows PHP's timelib astronomical algorithm for all three return formats.
 
-## Limitations
+## Compatibility details
 
 - `format()` renders the stored instant in the object's **own timezone**: the zone captured from `date_default_timezone_get()` at construction, or one assigned later with `setTimezone()`. Offsets and daylight-saving transitions are resolved from the system timezone database (see [System & I/O](system-and-io.md)). `setTimezone()` changes only the display zone, not the absolute instant. (`gmdate()` remains available for explicit UTC formatting.)
-- The constructor accepts `"now"`, absolute date/time strings, and the `@<timestamp>` epoch form — anything [`strtotime()`](system-and-io.md) parses. For relative expressions like `"+1 day"`, you can also build the object and call `modify()`.
-- `modify()` and the 2-argument `strtotime()` support relative offsets, time-only, and keyword forms, plus the `"first/last day of"` and `"first/last <weekday> of"` phrases. `DatePeriod` supports both object overloads, `createFromISO8601String()`, and the deprecated runtime-string constructor overload.
+- The constructor accepts `"now"`, absolute and relative timelib strings, timezone suffixes, and the `@<timestamp>` epoch form — the same grammar as php-src. `modify()` and the two-argument `strtotime()` use the same parser.
+- `DatePeriod` supports both object overloads, `createFromISO8601String()`, and the deprecated runtime-string constructor overload. It exposes the seven php-src virtual properties and returns an independent iterator.
 - **Microseconds**: `getMicrosecond()`/`setMicrosecond()` store a sub-second component, and `format()`'s `u` (six digits) and `v` (three digits) specifiers render it. `createFromFormat()` parses the `u` specifier (e.g. `"Y-m-d H:i:s.u"`, `"U.u"`). The component is preserved by calendar setters, cross-class factories, and interval arithmetic; `setTimestamp()` deliberately resets it to `0`, matching PHP. `diff()` reports the fractional-second difference in `DateInterval::$f`, and `add()`/`sub()` apply an interval's `$f` with carry across the second. The constructor captures a trailing fractional second from a date string (`new DateTime("2020-01-01 12:00:00.5")` → microsecond `500000`, padded/truncated to six digits). `modify()` also accepts a `microsecond[s]`/`usec[s]` relative unit.
-- `createFromFormat()` supports the format characters `Y y m n d j D l S F M z H G h g i s u v A a U O P T e X x`, `\` escapes, and the `!`/`|` resets. `O`, `P`, `T`, and `e` select the result timezone and override the optional third `DateTimeZone`; `Z` is a literal, not a parser token.
-- Dates before 1900: `mktime()`, `gmmktime()`, `strtotime()`, and the `DateTime`/`DateTimeImmutable` constructors handle years 101–1899 (libc rejects them, so elephc shifts the year forward by whole 400-year Gregorian cycles into libc's range and corrects the result).
+- `createFromFormat()` supports php-src's timelib format grammar, escapes, reset metas, embedded timezones, diagnostics, and `getLastErrors()` state.
+- Dates before 1900: `mktime()`, `gmmktime()`, `strtotime()`, and the `DateTime`/`DateTimeImmutable` constructors handle years 101–1899 by whole 400-year Gregorian cycles where the host libc needs normalization.
 - Two-digit years: `mktime()`/`gmmktime()` and both `M/D/YY` and ISO `YY-MM-DD` date strings apply PHP's shorthand (0–69 → 2000–2069, 70–100 → 1970–2000).
-
-### Not currently supported
-
-A few corners of PHP's date/time API diverge from PHP:
-
-- **Detailed parse warnings**: shared `DateTime`/`DateTimeImmutable` state and the principal byte-positioned messages are implemented (`Trailing data`, `The parsed date was invalid`, `Not enough data available to satisfy format`, `Unexpected data found.`). PHP's full timelib message/count table is not reproduced for every format token.
-- **Free-form parsing**: `date_parse()` and `strtotime()` cover the documented common, relative, ISO, keyword, and timezone-suffix forms, but not timelib's entire grammar. PHP 8.5 accepts some ambiguous strings that Elephc still rejects, including slash-separated `2024/06/15`, `2024-0x-15`, and a trailing one-letter timezone such as `2024-06-15 12:30x`.
-- **DatePeriod iterator shape**: PHP exposes `DatePeriod` only as `IteratorAggregate` with an independent iterator. Elephc also implements `Iterator` internally and `getIterator()` returns the rewound period itself. The public properties are not yet write-protected as virtual readonly properties.
-- **DateInterval debug-only fields**: direct reads of `from_string`/`date_string` are rejected instead of producing PHP's undefined-property warning plus `null`; their serialization shape is preserved.
-- **Runtime notices**: Elephc has no PHP notice channel for the `E_DEPRECATED` messages emitted by `strftime()`/`gmstrftime()` (PHP 8.1), `strptime()` (8.2), the `DatePeriod` string constructor (8.3), `SUNFUNCS_RET_*` (8.4), or `DateTimeInterface::RFC7231` (8.5). It likewise cannot emit every `E_WARNING` attached to otherwise-correct return values.
-- **`idate()` warnings**: `idate()` returns `false` for an empty or unrecognized format (matching PHP), but does not emit PHP's `E_WARNING` (elephc has no warning system). The recognized specifier set is `B d G g H h I i L m N n s t U W w Y y z Z`.
+- Runtime `E_WARNING`/`E_DEPRECATED` messages use Elephc's suppressible diagnostics channel, so `@` suppresses the same date/time notices without suppressing exceptions.
+- Serialization, `var_dump()`, Reflection, exception hierarchy, constants, attributes, function signatures, and method order are pinned to php-src `47b563cbb856ec19155aacc3246931dfacbebd21`.
 
 A complete runnable program is in [`examples/datetime/main.php`](https://github.com/illegalstudio/elephc/tree/main/examples/datetime).

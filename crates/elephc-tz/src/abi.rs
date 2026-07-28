@@ -20,7 +20,18 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
-use crate::{abbreviations, zone_location, zone_transitions};
+use crate::{abbreviations, timelib_ffi, zone_location, zone_transitions};
+
+/// Reads one borrowed UTF-8 string from elephc's pointer-and-length string ABI.
+///
+/// Invalid pointers remain a caller contract violation; invalid UTF-8 is rejected
+/// as an empty value so timelib reports the same parse failure as an empty input.
+unsafe fn sized_string<'a>(ptr: *const u8, len: i64) -> Cow<'a, str> {
+    if ptr.is_null() || len <= 0 {
+        return Cow::Borrowed("");
+    }
+    String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len as usize))
+}
 
 /// Reads a borrowed zone name from a NUL-terminated C string — the way elephc
 /// lowers an extern `string` argument (a single `char*`). A null pointer yields
@@ -126,6 +137,12 @@ fn abbreviations_cell() -> &'static Mutex<CString> {
     CELL.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Returns the process-wide buffer cell for raw timelib parse results.
+fn parse_cell() -> &'static Mutex<CString> {
+    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// C ABI: returns a zone's `getTransitions()` rows serialized as
 /// `ts\toffset\tdst\tabbr\ttime` lines, or an empty string for a false-zone or
 /// unknown name (which the marshalling turns into PHP `false`).
@@ -154,6 +171,158 @@ pub unsafe extern "C" fn elephc_tz_location(name: *const c_char) -> *const c_cha
 #[no_mangle]
 pub extern "C" fn elephc_tz_abbreviations() -> *const c_char {
     stash(abbreviations_cell(), serialize_abbreviations())
+}
+
+/// C ABI: returns php-src's `date_parse()` field/diagnostic structure serialized
+/// as tab-separated records for the Elephc-PHP marshalling helper.
+///
+/// # Safety
+/// `input_ptr` and `input_len` must designate a readable byte slice.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_date_parse(
+    input_ptr: *const u8,
+    input_len: i64,
+) -> *const c_char {
+    let input = sized_string(input_ptr, input_len);
+    stash(parse_cell(), timelib_ffi::parse_serialized(None, &input))
+}
+
+/// C ABI: returns php-src's `date_parse_from_format()` field/diagnostic structure
+/// serialized as tab-separated records for the Elephc-PHP marshalling helper.
+///
+/// # Safety
+/// Both pointer/length pairs must designate readable byte slices.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_date_parse_from_format(
+    format_ptr: *const u8,
+    format_len: i64,
+    input_ptr: *const u8,
+    input_len: i64,
+) -> *const c_char {
+    let format = sized_string(format_ptr, format_len);
+    let input = sized_string(input_ptr, input_len);
+    stash(
+        parse_cell(),
+        timelib_ffi::parse_serialized(Some(&format), &input),
+    )
+}
+
+/// C ABI: parses and normalizes `DateTime::createFromFormat()` through timelib,
+/// returning the calculated timestamp, timezone representation, and complete
+/// diagnostics in the shared serialized record format.
+///
+/// # Safety
+/// All pointer/length pairs must designate readable byte slices.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_create_from_format(
+    format_ptr: *const u8,
+    format_len: i64,
+    input_ptr: *const u8,
+    input_len: i64,
+    base_timestamp: i64,
+    timezone_ptr: *const u8,
+    timezone_len: i64,
+) -> *const c_char {
+    let format = sized_string(format_ptr, format_len);
+    let input = sized_string(input_ptr, input_len);
+    let timezone = sized_string(timezone_ptr, timezone_len);
+    stash(
+        parse_cell(),
+        timelib_ffi::create_from_format_serialized(
+            &format,
+            &input,
+            base_timestamp,
+            &timezone,
+        ),
+    )
+}
+
+/// C ABI: parses a DateInterval duration or free-form relative string through
+/// php-src's timelib and returns the complete relative-time record.
+///
+/// # Safety
+/// The pointer/length pair must designate a readable byte slice.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_interval_parse(
+    input_ptr: *const u8,
+    input_len: i64,
+    relative: i64,
+) -> *const c_char {
+    let input = sized_string(input_ptr, input_len);
+    stash(
+        parse_cell(),
+        timelib_ffi::interval_parse_serialized(&input, relative != 0),
+    )
+}
+
+/// C ABI: parses DatePeriod's ISO interval grammar and returns its constituent
+/// start/end/period/recurrence fields.
+///
+/// # Safety
+/// The pointer/length pair must designate a readable byte slice.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_period_parse(
+    input_ptr: *const u8,
+    input_len: i64,
+) -> *const c_char {
+    let input = sized_string(input_ptr, input_len);
+    stash(parse_cell(), timelib_ffi::period_parse_serialized(&input))
+}
+
+/// C ABI: applies one serialized DateInterval to a zoned timestamp through
+/// timelib's civil/wall add or subtract implementation.
+///
+/// # Safety
+/// Both pointer/length pairs must designate readable byte slices.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_apply_interval(
+    timestamp: i64,
+    microsecond: i64,
+    timezone_ptr: *const u8,
+    timezone_len: i64,
+    payload_ptr: *const u8,
+    payload_len: i64,
+    subtract: i64,
+) -> *const c_char {
+    let timezone = sized_string(timezone_ptr, timezone_len);
+    let payload = sized_string(payload_ptr, payload_len);
+    let serialized = timelib_ffi::apply_interval_serialized(
+        timestamp,
+        microsecond,
+        &timezone,
+        &payload,
+        subtract != 0,
+    )
+    .unwrap_or_default();
+    stash(parse_cell(), serialized)
+}
+
+/// C ABI: parses a PHP free-form datetime through timelib.
+///
+/// Returns the Unix timestamp on success and `i64::MIN` on failure, matching
+/// `__rt_strtotime`'s established sentinel contract. `has_base` distinguishes an
+/// omitted base timestamp from the valid timestamp zero.
+///
+/// # Safety
+/// Both pointer/length pairs must designate readable byte slices for the duration
+/// of this call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tz_strtotime(
+    input_ptr: *const u8,
+    input_len: i64,
+    base_timestamp: i64,
+    has_base: i64,
+    timezone_ptr: *const u8,
+    timezone_len: i64,
+) -> i64 {
+    let input = sized_string(input_ptr, input_len);
+    let timezone_name = sized_string(timezone_ptr, timezone_len);
+    timelib_ffi::strtotime_timestamp(
+        &input,
+        (has_base != 0).then_some(base_timestamp),
+        &timezone_name,
+    )
+    .unwrap_or(i64::MIN)
 }
 
 #[cfg(test)]
@@ -201,6 +370,25 @@ mod tests {
             "FR\t48.866659999999996\t2.3333299999999895\t"
         );
         assert_eq!(serialize_location("UTC"), "??\t-90\t-180\t");
+    }
+
+    /// Free-form parsing delegates to timelib for grammar PHP accepts beyond the
+    /// former handwritten runtime parser.
+    #[test]
+    fn parses_free_form_dates_with_timelib() {
+        let input = b"2024/06/15";
+        let timezone = b"UTC";
+        let timestamp = unsafe {
+            elephc_tz_strtotime(
+                input.as_ptr(),
+                input.len() as i64,
+                0,
+                1,
+                timezone.as_ptr(),
+                timezone.len() as i64,
+            )
+        };
+        assert_eq!(timestamp, 1_718_409_600);
     }
 
     /// The abbreviation serialization yields 144 lines in PHP order, and a null

@@ -132,7 +132,14 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
 fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
     let mut construct = method_with_body(
         "__construct",
-        vec![param("owner", named_type("SplFixedArray"))],
+        vec![
+            param("owner", array_type()),
+            param_default(
+                "onCurrent",
+                TypeExpr::Nullable(Box::new(named_type("Closure"))),
+                null_expr(),
+            ),
+        ],
         Some(TypeExpr::Void),
         internal_iterator_construct_body(),
     );
@@ -151,8 +158,13 @@ fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the property list for internal iterator.
 fn internal_iterator_properties() -> Vec<ClassProperty> {
     vec![
-        storage_property("owner", named_type("SplFixedArray")),
+        storage_property("owner", array_type()),
         storage_property("position", TypeExpr::Int),
+        storage_property_default(
+            "onCurrent",
+            TypeExpr::Nullable(Box::new(named_type("Closure"))),
+            null_expr(),
+        ),
     ]
 }
 
@@ -323,30 +335,61 @@ fn internal_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "owner", var_expr("owner")),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(this_expr(), "onCurrent", var_expr("onCurrent")),
     ]
 }
 
+/// Synthetic PHP body used by `InternalIterator::current()`.
+///
+/// The optional callback lets internal aggregate implementations mirror their live
+/// cursor without making the aggregate itself implement `Iterator`.
+const INTERNAL_ITERATOR_CURRENT_SRC: &str = r#"<?php
+$value = $this->owner[$this->position];
+if ($this->onCurrent !== null) {
+    ($this->onCurrent)($value);
+}
+return $value;
+"#;
+
 /// Builds the synthetic method body for internal iterator current.
 fn internal_iterator_current_body() -> Vec<Stmt> {
-    return_body(method_call(
-        internal_iterator_owner_expr(),
-        "offsetGet",
-        vec![internal_iterator_position_expr()],
-    ))
+    let tokens = crate::lexer::tokenize(INTERNAL_ITERATOR_CURRENT_SRC)
+        .expect("InternalIterator::current body must tokenize");
+    crate::parser::parse(&tokens).expect("InternalIterator::current body must parse")
 }
+
+/// Synthetic PHP body used by `InternalIterator::next()`.
+const INTERNAL_ITERATOR_NEXT_SRC: &str = r#"<?php
+$this->position = $this->position + 1;
+if ($this->onCurrent !== null) {
+    if ($this->position < count($this->owner)) {
+        $this->current();
+    } else {
+        ($this->onCurrent)(null);
+    }
+}
+"#;
 
 /// Builds the synthetic method body for internal iterator next.
 fn internal_iterator_next_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(
-        this_expr(),
-        "position",
-        binary_expr(internal_iterator_position_expr(), BinOp::Add, int_expr(1)),
-    )]
+    let tokens = crate::lexer::tokenize(INTERNAL_ITERATOR_NEXT_SRC)
+        .expect("InternalIterator::next body must tokenize");
+    crate::parser::parse(&tokens).expect("InternalIterator::next body must parse")
 }
+
+/// Synthetic PHP body used by `InternalIterator::rewind()`.
+const INTERNAL_ITERATOR_REWIND_SRC: &str = r#"<?php
+$this->position = 0;
+if ($this->onCurrent !== null && count($this->owner) > 0) {
+    $this->current();
+}
+"#;
 
 /// Builds the synthetic method body for internal iterator rewind.
 fn internal_iterator_rewind_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+    let tokens = crate::lexer::tokenize(INTERNAL_ITERATOR_REWIND_SRC)
+        .expect("InternalIterator::rewind body must tokenize");
+    crate::parser::parse(&tokens).expect("InternalIterator::rewind body must parse")
 }
 
 /// Builds the synthetic method body for internal iterator valid.
@@ -354,13 +397,27 @@ fn internal_iterator_valid_body() -> Vec<Stmt> {
     return_body(binary_expr(
         internal_iterator_position_expr(),
         BinOp::Lt,
-        method_call(internal_iterator_owner_expr(), "count", Vec::new()),
+        function_call("count", vec![internal_iterator_owner_expr()]),
     ))
 }
 
+/// Synthetic PHP body used by `SplFixedArray::getIterator()`.
+const FIXED_ARRAY_GET_ITERATOR_SRC: &str = r#"<?php
+$items = [];
+$i = 0;
+$limit = $this->count();
+while ($i < $limit) {
+    $items[] = $this->offsetGet($i);
+    $i = $i + 1;
+}
+return new InternalIterator($items);
+"#;
+
 /// Builds the synthetic method body for fixed array get iterator.
 fn fixed_array_get_iterator_body() -> Vec<Stmt> {
-    return_body(new_object_expr("InternalIterator", vec![this_expr()]))
+    let tokens = crate::lexer::tokenize(FIXED_ARRAY_GET_ITERATOR_SRC)
+        .expect("SplFixedArray::getIterator body must tokenize");
+    crate::parser::parse(&tokens).expect("SplFixedArray::getIterator body must parse")
 }
 
 /// Provides the Dll items snapshot prelude helper used by the containers module.

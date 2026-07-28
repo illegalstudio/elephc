@@ -24,7 +24,7 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         CastType::Float => try_fold_cast_float(value),
         CastType::String => try_fold_cast_string(value),
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
-        CastType::Array => None,
+        CastType::Array | CastType::Void => None,
     }
 }
 

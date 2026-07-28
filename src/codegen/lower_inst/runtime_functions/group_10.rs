@@ -166,6 +166,9 @@ pub(super) fn lower(
         RuntimeFnId::Wordwrap => Some({
             crate::codegen::lower_inst::builtins::strings::lower_wordwrap(ctx, inst)
         }),
+        RuntimeFnId::ElephcDiagWarning => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_diag_warning(ctx, inst)
+        }),
         RuntimeFnId::ElephcGmmktimeRaw => Some({
             crate::codegen::lower_inst::builtins::system::lower_gmmktime(ctx, inst)
         }),

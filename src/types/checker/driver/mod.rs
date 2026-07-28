@@ -161,7 +161,7 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval.
-    inject_builtin_date_period(&mut class_map);
+    inject_builtin_date_period(&mut class_map, uses_tz_introspection);
     if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }

@@ -83,6 +83,11 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    // Date/time aggregate methods can instantiate SPL helpers (notably
+    // `DatePeriod::getIterator()` -> `InternalIterator`) after the first SPL
+    // discovery pass has completed. Re-run the fixed-point collector so those
+    // newly referenced constructors and interface methods receive EIR bodies.
+    lower_referenced_builtin_spl_methods(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);
     validate_module(&module)?;
     Ok(module)
@@ -369,6 +374,7 @@ fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>) -> 
 pub(super) fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
+    module.required_runtime_features.timelib |= features.timelib;
     module.required_runtime_features.mb_strlen |= features.mb_strlen;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
@@ -390,6 +396,7 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
             match inst.op {
                 Op::RuntimeCall => {
                     if let Some(target) = typed_builtin_target(inst) {
+                        features.timelib |= target == crate::ir::RuntimeFnId::Strtotime;
                         features.regex |= target.uses_regex_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
@@ -1877,11 +1884,83 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                         _ => {}
                     }
                 }
+                Op::VarDump => push_datetime_var_dump_methods(
+                    &mut methods,
+                    module,
+                    function,
+                    &inst.operands,
+                ),
+                Op::RuntimeCall
+                    if typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::VarDump) =>
+                {
+                    push_datetime_var_dump_methods(
+                        &mut methods,
+                        module,
+                        function,
+                        &inst.operands,
+                    );
+                }
                 _ => {}
             }
         }
     }
     methods
+}
+
+/// Adds the php-src-specific date/time debug renderer methods referenced by `var_dump()`.
+fn push_datetime_var_dump_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    function: &Function,
+    operands: &[crate::ir::ValueId],
+) {
+    let debug_key = php_method_key("__elephc_debug_dump");
+    for operand in operands {
+        let Some(operand_type) = function
+            .value(*operand)
+            .map(|value| value.php_type.codegen_repr())
+        else {
+            continue;
+        };
+        match operand_type {
+            PhpType::Object(class_name) => {
+                let normalized = class_name.trim_start_matches('\\');
+                if is_datetime_debug_class(normalized) {
+                    push_supported_builtin_spl_method_for_receiver(
+                        methods,
+                        module,
+                        normalized,
+                        &debug_key,
+                    );
+                }
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                for class_name in [
+                    "DateTime",
+                    "DateTimeImmutable",
+                    "DateTimeZone",
+                    "DateInterval",
+                    "DatePeriod",
+                ] {
+                    push_supported_builtin_spl_method_for_receiver(
+                        methods,
+                        module,
+                        class_name,
+                        &debug_key,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns whether a builtin class owns a php-src-specific `var_dump()` renderer.
+fn is_datetime_debug_class(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name).as_str(),
+        "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+    )
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.
@@ -2303,6 +2382,9 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
 /// Returns true for builtin SPL methods intentionally lowered into EIR today.
 fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
     match class_name {
+        "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod" => {
+            method_key == "__elephc_debug_dump"
+        }
         "SplFileInfo" => matches!(
             method_key,
             "__construct"

@@ -430,6 +430,7 @@ pub enum RuntimeFnId {
     Vprintf,
     Vsprintf,
     Wordwrap,
+    ElephcDiagWarning,
     ElephcGmmktimeRaw,
     ElephcMktimeRaw,
     ElephcStrtotimeRaw,
@@ -771,6 +772,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
+            RuntimeFnId::Strtotime => &[BuiltinRequirement::Bridge("elephc_tz")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
             _ => &[],
         }
@@ -1335,6 +1337,7 @@ impl RuntimeFnId {
             RuntimeFnId::Vprintf => "vprintf",
             RuntimeFnId::Vsprintf => "vsprintf",
             RuntimeFnId::Wordwrap => "wordwrap",
+            RuntimeFnId::ElephcDiagWarning => "__elephc_diag_warning",
             RuntimeFnId::ElephcGmmktimeRaw => "__elephc_gmmktime_raw",
             RuntimeFnId::ElephcMktimeRaw => "__elephc_mktime_raw",
             RuntimeFnId::ElephcStrtotimeRaw => "__elephc_strtotime_raw",

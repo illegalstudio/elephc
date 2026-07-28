@@ -30,8 +30,8 @@ use crate::names::{
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
-    is_php_integer_array_key, AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig,
-    InterfaceInfo, PhpType,
+    is_php_integer_array_key, AttrArgEntry, AttrArgValue, AttrKey, EnumCaseInfo, EnumCaseValue,
+    FunctionSig, InterfaceInfo, PhpType,
 };
 
 use super::super::super::context::FunctionContext;
@@ -275,6 +275,7 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
+    is_dynamic: bool,
 }
 
 /// Runtime class candidate used when object reflection must dispatch by object class id.
@@ -360,18 +361,72 @@ fn emit_reflection_owner_from_runtime_object(
 
     emit_runtime_object_class_dispatch(ctx, object_operand, &candidates, &case_labels, &fallback_label)?;
 
-    let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
+    let fallback_metadata = if class_name == "ReflectionObject"
+        && php_symbol_key(&candidates[0].class_name) == "dateinterval"
+    {
+        reflection_date_interval_object_metadata(ctx, false)?
+    } else {
+        reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?
+    };
     emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
     emit_reflection_dispatch_jump(ctx, &done_label);                            // skip runtime reflection candidates after fallback allocation
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
+        if class_name == "ReflectionObject"
+            && php_symbol_key(&candidate.class_name) == "dateinterval"
+        {
+            emit_date_interval_reflection_object(
+                ctx,
+                object_operand,
+                &candidate.class_name,
+                &done_label,
+            )?;
+            continue;
+        }
         let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
         emit_reflection_dispatch_jump(ctx, &done_label);                        // finish after materializing the matched runtime class
     }
 
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes state-dependent `ReflectionObject(DateInterval)` property metadata.
+#[rustfmt::skip]
+fn emit_date_interval_reflection_object(
+    ctx: &mut FunctionContext<'_>,
+    object_operand: ValueId,
+    class_name: &str,
+    done_label: &str,
+) -> Result<()> {
+    let from_string_offset = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.property_offsets.get("_from_string"))
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("DateInterval::_from_string", 0))?;
+    let relative_label = ctx.next_label("reflection_date_interval_relative");
+    ctx.load_value_to_result(object_operand)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", from_string_offset)); // load DateInterval's relative-string discriminator
+            ctx.emitter.instruction(&format!("cbnz x9, {}", relative_label));   // select the two-property relative interval surface
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [rax + {}], 0", from_string_offset)); // test DateInterval's relative-string discriminator
+            ctx.emitter.instruction(&format!("jne {}", relative_label));        // select the two-property relative interval surface
+        }
+    }
+    let component_metadata = reflection_date_interval_object_metadata(ctx, false)?;
+    emit_reflection_owner_object(ctx, "ReflectionObject", &component_metadata)?;
+    emit_reflection_dispatch_jump(ctx, done_label);                              // finish after materializing component interval metadata
+    ctx.emitter.label(&relative_label);
+    let relative_metadata = reflection_date_interval_object_metadata(ctx, true)?;
+    emit_reflection_owner_object(ctx, "ReflectionObject", &relative_metadata)?;
+    emit_reflection_dispatch_jump(ctx, done_label);                              // finish after materializing relative interval metadata
     Ok(())
 }
 
@@ -780,6 +835,11 @@ fn emit_reflection_owner_object(
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
         let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
+        let has_tentative_return_type = metadata.type_metadata.is_some()
+            && reflection_datetime_method_has_tentative_return_type(
+                metadata.parent_class_name.as_deref(),
+                metadata.reflected_name.as_deref(),
+            );
         emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -803,9 +863,29 @@ fn emit_reflection_owner_object(
             ctx,
             class_name,
             "__has_return_type",
-            metadata.type_metadata.is_some(),
+            metadata.type_metadata.is_some() && !has_tentative_return_type,
         )?;
-        emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property(
+            ctx,
+            class_name,
+            (!has_tentative_return_type)
+                .then_some(metadata.type_metadata.as_ref())
+                .flatten(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_tentative_return_type",
+            has_tentative_return_type,
+        )?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            class_name,
+            "__tentative_type",
+            has_tentative_return_type
+                .then_some(metadata.type_metadata.as_ref())
+                .flatten(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -835,6 +915,12 @@ fn emit_reflection_owner_object(
             class_name,
             "__has_type",
             metadata.type_metadata.is_some(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_deprecated",
+            metadata.is_deprecated,
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
@@ -1301,6 +1387,69 @@ fn reflection_class_metadata_for_name(
     Ok(empty_reflection_metadata())
 }
 
+/// Builds php-src's state-dependent dynamic property surface for `DateInterval` objects.
+fn reflection_date_interval_object_metadata(
+    ctx: &FunctionContext<'_>,
+    from_string: bool,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = reflection_class_metadata_for_name(ctx, "DateInterval")?;
+    let property_names = if from_string {
+        vec!["from_string", "date_string"]
+    } else {
+        vec![
+            "y",
+            "m",
+            "d",
+            "h",
+            "i",
+            "s",
+            "f",
+            "invert",
+            "days",
+            "from_string",
+        ]
+    };
+    metadata.property_names = property_names
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    metadata.property_members = metadata
+        .property_names
+        .iter()
+        .map(|name| reflection_date_interval_dynamic_property_member(name))
+        .collect();
+    metadata.default_property_members.clear();
+    Ok(metadata)
+}
+
+/// Builds one untyped public dynamic `ReflectionProperty` owned by `DateInterval`.
+fn reflection_date_interval_dynamic_property_member(
+    property_name: &str,
+) -> ReflectionListedMember {
+    let mut flags =
+        reflection_member_flags(false, &Visibility::Public, false, false, false, false);
+    flags.is_dynamic = true;
+    ReflectionListedMember {
+        name: property_name.to_string(),
+        declaring_class_name: Some("DateInterval".to_string()),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        constant_value: None,
+        backing_value: None,
+        is_enum_case: false,
+        flags,
+        modifiers: reflection_property_modifiers_from_flags(flags),
+        type_metadata: None,
+        default_value: None,
+        property_hook_members: Vec::new(),
+        required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
+        prototype_member: None,
+        parameters: Vec::new(),
+    }
+}
+
 /// Resolves class metadata for nested declaring-class slots without recursive member objects.
 fn reflection_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
@@ -1359,12 +1508,12 @@ fn reflection_function_metadata(
         return Ok(empty_reflection_metadata());
     };
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
+    if let Some((builtin_name, signature)) =
+        reflection_builtin_function_signature(&function_name)
+    {
+        return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
+    }
     let Some(function) = ctx.function_by_name(&function_name) else {
-        if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
-        {
-            return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
-        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {
@@ -1411,17 +1560,22 @@ fn reflection_builtin_function_metadata(
 ) -> Result<ReflectionOwnerMetadata> {
     let required_parameter_count = reflection_required_parameter_count(signature);
     let type_metadata = reflection_return_type_metadata(signature);
+    let (attr_names, attr_args) =
+        reflection_builtin_function_attributes(function_name, signature);
+    let is_deprecated = signature.deprecation.is_some();
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: function_name.to_string(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: attr_names.clone(),
+        attr_args: attr_args.clone(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
-        is_deprecated: false,
+        is_deprecated,
         is_generator: false,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(function_name.to_string());
+    metadata.attr_names = attr_names;
+    metadata.attr_args = attr_args;
     metadata.parameter_members = reflection_parameter_members_with_declaring_function(
         ctx,
         signature,
@@ -1434,13 +1588,46 @@ fn reflection_builtin_function_metadata(
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
+    metadata.is_deprecated = is_deprecated;
     Ok(metadata)
+}
+
+/// Builds Reflection attribute metadata for deprecated internal date functions.
+fn reflection_builtin_function_attributes(
+    function_name: &str,
+    signature: &FunctionSig,
+) -> (Vec<String>, Vec<Option<Vec<AttrArgEntry>>>) {
+    let Some(message) = signature.deprecation.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let since = match function_name {
+        "strptime" => "8.2",
+        "strftime" | "gmstrftime" | "date_sunrise" | "date_sunset" => "8.1",
+        _ => "",
+    };
+    let mut args = Vec::new();
+    if !since.is_empty() {
+        args.push(AttrArgEntry {
+            key: Some(AttrKey::Str("since".to_string())),
+            value: AttrArgValue::Str(since.to_string()),
+        });
+    }
+    if !message.is_empty() {
+        args.push(AttrArgEntry {
+            key: Some(AttrKey::Str("message".to_string())),
+            value: AttrArgValue::Str(message.clone()),
+        });
+    }
+    (
+        vec!["Deprecated".to_string()],
+        vec![Some(args)],
+    )
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.
 fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
     let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
-    crate::types::first_class_callable_builtin_sig(&builtin_key)
+    crate::types::reflection_builtin_function_sig(&builtin_key)
         .map(|signature| (builtin_key, signature))
 }
 
@@ -1460,6 +1647,50 @@ fn reflection_function_or_method_is_internal(
         .parent_class_name
         .as_deref()
         .is_some_and(reflection_class_like_is_internal)
+}
+
+/// Returns whether php-src exposes a date/time method's declared type as tentative.
+///
+/// PHP's ext/date stubs retain tentative return types on legacy methods for inheritance
+/// compatibility. Newer methods and serialization hooks use ordinary declared return types.
+fn reflection_datetime_method_has_tentative_return_type(
+    declaring_class_name: Option<&str>,
+    method_name: Option<&str>,
+) -> bool {
+    let Some(class_name) = declaring_class_name else {
+        return false;
+    };
+    let Some(method_key) = method_name.map(php_symbol_key) else {
+        return false;
+    };
+    match class_name.trim_start_matches('\\') {
+        "DateTimeInterface" => !matches!(
+            method_key.as_str(),
+            "getmicrosecond" | "__serialize" | "__unserialize"
+        ),
+        "DateTime" | "DateTimeImmutable" => !matches!(
+            method_key.as_str(),
+            "__construct"
+                | "__serialize"
+                | "__unserialize"
+                | "createfrominterface"
+                | "getmicrosecond"
+                | "setmicrosecond"
+        ),
+        "DateTimeZone" | "DateInterval" => !matches!(
+            method_key.as_str(),
+            "__construct" | "__serialize" | "__unserialize"
+        ),
+        "DatePeriod" => !matches!(
+            method_key.as_str(),
+            "__construct"
+                | "createfromiso8601string"
+                | "__serialize"
+                | "__unserialize"
+                | "getiterator"
+        ),
+        _ => false,
+    }
 }
 
 /// Resolves `ReflectionMethod(class, method)` metadata.
@@ -1509,8 +1740,16 @@ fn reflection_method_owner_metadata(
     method_name: &str,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
+    let reflected_name = member
+        .declaring_class_name
+        .as_deref()
+        .and_then(|class_name| {
+            crate::types::php_src_date_method_canonical_name(class_name, method_name)
+        })
+        .unwrap_or(method_name)
+        .to_string();
     ReflectionOwnerMetadata {
-        reflected_name: Some(method_name.to_string()),
+        reflected_name: Some(reflected_name),
         attr_names: member.attr_names,
         attr_args: member.attr_args,
         interface_names: Vec::new(),
@@ -1574,13 +1813,18 @@ fn reflection_property_metadata(
                 reflection_property_declaring_class_name(info, &property_name);
             let type_metadata = reflection_property_type_metadata(info, &property_name);
             let member_flags = reflection_property_member_flags(info, &property_name)?;
-            let property_hook_members = reflection_property_hook_members(
-                info,
-                &property_name,
-                declaring_class_name.as_deref(),
-                member_flags,
-                type_metadata.as_ref(),
-            );
+            let property_hook_members =
+                if reflected_class.trim_start_matches('\\') == "DatePeriod" {
+                    Vec::new()
+                } else {
+                    reflection_property_hook_members(
+                        info,
+                        &property_name,
+                        declaring_class_name.as_deref(),
+                        member_flags,
+                        type_metadata.as_ref(),
+                    )
+                };
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
                 attr_names: info
@@ -1682,18 +1926,18 @@ fn reflection_function_parameter_metadata(
     let function_name =
         const_required_string_operand(ctx, function_operand, "ReflectionParameter")?;
     let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
+    if let Some((builtin_name, signature)) =
+        reflection_builtin_function_signature(&function_name)
+    {
+        let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
+        let Some(parameter) =
+            reflection_parameter_member_for_selector(&metadata.parameter_members, selector)
+        else {
+            return Ok(empty_reflection_metadata());
+        };
+        return Ok(reflection_parameter_owner_metadata(parameter));
+    }
     let Some(function) = ctx.function_by_name(&function_name) else {
-        if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
-        {
-            let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
-            let Some(parameter) =
-                reflection_parameter_member_for_selector(&metadata.parameter_members, selector)
-            else {
-                return Ok(empty_reflection_metadata());
-            };
-            return Ok(reflection_parameter_owner_metadata(parameter));
-        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {
@@ -1945,6 +2189,10 @@ fn reflection_class_constant_owner_metadata(
     metadata: ReflectionClassConstantMetadata,
 ) -> ReflectionOwnerMetadata {
     let is_final = metadata.is_final;
+    let is_deprecated = metadata
+        .attr_names
+        .iter()
+        .any(|name| php_symbol_key(name.trim_start_matches('\\')) == "deprecated");
     let modifiers = reflection_class_constant_modifiers(&metadata.visibility, is_final);
     let member_flags =
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
@@ -1976,7 +2224,7 @@ fn reflection_class_constant_owner_metadata(
         type_metadata: metadata.type_metadata,
         property_default_value: None,
         required_parameter_count: 0,
-        is_deprecated: false,
+        is_deprecated,
         is_generator: false,
         prototype_member: None,
         is_final,
@@ -2104,20 +2352,23 @@ fn reflection_interface_class_constant_lookup(
     };
     let declaring_interface =
         interface_constant_declaring_interface(info, interface_name, constant_name);
-    let is_final = ctx
-        .module
-        .interface_infos
-        .get(declaring_interface)
-        .is_some_and(|info| info.final_constants.contains(constant_name));
+    let declaring_info = ctx.module.interface_infos.get(declaring_interface);
+    let is_final =
+        declaring_info.is_some_and(|info| info.final_constants.contains(constant_name));
     let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
     Ok(Some(ReflectionClassConstantMetadata {
         declaring_class_name: declaring_interface.to_string(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: declaring_info
+            .and_then(|info| info.constant_attribute_names.get(constant_name))
+            .cloned()
+            .unwrap_or_default(),
+        attr_args: declaring_info
+            .and_then(|info| info.constant_attribute_args.get(constant_name))
+            .cloned()
+            .unwrap_or_default(),
         value,
-        type_metadata: info
-            .constant_types
-            .get(constant_name)
+        type_metadata: declaring_info
+            .and_then(|info| info.constant_types.get(constant_name))
             .and_then(reflection_declared_type_metadata),
         visibility: Visibility::Public,
         is_final,
@@ -2434,6 +2685,12 @@ fn collect_reflection_interface_parent_names(
 
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
+    if let Some(method_names) = crate::types::php_src_date_method_names(class_name) {
+        return method_names
+            .iter()
+            .map(|method_name| (*method_name).to_string())
+            .collect();
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut current = Some(class_name.to_string());
@@ -2457,6 +2714,12 @@ fn reflection_class_property_names(
     class_name: &str,
     info: &crate::types::ClassInfo,
 ) -> Vec<String> {
+    if let Some(property_names) = crate::types::php_src_date_property_names(class_name) {
+        return property_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if is_reflection_enum(ctx, class_name) {
@@ -2800,21 +3063,24 @@ fn collect_interface_constant_reflection_members(
     for (constant_name, value_expr) in &interface_info.constants {
         let declaring_interface =
             interface_constant_declaring_interface(interface_info, interface_name, constant_name);
-        let is_final = ctx
-            .module
-            .interface_infos
-            .get(declaring_interface)
-            .is_some_and(|info| info.final_constants.contains(constant_name));
+        let declaring_info = ctx.module.interface_infos.get(declaring_interface);
+        let is_final =
+            declaring_info.is_some_and(|info| info.final_constants.contains(constant_name));
         let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
         push_unique_constant_reflection_member(
             constant_name,
             declaring_interface,
-            Vec::new(),
-            Vec::new(),
+            declaring_info
+                .and_then(|info| info.constant_attribute_names.get(constant_name))
+                .cloned()
+                .unwrap_or_default(),
+            declaring_info
+                .and_then(|info| info.constant_attribute_args.get(constant_name))
+                .cloned()
+                .unwrap_or_default(),
             value,
-            interface_info
-                .constant_types
-                .get(constant_name)
+            declaring_info
+                .and_then(|info| info.constant_types.get(constant_name))
                 .and_then(reflection_declared_type_metadata),
             Visibility::Public,
             is_final,
@@ -3193,6 +3459,9 @@ fn reflection_class_method_member(
     method_name: &str,
 ) -> Result<Option<ReflectionListedMember>> {
     let method_key = php_symbol_key(method_name);
+    if crate::types::php_src_date_method_visible(class_name, &method_key) == Some(false) {
+        return Ok(None);
+    }
     let sig = info
         .methods
         .get(&method_key)
@@ -3215,13 +3484,26 @@ fn reflection_class_method_member(
     let Some(flags) = reflection_method_member_flags(info, &method_key) else {
         return Ok(None);
     };
-    let required_parameter_count = reflection_required_parameter_count(sig);
+    let is_php_dateperiod_constructor = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("DatePeriod")
+        && method_key == "__construct";
+    let required_parameter_count = if is_php_dateperiod_constructor {
+        1
+    } else {
+        reflection_required_parameter_count(sig)
+    };
     let late_static_return = if flags.is_static {
         info.late_static_static_method_returns.get(&method_key)
     } else {
         info.late_static_method_returns.get(&method_key)
     };
-    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    let mut type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    if let Some(return_type) =
+        crate::types::php_src_date_method_return_type(class_name, &method_key)
+    {
+        type_metadata = reflection_declared_type_metadata(&return_type);
+    }
     let is_generator = reflection_method_is_generator(
         ctx,
         declaring_class_name.as_deref().unwrap_or(class_name),
@@ -3250,7 +3532,7 @@ fn reflection_class_method_member(
                 flags.is_static,
             )
         });
-    let parameters = reflection_parameter_members_with_declaring_class(
+    let mut parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
         class_name,
@@ -3260,8 +3542,38 @@ fn reflection_class_method_member(
         &reflection_promoted_constructor_parameter_names(info, &method_key),
         source_defaults.as_deref(),
     )?;
+    if is_php_dateperiod_constructor {
+        for (index, parameter) in parameters.iter_mut().enumerate() {
+            parameter.is_optional = index > 0;
+            parameter.has_type = false;
+            parameter.allows_null = true;
+            parameter.type_metadata = None;
+            parameter.default_value = None;
+            parameter.default_value_constant_name = None;
+        }
+    }
+    for (index, parameter) in parameters.iter_mut().enumerate() {
+        let Some(type_expr) = crate::types::php_src_date_method_parameter_type(
+            class_name,
+            &method_key,
+            index,
+        ) else {
+            continue;
+        };
+        parameter.has_type = true;
+        parameter.allows_null = false;
+        parameter.is_array_type = false;
+        parameter.is_callable_type = false;
+        parameter.type_metadata = reflection_declared_type_metadata(&type_expr);
+    }
+    let reflected_method_name = crate::types::php_src_date_method_canonical_name(
+        class_name,
+        &method_key,
+    )
+    .unwrap_or(method_name)
+    .to_string();
     Ok(Some(ReflectionListedMember {
-        name: method_key.clone(),
+        name: reflected_method_name,
         declaring_class_name,
         attr_names,
         attr_args,
@@ -3357,7 +3669,12 @@ fn reflection_interface_method_member(
         source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
-        name: method_key,
+        name: crate::types::php_src_date_method_canonical_name(
+            interface_name,
+            &method_key,
+        )
+        .unwrap_or(method_name)
+        .to_string(),
         declaring_class_name: Some(declaring_class_name),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
@@ -3509,13 +3826,20 @@ fn reflection_class_property_member(
             (is_reflection_enum(ctx, class_name) && property_name == "name")
                 .then(|| class_name.to_string())
         });
-    let property_hook_members = reflection_property_hook_members(
-        info,
-        property_name,
-        declaring_class_name.as_deref(),
-        flags,
-        type_metadata.as_ref(),
-    );
+    let property_hook_members = if class_name == "DatePeriod" {
+        // php-src implements DatePeriod's seven public virtual properties through
+        // object handlers rather than PHP property hooks. Elephc uses hidden
+        // synthetic getters for code generation, but Reflection must expose no hooks.
+        Vec::new()
+    } else {
+        reflection_property_hook_members(
+            info,
+            property_name,
+            declaring_class_name.as_deref(),
+            flags,
+            type_metadata.as_ref(),
+        )
+    };
     Some(ReflectionListedMember {
         name: property_name.to_string(),
         declaring_class_name,
@@ -4058,8 +4382,10 @@ fn reflection_parameter_members_with_declaring_function(
             .and_then(|defaults| defaults.get(index))
             .and_then(Option::as_ref);
         let default_value_constant_name = source_default_expr
-            .or(default_expr)
-            .and_then(reflection_parameter_default_constant_name);
+            .and_then(reflection_parameter_default_constant_name)
+            .or_else(|| {
+                default_expr.and_then(reflection_parameter_default_constant_name)
+            });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
@@ -4144,6 +4470,9 @@ fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_global_default_value(default) {
+        return Ok(Some(value));
+    }
     if let Some(value) =
         reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
     {
@@ -4384,11 +4713,30 @@ fn reflection_parameter_default_from_constant_value(
 /// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
 fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
-        ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
-            "{}::{}",
-            reflection_static_receiver_label(receiver),
-            name
-        )),
+        ExprKind::ScopedConstantAccess { receiver, name }
+            if reflection_static_receiver_label(receiver)
+                == "__ElephcReflectionGlobalConstant" =>
+        {
+            Some(name.clone())
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            Some(format!("{}::{}", reflection_static_receiver_label(receiver), name))
+        }
+        _ => None,
+    }
+}
+
+/// Materializes one global-constant marker used only by reflected builtin defaults.
+fn reflection_global_default_value(default: &Expr) -> Option<ReflectionParameterDefaultValue> {
+    let ExprKind::ScopedConstantAccess { receiver, name } = &default.kind else {
+        return None;
+    };
+    if reflection_static_receiver_label(receiver) != "__ElephcReflectionGlobalConstant" {
+        return None;
+    }
+    match name.as_str() {
+        "PHP_INT_MIN" => Some(ReflectionParameterDefaultValue::Int(i64::MIN)),
+        "SUNFUNCS_RET_STRING" => Some(ReflectionParameterDefaultValue::Int(1)),
         _ => None,
     }
 }
@@ -4500,6 +4848,7 @@ fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMet
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
@@ -4619,6 +4968,7 @@ fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_dynamic: false,
     }
 }
 
@@ -4630,6 +4980,12 @@ fn reflection_interface_method_names(
     let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
         return Vec::new();
     };
+    if let Some(method_names) = crate::types::php_src_date_method_names(interface_name) {
+        return method_names
+            .iter()
+            .map(|method_name| (*method_name).to_string())
+            .collect();
+    }
     let Some(info) = ctx.module.interface_infos.get(interface_name) else {
         return Vec::new();
     };
@@ -5292,7 +5648,7 @@ fn emit_reflection_attrs_property(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     super::super::builtins::attributes::emit_reflection_attribute_array(
@@ -5357,7 +5713,7 @@ fn emit_reflection_owner_string_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_string_array(ctx, names)?;
@@ -5392,7 +5748,7 @@ fn emit_reflection_class_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_class_array(ctx, names)?;
@@ -5427,7 +5783,7 @@ fn emit_reflection_constant_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_constant_array(ctx, members)?;
@@ -5461,7 +5817,7 @@ fn emit_reflection_default_property_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_default_property_array(ctx, members);
@@ -5495,7 +5851,7 @@ fn emit_reflection_static_property_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_static_property_array(ctx, members);
@@ -5525,7 +5881,7 @@ fn emit_reflection_member_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_member_array(ctx, member_class_name, members)?;
@@ -5560,7 +5916,7 @@ fn emit_reflection_property_hook_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_property_hook_array(ctx, members)?;
@@ -5774,7 +6130,7 @@ fn emit_reflection_parameter_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_parameter_array(ctx, parameters)?;
@@ -5809,7 +6165,7 @@ fn emit_reflection_member_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_member_object(ctx, member_class_name, member)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, member_class_name);
     }
 
     Ok(())
@@ -5848,7 +6204,7 @@ fn emit_reflection_parameter_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_parameter_object(ctx, parameter)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, "ReflectionParameter");
     }
 
     Ok(())
@@ -5971,7 +6327,7 @@ fn emit_reflection_string_assoc_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     emit_reflection_string_assoc_array(ctx, entries);
@@ -6446,6 +6802,11 @@ fn emit_reflection_member_object(
         member.declaring_class_name.as_deref(),
     )?;
     if member_class_name == "ReflectionMethod" {
+        let has_tentative_return_type = member.type_metadata.is_some()
+            && reflection_datetime_method_has_tentative_return_type(
+                member.declaring_class_name.as_deref(),
+                Some(&member.name),
+            );
         emit_reflection_parameter_array_property_by_name(
             ctx,
             member_class_name,
@@ -6462,9 +6823,29 @@ fn emit_reflection_member_object(
             ctx,
             member_class_name,
             "__has_return_type",
-            member.type_metadata.is_some(),
+            member.type_metadata.is_some() && !has_tentative_return_type,
         )?;
-        emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property(
+            ctx,
+            member_class_name,
+            (!has_tentative_return_type)
+                .then_some(member.type_metadata.as_ref())
+                .flatten(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_tentative_return_type",
+            has_tentative_return_type,
+        )?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            member_class_name,
+            "__tentative_type",
+            has_tentative_return_type
+                .then_some(member.type_metadata.as_ref())
+                .flatten(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             member_class_name,
@@ -7167,7 +7548,7 @@ fn emit_reflection_named_type_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_named_type_object(ctx, type_metadata)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, "ReflectionNamedType");
     }
     Ok(())
 }
@@ -7229,18 +7610,23 @@ fn emit_reflection_indexed_array(ctx: &mut FunctionContext<'_>, capacity: usize,
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
 }
 
-/// Appends the stacked member object to the stacked member array and leaves the array in result.
-fn emit_append_reflection_member_object(ctx: &mut FunctionContext<'_>) {
+/// Retains and appends the stacked member object, then releases its temporary owner.
+fn emit_append_reflection_member_object(ctx: &mut FunctionContext<'_>, member_class_name: &str) {
+    let member_type = PhpType::Object(member_class_name.to_string());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &member_type);
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rsi");
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &member_type);
         }
     }
 }
@@ -7350,6 +7736,7 @@ fn emit_reflection_member_flag_properties(
                 flags.is_promoted,
             )?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_virtual", flags.is_virtual)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_dynamic", flags.is_dynamic)?;
         }
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
             emit_reflection_owner_bool_property(ctx, class_name, "__is_public", flags.is_public)?;

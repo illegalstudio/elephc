@@ -241,6 +241,10 @@ pub struct InterfaceInfo {
     pub constants: HashMap<String, crate::parser::ast::Expr>,
     /// PHP 8.3 declared types for visible interface constants.
     pub constant_types: HashMap<String, TypeExpr>,
+    /// Attribute names attached to visible interface constants.
+    pub constant_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal interface-constant attribute args aligned with `constant_attribute_names`.
+    pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Declaring interface for each visible constant, keyed by case-sensitive constant name.
     pub constant_declaring_interfaces: HashMap<String, String>,
     /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.

@@ -2088,6 +2088,20 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
+    // PHP's declared `array` type covers both indexed and associative runtime
+    // layouts. A synthetic method returning an assoc array through an `array`
+    // signature therefore needs no payload conversion: preserve the heap
+    // pointer and let key-sensitive consumers dispatch from its runtime kind.
+    if matches!(
+        (&source_ty, inst.result_php_type.codegen_repr()),
+        (
+            PhpType::AssocArray { .. },
+            PhpType::Array(result_value)
+        ) if result_value.codegen_repr() == PhpType::Mixed
+    ) {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
         match source_ty {
             PhpType::Int | PhpType::Bool | PhpType::Callable => {

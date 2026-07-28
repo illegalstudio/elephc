@@ -37,8 +37,11 @@ fn name_is_tz_fn(name: &Name) -> bool {
             || segment.eq_ignore_ascii_case("timezone_transitions_get")
             || segment.eq_ignore_ascii_case("timezone_abbreviations_list")
             || segment.eq_ignore_ascii_case("timezone_name_from_abbr")
+            || segment.eq_ignore_ascii_case("date_parse")
+            || segment.eq_ignore_ascii_case("date_parse_from_format")
             || segment.eq_ignore_ascii_case("date_create_from_format")
             || segment.eq_ignore_ascii_case("date_create_immutable_from_format")
+            || segment.eq_ignore_ascii_case("date_interval_create_from_date_string")
             || segment.eq_ignore_ascii_case("serialize")
             || segment.eq_ignore_ascii_case("unserialize")
             || segment.eq_ignore_ascii_case("var_export")
@@ -52,6 +55,7 @@ fn name_is_datetime_class(name: &Name) -> bool {
         segment.eq_ignore_ascii_case("DateTime")
             || segment.eq_ignore_ascii_case("DateTimeImmutable")
             || segment.eq_ignore_ascii_case("DateTimeZone")
+            || segment.eq_ignore_ascii_case("DateInterval")
             || segment.eq_ignore_ascii_case("DatePeriod")
     })
 }
@@ -78,6 +82,10 @@ fn method_is_tz(method: &str) -> bool {
         || method.eq_ignore_ascii_case("getTransitions")
         || method.eq_ignore_ascii_case("listAbbreviations")
         || method.eq_ignore_ascii_case("createFromFormat")
+        || method.eq_ignore_ascii_case("createFromDateString")
+        || method.eq_ignore_ascii_case("createFromISO8601String")
+        || method.eq_ignore_ascii_case("add")
+        || method.eq_ignore_ascii_case("sub")
         || method.eq_ignore_ascii_case("format")
         || method.eq_ignore_ascii_case("getOffset")
         || method.eq_ignore_ascii_case("__serialize")
@@ -274,7 +282,8 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         }
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_tz(len),
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::ClassConstant { receiver } => receiver_is_datetime_class(receiver),
+        ExprKind::ScopedConstantAccess { .. } => false,
         ExprKind::ObjectClassName { object } => expr_refs_tz(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_tz),
         ExprKind::Yield { key, value } => {
@@ -522,6 +531,15 @@ mod tests {
         )));
         assert!(program_uses_tz_introspection(&parse(
             r#"<?php $period = new DatePeriod("R2/2024-01-01T00:00:00Z/P1D");"#
+        )));
+    }
+
+    /// A date class constant used by Reflection still requires the bridge so
+    /// Reflection exposes methods whose synthetic bodies depend on timelib.
+    #[test]
+    fn detects_datetime_class_constant_dependency() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $reflection = new ReflectionClass(DateTimeZone::class);"#
         )));
     }
 

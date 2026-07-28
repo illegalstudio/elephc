@@ -854,6 +854,9 @@ fn static_method_exists_on_class_info(
     method_name: &str,
     target_is_object: bool,
 ) -> bool {
+    if !crate::codegen_support::callable_dispatch::runtime_method_callable_visible(method_name) {
+        return false;
+    }
     let method_key = php_symbol_key(method_name);
     if class_info.methods.contains_key(&method_key) {
         return target_is_object
@@ -926,8 +929,19 @@ fn static_property_exists_on_class_info(
     resolved_class: &str,
     class_info: &ClassInfo,
     property_name: &str,
-    _target_is_object: bool,
+    target_is_object: bool,
 ) -> bool {
+    let class_key = php_symbol_key(resolved_class.trim_start_matches('\\'));
+    if class_key == "dateinterval" {
+        return target_is_object
+            && matches!(
+                property_name,
+                "y" | "m" | "d" | "h" | "i" | "s" | "f" | "invert" | "days"
+            );
+    }
+    if let Some(property_names) = crate::types::php_src_date_property_names(resolved_class) {
+        return property_names.contains(&property_name);
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,
@@ -1591,7 +1605,7 @@ fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Resu
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
+    if !matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName) {
         return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
@@ -1599,9 +1613,12 @@ fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Resu
             "function_exists string literal has no data id",
         ));
     };
-    ctx.module
-        .data
-        .strings
+    let values = match inst_ref.op {
+        Op::ConstStr => &ctx.module.data.strings,
+        Op::ConstClassName => &ctx.module.data.class_names,
+        _ => unreachable!("constant-string opcode was checked above"),
+    };
+    values
         .get(data.as_raw() as usize)
         .cloned()
         .map(Some)

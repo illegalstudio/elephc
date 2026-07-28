@@ -18,6 +18,29 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
+/// Lowers the internal suppression-aware diagnostic helper.
+///
+/// The input is already a complete PHP-style warning/deprecation line. It is
+/// materialized in the ABI expected by `__rt_diag_warning`, which suppresses the
+/// write when the source expression is wrapped in `@`.
+pub(crate) fn lower_elephc_diag_warning(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_diag_warning", 1)?;
+    let message = expect_operand(inst, 0)?;
+    require_string(
+        ctx.value_php_type(message)?,
+        "__elephc_diag_warning message",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
+        Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
 pub(crate) fn lower_date(
     ctx: &mut FunctionContext<'_>,
@@ -567,26 +590,123 @@ fn emit_strtotime_marshal(
     let datetime = expect_operand(inst, 0)?;
     let base = inst.operands.get(1).copied();
     load_date_string_arg(ctx, datetime, name)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            if let Some(base) = base {
-                materialize_integer_arg(ctx, base, "x0", "strtotime base")?;
-                ctx.emitter.instruction("mov x3, #1");                          // a base timestamp was provided
-            } else {
-                ctx.emitter.instruction("mov x3, #0");                          // no base → runtime uses the current time
-            }
-        }
-        Arch::X86_64 => {
-            if let Some(base) = base {
-                materialize_integer_arg(ctx, base, "rdx", "strtotime base")?;
-                ctx.emitter.instruction("mov rcx, 1");                          // a base timestamp was provided
-            } else {
-                ctx.emitter.instruction("xor ecx, ecx");                        // no base → runtime uses the current time
-            }
-        }
-    }
+    materialize_optional_strtotime_base(ctx, base)?;
     abi::emit_call_label(ctx.emitter, "__rt_strtotime");
     Ok(())
+}
+
+/// Materializes `strtotime()`'s nullable base timestamp and its runtime presence flag.
+///
+/// Nullable unions use the inline tagged-scalar representation, while wider `mixed` values
+/// use a boxed cell. Both forms must preserve PHP's distinction between a real timestamp zero
+/// and `null`, which asks timelib to use the current time.
+fn materialize_optional_strtotime_base(
+    ctx: &mut FunctionContext<'_>,
+    base: Option<ValueId>,
+) -> Result<()> {
+    let Some(base) = base else {
+        emit_strtotime_base_absent(ctx);
+        return Ok(());
+    };
+    match ctx.value_php_type(base)?.codegen_repr() {
+        PhpType::Void | PhpType::Never => {
+            emit_strtotime_base_absent(ctx);
+        }
+        PhpType::Int | PhpType::Bool => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.load_value_to_reg(base, "x0")?;
+                    ctx.emitter.instruction("mov x3, #1");                      // a concrete base timestamp was provided
+                }
+                Arch::X86_64 => {
+                    ctx.load_value_to_reg(base, "rdx")?;
+                    ctx.emitter.instruction("mov rcx, 1");                      // a concrete base timestamp was provided
+                }
+            }
+        }
+        PhpType::TaggedScalar => {
+            stage_date_string_regs(ctx);
+            ctx.load_value_to_result(base)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x1, #8");                      // tagged-scalar tag 8 means the optional base is null
+                    ctx.emitter.instruction("cset x3, ne");                     // only a non-null payload supplies the base timestamp
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rdx, 8");                      // tagged-scalar tag 8 means the optional base is null
+                    ctx.emitter.instruction("setne cl");                        // record whether the tagged payload is a concrete integer
+                    ctx.emitter.instruction("movzx rcx, cl");                   // widen the has-base flag for the runtime ABI
+                    ctx.emitter.instruction("mov rdx, rax");                    // move the tagged payload into the base-timestamp register
+                }
+            }
+            unstage_date_string_regs(ctx);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            materialize_boxed_nullable_strtotime_base(ctx, base)?;
+        }
+        ty => {
+            return Err(CodegenIrError::unsupported(format!(
+                "strtotime base for PHP type {:?}",
+                ty
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Materializes a boxed nullable `strtotime()` base while preserving the staged datetime string.
+fn materialize_boxed_nullable_strtotime_base(
+    ctx: &mut FunctionContext<'_>,
+    base: ValueId,
+) -> Result<()> {
+    let null_label = ctx.next_label("strtotime_base_null");
+    let done_label = ctx.next_label("strtotime_base_ready");
+    stage_date_string_regs(ctx);
+    load_value_to_first_int_arg(ctx, base)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed base is null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // null asks timelib to choose the current timestamp
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("mov x3, #1");                              // a concrete boxed base timestamp was provided
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null cleanup path
+            ctx.emitter.label(&null_label);
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction("mov x3, #0");                              // boxed null leaves the base timestamp absent
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed base is null
+            ctx.emitter.instruction(&format!("je {}", null_label));             // null asks timelib to choose the current timestamp
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("mov rdx, rax");                            // move the concrete payload into the base-timestamp register
+            ctx.emitter.instruction("mov rcx, 1");                              // a concrete boxed base timestamp was provided
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null cleanup path
+            ctx.emitter.label(&null_label);
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            ctx.emitter.instruction("xor ecx, ecx");                            // boxed null leaves the base timestamp absent
+        }
+    }
+    ctx.emitter.label(&done_label);
+    unstage_date_string_regs(ctx);
+    Ok(())
+}
+
+/// Marks `strtotime()`'s optional base as absent in the target runtime ABI.
+fn emit_strtotime_base_absent(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, #0");                              // no base means the runtime uses the current time
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor ecx, ecx");                            // no base means the runtime uses the current time
+        }
+    }
 }
 
 /// Maps the `__rt_strtotime` `i64::MIN` parse-failure sentinel to `-1` in the integer result.
@@ -874,13 +994,28 @@ fn load_date_timestamp(
             ctx.load_value_to_result(timestamp)?;
             Ok(())
         }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(timestamp)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x9, #-1");                     // materialize the current-time sentinel
+                    ctx.emitter.instruction("cmp x1, #8");                      // tagged-scalar tag 8 means the timestamp is null
+                    ctx.emitter.instruction("csel x0, x9, x0, eq");             // null selects current time; integers keep their payload
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov r11, -1");                     // materialize the current-time sentinel
+                    ctx.emitter.instruction("cmp rdx, 8");                      // tagged-scalar tag 8 means the timestamp is null
+                    ctx.emitter.instruction("cmove rax, r11");                  // null selects current time; integers keep their payload
+                }
+            }
+            Ok(())
+        }
         // A boxed Mixed/Union timestamp (for example read from an associative array or produced by
         // a Mixed-typed expression) is unboxed to its integer value before formatting, matching
         // PHP's implicit integer coercion of the timestamp argument. The unboxed result lands in
         // the integer result register, which is where the formatter helper reads the timestamp.
         PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, timestamp)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            load_boxed_nullable_date_timestamp(ctx, timestamp)?;
             Ok(())
         }
         ty => Err(CodegenIrError::unsupported(format!(
@@ -888,6 +1023,44 @@ fn load_date_timestamp(
             ty
         ))),
     }
+}
+
+/// Loads a boxed date timestamp, selecting current time for PHP null and integer coercion otherwise.
+fn load_boxed_nullable_date_timestamp(
+    ctx: &mut FunctionContext<'_>,
+    timestamp: ValueId,
+) -> Result<()> {
+    let null_label = ctx.next_label("date_timestamp_null");
+    let done_label = ctx.next_label("date_timestamp_ready");
+    load_value_to_first_int_arg(ctx, timestamp)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed timestamp is null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // null selects the formatter's current-time sentinel
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null cleanup path after coercion
+            ctx.emitter.label(&null_label);
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction("mov x0, #-1");                             // pass the current-time sentinel for boxed null
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed timestamp is null
+            ctx.emitter.instruction(&format!("je {}", null_label));             // null selects the formatter's current-time sentinel
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null cleanup path after coercion
+            ctx.emitter.label(&null_label);
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            ctx.emitter.instruction("mov rax, -1");                             // pass the current-time sentinel for boxed null
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Loads a date/strtotime string argument into the runtime helper's string

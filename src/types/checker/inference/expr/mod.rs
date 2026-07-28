@@ -383,6 +383,7 @@ impl Checker {
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
                     CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+                    CastType::Void => PhpType::Void,
                 })
             }
             ExprKind::FunctionCall { name, args } => {

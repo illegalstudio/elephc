@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STR_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
@@ -148,6 +148,12 @@ pub(crate) fn collect_constants(
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in DATE_STR_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
         );
     }
     for (name, value) in SESSION_INT_CONSTANTS {

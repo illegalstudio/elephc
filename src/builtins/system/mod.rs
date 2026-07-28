@@ -11,6 +11,7 @@
 //! - Pure-data builtins (no check hook): time, sleep, usleep, checkdate, date, gmdate,
 //!   mktime, gmmktime, hrtime, getdate, localtime, date_default_timezone_get/set,
 //!   __elephc_mktime_raw, __elephc_gmmktime_raw, __elephc_strtotime_raw,
+//!   __elephc_diag_warning,
 //!   putenv, http_response_code, header, phpversion, exec, shell_exec, system, passthru,
 //!   json_last_error, json_last_error_msg, serialize, preg_match_all, preg_replace.
 //! - Check-hook builtins: microtime (literal-dependent return type), strtotime
@@ -23,6 +24,7 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_diag_warning;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_mktime_raw;
 pub mod __elephc_strtotime_raw;

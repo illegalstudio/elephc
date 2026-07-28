@@ -18,6 +18,35 @@ use super::names::{
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, rewrite_callback_literal_args, Imports, Symbols};
 
+/// Wraps a deprecated predefined constant read in a typed runtime-diagnostic passthrough.
+fn deprecated_constant_read(value: Expr, is_string: bool, message: String) -> ExprKind {
+    ExprKind::StaticMethodCall {
+        receiver: StaticReceiver::Named(resolved_name("DateTime".to_string())),
+        method: if is_string {
+            "__elephc_deprecated_string_constant".to_string()
+        } else {
+            "__elephc_deprecated_int_constant".to_string()
+        },
+        args: vec![
+            value,
+            Expr::new(ExprKind::StringLiteral(message), crate::span::Span::dummy()),
+        ],
+    }
+}
+
+/// Rewrites compiler-only synthetic method names in user source so they cannot
+/// reach implementation helpers that php-src does not expose.
+fn source_visible_method_name(method: &str) -> String {
+    if method
+        .get(.."__elephc_".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("__elephc_"))
+    {
+        format!("{method}__php_src_hidden")
+    } else {
+        method.to_string()
+    }
+}
+
 /// Recursively resolves names in an expression, returning a new expression with
 /// all name references rewritten according to namespace and import rules.
 ///
@@ -207,12 +236,40 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
-        ExprKind::ConstRef(name) => ExprKind::ConstRef(resolved_name(resolve_constant_name(
-            name,
-            current_namespace,
-            imports,
-            symbols,
-        ))),
+        ExprKind::ConstRef(name) => {
+            let resolved =
+                resolve_constant_name(name, current_namespace, imports, symbols);
+            let value = Expr::new(
+                ExprKind::ConstRef(resolved_name(resolved.clone())),
+                expr.span,
+            );
+            let bare = resolved.trim_start_matches('\\');
+            if bare.eq_ignore_ascii_case("DATE_RFC7231") {
+                deprecated_constant_read(
+                    value,
+                    true,
+                    "Deprecated: Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT\n".to_string(),
+                )
+            } else if [
+                "SUNFUNCS_RET_TIMESTAMP",
+                "SUNFUNCS_RET_STRING",
+                "SUNFUNCS_RET_DOUBLE",
+            ]
+            .iter()
+            .any(|constant| bare.eq_ignore_ascii_case(constant))
+            {
+                deprecated_constant_read(
+                    value,
+                    false,
+                    format!(
+                        "Deprecated: Constant {} is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1\n",
+                        bare
+                    ),
+                )
+            } else {
+                value.kind
+            }
+        }
         ExprKind::NewObject { class_name, args } => {
             let resolved_class = resolved_name(resolve_special_or_class_name(
                 class_name,
@@ -242,7 +299,7 @@ pub(super) fn resolve_expr(
                 };
                 ExprKind::StaticMethodCall {
                     receiver: StaticReceiver::Named(resolved_class.clone()),
-                    method: php_symbol_key("createFromISO8601String"),
+                    method: php_symbol_key("__elephc_deprecated_string_constructor"),
                     args: method_args,
                 }
             } else {
@@ -294,15 +351,40 @@ pub(super) fn resolve_expr(
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
         },
-        ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
-            receiver: match receiver {
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let resolved_receiver = match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
                 _ => receiver.clone(),
-            },
-            name: name.clone(),
-        },
+            };
+            let value = Expr::new(
+                ExprKind::ScopedConstantAccess {
+                    receiver: resolved_receiver.clone(),
+                    name: name.clone(),
+                },
+                expr.span,
+            );
+            let is_datetime_rfc7231 = name.eq_ignore_ascii_case("RFC7231")
+                && matches!(
+                    &resolved_receiver,
+                    StaticReceiver::Named(class_name)
+                        if class_name.last_segment().is_some_and(|segment| {
+                            segment.eq_ignore_ascii_case("DateTimeInterface")
+                                || segment.eq_ignore_ascii_case("DateTime")
+                                || segment.eq_ignore_ascii_case("DateTimeImmutable")
+                        })
+                );
+            if is_datetime_rfc7231 {
+                deprecated_constant_read(
+                    value,
+                    true,
+                    "Deprecated: Constant DateTimeInterface::RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT\n".to_string(),
+                )
+            } else {
+                value.kind
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
@@ -317,7 +399,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: source_visible_method_name(method),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -325,7 +407,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: source_visible_method_name(method),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -383,7 +465,7 @@ pub(super) fn resolve_expr(
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
-                    method: method.clone(),
+                    method: source_visible_method_name(method),
                     args: resolved_args,
                 }
             }
@@ -399,11 +481,11 @@ pub(super) fn resolve_expr(
                     )),
                     _ => receiver.clone(),
                 },
-                method: php_symbol_key(method),
+                method: php_symbol_key(&source_visible_method_name(method)),
             },
             CallableTarget::Method { object, method } => CallableTarget::Method {
                 object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-                method: php_symbol_key(method),
+                method: php_symbol_key(&source_visible_method_name(method)),
             },
         }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
@@ -498,28 +580,33 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
             let specs = ["G", "i", "s", "n", "j", "Y"];
             let mut full: Vec<Expr> = Vec::with_capacity(6);
             for i in 0..6 {
+                let span = crate::span::Span::dummy();
+                let date_call = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: resolved_name(date_fn.to_string()),
+                        args: vec![Expr::new(
+                            ExprKind::StringLiteral(specs[i].to_string()),
+                            span,
+                        )],
+                    },
+                    span,
+                );
+                let current_component = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: resolved_name("intval".to_string()),
+                        args: vec![date_call],
+                    },
+                    span,
+                );
                 full.push(match args.get(i) {
-                    Some(a) => a.clone(),
-                    None => {
-                        let span = crate::span::Span::dummy();
-                        let date_call = Expr::new(
-                            ExprKind::FunctionCall {
-                                name: resolved_name(date_fn.to_string()),
-                                args: vec![Expr::new(
-                                    ExprKind::StringLiteral(specs[i].to_string()),
-                                    span,
-                                )],
-                            },
-                            span,
-                        );
-                        Expr::new(
-                            ExprKind::FunctionCall {
-                                name: resolved_name("intval".to_string()),
-                                args: vec![date_call],
-                            },
-                            span,
-                        )
-                    }
+                    Some(argument) => Expr::new(
+                        ExprKind::NullCoalesce {
+                            value: Box::new(argument.clone()),
+                            default: Box::new(current_component),
+                        },
+                        argument.span,
+                    ),
+                    None => current_component,
                 });
             }
             let raw_name = if is_gm { "__elephc_gmmktime_raw" } else { "__elephc_mktime_raw" };
@@ -695,13 +782,13 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
             ))
         }
         "date_interval_create_from_date_string" if args.len() == 1 => {
-            Some(static_call("DateInterval", "createFromDateString"))
+            Some(static_call("DateInterval", "__elephc_create_from_date_string"))
         }
         "date_diff" if args.len() == 2 => Some(method(0, "diff", &[1])),
         "date_diff" if args.len() == 3 => Some(method(0, "diff", &[1, 2])),
         "date_format" if args.len() == 2 => Some(method(0, "format", &[1])),
-        "date_add" if args.len() == 2 => Some(method(0, "add", &[1])),
-        "date_sub" if args.len() == 2 => Some(method(0, "sub", &[1])),
+        "date_add" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_add")),
+        "date_sub" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_sub")),
         "date_modify" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_modify")),
         "date_timestamp_get" if args.len() == 1 => Some(method(0, "getTimestamp", &[])),
         "date_timestamp_set" if args.len() == 2 => Some(method(0, "setTimestamp", &[1])),

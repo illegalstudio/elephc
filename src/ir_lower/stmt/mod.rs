@@ -23,7 +23,7 @@ use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_callable_array_for_assignment, lower_array_literal_with_expected_type,
-    lower_closure_for_assignment, lower_expr,
+    instance_callable_object_class, lower_closure_for_assignment, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
@@ -136,6 +136,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {
+            lower_datetime_immutable_nodiscard_warning(ctx, expr);
             let value = lower_expr(ctx, expr);
             release_expr_statement_result(ctx, value, expr.span);
         }
@@ -195,6 +196,89 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
     }
+}
+
+/// Emits PHP 8.5's `NoDiscard` warning for an unused `DateTimeImmutable` mutator result.
+///
+/// The warning precedes the call, matching php-src when the method later throws.
+/// A `(void)` cast intentionally discards the value and bypasses this hook, while
+/// `@` suppresses the diagnostic through normal error-suppression lowering.
+fn lower_datetime_immutable_nodiscard_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) {
+    let candidate = match &expr.kind {
+        ExprKind::MethodCall { object, method, .. } => {
+            Some((object.as_ref(), method.as_str()))
+        }
+        _ => None,
+    };
+    let Some((object, method)) = candidate else {
+        return;
+    };
+    let method_key = method.to_ascii_lowercase();
+    if !matches!(
+        method_key.as_str(),
+        "modify"
+            | "add"
+            | "sub"
+            | "settimezone"
+            | "settime"
+            | "setdate"
+            | "setisodate"
+            | "settimestamp"
+            | "setmicrosecond"
+    ) {
+        return;
+    }
+    let Some(class_name) = instance_callable_object_class(ctx, object) else {
+        return;
+    };
+    if !is_datetime_immutable_class(ctx, &class_name) {
+        return;
+    }
+    let display_method = match method_key.as_str() {
+        "settimezone" => "setTimezone",
+        "settime" => "setTime",
+        "setdate" => "setDate",
+        "setisodate" => "setISODate",
+        "settimestamp" => "setTimestamp",
+        "setmicrosecond" => "setMicrosecond",
+        "modify" => "modify",
+        "add" => "add",
+        "sub" => "sub",
+        _ => return,
+    };
+    let warning = format!(
+        "Warning: The return value of method DateTimeImmutable::{display_method}() should either be used or intentionally ignored by casting it as (void), as DateTimeImmutable::{display_method}() does not modify the object itself\n"
+    );
+    let diagnostic = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("__elephc_diag_warning"),
+            args: vec![Expr::new(ExprKind::StringLiteral(warning), expr.span)],
+        },
+        expr.span,
+    );
+    let value = lower_expr(ctx, &diagnostic);
+    release_expr_statement_result(ctx, value, expr.span);
+}
+
+/// Returns whether a receiver class is `DateTimeImmutable` or inherits from it.
+fn is_datetime_immutable_class(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> bool {
+    let mut cursor = Some(class_name.trim_start_matches('\\'));
+    while let Some(name) = cursor {
+        if name.eq_ignore_ascii_case("DateTimeImmutable") {
+            return true;
+        }
+        cursor = ctx
+            .classes
+            .get(name)
+            .and_then(|info| info.parent.as_deref());
+    }
+    false
 }
 
 /// Releases a discarded expression-statement result when it may own temporary storage.

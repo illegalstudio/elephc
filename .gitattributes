@@ -1,0 +1,3 @@
+# Preserve the vendored php-src timelib snapshot byte-for-byte.
+crates/elephc-tz/vendor/timelib/** -whitespace
+crates/elephc-tz/vendor/timelib/README.rst conflict-marker-size=32

@@ -1153,6 +1153,9 @@ fn runtime_array_instance_method_targets_for_descriptor(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .method_visibilities
                 .get(method_name)
@@ -1200,6 +1203,9 @@ fn runtime_static_method_descriptor_cases(
         let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
         static_methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in static_methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .static_method_visibilities
                 .get(method_name)
@@ -1298,6 +1304,9 @@ fn runtime_array_instance_method_targets(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if sig.params.len() != arg_count || sig.variadic.is_some() {
                 continue;
             }

@@ -274,6 +274,22 @@ fn check_object_property_write(
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
         if has_get_hook && !has_set_hook && !in_own_accessor {
+            if class_name == "DatePeriod" {
+                // php-src exposes DatePeriod's state through virtual, non-readonly
+                // Reflection properties, but its object handlers reject writes at runtime
+                // with the same catchable error used for readonly properties.
+                checker.throw_access_sites.insert(
+                    span,
+                    crate::types::ThrowAccessInfo {
+                        span,
+                        kind: crate::types::ThrowAccessKind::ReadonlyProperty {
+                            class_name: class_name.to_string(),
+                            property: property.to_string(),
+                        },
+                    },
+                );
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(

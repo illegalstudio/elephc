@@ -33,6 +33,8 @@ use super::program_usage::{collect_required_class_names, program_has_dynamic_ins
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
+    /// True when emitted code can call the timelib-backed date parser.
+    pub timelib: bool,
     /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
     pub mb_strlen: bool,
     pub phar_archive: bool,
@@ -57,6 +59,7 @@ impl RuntimeFeatures {
     pub const fn none() -> Self {
         Self {
             regex: false,
+            timelib: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: false,
@@ -71,6 +74,7 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
+            timelib: true,
             mb_strlen: true,
             phar_archive: true,
             descriptor_invoker: true,
@@ -106,6 +110,9 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         libs.push("elephc_phar".to_string());
         libs.push("z".to_string());
         libs.push("bz2".to_string());
+    }
+    if features.timelib {
+        push_required_library(&mut libs, "elephc_tz");
     }
     if features.descriptor_invoker {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
@@ -1167,6 +1174,7 @@ mod tests {
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_library() {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures {
             regex: false,
+            timelib: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: true,

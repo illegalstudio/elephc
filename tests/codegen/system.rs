@@ -429,11 +429,11 @@ echo date("Y-m-d H:i:s", $lower);
     assert_eq!(out, "2024-06-15 12:00:00,2024-06-15 12:30:00");
 }
 
-/// Pins the current strict ISO-subset rejection behavior while documenting the audited timelib
-/// gap: PHP 8.5 also rejects cases 1, 2, and 4, but accepts the one-letter-zone, slash-date, and
-/// `0x` forms in cases 3, 5, and 6. A strict `=== false` distinguishes failure from timestamp zero.
+/// Verifies timelib's free-form grammar rejects trailing words, bare date suffixes, and incomplete
+/// hours while accepting one-letter zones, slash dates, and `0x` month input exactly like php-src.
+/// A strict `=== false` distinguishes failure from timestamp zero.
 #[test]
-fn test_strtotime_iso_datetime_subset_rejections() {
+fn test_strtotime_php_src_datetime_grammar_edges() {
     let out = compile_and_run(
         r#"<?php
 echo (strtotime("2024-06-15 12:30:45 extra") === false ? "F" : "x") . ",";
@@ -444,7 +444,7 @@ echo (strtotime("2024/06/15") === false ? "F" : "x") . ",";
 echo (strtotime("2024-0x-15") === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "F,F,F,F,F,F");
+    assert_eq!(out, "F,F,x,F,x,x");
 }
 
 /// Verifies the strtotime() failure value is `false`, not `-1`: a failed parse echoes as the

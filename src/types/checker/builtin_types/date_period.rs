@@ -87,11 +87,6 @@ fn new_obj(class_name: &str, args: Vec<Expr>) -> Expr {
     )
 }
 
-/// Builds a string-literal expression.
-fn str_lit(value: &str) -> Expr {
-    Expr::new(ExprKind::StringLiteral(value.to_string()), dummy())
-}
-
 /// Builds a `<name>(args)` free-function call expression (used for `is_int`).
 fn call(name: &str, args: Vec<Expr>) -> Expr {
     Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args }, dummy())
@@ -118,18 +113,6 @@ fn assign_this(property: &str, value: Expr) -> Stmt {
     Stmt::new(
         StmtKind::PropertyAssign {
             object: Box::new(Expr::new(ExprKind::This, dummy())),
-            property: property.to_string(),
-            value,
-        },
-        dummy(),
-    )
-}
-
-/// Builds a `$var->property = value;` statement.
-fn assign_var_prop(var_name: &str, property: &str, value: Expr) -> Stmt {
-    Stmt::new(
-        StmtKind::PropertyAssign {
-            object: Box::new(var(var_name)),
             property: property.to_string(),
             value,
         },
@@ -202,11 +185,11 @@ fn method(
     method_vis(name, Visibility::Public, params, return_type, body)
 }
 
-/// Builds a public integer property defaulting to `0`.
+/// Builds a private integer storage property defaulting to `0`.
 fn int_property(name: &str) -> ClassProperty {
     ClassProperty {
         name: name.to_string(),
-        visibility: Visibility::Public,
+        visibility: Visibility::Private,
         set_visibility: None,
         type_expr: Some(TypeExpr::Int),
         hooks: PropertyHooks::none(),
@@ -222,11 +205,11 @@ fn int_property(name: &str) -> ClassProperty {
     }
 }
 
-/// Builds a public boolean property defaulting to `false`.
+/// Builds a private boolean storage property defaulting to `false`.
 fn bool_property(name: &str) -> ClassProperty {
     ClassProperty {
         name: name.to_string(),
-        visibility: Visibility::Public,
+        visibility: Visibility::Private,
         set_visibility: None,
         type_expr: Some(TypeExpr::Bool),
         hooks: PropertyHooks::none(),
@@ -248,7 +231,7 @@ fn class_const(name: &str, value: i64) -> ClassConst {
         name: name.to_string(),
         visibility: Visibility::Public,
         is_final: false,
-        type_expr: None,
+        type_expr: Some(TypeExpr::Int),
         value: int_lit(value),
         span: dummy(),
         attributes: Vec::new(),
@@ -267,16 +250,6 @@ const INTERVAL_PARTS: [(&str, &str); 7] = [
     ("iv_invert", "invert"),
 ];
 
-/// Builds the statements that materialize a `$iv` local `DateInterval` from the
-/// stored components: `$iv = new DateInterval("PT0S"); $iv->y = $this->iv_y; ...`.
-fn build_interval_local() -> Vec<Stmt> {
-    let mut stmts = vec![assign("iv", new_obj("DateInterval", vec![str_lit("PT0S")]))];
-    for (store, part) in INTERVAL_PARTS {
-        stmts.push(assign_var_prop("iv", part, this_prop(store)));
-    }
-    stmts
-}
-
 /// `DatePeriod::__construct(DateTimeInterface $start, DateInterval $interval, DateTimeInterface|int $end, int $options = 0)`.
 ///
 /// Records the start timestamp, decomposes the interval into its seven integer
@@ -289,7 +262,29 @@ fn date_period_constructor() -> ClassMethod {
     let interval_ty = Some(TypeExpr::Named(Name::unqualified("DateInterval")));
     // `mixed` so an int recurrence count or a DateTimeInterface end both pass the checker.
     let end_ty = Some(TypeExpr::Named(Name::unqualified("mixed")));
-    let mut body = vec![
+    let validation_tokens = crate::lexer::tokenize(
+        r#"<?php
+if (is_int($end)) {
+    if ($end < 1 || $end > 2147483639) {
+        throw new DateMalformedPeriodStringException(
+            "DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640"
+        );
+    }
+    $totalRecurrences = $end
+        + (($options & DatePeriod::EXCLUDE_START_DATE) ? 0 : 1)
+        + (($options & DatePeriod::INCLUDE_END_DATE) ? 1 : 0);
+    if ($totalRecurrences > 2147483639) {
+        throw new DateMalformedStringException(
+            "DatePeriod::__construct(): Recurrence count must be greater or equal to 1 and lower than 2147483640 (including options)"
+        );
+    }
+}
+"#,
+    )
+    .expect("DatePeriod constructor validation must tokenize");
+    let mut body = crate::parser::parse(&validation_tokens)
+        .expect("DatePeriod constructor validation must parse");
+    body.extend(vec![
         assign_this("startTs", mcall(var("start"), "getTimestamp", Vec::new())),
         assign_this(
             "startIsImmutable",
@@ -301,7 +296,7 @@ fn date_period_constructor() -> ClassMethod {
                 dummy(),
             ),
         ),
-    ];
+    ]);
     for (store, part) in INTERVAL_PARTS {
         body.push(assign_this(store, var_prop("interval", part)));
     }
@@ -325,12 +320,12 @@ fn date_period_constructor() -> ClassMethod {
     body.push(assign_this("includeEnd", bin(var("options"), BinOp::BitAnd, int_lit(2))));
     body.push(assign_this("curTs", this_prop("startTs")));
     body.push(assign_this("idx", int_lit(0)));
-    // Populate the PHP 8.2+ public mirror properties from the constructor arguments.
-    body.push(assign_this("start", var("start")));
-    body.push(assign_this("interval", var("interval")));
+    // Populate private storage backing PHP 8.2+'s virtual public properties.
+    body.push(assign_this("_start", var("start")));
+    body.push(assign_this("_interval", var("interval")));
     // include_start_date = !excludeStart; include_end_date = (includeEnd != 0).
     body.push(assign_this(
-        "include_start_date",
+        "_include_start_date",
         Expr::new(
             ExprKind::BinaryOp {
                 left: Box::new(this_prop("excludeStart")),
@@ -341,7 +336,7 @@ fn date_period_constructor() -> ClassMethod {
         ),
     ));
     body.push(assign_this(
-        "include_end_date",
+        "_include_end_date",
         Expr::new(
             ExprKind::BinaryOp {
                 left: Box::new(this_prop("includeEnd")),
@@ -355,19 +350,19 @@ fn date_period_constructor() -> ClassMethod {
     // number of yielded instances: explicit count + included start + included end.
     body.push(if_else(
         call("is_int", vec![var("end")]),
-        vec![assign_this("end", null_lit())],
-        Some(vec![assign_this("end", var("end"))]),
+        vec![assign_this("_end", null_lit())],
+        Some(vec![assign_this("_end", var("end"))]),
     ));
     body.push(assign_this(
-        "recurrences",
+        "_recurrences",
         bin(
             bin(
                 this_prop("_recurrence_count"),
                 BinOp::Add,
-                cast_int(this_prop("include_start_date")),
+                cast_int(this_prop("_include_start_date")),
             ),
             BinOp::Add,
-            cast_int(this_prop("include_end_date")),
+            cast_int(this_prop("_include_end_date")),
         ),
     ));
     method(
@@ -386,7 +381,14 @@ fn date_period_constructor() -> ClassMethod {
 /// `DatePeriod::_advance(): void` — private helper that steps `curTs` forward by one
 /// interval, reusing `DateTime::add()` so calendar overflow matches PHP exactly.
 fn date_period_advance() -> ClassMethod {
-    let mut body = build_interval_local();
+    let mut body = vec![assign(
+        "iv",
+        mcall(
+            Expr::new(ExprKind::This, dummy()),
+            "getDateInterval",
+            Vec::new(),
+        ),
+    )];
     body.push(assign("tmp", new_obj("DateTime", Vec::new())));
     body.push(expr_stmt(mcall(var("tmp"), "setTimestamp", vec![this_prop("curTs")])));
     body.push(expr_stmt(mcall(var("tmp"), "add", vec![var("iv")])));
@@ -397,8 +399,9 @@ fn date_period_advance() -> ClassMethod {
 /// `DatePeriod::rewind(): void` — resets the cursor to the start, skipping it once when
 /// `EXCLUDE_START_DATE` is set.
 fn date_period_rewind() -> ClassMethod {
-    method(
+    method_vis(
         "rewind",
+        Visibility::Private,
         Vec::new(),
         Some(TypeExpr::Void),
         vec![
@@ -430,8 +433,9 @@ fn date_period_valid() -> ClassMethod {
         vec![ret(bin(this_prop("curTs"), BinOp::LtEq, this_prop("endTs")))],
         Some(vec![ret(bin(this_prop("curTs"), BinOp::Lt, this_prop("endTs")))]),
     )];
-    method(
+    method_vis(
         "valid",
+        Visibility::Private,
         Vec::new(),
         Some(TypeExpr::Bool),
         vec![if_else(this_prop("useCount"), count_branch, Some(date_branch))],
@@ -442,12 +446,10 @@ const CURRENT_SRC: &str = r#"<?php
 if ($this->startIsImmutable) {
     $d = new DateTimeImmutable();
     $d = $d->setTimestamp($this->curTs);
-    $this->current = $d;
     return $d;
 }
 $d = new DateTime();
 $d->setTimestamp($this->curTs);
-$this->current = $d;
 return $d;
 "#;
 
@@ -456,8 +458,9 @@ return $d;
 fn date_period_current() -> ClassMethod {
     let tokens = crate::lexer::tokenize(CURRENT_SRC).expect("current body must tokenize");
     let body = crate::parser::parse(&tokens).expect("current body must parse");
-    method(
+    method_vis(
         "current",
+        Visibility::Private,
         Vec::new(),
         Some(TypeExpr::Named(Name::unqualified("DateTimeInterface"))),
         body,
@@ -466,13 +469,20 @@ fn date_period_current() -> ClassMethod {
 
 /// `DatePeriod::key(): int` — returns the zero-based iteration index.
 fn date_period_key() -> ClassMethod {
-    method("key", Vec::new(), Some(TypeExpr::Int), vec![ret(this_prop("idx"))])
+    method_vis(
+        "key",
+        Visibility::Private,
+        Vec::new(),
+        Some(TypeExpr::Int),
+        vec![ret(this_prop("idx"))],
+    )
 }
 
 /// `DatePeriod::next(): void` — advances the cursor by one interval and bumps the index.
 fn date_period_next() -> ClassMethod {
-    method(
+    method_vis(
         "next",
+        Visibility::Private,
         Vec::new(),
         Some(TypeExpr::Void),
         vec![
@@ -530,8 +540,18 @@ fn date_period_get_end_date() -> ClassMethod {
 
 /// `DatePeriod::getDateInterval(): DateInterval` — rebuilds the interval from its components.
 fn date_period_get_interval() -> ClassMethod {
-    let mut body = build_interval_local();
-    body.push(ret(var("iv")));
+    let tokens = crate::lexer::tokenize(
+        r#"<?php
+$interval = $this->_interval;
+if (!($interval instanceof DateInterval)) {
+    throw new DateObjectError("Object of type DatePeriod has not been correctly initialized by calling parent::__construct() in its constructor");
+}
+return $interval->__elephc_clone();
+"#,
+    )
+    .expect("DatePeriod getDateInterval body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod getDateInterval body must parse");
     method(
         "getDateInterval",
         Vec::new(),
@@ -555,95 +575,86 @@ fn date_period_get_recurrences() -> ClassMethod {
     )
 }
 
-/// `DatePeriod::getIterator(): Iterator` — returns an iterator over the period's
-/// dates. PHP's `DatePeriod` is an `IteratorAggregate` whose `getIterator()`
-/// returns a separate iterator; elephc's `DatePeriod` is itself an `Iterator`, so
-/// this rewinds and returns `$this`, which supports the common
-/// `foreach ($p->getIterator() ...)` / `iterator_to_array($p->getIterator())`
-/// uses (a single live iterator rather than independent ones).
+/// PHP source backing `DatePeriod::getIterator()`.
+///
+/// It snapshots fresh date values into an `InternalIterator`. The callback mirrors
+/// the iterator's live cursor onto `DatePeriod::$current`, matching php-src while
+/// keeping separate `getIterator()` calls independent.
+const DATEPERIOD_GET_ITERATOR_SRC: &str = r#"<?php
+$items = [];
+$this->rewind();
+while ($this->valid()) {
+    $items[] = $this->current();
+    $this->next();
+}
+$onCurrent = function($value): void {
+    if ($value === null) {
+        $this->_current = $this->current();
+    } else {
+        $this->_current = $value;
+    }
+};
+return new InternalIterator($items, $onCurrent);
+"#;
+
+/// `DatePeriod::getIterator(): Iterator` — returns an independent internal iterator
+/// over the period's dates.
 fn date_period_get_iterator() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DATEPERIOD_GET_ITERATOR_SRC)
+        .expect("DatePeriod::getIterator body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod::getIterator body must parse");
     method(
         "getIterator",
         Vec::new(),
         Some(TypeExpr::Named(Name::unqualified("Iterator"))),
-        vec![
-            expr_stmt(mcall(
-                Expr::new(ExprKind::This, dummy()),
-                "rewind",
-                Vec::new(),
-            )),
-            ret(Expr::new(ExprKind::This, dummy())),
-        ],
+        body,
     )
 }
 
 /// PHP source backing `DatePeriod::createFromISO8601String()` (PHP 8.3+).
 ///
-/// Parses a subset of the RFC 5545 repeating-interval specification and forwards to the regular
-/// `(start, interval, end|recurrences)` constructor. Two forms are accepted:
-/// - `Rn/start[/interval[/end]]` with `n` ≥ 1 (recurrence form; the interval defaults to `P1D`).
-/// - `start/interval[/end]` (no `R` prefix; a finite end bound is required — the endless form
-///   `start/interval` is rejected, since elephc cannot model an unbounded iteration).
-/// On malformed input it throws `DateMalformedPeriodStringException`, matching PHP 8.3+: a
-/// `Recurrence count must be greater or equal to 1 ...` message for an out-of-range recurrence
-/// (`R0`), and `Unknown or bad format (<input>)` for every other parse failure.
+/// Delegates the complete grammar to the vendored php-src timelib parser, then
+/// performs php-src's start/interval/end-or-recurrence validation in the same order.
 const CREATE_FROM_ISO8601_SRC: &str = r#"<?php
-$bad = "Unknown or bad format (" . $specification . ")";
-$badRecur = "DatePeriod::createFromISO8601String(): Recurrence count must be greater or equal to 1 and lower than 2147483640";
-$len = strlen($specification);
-if ($len < 3) { throw new DateMalformedPeriodStringException($bad); }
-$recurrences = 0;
-if ($specification[0] === "R") {
-    // The recurrence prefix is Rn where n is a non-empty digit run; R<digits>/ is required
-    // (endless "R/" is a bad-format error, and "R0" is a recurrence-count error, per PHP 8.3+).
-    $slash = strpos($specification, "/");
-    if ($slash === false || $slash < 2) { throw new DateMalformedPeriodStringException($bad); }
-    $prefix = substr($specification, 1, $slash - 1);
-    if ($prefix === "") { throw new DateMalformedPeriodStringException($bad); }
-    if ($prefix[0] === "0") { throw new DateMalformedPeriodStringException($badRecur); }
-    $digits = "0123456789";
-    $all_digits = 1;
-    $pi = 0;
-    while ($pi < strlen($prefix)) {
-        $ch = $prefix[$pi];
-        $found = 0;
-        $di = 0;
-        while ($di < 10) {
-            if ($digits[$di] === $ch) { $found = 1; break; }
-            $di = $di + 1;
-        }
-        if ($found === 0) { $all_digits = 0; break; }
-        $pi = $pi + 1;
-    }
-    if ($all_digits === 0) { throw new DateMalformedPeriodStringException($bad); }
-    $recurrences = (int)$prefix;
-    if ($recurrences < 1) { throw new DateMalformedPeriodStringException($badRecur); }
-    $rest = substr($specification, $slash + 1);
-} else {
-    // No R prefix: start/interval[/end] form.
-    $rest = $specification;
+$parsed = __elephc_timelib_period_parse($specification);
+if ($parsed["status"] !== "P") {
+    throw new DateMalformedPeriodStringException(
+        "Unknown or bad format (" . $specification . ")"
+    );
 }
-$parts = explode("/", $rest);
-// count()-guarded reads avoid an undefined-key notice on the 2-part (no-end) form.
-$nparts = count($parts);
-$start_str = $parts[0];
-$interval_str = ($nparts >= 2) ? $parts[1] : "P1D";
-$end_str = ($nparts >= 3) ? $parts[2] : "";
-if ($start_str === "" || $interval_str === "") { throw new DateMalformedPeriodStringException($bad); }
-$has_end = ($end_str !== "") ? 1 : 0;
-if ($has_end === 0 && $recurrences < 1) { throw new DateMalformedPeriodStringException($bad); }
-try {
-    $start_dt = new DateTime($start_str);
-    $iv = new DateInterval($interval_str);
-} catch (Exception $e) {
-    throw new DateMalformedPeriodStringException($bad);
+if (!$parsed["has_start"]) {
+    throw new DateMalformedPeriodStringException(
+        "DatePeriod::createFromISO8601String(): ISO interval must contain a start date, \""
+        . $specification . "\" given"
+    );
 }
-if ($has_end === 1) {
-    try { $end_dt = new DateTime($end_str); }
-    catch (Exception $e) { throw new DateMalformedPeriodStringException($bad); }
-    return new DatePeriod($start_dt, $iv, $end_dt, $options);
+if (!$parsed["has_interval"]) {
+    throw new DateMalformedPeriodStringException(
+        "DatePeriod::createFromISO8601String(): ISO interval must contain an interval, \""
+        . $specification . "\" given"
+    );
 }
-return new DatePeriod($start_dt, $iv, $recurrences, $options);
+if (!$parsed["has_end"] && $parsed["recurrences"] === 0) {
+    throw new DateMalformedPeriodStringException(
+        "DatePeriod::createFromISO8601String(): ISO interval must contain an end date or a recurrence count, \""
+        . $specification . "\" given"
+    );
+}
+$start = DateTimeImmutable::createFromTimestamp($parsed["start"]);
+$interval = new DateInterval("PT0S");
+$interval->y = $parsed["y"];
+$interval->m = $parsed["m"];
+$interval->d = $parsed["d"];
+$interval->h = $parsed["h"];
+$interval->i = $parsed["i"];
+$interval->s = $parsed["s"];
+$interval->f = $parsed["us"] / 1000000.0;
+if ($parsed["has_end"]) {
+    $end = DateTimeImmutable::createFromTimestamp($parsed["end"]);
+    return new DatePeriod($start, $interval, $end, $options);
+}
+return new DatePeriod($start, $interval, $parsed["recurrences"], $options);
 "#;
 
 /// Builds the static `createFromISO8601String(string $specification, int $options = 0): DatePeriod`
@@ -652,8 +663,17 @@ return new DatePeriod($start_dt, $iv, $recurrences, $options);
 /// The body is the parsed `CREATE_FROM_ISO8601_SRC` PHP source. It forwards to the regular
 /// `(start, interval, end|recurrences, options)` constructor on success and throws
 /// `DateMalformedPeriodStringException` on malformed input (PHP 8.3+ never returns `false`).
-fn date_period_create_from_iso8601_string() -> ClassMethod {
-    let tokens = crate::lexer::tokenize(CREATE_FROM_ISO8601_SRC)
+fn date_period_create_from_iso8601_string(uses_timelib: bool) -> ClassMethod {
+    let source = if uses_timelib {
+        CREATE_FROM_ISO8601_SRC
+    } else {
+        r#"<?php
+throw new DateMalformedPeriodStringException(
+    "Unknown or bad format (" . $specification . ")"
+);
+"#
+    };
+    let tokens = crate::lexer::tokenize(source)
         .expect("createFromISO8601String body source must tokenize");
     let body = crate::parser::parse(&tokens)
         .expect("createFromISO8601String body source must parse");
@@ -673,6 +693,41 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
         variadic_by_ref: false,
         variadic_type: None,
         // PHP 8.3+: returns a `DatePeriod` or throws (never `false`).
+        return_type: Some(TypeExpr::Named(Name::unqualified("static"))),
+        by_ref_return: false,
+        body,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// PHP source backing the deprecated string constructor overload.
+const DEPRECATED_STRING_CONSTRUCTOR_SRC: &str = r#"<?php
+__elephc_diag_warning("Deprecated: Calling DatePeriod::__construct(string $isostr, int $options = 0) is deprecated, use DatePeriod::createFromISO8601String() instead\n");
+return DatePeriod::createFromISO8601String($specification, $options);
+"#;
+
+/// Builds the internal wrapper used for `new DatePeriod(string[, int])`.
+fn date_period_deprecated_string_constructor() -> ClassMethod {
+    let tokens = crate::lexer::tokenize(DEPRECATED_STRING_CONSTRUCTOR_SRC)
+        .expect("DatePeriod deprecated string constructor body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod deprecated string constructor body must parse");
+    ClassMethod {
+        name: "__elephc_deprecated_string_constructor".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            param("specification", Some(TypeExpr::Str), None),
+            param("options", Some(TypeExpr::Int), Some(int_lit(0))),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),
         by_ref_return: false,
         body,
@@ -681,8 +736,33 @@ fn date_period_create_from_iso8601_string() -> ClassMethod {
     }
 }
 
+/// Builds the internal renderer for php-src's seven-field `DatePeriod` debug shape.
+fn date_period_debug_dump() -> ClassMethod {
+    let src = r#"<?php
+echo "object(DatePeriod)#" . spl_object_id($this) . " (7) {\n";
+echo "  [\"start\"]=>\n"; var_dump($this->start);
+echo "  [\"current\"]=>\n"; var_dump($this->current);
+echo "  [\"end\"]=>\n"; var_dump($this->end);
+echo "  [\"interval\"]=>\n"; var_dump($this->interval);
+echo "  [\"recurrences\"]=>\n"; var_dump($this->recurrences);
+echo "  [\"include_start_date\"]=>\n"; var_dump($this->include_start_date);
+echo "  [\"include_end_date\"]=>\n"; var_dump($this->include_end_date);
+echo "}\n";
+"#;
+    let tokens = crate::lexer::tokenize(src)
+        .expect("DatePeriod debug dump source must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("DatePeriod debug dump source must parse");
+    method(
+        "__elephc_debug_dump",
+        Vec::new(),
+        Some(TypeExpr::Void),
+        body,
+    )
+}
+
 /// Builds the full `DatePeriod` method list.
-fn date_period_methods() -> Vec<ClassMethod> {
+fn date_period_methods(uses_timelib: bool) -> Vec<ClassMethod> {
     let mut methods = vec![
         date_period_constructor(),
         date_period_advance(),
@@ -696,8 +776,11 @@ fn date_period_methods() -> Vec<ClassMethod> {
         date_period_get_interval(),
         date_period_get_recurrences(),
         date_period_get_iterator(),
-        date_period_create_from_iso8601_string(),
+        date_period_create_from_iso8601_string(uses_timelib),
+        date_period_deprecated_string_constructor(),
+        date_period_debug_dump(),
     ];
+    methods.extend(date_period_property_getters());
     methods.extend(date_period_serialize_methods());
     methods
 }
@@ -719,6 +802,22 @@ return [
 /// PHP source backing `DatePeriod::__set_state()`. Reconstructs from the array by forwarding to the
 /// constructor with the start/interval/end or start/interval/recurrences form.
 const DATEPERIOD_SET_STATE_SRC: &str = r#"<?php
+if (!array_key_exists("start", $array)
+    || !array_key_exists("current", $array)
+    || !array_key_exists("end", $array)
+    || !array_key_exists("interval", $array)
+    || !array_key_exists("recurrences", $array)
+    || !array_key_exists("include_start_date", $array)
+    || !array_key_exists("include_end_date", $array)
+    || !($array["start"] instanceof DateTimeInterface)
+    || !($array["current"] === null || $array["current"] instanceof DateTimeInterface)
+    || !($array["end"] === null || $array["end"] instanceof DateTimeInterface)
+    || !($array["interval"] instanceof DateInterval)
+    || !is_int($array["recurrences"])
+    || !is_bool($array["include_start_date"])
+    || !is_bool($array["include_end_date"])) {
+    throw new Error("Invalid serialization data for DatePeriod object");
+}
 $options = ($array["include_start_date"] ? 0 : DatePeriod::EXCLUDE_START_DATE)
     | ($array["include_end_date"] ? DatePeriod::INCLUDE_END_DATE : 0);
 if ($array["end"] === null) {
@@ -733,6 +832,8 @@ return new DatePeriod($array["start"], $array["interval"], $array["end"], $optio
 /// Builds `DatePeriod::__wakeup(): void` (no-op, reusing the datetime wakeup builder).
 fn date_period_wakeup() -> ClassMethod {
     let tokens = crate::lexer::tokenize(r#"<?php
+__elephc_diag_warning("Deprecated: Method DatePeriod::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n");
+throw new Error("Invalid serialization data for DatePeriod object");
 "#)
         .expect("DatePeriod::__wakeup body source must tokenize");
     let body = crate::parser::parse(&tokens)
@@ -753,7 +854,10 @@ fn date_period_wakeup() -> ClassMethod {
         by_ref_return: false,
         body,
         span: dummy(),
-        attributes: Vec::new(),
+        attributes: super::datetime::deprecated_attribute(
+            "8.5",
+            "this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()",
+        ),
     }
 }
 
@@ -775,7 +879,7 @@ fn date_period_serialize() -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Named(Name::unqualified("array"))),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -786,6 +890,22 @@ fn date_period_serialize() -> ClassMethod {
 /// Builds `DatePeriod::__unserialize(array $data): void`. Restores the mirror properties.
 fn date_period_unserialize() -> ClassMethod {
     let src = r#"<?php
+if (!array_key_exists("start", $data)
+    || !array_key_exists("current", $data)
+    || !array_key_exists("end", $data)
+    || !array_key_exists("interval", $data)
+    || !array_key_exists("recurrences", $data)
+    || !array_key_exists("include_start_date", $data)
+    || !array_key_exists("include_end_date", $data)
+    || !($data["start"] instanceof DateTimeInterface)
+    || !($data["current"] === null || $data["current"] instanceof DateTimeInterface)
+    || !($data["end"] === null || $data["end"] instanceof DateTimeInterface)
+    || !($data["interval"] instanceof DateInterval)
+    || !is_int($data["recurrences"])
+    || !is_bool($data["include_start_date"])
+    || !is_bool($data["include_end_date"])) {
+    throw new Error("Invalid serialization data for DatePeriod object");
+}
 $options = ($data["include_start_date"] ? 0 : DatePeriod::EXCLUDE_START_DATE)
     | ($data["include_end_date"] ? DatePeriod::INCLUDE_END_DATE : 0);
 if ($data["end"] === null) {
@@ -796,7 +916,7 @@ if ($data["end"] === null) {
 } else {
     $this->__construct($data["start"], $data["interval"], $data["end"], $options);
 }
-$this->current = $data["current"];
+$this->_current = $data["current"];
 "#;
     let tokens = crate::lexer::tokenize(src).expect("DatePeriod::__unserialize body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("DatePeriod::__unserialize body source must parse");
@@ -809,7 +929,7 @@ $this->current = $data["current"];
         has_body: true,
         params: vec![(
             "data".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -840,7 +960,7 @@ fn date_period_set_state() -> ClassMethod {
         has_body: true,
         params: vec![(
             "array".to_string(),
-            Some(TypeExpr::Named(Name::unqualified("mixed"))),
+            Some(TypeExpr::Named(Name::unqualified("array"))),
             None,
             false,
         )],
@@ -868,10 +988,10 @@ fn date_period_serialize_methods() -> Vec<ClassMethod> {
 
 /// Builds a public object property defaulting to `null` (for the `DateTimeInterface`/`DateInterval`
 /// mirror properties exposed by PHP's `DatePeriod`).
-fn nullable_object_property(name: &str, class_name: &str) -> ClassProperty {
+fn nullable_object_property(name: &str, class_name: &str, visibility: Visibility) -> ClassProperty {
     ClassProperty {
         name: name.to_string(),
-        visibility: Visibility::Public,
+        visibility,
         set_visibility: None,
         type_expr: Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
             class_name,
@@ -889,6 +1009,63 @@ fn nullable_object_property(name: &str, class_name: &str) -> ClassProperty {
     }
 }
 
+/// Builds one public virtual get-only property backed by a synthetic getter method.
+fn virtual_property(name: &str, type_expr: TypeExpr) -> ClassProperty {
+    ClassProperty {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        set_visibility: None,
+        type_expr: Some(type_expr),
+        hooks: PropertyHooks { get: true, set: false, get_by_ref: false },
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: None,
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds one synthetic getter for a public `DatePeriod` virtual property.
+fn virtual_property_getter(name: &str, backing: &str, return_type: TypeExpr) -> ClassMethod {
+    method(
+        &crate::names::property_hook_get_method(name),
+        Vec::new(),
+        Some(return_type),
+        vec![ret(this_prop(backing))],
+    )
+}
+
+/// Builds the seven php-src virtual property getters.
+fn date_period_property_getters() -> Vec<ClassMethod> {
+    let dti = TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+        "DateTimeInterface",
+    ))));
+    let interval = TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+        "DateInterval",
+    ))));
+    vec![
+        virtual_property_getter("start", "_start", dti.clone()),
+        virtual_property_getter("current", "_current", dti.clone()),
+        virtual_property_getter("end", "_end", dti),
+        virtual_property_getter("interval", "_interval", interval),
+        virtual_property_getter("recurrences", "_recurrences", TypeExpr::Int),
+        virtual_property_getter(
+            "include_start_date",
+            "_include_start_date",
+            TypeExpr::Bool,
+        ),
+        virtual_property_getter(
+            "include_end_date",
+            "_include_end_date",
+            TypeExpr::Bool,
+        ),
+    ]
+}
+
 /// Builds the `DatePeriod` integer state properties.
 fn date_period_properties() -> Vec<ClassProperty> {
     let mut props = vec![int_property("startTs"), int_property("endTs"), bool_property("startIsImmutable")];
@@ -902,24 +1079,78 @@ fn date_period_properties() -> Vec<ClassProperty> {
     // useCount selects the count form; _recurrence_count holds its explicit repeat count.
     props.push(int_property("useCount"));
     props.push(int_property("_recurrence_count"));
-    // PHP 8.2+ public readonly virtual properties, exposed here as public mirror properties
-    // populated by the constructor and `current()`/`_advance` so the userland surface matches PHP.
-    props.push(nullable_object_property("start", "DateTimeInterface"));
-    props.push(nullable_object_property("current", "DateTimeInterface"));
-    props.push(nullable_object_property("end", "DateTimeInterface"));
-    props.push(nullable_object_property("interval", "DateInterval"));
-    props.push(int_property("recurrences"));
-    props.push(bool_property("include_start_date"));
-    props.push(bool_property("include_end_date"));
+    // Private materialized storage and public virtual get-only properties reproduce
+    // php-src's special handlers: Reflection reports virtual properties while direct
+    // user writes are rejected even though `isReadOnly()` itself is false.
+    props.push(nullable_object_property(
+        "_start",
+        "DateTimeInterface",
+        Visibility::Private,
+    ));
+    props.push(nullable_object_property(
+        "_current",
+        "DateTimeInterface",
+        Visibility::Private,
+    ));
+    props.push(nullable_object_property(
+        "_end",
+        "DateTimeInterface",
+        Visibility::Private,
+    ));
+    props.push(nullable_object_property(
+        "_interval",
+        "DateInterval",
+        Visibility::Private,
+    ));
+    let mut recurrence_store = int_property("_recurrences");
+    recurrence_store.visibility = Visibility::Private;
+    props.push(recurrence_store);
+    let mut include_start_store = bool_property("_include_start_date");
+    include_start_store.visibility = Visibility::Private;
+    props.push(include_start_store);
+    let mut include_end_store = bool_property("_include_end_date");
+    include_end_store.visibility = Visibility::Private;
+    props.push(include_end_store);
+    props.push(virtual_property(
+        "start",
+        TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        )))),
+    ));
+    props.push(virtual_property(
+        "current",
+        TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        )))),
+    ));
+    props.push(virtual_property(
+        "end",
+        TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        )))),
+    ));
+    props.push(virtual_property(
+        "interval",
+        TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateInterval",
+        )))),
+    ));
+    props.push(virtual_property("recurrences", TypeExpr::Int));
+    props.push(virtual_property("include_start_date", TypeExpr::Bool));
+    props.push(virtual_property("include_end_date", TypeExpr::Bool));
     props
 }
 
 /// Injects the built-in `DatePeriod` class into the checker's class map.
 ///
-/// `DatePeriod` implements `Iterator` so it can be used directly in `foreach`. It is
-/// registered after `DateTime`/`DateInterval` (which its method bodies reference). The
-/// constructor models the `(start, interval, end)` and `(start, interval, recurrences)` forms.
-pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, FlattenedClass>) {
+/// `DatePeriod` implements only `IteratorAggregate`, like php-src, and returns an
+/// independent `InternalIterator`. It is registered after `DateTime`/`DateInterval`
+/// (which its method bodies reference). The constructor models the
+/// `(start, interval, end)` and `(start, interval, recurrences)` forms.
+pub(crate) fn inject_builtin_date_period(
+    class_map: &mut HashMap<String, FlattenedClass>,
+    uses_timelib: bool,
+) {
     if class_map.contains_key("DatePeriod") {
         return;
     }
@@ -929,16 +1160,12 @@ pub(crate) fn inject_builtin_date_period(class_map: &mut HashMap<String, Flatten
             name: "DatePeriod".to_string(),
             span: dummy(),
             extends: None,
-            implements: vec![
-                "Iterator".to_string(),
-                "IteratorAggregate".to_string(),
-                "Traversable".to_string(),
-            ],
+            implements: vec!["IteratorAggregate".to_string(), "Traversable".to_string()],
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
             properties: date_period_properties(),
-            methods: date_period_methods(),
+            methods: date_period_methods(uses_timelib),
             attributes: Vec::new(),
             constants: vec![
                 class_const("EXCLUDE_START_DATE", 1),

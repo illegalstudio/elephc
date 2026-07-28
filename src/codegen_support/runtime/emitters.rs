@@ -134,7 +134,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_localtime(emitter);
     system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
-    system::emit_strtotime(emitter);
+    system::emit_strtotime(emitter, features.timelib);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);

@@ -395,4 +395,10 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::date_constants::DATE_INT_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::date_constants::DATE_STR_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
 }

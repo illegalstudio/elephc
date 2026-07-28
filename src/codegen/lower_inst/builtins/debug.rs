@@ -178,6 +178,18 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
                 emit_var_dump_array(ctx, &ty)
             }
+            PhpType::Object(class_name)
+                if matches_datetime_debug_class(class_name) =>
+            {
+                let mut method_call = inst.clone();
+                method_call.operands = vec![value];
+                super::super::lower_runtime_object_method_call(
+                    ctx,
+                    &method_call,
+                    class_name,
+                    "__elephc_debug_dump",
+                )
+            }
             PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
             PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
             other => Err(CodegenIrError::unsupported(format!(
@@ -187,6 +199,16 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         }?;
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns whether php-src exposes a special date/time debug handler for a class.
+fn matches_datetime_debug_class(class_name: &str) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    normalized.eq_ignore_ascii_case("DateTime")
+        || normalized.eq_ignore_ascii_case("DateTimeImmutable")
+        || normalized.eq_ignore_ascii_case("DateTimeZone")
+        || normalized.eq_ignore_ascii_case("DateInterval")
+        || normalized.eq_ignore_ascii_case("DatePeriod")
 }
 
 /// Loads a value and returns the PHP type needed for user-visible debug output.
@@ -592,7 +614,11 @@ fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_jump(ctx.emitter, &fallback);
     for (case, class_name) in cases {
         ctx.emitter.label(&case);
-        emit_var_dump_object_name(ctx, &class_name);
+        if matches_datetime_debug_class(&class_name) {
+            emit_dynamic_datetime_debug_call(ctx, &class_name);
+        } else {
+            emit_var_dump_object_name(ctx, &class_name);
+        }
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&null_label);
@@ -602,6 +628,16 @@ fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
     emit_write_literal(ctx, b"object\n");
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Calls a concrete ext/date debug renderer for an object already loaded in the
+/// integer result register.
+fn emit_dynamic_datetime_debug_call(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the dynamically identified date object as `$this`
+    }
+    let symbol = crate::names::method_symbol(class_name, "__elephc_debug_dump");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits `object(ClassName)` output for a known runtime class name.

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STR_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
@@ -77,6 +77,9 @@ impl Checker {
         }
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in DATE_STR_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Str);
         }
         for (name, _value) in SESSION_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);

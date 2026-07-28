@@ -4394,10 +4394,13 @@ fn static_array_callable_is_callable(
     let [class_expr, method_expr] = items else {
         return None;
     };
-    let class_name = static_callable_class_name(ctx, class_expr)?;
     let ExprKind::StringLiteral(method) = &method_expr.kind else {
         return None;
     };
+    if !crate::codegen_support::callable_dispatch::runtime_method_callable_visible(method) {
+        return Some(false);
+    }
+    let class_name = static_callable_class_name(ctx, class_expr)?;
     Some(static_method_callback_is_callable(ctx, &class_name, method))
 }
 
@@ -4757,7 +4760,7 @@ pub(crate) fn lower_bound_closure_for_assignment(
 
 /// Resolves the statically-known class name of an object expression used as an instance-call
 /// receiver, including declared property and chained-call results.
-fn instance_callable_object_class(
+pub(crate) fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {
@@ -8435,6 +8438,12 @@ fn lower_ternary(
 /// Lowers a cast expression.
 fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // PHP 8.5's `(void)` cast is an explicit discard marker. The enclosing
+    // expression statement still owns cleanup of the evaluated value, so keep
+    // the producer visible and do not emit a representation-changing cast.
+    if matches!(target, CastType::Void) {
+        return value;
+    }
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.
@@ -8507,6 +8516,7 @@ fn cast_php_type(target: &CastType) -> PhpType {
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        CastType::Void => PhpType::Void,
     }
 }
 
@@ -10423,6 +10433,19 @@ fn static_property_result_type(
     normalize_value_php_type(property_ty.codegen_repr())
 }
 
+/// Returns whether an inline `ReflectionClass` receiver has no observable construction effects.
+///
+/// Known literal class reflectors may be skipped when a member-list call is rebuilt directly
+/// from compile-time metadata. `ReflectionObject` must still be materialized because its
+/// DateInterval property surface depends on live instance state.
+fn reflection_class_inline_owner_can_be_elided(object_expr: &Expr) -> bool {
+    matches!(
+        &object_expr.kind,
+        ExprKind::NewObject { class_name, .. }
+            if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass"
+    )
+}
+
 /// Lowers an object method call.
 fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10455,6 +10478,13 @@ fn lower_method_call(
         None
     };
     let object_expr = object;
+    if op == Op::MethodCall && reflection_class_inline_owner_can_be_elided(object_expr) {
+        if let Some(value) =
+            lower_reflection_class_member_list_call(ctx, Some(object_expr), method, args, expr)
+        {
+            return value;
+        }
+    }
     let object = lower_expr(ctx, object_expr);
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
@@ -10829,9 +10859,13 @@ fn lower_reflection_class_member_list_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
+    let object_expr = object_expr?;
+    let class_name = reflection_class_reflected_class(ctx, object_expr)?;
     let (member_class, items): (&str, Vec<Expr>) = match php_symbol_key(method).as_str() {
         "getproperties" => {
+            if reflection_owner_receiver_is_object(ctx, object_expr) {
+                return None;
+            }
             let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
             (
                 "ReflectionProperty",
@@ -11711,11 +11745,24 @@ fn reflection_property_class_get_properties_index_target(
     if php_symbol_key(method) != "getproperties" {
         return None;
     }
+    if reflection_owner_receiver_is_object(ctx, object) {
+        return None;
+    }
     let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
     let class_name = reflection_class_reflected_class(ctx, object)?;
     let property =
         reflection_class_property_name_at_index(ctx, &class_name, *raw_index as usize, filter)?;
     Some((class_name, property))
+}
+
+/// Returns whether a Reflection owner expression is a `ReflectionObject` rather than a class.
+fn reflection_owner_receiver_is_object(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> bool {
+    isset_object_expr_class(ctx, object_expr).is_some_and(|(class_name, _)| {
+        php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionobject"
+    })
 }
 
 /// Returns the `ReflectionClass::getProperties()` property name at a known index.
@@ -11737,6 +11784,15 @@ fn reflection_class_property_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if let Some(property_names) = crate::types::php_src_date_property_names(class_name) {
+        return Some(
+            property_names
+                .iter()
+                .filter(|name| reflection_property_matches_filter(class_info, name, filter))
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+    }
     Some(
         class_info
             .properties
@@ -11756,6 +11812,15 @@ fn reflection_class_method_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if let Some(method_names) = crate::types::php_src_date_method_names(class_name) {
+        return Some(
+            method_names
+                .iter()
+                .filter(|name| reflection_method_matches_filter(class_info, name, filter))
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in class_info

@@ -216,7 +216,10 @@ impl Checker {
     fn can_construct_internal_iterator_from_builtin_get_iterator(&self, class_name: &str) -> bool {
         let get_iterator_key = php_symbol_key("getIterator");
         class_name == "InternalIterator"
-            && self.current_class.as_deref() == Some("SplFixedArray")
+            && matches!(
+                self.current_class.as_deref(),
+                Some("SplFixedArray" | "DatePeriod")
+            )
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
@@ -596,7 +599,7 @@ impl Checker {
     ) -> Result<Option<FunctionSig>, CompileError> {
         let lookup_name = function_name.trim_start_matches('\\');
         let builtin_key = php_symbol_key(lookup_name);
-        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+        if let Some(sig) = crate::types::reflection_builtin_function_sig(&builtin_key) {
             return Ok(Some(sig));
         }
         let canonical =

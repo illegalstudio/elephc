@@ -121,7 +121,7 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
@@ -834,7 +834,12 @@ fn builtin_reflection_parameter() -> FlattenedClass {
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
             builtin_property(
                 "__optional",
@@ -1300,7 +1305,12 @@ fn builtin_reflection_named_type() -> FlattenedClass {
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -1345,7 +1355,12 @@ fn builtin_reflection_union_type() -> FlattenedClass {
                 Some(object_array_type("ReflectionNamedType")),
                 empty_array(),
             ),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -1395,7 +1410,12 @@ fn builtin_reflection_intersection_type() -> FlattenedClass {
                 Some(object_array_type("ReflectionNamedType")),
                 empty_array(),
             ),
-            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__attrs",
+                Visibility::Private,
+                Some(object_array_type("ReflectionAttribute")),
+                empty_array(),
+            ),
             builtin_property(
                 "__allows_null",
                 Visibility::Private,
@@ -1623,7 +1643,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_property(
                 "__attrs",
                 Visibility::Private,
-                Some(array_type()),
+                Some(object_array_type("ReflectionAttribute")),
                 empty_array(),
             ),
             builtin_property(
@@ -3992,10 +4012,17 @@ fn builtin_reflection_owner_class(
             "__toString",
             "__string",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
-            "isDeprecated",
-        ));
         if name == "ReflectionClassConstant" {
+            properties.push(builtin_property(
+                "__is_deprecated",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(
+                "isDeprecated",
+                "__is_deprecated",
+            ));
             properties.push(builtin_property(
                 "__has_type",
                 Visibility::Private,
@@ -4019,6 +4046,9 @@ fn builtin_reflection_owner_class(
                 mixed_type(),
             ));
         } else {
+            methods.push(builtin_reflection_constant_false_bool_method(
+                "isDeprecated",
+            ));
             methods.push(builtin_reflection_constant_false_bool_method("hasType"));
             methods.push(builtin_reflection_constant_null_mixed_method("getType"));
         }
@@ -4061,6 +4091,18 @@ fn builtin_reflection_owner_class(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__tentative_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__has_tentative_return_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__required_parameter_count",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -4093,11 +4135,13 @@ fn builtin_reflection_owner_class(
             "isGenerator",
             "__is_generator",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
+        methods.push(builtin_reflection_class_bool_method(
             "hasTentativeReturnType",
+            "__has_tentative_return_type",
         ));
-        methods.push(builtin_reflection_constant_null_mixed_method(
+        methods.push(builtin_reflection_class_mixed_method(
             "getTentativeReturnType",
+            "__tentative_type",
         ));
         methods.push(builtin_reflection_function_method_is_variadic_method());
         methods.push(builtin_reflection_class_string_method(
@@ -4144,7 +4188,7 @@ fn builtin_reflection_owner_class(
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
-        Some(array_type()),
+        Some(object_array_type("ReflectionAttribute")),
         empty_array(),
     ));
     methods.push(builtin_reflection_owner_get_attributes_method());
@@ -4722,10 +4766,33 @@ fn builtin_reflection_owner_constructor_method(
     }
 }
 
-/// Returns a public `getAttributes()` method that returns the private `__attrs`
-/// property as an `array` of `ReflectionAttribute` objects.
+/// Returns a public `getAttributes(?string $name = null, int $flags = 0)` method
+/// that filters the private `__attrs` array by exact name or `IS_INSTANCEOF`.
 fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let source = r#"<?php
+if ($flags !== 0 && $flags !== ReflectionAttribute::IS_INSTANCEOF) {
+    throw new ValueError("Argument #2 ($flags) must be a valid attribute filter flag");
+}
+if ($name === null) {
+    return $this->__attrs;
+}
+ $result = [];
+foreach ($this->__attrs as $attribute) {
+    if ($flags === ReflectionAttribute::IS_INSTANCEOF) {
+        if (is_a($attribute->getName(), $name, true)) {
+            $result[] = clone $attribute;
+        }
+    } elseif ($attribute->getName() === $name) {
+        $result[] = clone $attribute;
+    }
+}
+return $result;
+"#;
+    let tokens = crate::lexer::tokenize(source)
+        .expect("Reflection getAttributes body must tokenize");
+    let body = crate::parser::parse(&tokens)
+        .expect("Reflection getAttributes body must parse");
     ClassMethod {
         name: "getAttributes".to_string(),
         visibility: Visibility::Public,
@@ -4733,23 +4800,27 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: Vec::new(),
+        params: vec![
+            (
+                "name".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                Some(Expr::new(ExprKind::Null, dummy_span)),
+                false,
+            ),
+            (
+                "flags".to_string(),
+                Some(TypeExpr::Int),
+                Some(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+                false,
+            ),
+        ],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(array_type()),
         by_ref_return: false,
-        body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: "__attrs".to_string(),
-                },
-                dummy_span,
-            ))),
-            dummy_span,
-        )],
+        body,
         span: dummy_span,
         attributes: Vec::new(),
     }

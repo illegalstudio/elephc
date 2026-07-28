@@ -452,7 +452,7 @@ fn eval_instance_method_callable_cases(
         data,
         state,
         EvalInstanceCallableShape::InstanceMethod,
-        |_| true,
+        callable_dispatch::runtime_method_callable_visible,
     )
 }
 
@@ -551,6 +551,9 @@ fn eval_static_method_callable_cases(
     let mut candidates = Vec::new();
     for (class_name, class_info) in &module.class_infos {
         for (method_name, sig) in &class_info.static_methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .static_method_visibilities
                 .get(method_name)

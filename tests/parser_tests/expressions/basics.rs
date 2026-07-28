@@ -230,6 +230,22 @@ fn test_cast_keywords_are_case_insensitive() {
     }
 }
 
+/// Verifies PHP 8.5's `(void)` explicit-discard cast parses around a call expression.
+#[test]
+fn test_void_cast_parses() {
+    let program = parse_source("<?php (void) strlen('discarded');");
+    assert!(matches!(
+        &program[0].kind,
+        StmtKind::ExprStmt(Expr {
+            kind: ExprKind::Cast {
+                target: CastType::Void,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
 /// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
 /// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 #[test]

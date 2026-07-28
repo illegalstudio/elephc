@@ -254,6 +254,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Bool,
             ..
         } => PhpType::Bool,
+        ExprKind::Cast {
+            target: CastType::Void,
+            ..
+        } => PhpType::Void,
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"

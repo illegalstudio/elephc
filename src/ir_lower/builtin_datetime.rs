@@ -10,7 +10,7 @@
 //!
 //! Key details:
 //! - Mirrors the builtin SPL method lowering: scans already-lowered EIR for
-//!   `ObjectNew` / `MethodCall` / `StaticMethodCall` referencing a date/time class
+//!   `ObjectNew` / method/property calls / `StaticMethodCall` referencing a date/time class
 //!   and lowers the referenced method bodies, iterating to a fixpoint for
 //!   transitive references (for example `DateTime::diff` returning a
 //!   `DateInterval`, or the calendar functions that desugar to
@@ -250,7 +250,7 @@ fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool 
 /// Finds builtin date/time methods whose symbols are required by already-lowered EIR.
 ///
 /// Returns `(class_name, method_key)` pairs for every `ObjectNew`,
-/// `MethodCall`/`NullsafeMethodCall`, and `StaticMethodCall` that targets a
+/// method/property call, and `StaticMethodCall` that targets a
 /// date/time class. `ObjectNew` additionally pulls in the constructor and the
 /// full interface vtable required to allocate the object.
 fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
@@ -319,6 +319,38 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                     let method_key = php_method_key(method_name);
                     let impl_class = method_impl_class(module, &normalized, &method_key);
                     methods.push((impl_class, method_key));
+                }
+                Op::PropGet | Op::NullsafePropGet | Op::DynamicPropGet => {
+                    let Some(receiver) = inst.operands.first().copied() else {
+                        continue;
+                    };
+                    let receiver_ty = function.value(receiver).map(|value| &value.php_type);
+                    let magic_get_key = php_method_key("__get");
+                    if let Some(class_name) =
+                        receiver_ty.and_then(builtin_datetime_class_in_type)
+                    {
+                        let Some(class_info) = module.class_infos.get(&class_name) else {
+                            continue;
+                        };
+                        if class_info.methods.contains_key(&magic_get_key) {
+                            let impl_class =
+                                method_impl_class(module, &class_name, &magic_get_key);
+                            methods.push((impl_class, magic_get_key));
+                        }
+                    } else if receiver_ty.is_some_and(|ty| {
+                        matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                    }) {
+                        for class_name in BUILTIN_DATETIME_CLASSES {
+                            let Some(class_info) = module.class_infos.get(*class_name) else {
+                                continue;
+                            };
+                            if class_info.methods.contains_key(&magic_get_key) {
+                                let impl_class =
+                                    method_impl_class(module, class_name, &magic_get_key);
+                                methods.push((impl_class, magic_get_key.clone()));
+                            }
+                        }
+                    }
                 }
                 Op::StaticMethodCall => {
                     if let Some(name) = string_data_name(module, inst) {
