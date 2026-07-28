@@ -20,7 +20,7 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::canonical_builtin_function_name;
+use super::{canonical_builtin_function_name, canonical_builtin_function_name_on_platform};
 use super::super::Checker;
 
 mod preg_replace_callback;
@@ -973,7 +973,9 @@ pub(crate) fn check_call_user_func_array(
                 return Ok(sig.return_type);
             }
         }
-        if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+        if let Some(builtin_name) =
+            canonical_builtin_function_name_on_platform(cb_name, checker.target_platform)
+        {
             if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                 if let Some(ret_ty) =
                     checker.check_builtin(&builtin_name, elems, span, env)?

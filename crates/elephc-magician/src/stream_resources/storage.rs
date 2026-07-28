@@ -83,11 +83,11 @@ impl EvalStreamResources {
     pub(super) fn insert_tcp_stream(&mut self, stream: TcpStream) -> Option<i64> {
         let local = stream.local_addr().ok()?.to_string();
         let peer = stream.peer_addr().ok().map(|addr| addr.to_string());
-        let file = unsafe {
-            // The TcpStream is moved into the File-backed eval stream.
-            File::from_raw_fd(stream.into_raw_fd())
-        };
-        let id = self.insert(EvalFileStream::new(file, local.clone(), "r+".to_string()));
+        let id = self.insert(EvalFileStream::new_tcp(
+            stream,
+            local.clone(),
+            "r+".to_string(),
+        ));
         self.socket_names
             .insert(id, EvalSocketNames { local, peer });
         Some(id)

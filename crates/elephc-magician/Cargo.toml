@@ -13,6 +13,7 @@ crate-type = ["staticlib", "rlib"]
 elephc-crypto = { path = "../elephc-crypto" }
 elephc-phar = { path = "../elephc-phar" }
 flate2 = "1"
+getrandom = "0.2"
 inventory = "0.3"
 libc = "0.2"
 unicode-segmentation = "1"

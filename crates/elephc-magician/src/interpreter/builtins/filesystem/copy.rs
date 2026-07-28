@@ -78,12 +78,45 @@ pub(in crate::interpreter) fn eval_binary_path_bool_result(
     let Some(to) = stream_wrappers::local_filesystem_path(&to) else {
         return values.bool_value(false);
     };
+    #[cfg(windows)]
+    let source_mode = context.capture_local_file_mode(&from);
+    #[cfg(windows)]
+    let destination_mode = context.capture_local_file_mode(&to);
     let ok = match name {
-        "copy" => std::fs::copy(from, to).is_ok(),
-        "link" => std::fs::hard_link(from, to).is_ok(),
-        "rename" => std::fs::rename(from, to).is_ok(),
-        "symlink" => std::os::unix::fs::symlink(from, to).is_ok(),
+        "copy" => std::fs::copy(&from, &to).is_ok(),
+        "link" => std::fs::hard_link(&from, &to).is_ok(),
+        "rename" => std::fs::rename(&from, &to).is_ok(),
+        "symlink" => eval_create_symlink(&from, &to),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
+    #[cfg(windows)]
+    if ok {
+        match name {
+            "copy" | "link" => context.copy_local_file_mode(
+                source_mode.as_ref(),
+                destination_mode.as_ref(),
+                &to,
+            ),
+            "rename" => context.rename_local_file_mode(source_mode, destination_mode, &to),
+            "symlink" => {}
+            _ => unreachable!("filesystem operation was validated above"),
+        }
+    }
     values.bool_value(ok)
+}
+
+/// Creates a symbolic link with the host-specific path API.
+fn eval_create_symlink(from: &str, to: &str) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(from, to).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        if std::fs::metadata(from).is_ok_and(|metadata| metadata.is_dir()) {
+            std::os::windows::fs::symlink_dir(from, to).is_ok()
+        } else {
+            std::os::windows::fs::symlink_file(from, to).is_ok()
+        }
+    }
 }

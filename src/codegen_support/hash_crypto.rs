@@ -24,7 +24,7 @@
 //!   per-program `DataSection`.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::{abi, platform::Arch};
+use crate::codegen_support::{abi, platform::Arch, platform::Platform};
 
 /// Publishes the `elephc_crypto_hash` and `elephc_crypto_hmac` C entry points
 /// into their runtime function-pointer slots so `__rt_hash` and `__rt_hash_hmac`
@@ -108,6 +108,13 @@ fn emit_throw_value_error_aarch64(emitter: &mut Emitter, message_symbol: &str, m
 
 /// Emits the Linux x86_64 allocation and unwinder handoff for the `hash()` `\ValueError`.
 fn emit_throw_value_error_x86_64(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
+    if emitter.platform == Platform::Windows {
+        abi::emit_load_symbol_to_reg(emitter, "rdi", "_spl_value_error_class_id", 0); // pass ValueError's runtime class id
+        abi::emit_symbol_address(emitter, "rsi", message_symbol);               // pass the static ValueError message pointer
+        emitter.instruction(&format!("mov rdx, {}", message_len));              // pass the static ValueError message length
+        emitter.instruction("jmp __rt_throw_static_exception");                 // allocate and publish through an independent unwind frame
+        return;
+    }
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned

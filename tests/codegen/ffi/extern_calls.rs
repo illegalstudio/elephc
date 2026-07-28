@@ -236,6 +236,10 @@ echo "len=" . strlen("hello");
 /// Verifies an FFI extern `poll` call within a method body reads arguments from local variables, not from `this`.
 #[test]
 fn test_ffi_extern_poll_from_method_uses_local_arguments() {
+    if target().platform == Platform::Windows {
+        eprintln!("skipping POSIX poll fixture on Windows; Winsock exposes WSAPoll instead");
+        return;
+    }
     // Verifies an FFI extern `poll` call within a method body reads arguments from local variables, not from `this`.
     let out = compile_and_run(
         r#"<?php
@@ -258,6 +262,10 @@ $server->loop();
 /// Regression: FFI extern `poll` called after a loop with internal function calls must not clobber the local `int` `$nfds` argument.
 #[test]
 fn test_ffi_extern_poll_after_loop_with_calls_preserves_local_int_arg() {
+    if target().platform == Platform::Windows {
+        eprintln!("skipping POSIX poll fixture on Windows; Winsock exposes WSAPoll instead");
+        return;
+    }
     // Regression: FFI extern `poll` called after a loop with internal function calls must not clobber the local `int` `$nfds` argument.
     let out = compile_and_run(
         r#"<?php
@@ -292,6 +300,10 @@ free($pollfds);
 /// Regression: FFI extern `poll` called in a large function with an unrelated associative-array local must not corrupt argument registers.
 #[test]
 fn test_ffi_extern_poll_in_large_function_survives_unrelated_array_local() {
+    if target().platform == Platform::Windows {
+        eprintln!("skipping POSIX poll fixture on Windows; Winsock exposes WSAPoll instead");
+        return;
+    }
     // Regression: FFI extern `poll` called in a large function with an unrelated associative-array local must not corrupt argument registers.
     let out = compile_and_run(
         r#"<?php

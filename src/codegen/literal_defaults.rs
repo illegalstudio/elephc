@@ -254,8 +254,8 @@ pub(crate) fn emit_empty_assoc_array_literal_to_result(
     ctx: &mut FunctionContext<'_>,
     value_type: &PhpType,
 ) {
-    let capacity_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let value_tag_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let capacity_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 0);
+    let value_tag_reg = abi::runtime_helper_int_arg_reg(ctx.emitter, 1);
     abi::emit_load_int_immediate(ctx.emitter, capacity_reg, 16);
     abi::emit_load_int_immediate(
         ctx.emitter,

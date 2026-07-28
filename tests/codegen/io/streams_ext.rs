@@ -45,18 +45,15 @@ fclose($h);
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `fgetc` returns `false` when the underlying descriptor cannot be read
-/// (e.g., opening a directory as a file).
+/// Verifies `fgetc` returns `false` when a write-only stream cannot be read.
 #[test]
 fn test_fgetc_returns_false_on_read_error() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
-mkdir("as-dir");
-$h = fopen("as-dir", "r");
+$h = fopen("write-only.txt", "w");
 $c = fgetc($h);
 echo $c === false ? "false" : "not-false:" . strlen($c);
 fclose($h);
-rmdir("as-dir");
 "#,
     );
     assert_eq!(out, "false");
@@ -88,7 +85,15 @@ echo "|" . $bytes;
 rmdir("as-dir");
 "#,
     );
-    assert_eq!(out, "|-1");
+    // Win32 refuses to open a directory as a file, so PHP's open-failure
+    // sentinel is false (which stringifies to empty). POSIX opens it and the
+    // subsequent read returns -1/EISDIR.
+    let expected = if target().platform == Platform::Windows {
+        "|"
+    } else {
+        "|-1"
+    };
+    assert_eq!(out, expected);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -169,34 +174,30 @@ fclose($h);
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `fpassthru` returns `-1` when the underlying descriptor cannot be read.
+/// Verifies `fpassthru` returns `-1` when a write-only stream cannot be read.
 #[test]
 fn test_fpassthru_read_error_returns_minus_one() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
-mkdir("as-dir");
-$h = fopen("as-dir", "r");
+$h = fopen("write-only.txt", "w");
 $bytes = fpassthru($h);
 echo "|" . $bytes;
 fclose($h);
-rmdir("as-dir");
 "#,
     );
     assert_eq!(out, "|-1");
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `fpassthru` sets EOF on the stream after a read error.
+/// Verifies `fpassthru` sets EOF on a write-only stream after a read error.
 #[test]
 fn test_fpassthru_sets_eof_after_read_error() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
-mkdir("as-dir");
-$h = fopen("as-dir", "r");
+$h = fopen("write-only.txt", "w");
 $bytes = fpassthru($h);
 echo "|" . $bytes . "|" . (feof($h) ? "eof" : "not-eof");
 fclose($h);
-rmdir("as-dir");
 "#,
     );
     assert_eq!(out, "|-1|eof");

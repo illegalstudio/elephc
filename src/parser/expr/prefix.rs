@@ -128,7 +128,12 @@ pub(super) fn parse_prefix(
             span,
             ExprKind::ConstRef(Name::unqualified("STDERR")),
         ),
-        Token::PhpEol => parse_simple(tokens, pos, span, ExprKind::StringLiteral("\n".to_string())),
+        Token::PhpEol => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::ConstRef(Name::unqualified("PHP_EOL")),
+        ),
         Token::PhpOs => parse_simple(
             tokens,
             pos,
@@ -139,7 +144,13 @@ pub(super) fn parse_prefix(
             tokens,
             pos,
             span,
-            ExprKind::StringLiteral("/".to_string()),
+            ExprKind::ConstRef(Name::unqualified("DIRECTORY_SEPARATOR")),
+        ),
+        Token::PathSeparator => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::ConstRef(Name::unqualified("PATH_SEPARATOR")),
         ),
         Token::DunderLine => {
             parse_simple(tokens, pos, span, ExprKind::IntLiteral(span.line as i64))

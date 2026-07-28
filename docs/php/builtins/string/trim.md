@@ -2,7 +2,7 @@
 title: "trim()"
 description: "Strips whitespace (or other characters) from the beginning and end of a string."
 sidebar:
-  order: 422
+  order: 429
 ---
 
 ## trim()

@@ -1063,9 +1063,10 @@ fn emit_reflection_constant_names_aarch64(
 ) {
     let done_label = "__elephc_eval_reflection_constant_names_done";
     let fail_label = "__elephc_eval_reflection_constant_names_fail";
-    let array_new = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_new");
+    let array_new = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_new",
+    );
     emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class slice, array, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
@@ -1096,9 +1097,10 @@ fn emit_reflection_constant_names_x86_64(
 ) {
     let done_label = "__elephc_eval_reflection_constant_names_done_x";
     let fail_label = "__elephc_eval_reflection_constant_names_fail_x";
-    let array_new = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_new");
+    let array_new = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_new",
+    );
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class slice and result array
@@ -1131,9 +1133,10 @@ fn emit_aarch64_constant_name_push(
     fail_label: &str,
 ) {
     let skip_label = format!("__elephc_eval_reflection_constant_names_skip_{}", index);
-    let push_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_push");
+    let push_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_push",
+    );
     emit_aarch64_class_name_compare(emitter, data, &slot.reflected_class, &skip_label);
     let (label, len) = data.add_string(slot.constant.as_bytes());
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed result string array
@@ -1154,9 +1157,10 @@ fn emit_x86_64_constant_name_push(
     fail_label: &str,
 ) {
     let skip_label = format!("__elephc_eval_reflection_constant_names_skip_{}_x", index);
-    let push_symbol = emitter
-        .target
-        .extern_symbol("__elephc_eval_value_string_array_push");
+    let push_symbol = abi::c_callback_internal_symbol(
+        emitter.target,
+        "__elephc_eval_value_string_array_push",
+    );
     emit_x86_64_class_name_compare(emitter, data, &slot.reflected_class, &skip_label);
     let (label, len) = data.add_string(slot.constant.as_bytes());
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the boxed result string array
@@ -1514,6 +1518,6 @@ fn label_fragment(value: &str) -> String {
 
 /// Emits a C-global label using the target's symbol spelling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, symbol: &str) {
-    let label = module.target.extern_symbol(symbol);
-    emitter.label_global(&label);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, symbol);
 }

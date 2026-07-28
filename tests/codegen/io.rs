@@ -21,6 +21,8 @@ mod streams;
 mod filesystem;
 #[path = "io/misc.rs"]
 mod misc;
+#[path = "io/proc.rs"]
+mod proc;
 #[path = "io/stat_ext.rs"]
 mod stat_ext;
 #[path = "io/paths/mod.rs"]

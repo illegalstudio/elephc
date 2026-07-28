@@ -153,14 +153,10 @@ echo fileinode("missing.txt") === false ? "i" : "!";
     assert_eq!(out, "acpogi");
 }
 
-/// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every
-/// POSIX target the compiler ships for. Regression guard for target-specific path handling.
+/// Verifies `is_executable()` recognizes the currently running native binary on every target.
 #[test]
 fn test_is_executable_true_for_self() {
-    // /bin/sh is executable on every POSIX target we ship for.
-    let out = compile_and_run(
-        r#"<?php echo is_executable("/bin/sh") ? "y" : "n";"#,
-    );
+    let out = compile_and_run(r#"<?php echo is_executable($argv[0]) ? "y" : "n";"#);
     assert_eq!(out, "y");
 }
 
@@ -204,14 +200,27 @@ fn test_filetype_and_is_link_for_symlink() {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let source = r#"<?php
+    let source = if target().platform == Platform::Windows {
+        r#"<?php
+file_put_contents("target.txt", "payload");
+symlink("target.txt", "link.txt");
 echo filetype("link.txt") . "|";
 echo is_link("link.txt") ? "y" : "n";
-"#;
+unlink("link.txt");
+unlink("target.txt");
+"#
+    } else {
+        r#"<?php
+echo filetype("link.txt") . "|";
+echo is_link("link.txt") ? "y" : "n";
+"#
+    };
     let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    fs::write(dir.join("target.txt"), "payload").unwrap();
-    std::os::unix::fs::symlink("target.txt", dir.join("link.txt")).unwrap();
+    if target().platform != Platform::Windows {
+        fs::write(dir.join("target.txt"), "payload").unwrap();
+        std::os::unix::fs::symlink("target.txt", dir.join("link.txt")).unwrap();
+    }
 
     let out = assemble_and_run(
         &user_asm,
@@ -222,6 +231,30 @@ echo is_link("link.txt") ? "y" : "n";
         &[],
     );
     assert_eq!(out, "link|y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `lstat()` reads the link object after its target is removed.
+///
+/// The runtime creates the symlink itself on Windows so the fixture also exercises
+/// the Win32 unprivileged-symlink retry path used by CI and Wine.
+#[test]
+fn test_windows_lstat_succeeds_for_dangling_symlink() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dangling-target.txt", "payload");
+symlink("dangling-target.txt", "dangling-link.txt");
+unlink("dangling-target.txt");
+$info = lstat("dangling-link.txt");
+echo is_array($info) && ($info["mode"] & 0xF000) === 0xA000 ? "link" : "fail";
+unlink("dangling-link.txt");
+"#,
+    );
+    assert_eq!(out, "link");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -236,6 +269,147 @@ echo is_writeable("wr.txt") ? "y" : "n";
 "#,
     );
     assert_eq!(out, "y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `is_writable()` rejects readonly attributes while reads still succeed.
+///
+/// Keep this test exactly as it is: it is the sentinel proving the ACL gate
+/// added on top of the attribute rules cannot make a readonly-attribute file
+/// unreadable (the `r`), and that the readonly-attribute denial still wins for
+/// `W_OK` ahead of any DACL verdict (the `w`). Do not "simplify" it away.
+#[test]
+fn test_windows_readonly_file_is_not_writable() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("readonly.txt", "x");
+chmod("readonly.txt", 0o444);
+echo file_exists("readonly.txt") ? "e" : "E";
+echo is_readable("readonly.txt") ? "r" : "R";
+echo is_writable("readonly.txt") ? "W" : "w";
+chmod("readonly.txt", 0o644);
+unlink("readonly.txt");
+"#,
+    );
+    assert_eq!(out, "erw");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `is_writable()` honors a DACL that denies only the
+/// data-write rights, the way php-src's `tsrm_win32_access` does.
+///
+/// This is the one fixture the attribute-only shim cannot pass: the file
+/// carries no FILE_ATTRIBUTE_READONLY, so `GetFileAttributesW` alone reports
+/// it writable and only `AccessCheck` can see the deny ACE. The deny names the
+/// four data-write rights instead of icacls' `(W)` on purpose - `(W)` is
+/// FILE_GENERIC_WRITE, which includes READ_CONTROL, which would make
+/// `GetFileSecurityW` itself fail and send the shim down its fail-open path,
+/// turning this test green for the wrong reason. The `setup:`/`undo:` markers
+/// exist so a machine where icacls did nothing reports FAIL instead of a
+/// vacuous pass.
+#[test]
+fn test_windows_acl_denied_write_is_not_writable() {
+    if target().platform != Platform::Windows || !cfg!(windows) {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = getcwd() . "\\acl-write-deny.txt";
+file_put_contents($path, "payload");
+$setup = shell_exec('icacls "' . $path . '" /deny "%USERNAME%:(WD,AD,WEA,WA)" 2>&1');
+echo str_contains($setup, "Failed processing 0 files") ? "setup:ok " : "setup:FAIL ";
+echo file_exists($path) ? "exists:yes " : "exists:no ";
+echo is_readable($path) ? "read:yes " : "read:no ";
+echo is_writable($path) ? "write:yes " : "write:no ";
+$undo = shell_exec('icacls "' . $path . '" /remove:d "%USERNAME%" 2>&1');
+echo str_contains($undo, "Failed processing 0 files") ? "undo:ok " : "undo:FAIL ";
+echo is_writable($path) ? "write2:yes" : "write2:no";
+unlink($path);
+"#,
+    );
+    assert_eq!(out, "setup:ok exists:yes read:yes write:no undo:ok write2:yes");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `is_readable()` honors a DACL that denies FILE_READ_DATA while
+/// leaving READ_CONTROL intact, so the descriptor is still fetchable and the
+/// denial is a real `AccessCheck` verdict rather than a fail-open.
+#[test]
+fn test_windows_acl_denied_read_is_not_readable() {
+    if target().platform != Platform::Windows || !cfg!(windows) {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = getcwd() . "\\acl-read-deny.txt";
+file_put_contents($path, "payload");
+$setup = shell_exec('icacls "' . $path . '" /deny "%USERNAME%:(RD)" 2>&1');
+echo str_contains($setup, "Failed processing 0 files") ? "setup:ok " : "setup:FAIL ";
+echo file_exists($path) ? "exists:yes " : "exists:no ";
+echo is_readable($path) ? "read:yes " : "read:no ";
+echo is_writable($path) ? "write:yes " : "write:no ";
+$undo = shell_exec('icacls "' . $path . '" /remove:d "%USERNAME%" 2>&1');
+echo str_contains($undo, "Failed processing 0 files") ? "undo:ok " : "undo:FAIL ";
+echo is_readable($path) ? "read2:yes" : "read2:no";
+unlink($path);
+"#,
+    );
+    assert_eq!(out, "setup:ok exists:yes read:no write:yes undo:ok read2:yes");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a protected system binary is executable and readable but not
+/// writable, the php-parity answer. `cmd.exe` carries no readonly attribute,
+/// so the attribute-only shim calls it writable; only the DACL says otherwise.
+#[test]
+fn test_windows_system_binary_is_readable_executable_not_writable() {
+    if target().platform != Platform::Windows || !cfg!(windows) {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$exe = "C:\\Windows\\System32\\cmd.exe";
+echo file_exists($exe) ? "e" : "E";
+echo is_executable($exe) ? "x" : "X";
+echo is_readable($exe) ? "r" : "R";
+echo is_writable($exe) ? "W" : "w";
+"#,
+    );
+    assert_eq!(out, "exrw");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies ordinary files and directories stay readable and writable once the
+/// ACL gate is in the path, and that a missing path still answers false.
+///
+/// This is the fail-open guard: if the ACL check ever denied on failure
+/// instead of falling back, every letter here would flip to upper case. It
+/// deliberately makes no assumption about whether the ACL check can run at
+/// all, so it is meaningful on a fail-open host too.
+#[test]
+fn test_windows_ordinary_paths_stay_readable_and_writable() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("plain.txt", "x");
+echo is_readable("plain.txt") ? "r" : "R";
+echo is_writable("plain.txt") ? "w" : "W";
+$d = getcwd();
+echo is_readable($d) ? "d" : "D";
+echo is_writable($d) ? "t" : "T";
+echo is_readable("no-such-file.txt") ? "X" : "n";
+echo is_writable("no-such-file.txt") ? "Y" : "m";
+echo is_readable("\\\\no-such-host\\share\\x") ? "U" : "u";
+echo "done";
+unlink("plain.txt");
+"#,
+    );
+    assert_eq!(out, "rwdtnmudone");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -405,5 +579,61 @@ echo $info["size"];
 "#,
     );
     assert_eq!(out, "10");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies Windows `fstat()` exposes native identity, links, timestamps, and readonly mode.
+#[test]
+fn test_windows_fstat_reports_native_metadata() {
+    if target().platform != Platform::Windows {
+        return;
+    }
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fstat-native.txt", "abc");
+chmod("fstat-native.txt", 0o444);
+$h = fopen("fstat-native.txt", "r");
+$st = fstat($h);
+echo $st["size"] === 3 ? "s" : "S";
+echo $st["nlink"] >= 1 ? "n" : "N";
+echo $st["ino"] > 0 ? "i" : "I";
+echo $st["dev"] > 0 ? "d" : "D";
+echo $st["mtime"] > 0 ? "t" : "T";
+echo (($st["mode"] & 0o222) === 0) ? "r" : "R";
+fclose($h);
+chmod("fstat-native.txt", 0o644);
+unlink("fstat-native.txt");
+"#,
+    );
+    assert_eq!(out, "snidtr");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stat()` reports the block fields PHP reports on the target.
+///
+/// Windows has neither `st_blksize` nor `st_blocks`, so php-src compiles the
+/// `#else` arms of ext/standard/filestat.c php_stat and reports -1 for both.
+/// elephc left the zeroed stat buffer alone and reported 0, which reads as a real
+/// answer: `if ($s['blksize'] > 0)` takes the wrong branch and a chunked-copy loop
+/// sized from it divides by zero. POSIX block sizes vary by filesystem, so only
+/// their sign is portable.
+#[test]
+fn test_stat_block_fields_match_platform() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("blk.txt", "abc");
+$s = stat("blk.txt");
+echo $s["blksize"], "|", $s["blocks"];
+"#,
+    );
+    let mut fields = out.split('|');
+    let blksize: i64 = fields.next().unwrap_or("").parse().expect("blksize is an integer");
+    let blocks: i64 = fields.next().unwrap_or("").parse().expect("blocks is an integer");
+    if target().platform == Platform::Windows {
+        assert_eq!((blksize, blocks), (-1, -1), "windows reports php's unsupported sentinel");
+    } else {
+        assert!(blksize > 0, "posix st_blksize must be positive, got {blksize}");
+        assert!(blocks >= 0, "posix st_blocks must be non-negative, got {blocks}");
+    }
     let _ = fs::remove_dir_all(&dir);
 }

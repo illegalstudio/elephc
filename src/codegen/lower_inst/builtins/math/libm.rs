@@ -27,7 +27,7 @@ pub(crate) fn lower_unary_libm(
     super::ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
     super::load_numeric_as_float(ctx, value, name)?;
-    ctx.emitter.bl_c(name);
+    ctx.emitter.emit_call_c(name);                                             // Windows-safe: routes through the registered __rt_sys_<name> FP shim (sin/cos/tan/asin/acos/atan/sinh/cosh/tanh/exp/log2/log10)
     store_if_result(ctx, inst)
 }
 
@@ -60,12 +60,19 @@ pub(crate) fn lower_log(
     }
     let value = expect_operand(inst, 0)?;
     super::load_numeric_as_float(ctx, value, "log")?;
-    ctx.emitter.bl_c("log");
+    ctx.emitter.emit_call_c("log");                                             // Windows-safe: shadow space via __rt_sys_log
     if inst.operands.len() == 2 {
+        // Preserve log(value) across the second call. `emit_push_float_reg` on
+        // x86_64 reserves a full 16-byte slot (`sub rsp, 16`), so it never
+        // changes the parity of rsp mod 16 — the stack alignment seen by this
+        // second `emit_call_c("log")` is identical to the first, and the
+        // shim's own `sub rsp, 40` shadow-space reservation re-aligns it to a
+        // 16-byte boundary exactly as it did for the first call. No extra
+        // adjustment is needed around the change-of-base path.
         abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
         let base = expect_operand(inst, 1)?;
         super::load_numeric_as_float(ctx, base, "log")?;
-        ctx.emitter.bl_c("log");
+        ctx.emitter.emit_call_c("log");                                         // Windows-safe: shadow space via __rt_sys_log (2nd call, change-of-base — see alignment note above)
         emit_change_of_base_divide(ctx);
     }
     store_if_result(ctx, inst)
@@ -110,7 +117,7 @@ fn lower_binary_libm(
             ctx.emitter.instruction("movapd xmm2, xmm0");                       // preserve the second operand while ordering SysV libm arguments
             ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the first operand into the first libm argument register
             ctx.emitter.instruction("movapd xmm1, xmm2");                       // move the second operand into the second libm argument register
-            ctx.emitter.bl_c(name);
+            ctx.emitter.emit_call_c(name);                                      // Windows-safe: routes through the registered __rt_sys_<name> FP shim (atan2/hypot)
         }
     }
     store_if_result(ctx, inst)

@@ -266,7 +266,7 @@ fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_filter_ref_call");                       // call key-only callback without environment
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass capture environment after key argument
     emitter.label("__rt_array_filter_ref_call");
-    emitter.instruction("call r12");                                            // invoke the user callback with the current borrowed payload and read the truthy result from rax
+    emitter.emit_platform_callback_call("r12", 4);
     emitter.instruction("test rax, rax");                                       // check whether the callback reported a truthy keep/skip decision
     emitter.instruction("jz __rt_array_filter_ref_skip");                       // skip retaining/copying the payload when the callback returned zero / false
     emitter.instruction("cmp QWORD PTR [rbp - 72], 16");                        // is the kept element a string slot?

@@ -15,6 +15,8 @@ mod nullable_string_return;
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
+#[path = "runtime_gc/oversized_read_release.rs"]
+mod oversized_read_release;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]

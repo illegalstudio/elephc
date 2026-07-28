@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::{Arch, Target};
+use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Function, IrType, Op, Ownership, Terminator, ValueId};
 use crate::ir_passes::allocation::Allocation;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
@@ -125,11 +125,11 @@ fn is_eligible(func: &Function, iv: &LiveInterval, ineligible: &HashSet<ValueId>
 /// function must save/restore the register (only callee-saved pools).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PoolKind {
-    /// Caller-saved integer pool (`x12`–`x15` / `rsi`,`rdi`,`r8`,`r9`).
+    /// Caller-saved integer pool (`x12`–`x15`; target-valid x86_64 volatile registers).
     CallerInt,
     /// Callee-saved integer pool (`x21`–`x28` / `rbx`).
     CalleeInt,
-    /// Caller-saved float pool (`d16`–`d23` / `xmm2`–`xmm7`).
+    /// Caller-saved float pool (`d16`–`d23`; target-valid x86_64 volatile XMM registers).
     CallerFloat,
     /// Callee-saved float pool (`d8`–`d14`; empty on x86_64).
     CalleeFloat,
@@ -349,12 +349,16 @@ fn callee_float_pool(target: Target) -> &'static [&'static str] {
 /// op lowerings (see `crate::ir_passes::clobber`) never touch them, so a
 /// call-free value keeps its register intact with no save/restore.
 fn caller_int_pool(target: Target) -> &'static [&'static str] {
-    match target.arch {
+    match (target.platform, target.arch) {
         // x12–x15 are caller-saved temporaries the volatile-safe lowerings never use.
-        Arch::AArch64 => &["x12", "x13", "x14", "x15"],
+        (_, Arch::AArch64) => &["x12", "x13", "x14", "x15"],
         // rsi/rdi/r8/r9 are caller-saved argument registers, untouched by the
         // volatile-safe lowerings (which use rax/rdx/rcx/r10/r11 only).
-        Arch::X86_64 => &["rsi", "rdi", "r8", "r9"],
+        (Platform::MacOS | Platform::Linux, Arch::X86_64) => &["rsi", "rdi", "r8", "r9"],
+        // MSx64 makes rsi/rdi nonvolatile. Generated Windows frames do not save
+        // them, so only the volatile r8/r9 subset is eligible as call-free
+        // allocation storage.
+        (Platform::Windows, Arch::X86_64) => &["r8", "r9"],
     }
 }
 
@@ -364,10 +368,16 @@ fn caller_int_pool(target: Target) -> &'static [&'static str] {
 /// way float values are register-allocated at all, enabled for call-free
 /// intervals. The volatile-safe float lowerings use only d0/d1 and xmm0/xmm1.
 fn caller_float_pool(target: Target) -> &'static [&'static str] {
-    match target.arch {
+    match (target.platform, target.arch) {
         // d16–d23 are caller-saved vector registers never used by the backend
         // as arguments, results, or scratch.
-        Arch::AArch64 => &["d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23"],
-        Arch::X86_64 => &["xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"],
+        (_, Arch::AArch64) => &["d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23"],
+        (Platform::MacOS | Platform::Linux, Arch::X86_64) => {
+            &["xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"]
+        }
+        // xmm6-xmm15 are nonvolatile under MSx64 and would require full 128-bit
+        // save/restore plus matching unwind codes. Keep allocation to the
+        // volatile xmm2-xmm5 subset until that frame support exists.
+        (Platform::Windows, Arch::X86_64) => &["xmm2", "xmm3", "xmm4", "xmm5"],
     }
 }

@@ -248,7 +248,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // extra arg 3 (mode/options)
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // extra arg 4 (options)
-    emitter.instruction("call r11");                                            // invoke the wrapper path method
+    emitter.emit_platform_callback_call("r11", 5);
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // stash the bool result across the instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the throwaway wrapper instance
@@ -488,7 +488,22 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // from len → first string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // to ptr → second string-arg pair
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // to len → second string-arg pair
-    emitter.instruction("call r11");                                            // invoke the wrapper's rename method
+    if emitter.platform == crate::codegen_support::platform::Platform::Windows {
+        // MSx64 assigns arguments by PHP value, not by independently packed
+        // machine words. After $this and the first two-word string consume
+        // rcx/rdx/r8, the second two-word string cannot be split at r9: both
+        // words belong in the caller stack area.
+        emitter.instruction("sub rsp, 48");                                     // reserve shadow space plus the complete second string pair
+        emitter.instruction("mov QWORD PTR [rsp + 32], rcx");                   // destination string pointer in first overflow slot
+        emitter.instruction("mov QWORD PTR [rsp + 40], r8");                    // destination string length in second overflow slot
+        emitter.instruction("mov r8, rdx");                                     // source string length → MSx64 arg register 3
+        emitter.instruction("mov rdx, rsi");                                    // source string pointer → MSx64 arg register 2
+        emitter.instruction("mov rcx, rdi");                                    // wrapper object → MSx64 arg register 1
+        emitter.instruction("call r11");                                        // invoke generated wrapper method with composite ABI placement
+        emitter.instruction("add rsp, 48");                                     // release shadow and overflow slots
+    } else {
+        emitter.instruction("call r11");                                        // invoke the wrapper method through the SysV PHP ABI
+    }
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the bool result across the instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the throwaway wrapper instance
@@ -505,4 +520,88 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bool result
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_user_wrapper_path_op` call site stages
+    /// the 5th int arg (a4) on the stack above the MSx64 shadow space before the
+    /// indirect `call r11` into the wrapper's path method (finding F1, wide
+    /// reverse-ABI variant): without this staging the generated method would
+    /// read $this/path/a3/a4 from the wrong registers and slots on
+    /// windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_user_wrapper_path_op_stages_stack_arg_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_wrapper_path_op(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rdi, QWORD PTR [rbp - 48]").expect("expected SysV $this staging");
+        let stack_idx = asm.find("mov QWORD PTR [rsp + 32], r8").expect("expected 5th-arg stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(stack_idx < call_idx, "5th-arg stack store must precede the indirect call");
+        assert_eq!(asm.matches("sub rsp, 48").count(), 2, "expected the frame sub plus the windows call-site sub");
+        assert_eq!(asm.matches("add rsp, 48").count(), 2, "expected the frame add plus the windows call-site add");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_user_wrapper_path_op` stays
+    /// byte-identical to before the reverse-ABI staging was introduced: the
+    /// MSx64 stack staging is windows-x86_64-only, so a linux-x86_64 build must
+    /// keep the plain 5-register SysV call sequence.
+    #[test]
+    fn test_linux_x86_64_user_wrapper_path_op_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_wrapper_path_op(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rbp - 48]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rax"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rbp - 48]"));
+        assert_eq!(asm.matches("sub rsp, 48").count(), 1, "expected only the frame sub on linux-x86_64");
+        assert_eq!(asm.matches("add rsp, 48").count(), 1, "expected only the frame add on linux-x86_64");
+    }
+
+    /// Verifies Windows stages the entire second string on the stack because a
+    /// two-word PHP string cannot be split between r9 and the MSx64 stack area.
+    #[test]
+    fn test_windows_x86_64_user_wrapper_rename_stages_stack_arg_before_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_wrapper_rename(&mut emitter);
+        let asm = emitter.output();
+
+        let this_idx = asm.find("mov rdi, QWORD PTR [rbp - 40]").expect("expected SysV $this staging");
+        let to_ptr_idx = asm
+            .find("mov QWORD PTR [rsp + 32], rcx")
+            .expect("expected destination pointer stack store");
+        let to_len_idx = asm
+            .find("mov QWORD PTR [rsp + 40], r8")
+            .expect("expected destination length stack store");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(this_idx < call_idx, "$this load must precede the indirect call");
+        assert!(to_ptr_idx < call_idx, "destination pointer store must precede the indirect call");
+        assert!(to_len_idx < call_idx, "destination length store must precede the indirect call");
+        assert_eq!(asm.matches("sub rsp, 48").count(), 2, "expected the frame sub plus the windows call-site sub");
+        assert_eq!(asm.matches("add rsp, 48").count(), 2, "expected the frame add plus the windows call-site add");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_user_wrapper_rename` stays
+    /// byte-identical to before the reverse-ABI staging was introduced.
+    #[test]
+    fn test_linux_x86_64_user_wrapper_rename_has_no_msx64_stack_staging() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_wrapper_rename(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, QWORD PTR [rbp - 40]"));
+        assert!(!asm.contains("mov QWORD PTR [rsp + 32], rax"));
+        assert!(asm.contains("mov rdi, QWORD PTR [rbp - 40]"));
+        assert_eq!(asm.matches("sub rsp, 48").count(), 1, "expected only the frame sub on linux-x86_64");
+        assert_eq!(asm.matches("add rsp, 48").count(), 1, "expected only the frame add on linux-x86_64");
+    }
 }

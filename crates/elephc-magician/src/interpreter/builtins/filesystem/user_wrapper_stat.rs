@@ -13,6 +13,15 @@
 
 use super::super::super::*;
 
+const EVAL_S_IFMT: i64 = 0o170000;
+const EVAL_S_IFIFO: i64 = 0o010000;
+const EVAL_S_IFCHR: i64 = 0o020000;
+const EVAL_S_IFDIR: i64 = 0o040000;
+const EVAL_S_IFBLK: i64 = 0o060000;
+const EVAL_S_IFREG: i64 = 0o100000;
+const EVAL_S_IFLNK: i64 = 0o120000;
+const EVAL_S_IFSOCK: i64 = 0o140000;
+
 /// Dispatches `fstat()` to a wrapper object's `stream_stat()`.
 pub(in crate::interpreter) fn eval_user_wrapper_fstat_result(
     id: i64,
@@ -51,10 +60,10 @@ pub(in crate::interpreter) fn eval_user_wrapper_file_probe_from_stat(
     let mode = eval_user_wrapper_stat_int_field(stat, "mode", values)?.unwrap_or(0);
     let result = match name {
         "file_exists" => true,
-        "is_dir" => eval_mode_kind(mode) == libc::S_IFDIR as i64,
+        "is_dir" => eval_mode_kind(mode) == EVAL_S_IFDIR,
         "is_executable" => mode & 0o111 != 0,
-        "is_file" => eval_mode_kind(mode) == libc::S_IFREG as i64,
-        "is_link" => eval_mode_kind(mode) == libc::S_IFLNK as i64,
+        "is_file" => eval_mode_kind(mode) == EVAL_S_IFREG,
+        "is_link" => eval_mode_kind(mode) == EVAL_S_IFLNK,
         "is_readable" => mode & 0o444 != 0,
         "is_writable" | "is_writeable" => mode & 0o222 != 0,
         _ => return Err(EvalStatus::RuntimeFatal),
@@ -102,18 +111,18 @@ pub(in crate::interpreter) fn eval_user_wrapper_stat_int_field(
 /// Maps one POSIX mode value to PHP's `filetype()` label.
 pub(in crate::interpreter) fn eval_filetype_label_from_mode(mode: i64) -> &'static str {
     match eval_mode_kind(mode) {
-        kind if kind == libc::S_IFREG as i64 => "file",
-        kind if kind == libc::S_IFDIR as i64 => "dir",
-        kind if kind == libc::S_IFLNK as i64 => "link",
-        kind if kind == libc::S_IFCHR as i64 => "char",
-        kind if kind == libc::S_IFBLK as i64 => "block",
-        kind if kind == libc::S_IFIFO as i64 => "fifo",
-        kind if kind == libc::S_IFSOCK as i64 => "socket",
+        kind if kind == EVAL_S_IFREG => "file",
+        kind if kind == EVAL_S_IFDIR => "dir",
+        kind if kind == EVAL_S_IFLNK => "link",
+        kind if kind == EVAL_S_IFCHR => "char",
+        kind if kind == EVAL_S_IFBLK => "block",
+        kind if kind == EVAL_S_IFIFO => "fifo",
+        kind if kind == EVAL_S_IFSOCK => "socket",
         _ => "unknown",
     }
 }
 
 /// Masks one POSIX mode value down to its file-kind bits.
 fn eval_mode_kind(mode: i64) -> i64 {
-    mode & (libc::S_IFMT as i64)
+    mode & EVAL_S_IFMT
 }

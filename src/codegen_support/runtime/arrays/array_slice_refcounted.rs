@@ -56,8 +56,14 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, x9");                                          // compare offset with source length
     emitter.instruction("b.ge __rt_array_slice_ref_empty");                     // return empty array when offset is out of range
     emitter.instruction("sub x3, x9, x1");                                      // compute maximum possible slice length
-    emitter.instruction("cmn x2, #1");                                          // check whether requested length is -1
-    emitter.instruction("csel x2, x3, x2, eq");                                 // use remaining length when caller requested -1
+    // php reads a negative length as "stop that many elements before the end of the
+    // window", not as "select nothing".
+    emitter.instruction("cmp x2, #0");                                          // is the requested length negative?
+    emitter.instruction("b.ge __rt_array_slice_ref_len_clamp");                 // a non-negative length only needs the upper clamp
+    emitter.instruction("add x2, x3, x2");                                      // stop that many elements before the end
+    emitter.instruction("cmp x2, #0");                                          // did the omission consume the whole window?
+    emitter.instruction("csel x2, xzr, x2, lt");                                // an over-long omission selects nothing
+    emitter.label("__rt_array_slice_ref_len_clamp");
     emitter.instruction("cmp x2, x3");                                          // compare requested length with remaining length
     emitter.instruction("csel x2, x3, x2, gt");                                 // clamp requested length to remaining length
     emitter.instruction("str x1, [sp, #16]");                                   // save normalized offset
@@ -127,9 +133,14 @@ fn emit_array_slice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_slice_ref_empty_x86");                  // return an empty indexed array when the requested slice offset starts beyond the source length
     emitter.instruction("mov rcx, r10");                                        // seed the remaining-window scratch register from the source indexed-array logical length
     emitter.instruction("sub rcx, rsi");                                        // compute the remaining refcounted payload count from the normalized slice offset to the end of the source indexed array
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_slice should run until the end of the source indexed array
-    emitter.instruction("jne __rt_array_slice_ref_known_len_x86");              // keep the explicit requested slice length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining refcounted payload count in the source indexed array
+    // php reads a negative length as "stop that many elements before the end of the
+    // window", not as "select nothing".
+    emitter.instruction("cmp rdx, 0");                                          // is the requested length negative?
+    emitter.instruction("jge __rt_array_slice_ref_known_len_x86");              // a non-negative length only needs the upper clamp
+    emitter.instruction("add rdx, rcx");                                        // stop that many elements before the end
+    emitter.instruction("cmp rdx, 0");                                          // did the omission consume the whole window?
+    emitter.instruction("jge __rt_array_slice_ref_known_len_x86");              // the window still holds elements
+    emitter.instruction("xor edx, edx");                                        // an over-long omission selects nothing
 
     emitter.label("__rt_array_slice_ref_known_len_x86");
     emitter.instruction("cmp rdx, rcx");                                        // clamp the requested slice length so it cannot extend beyond the source indexed-array bounds

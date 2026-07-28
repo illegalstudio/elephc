@@ -18,5 +18,6 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Mktime,
     ),
+    requirements: crate::builtins::semantics::windows_timezone_requirements,
     summary: "Returns the Unix timestamp for a date.",
 }

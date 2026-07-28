@@ -1,12 +1,13 @@
 ---
 title: "Web Server (--web)"
-description: "Compile a PHP program into a standalone prefork HTTP server binary with --web."
+description: "Compile a PHP program into a standalone HTTP server binary with --web."
 sidebar:
   order: 7
 ---
 
 `--web` is an elephc compiler extension: it compiles a standard PHP file into a
-standalone prefork HTTP server binary instead of a plain CLI executable. The PHP
+standalone HTTP server binary instead of a plain CLI executable. Unix targets use
+a prefork supervisor; Windows uses a single-process event loop. The PHP
 source you compile is standard PHP — the same file would also run under the PHP
 interpreter or php-fpm — but the compile-and-serve mechanism is specific to
 elephc.
@@ -32,9 +33,10 @@ The produced binary accepts these arguments at runtime:
 | Argument | Required | Default | Description |
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
-| `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
+| `--workers N` | No | CPU count | Number of worker processes to prefork on Unix. Windows always uses one event-loop worker and ignores values other than 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after serving N requests (the master respawns it), bounding memory growth in long-running servers. |
+| `--max-requests N` | No | `0` (never) | Recycle each Unix worker after N requests; stop the Windows process cleanly after N requests so a service manager can restart it. |
+| `--max-execution-time N` | No | `0` (unlimited) | Stop a handler that runs longer than N seconds. Unix recycles that worker; Windows terminates the server process for external restart. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |
 
@@ -161,28 +163,32 @@ request to the next.
 
 ## Concurrency model
 
-The server uses a prefork model with `SO_REUSEPORT`: the master process forks N
-worker processes before any request arrives, and the kernel load-balances
-connections across workers.
+On Unix, the server uses a prefork model with `SO_REUSEPORT`: the master process
+forks N worker processes before any request arrives, and the kernel load-balances
+connections across workers. On Windows, one process owns one current-thread
+event loop. It multiplexes connection I/O while PHP handlers remain serialized
+on that thread; `--workers` does not create extra Windows processes.
 
-Each worker is a separate process with its own copy of the runtime. Within a
-single worker, requests are served **one at a time** — the PHP body runs to
-completion before the next request is accepted. Parallelism equals the worker
-count; a slow request occupies exactly one worker for its duration.
+Each Unix worker is a separate process with its own copy of the runtime. On both
+models, PHP request bodies run **one at a time per worker/process**. Unix handler
+parallelism equals the worker count; Windows currently has one PHP execution
+thread, although idle connection I/O is still multiplexed.
 
 ## Robustness
 
-- **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
-  `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
-  in-flight request may be dropped when shutdown arrives.
-- **Worker respawn** — a worker that dies unexpectedly (a crash, or PHP calling
-  `exit()`) is replaced so the pool stays at `--workers` N.
+- **Graceful shutdown** — Unix handles `SIGINT`/`SIGTERM`, forwards termination
+  to workers, reaps them, and exits `0`; Windows handles Ctrl-C and stops its
+  event loop. An in-flight request may be dropped when shutdown arrives.
+- **Worker respawn (Unix)** — a worker that dies unexpectedly (a crash, or PHP
+  calling `exit()`) is replaced so the pool stays at `--workers` N. Windows relies
+  on an external service manager after a process-fatal handler failure/timeout.
 - **Request body cap** — see `--max-body-size`; oversized bodies are rejected with
   `413` before the handler runs.
 - **Slow-connection bound** — HTTP/1.1 keep-alive is enabled, but a connection that
   does not send the next request's headers within 30 s is closed. Because a worker
   serves one connection at a time, a kept-alive connection holds a worker until it
-  closes or times out — size `--workers` accordingly.
+  closes or times out. Size `--workers` accordingly on Unix; Windows multiplexes
+  idle connection I/O but still serializes active PHP handlers.
 
 ## Sessions
 
@@ -237,10 +243,10 @@ available. The following are not yet available:
 - **`$argc` / `$argv` not populated** — the binary's own argv is consumed by the
   server and is not forwarded to the script body (PHP-FPM does not set them either).
 - **No intra-worker concurrency** — `handler()` runs synchronously, so one slow
-  request occupies its worker until it completes (idle keep-alive connections no
-  longer block the accept loop, but an in-flight handler does). Use `--workers`.
-- **In-flight requests may drop on shutdown** — `SIGINT`/`SIGTERM` terminate
-  workers promptly; there is no graceful connection drain yet.
+  request occupies its worker/process until it completes. Use `--workers` on
+  Unix; Windows currently has no multi-process worker pool.
+- **In-flight requests may drop on shutdown** — Unix signals and Windows Ctrl-C
+  stop promptly; there is no graceful connection drain yet.
 - **No response streaming** — the whole body is buffered before it is sent.
 - **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **Not supported in this release:** static file serving, in-process

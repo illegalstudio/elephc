@@ -275,13 +275,18 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     mark_eval_scope_global_aliases(ctx, &global_aliases);
     set_eval_context_global_scope(ctx);
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
-    load_eval_context_to_arg(ctx, 0);
-    load_eval_scope_to_arg(ctx, 1);
-    move_saved_eval_code_to_eval_args(ctx);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CODE_PTR_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CODE_LEN_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -694,44 +699,38 @@ fn emit_eval_scope_get_for_loaded_scope(
     out_flags_offset: usize,
 ) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, out_cell_offset);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, out_flags_offset);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    let scope_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Register(scope_arg),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(out_cell_offset),
+            EvalCAbiArg::TemporaryStackAddress(out_flags_offset),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_set` using an already-loaded scope handle arg.
 fn emit_eval_scope_set_for_loaded_scope(ctx: &mut FunctionContext<'_>, name: &str, flags: i64) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    let scope_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Register(scope_arg),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
@@ -782,41 +781,32 @@ fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
     let Some(source_path) = ctx.module.source_path.as_deref() else {
         return;
     };
-    load_eval_context_to_arg(ctx, 0);
     let (file_label, file_len) = ctx.data.add_string(source_path.as_bytes());
-    let file_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, file_arg, &file_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        file_len as i64,
-    );
     let dir = Path::new(source_path)
         .parent()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     let (dir_label, dir_len) = ctx.data.add_string(dir.as_bytes());
-    let dir_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_symbol_address(ctx.emitter, dir_arg, &dir_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        dir_len as i64,
-    );
     let line = inst
         .span
         .and_then(|span| i64::try_from(span.line).ok())
         .unwrap_or(0);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        line,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_set_call_site");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&file_label),
+            EvalCAbiArg::Immediate(file_len as i64),
+            EvalCAbiArg::Symbol(&dir_label),
+            EvalCAbiArg::Immediate(dir_len as i64),
+            EvalCAbiArg::Immediate(line),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
@@ -831,33 +821,28 @@ pub(super) fn lower_eval_function_call(
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
     store_eval_function_call_args(ctx, inst, args_offset)?;
-    load_eval_context_to_arg(ctx, 0);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    if inst.operands.is_empty() {
-        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    let args_arg = if inst.operands.is_empty() {
+        EvalCAbiArg::Immediate(0)
     } else {
-        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
-    }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        inst.operands.len() as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+        EvalCAbiArg::TemporaryStackAddress(args_offset)
+    };
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_call_function");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            args_arg,
+            EvalCAbiArg::Immediate(inst.operands.len() as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -881,24 +866,22 @@ pub(super) fn lower_eval_function_call_array(
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    load_eval_context_to_arg(ctx, 0);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, args_arg, EVAL_TEMP_CELL_OFFSET);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_call_function_array");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -917,29 +900,24 @@ pub(super) fn lower_eval_object_new(
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
     store_eval_function_call_args(ctx, inst, args_offset)?;
-    load_eval_context_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    if inst.operands.is_empty() {
-        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    let args_arg = if inst.operands.is_empty() {
+        EvalCAbiArg::Immediate(0)
     } else {
-        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
-    }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        inst.operands.len() as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+        EvalCAbiArg::TemporaryStackAddress(args_offset)
+    };
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_new_object");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            args_arg,
+            EvalCAbiArg::Immediate(inst.operands.len() as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -969,29 +947,27 @@ pub(super) fn lower_eval_object_new_dynamic_fallback(
     abi::emit_store_to_sp(ctx.emitter, name_len_reg, EVAL_CODE_LEN_OFFSET);
     ensure_eval_context(ctx)?;
     store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
-    load_eval_context_to_arg(ctx, 0);
-    let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_arg, EVAL_CODE_PTR_OFFSET);
-    let name_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_arg, EVAL_CODE_LEN_OFFSET);
-    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    if constructor_args.is_empty() {
-        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    let args_arg = if constructor_args.is_empty() {
+        EvalCAbiArg::Immediate(0)
     } else {
-        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
-    }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        constructor_args.len() as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+        EvalCAbiArg::TemporaryStackAddress(args_offset)
+    };
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_try_new_object");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CODE_PTR_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CODE_LEN_OFFSET),
+            args_arg,
+            EvalCAbiArg::Immediate(constructor_args.len() as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -1026,26 +1002,23 @@ pub(super) fn lower_eval_method_call(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     store_eval_method_call_arg_pack(ctx, inst, args_offset)?;
-    load_eval_context_to_arg(ctx, 0);
-    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
-    let method_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, method_ptr_arg, &method_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        method_len as i64,
-    );
-    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_method_call");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Symbol(&method_label),
+            EvalCAbiArg::Immediate(method_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(args_offset),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -1065,25 +1038,23 @@ pub(super) fn lower_eval_static_method_call(
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
     store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
-    load_eval_context_to_arg(ctx, 0);
     let target = format!("{}::{}", class_name, method_name);
     let (target_label, target_len) = ctx.data.add_string(target.as_bytes());
-    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        target_len as i64,
-    );
-    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_static_method_call");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&target_label),
+            EvalCAbiArg::Immediate(target_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(args_offset),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -1107,36 +1078,23 @@ pub(super) fn lower_eval_native_frame_static_method_call(
     emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
     store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
     let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &frame_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        frame_len as i64,
-    );
     let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        &method_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        method_len as i64,
-    );
-    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_native_frame_static_method_call");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Symbol(&frame_label),
+            EvalCAbiArg::Immediate(frame_len as i64),
+            EvalCAbiArg::Symbol(&method_label),
+            EvalCAbiArg::Immediate(method_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(args_offset),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -1165,34 +1123,22 @@ pub(super) fn lower_eval_native_frame_static_property_get(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
     let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &frame_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        frame_len as i64,
-    );
     let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        &property_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        property_len as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_native_frame_static_property_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Symbol(&frame_label),
+            EvalCAbiArg::Immediate(frame_len as i64),
+            EvalCAbiArg::Symbol(&property_label),
+            EvalCAbiArg::Immediate(property_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -1223,36 +1169,23 @@ pub(super) fn lower_eval_native_frame_static_property_set(
     emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
     store_eval_mixed_operand_at(ctx, value, EVAL_TEMP_CELL_OFFSET)?;
     let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &frame_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        frame_len as i64,
-    );
     let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        &property_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        property_len as i64,
-    );
-    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, value_arg, EVAL_TEMP_CELL_OFFSET);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_native_frame_static_property_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Symbol(&frame_label),
+            EvalCAbiArg::Immediate(frame_len as i64),
+            EvalCAbiArg::Symbol(&property_label),
+            EvalCAbiArg::Immediate(property_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
@@ -1275,18 +1208,20 @@ pub(super) fn lower_eval_callable_call_array(
     ensure_eval_context(ctx)?;
     store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?;
     store_eval_mixed_operand_at(ctx, arg_array, EVAL_CALLABLE_ARG_ARRAY_OFFSET)?;
-    load_eval_context_to_arg(ctx, 0);
-    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
-    let arg_array_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_array_arg, EVAL_CALLABLE_ARG_ARRAY_OFFSET);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_callable_call_array");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CALLABLE_ARG_ARRAY_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -1303,14 +1238,18 @@ pub(super) fn lower_eval_is_callable(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
     store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?;
-    load_eval_context_to_arg(ctx, 0);
-    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_is_callable");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+        ],
+    );
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
@@ -1443,27 +1382,22 @@ pub(super) fn lower_eval_object_is_a(
     store_eval_object_operand(ctx, object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
-    load_eval_context_to_arg(ctx, 0);
-    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
-    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        target_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        i64::from(exclude_self),
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_object_is_a");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Symbol(&target_label),
+            EvalCAbiArg::Immediate(target_len as i64),
+            EvalCAbiArg::Immediate(i64::from(exclude_self)),
+        ],
+    );
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&false_label);
@@ -1659,36 +1593,24 @@ pub(super) fn lower_eval_class_constant_fetch(
 ) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    load_eval_context_to_arg(ctx, 0);
     let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
-    );
     let (constant_label, constant_len) = ctx.data.add_string(constant_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &constant_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        constant_len as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_class_constant_fetch");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&class_label),
+            EvalCAbiArg::Immediate(class_len as i64),
+            EvalCAbiArg::Symbol(&constant_label),
+            EvalCAbiArg::Immediate(constant_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -1705,36 +1627,24 @@ pub(super) fn lower_eval_static_property_get(
 ) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    load_eval_context_to_arg(ctx, 0);
     let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
-    );
     let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &property_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        property_len as i64,
-    );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_static_property_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&class_label),
+            EvalCAbiArg::Immediate(class_len as i64),
+            EvalCAbiArg::Symbol(&property_label),
+            EvalCAbiArg::Immediate(property_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -1753,28 +1663,23 @@ pub(super) fn lower_eval_static_property_set(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_eval_mixed_operand_at(ctx, value, EVAL_TEMP_CELL_OFFSET)?;
     ensure_eval_context(ctx)?;
-    load_eval_context_to_arg(ctx, 0);
     let target = format!("{}::{}", class_name, property_name);
     let (target_label, target_len) = ctx.data.add_string(target.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &target_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        target_len as i64,
-    );
-    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, value_arg, EVAL_TEMP_CELL_OFFSET);
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_static_property_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&target_label),
+            EvalCAbiArg::Immediate(target_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(0),
+        ],
+    );
     emit_eval_status_check(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     Ok(())
@@ -1892,25 +1797,20 @@ fn emit_eval_native_frame_override_probe(
     no_override_label: &str,
 ) {
     let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &frame_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        frame_len as i64,
-    );
-    let out_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_temporary_stack_address(ctx.emitter, out_ptr_arg, EVAL_CALLED_CLASS_PTR_OFFSET);
-    let out_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_len_arg, EVAL_CALLED_CLASS_LEN_OFFSET);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_native_frame_called_class_override");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::Symbol(&frame_label),
+            EvalCAbiArg::Immediate(frame_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(EVAL_CALLED_CLASS_PTR_OFFSET),
+            EvalCAbiArg::TemporaryStackAddress(EVAL_CALLED_CLASS_LEN_OFFSET),
+        ],
+    );
     abi::emit_branch_if_int_result_zero(ctx.emitter, no_override_label);
 }
 
@@ -2045,8 +1945,11 @@ fn eval_class_relation_kind(name: &str) -> Result<i64> {
 fn emit_branch_if_eval_unboxed_not_object(ctx: &mut FunctionContext<'_>, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            let object_label = ctx.next_label("eval_unboxed_object_continue");
             ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the Mixed value contains an object
-            ctx.emitter.instruction(&format!("b.ne {}", label));                // non-object values use the native false/empty fallback
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // keep the short conditional branch within range for object values
+            ctx.emitter.instruction(&format!("b {}", label));                   // take the long-range non-object fallback through an unconditional branch
+            ctx.emitter.label(&object_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the Mixed value contains an object
@@ -2240,20 +2143,17 @@ fn register_eval_declared_symbol_name(
     symbol_name: &str,
     name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
     let symbol = ctx.emitter.target.extern_symbol(symbol_name);
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+        ],
+    );
 }
 
 /// Collects global PHP functions that can use the descriptor-invoker bridge.
@@ -4010,38 +3910,23 @@ fn register_eval_native_function(
         ),
         Some(&invoker_label),
     );
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (name_label, name_len) = ctx.data.add_string(registration.name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &descriptor_label,
-    );
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &invoker_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        registration.signature.params.len() as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::Symbol(&descriptor_label),
+            EvalCAbiArg::Symbol(&invoker_label),
+            EvalCAbiArg::Immediate(registration.signature.params.len() as i64),
+        ],
+    );
     register_eval_native_function_bridge_support(
         ctx,
         context_offset,
@@ -4113,6 +3998,70 @@ fn register_eval_native_function(
     Ok(())
 }
 
+/// Describes one scalar or pointer argument staged for an eval bridge C ABI call.
+enum EvalCAbiArg<'a> {
+    FrameOffset(usize),
+    TemporaryStackValue(usize),
+    TemporaryStackAddress(usize),
+    Register(&'a str),
+    Symbol(&'a str),
+    SymbolOwned(String),
+    Immediate(i64),
+}
+
+/// Materializes an eval bridge call through the target C ABI, including MS x64
+/// shadow space and stack arguments after the fourth positional slot.
+fn emit_eval_c_abi_call(ctx: &mut FunctionContext<'_>, symbol: &str, args: &[EvalCAbiArg<'_>]) {
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    for (index, arg) in args.iter().enumerate() {
+        let staged_bytes = index * 16;
+        match arg {
+            EvalCAbiArg::FrameOffset(offset) => {
+                abi::load_at_offset(ctx.emitter, value_reg, *offset);
+            }
+            EvalCAbiArg::TemporaryStackValue(offset) => {
+                abi::emit_load_temporary_stack_slot(
+                    ctx.emitter,
+                    value_reg,
+                    offset + staged_bytes,
+                );
+            }
+            EvalCAbiArg::TemporaryStackAddress(offset) => {
+                abi::emit_temporary_stack_address(
+                    ctx.emitter,
+                    value_reg,
+                    offset + staged_bytes,
+                );
+            }
+            EvalCAbiArg::Register(register) => {
+                abi::emit_push_reg(ctx.emitter, register);
+                continue;
+            }
+            EvalCAbiArg::Symbol(label) => {
+                abi::emit_symbol_address(ctx.emitter, value_reg, label);
+            }
+            EvalCAbiArg::SymbolOwned(label) => {
+                abi::emit_symbol_address(ctx.emitter, value_reg, label);
+            }
+            EvalCAbiArg::Immediate(value) => {
+                abi::emit_load_int_immediate(ctx.emitter, value_reg, *value);
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, value_reg);
+    }
+
+    let arg_types = vec![PhpType::Int; args.len()];
+    let assignments =
+        abi::build_c_abi_outgoing_arg_assignments_for_target(ctx.emitter.target, &arg_types);
+    let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    abi::compact_windows_c_abi_stack_args(ctx.emitter, &assignments);
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, 0);
+    abi::emit_reserve_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_call_label(ctx.emitter, symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, call_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+}
+
 /// Emits an eval-safe descriptor invoker for a registered native free function.
 fn emit_eval_native_function_invoker_inline(
     ctx: &mut FunctionContext<'_>,
@@ -4142,24 +4091,8 @@ fn register_eval_native_method(
     context_offset: usize,
     registration: &EvalNativeMethodRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let method_key = format!("{}::{}", registration.class_name, registration.method_name);
     let (method_key_label, method_key_len) = ctx.data.add_string(method_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        registration.signature.params.len() as i64,
-    );
     let symbol = if registration.is_static {
         ctx.emitter
             .target
@@ -4169,7 +4102,16 @@ fn register_eval_native_method(
             .target
             .extern_symbol("__elephc_eval_register_native_method")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(registration.signature.params.len() as i64),
+        ],
+    );
     register_eval_native_method_bridge_support(
         ctx,
         context_offset,
@@ -4255,22 +4197,6 @@ fn register_eval_native_method_bridge_support(
     is_static: bool,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        if bridge_supported { 1 } else { 0 },
-    );
     let symbol = if is_static {
         ctx.emitter
             .target
@@ -4280,7 +4206,16 @@ fn register_eval_native_method_bridge_support(
             .target
             .extern_symbol("__elephc_eval_register_native_method_bridge_support")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(if bridge_supported { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native method parameter-name registration call.
@@ -4293,33 +4228,7 @@ fn register_eval_native_method_param(
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &param_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        param_name_len as i64,
-    );
     let symbol = if is_static {
         ctx.emitter
             .target
@@ -4329,7 +4238,18 @@ fn register_eval_native_method_param(
             .target
             .extern_symbol("__elephc_eval_register_native_method_param")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&param_name_label),
+            EvalCAbiArg::Immediate(param_name_len as i64),
+        ],
+    );
 }
 
 /// Emits one native method parameter-flags registration call.
@@ -4343,32 +4263,6 @@ fn register_eval_native_method_param_flags(
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        if is_by_ref { 1 } else { 0 },
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        if is_variadic { 1 } else { 0 },
-    );
     let symbol = if is_static {
         ctx.emitter
             .target
@@ -4378,7 +4272,18 @@ fn register_eval_native_method_param_flags(
             .target
             .extern_symbol("__elephc_eval_register_native_method_param_flags")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Immediate(if is_by_ref { 1 } else { 0 }),
+            EvalCAbiArg::Immediate(if is_variadic { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native method parameter-type registration call.
@@ -4391,33 +4296,7 @@ fn register_eval_native_method_param_type(
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        type_len as i64,
-    );
     let symbol = if is_static {
         ctx.emitter
             .target
@@ -4427,7 +4306,18 @@ fn register_eval_native_method_param_type(
             .target
             .extern_symbol("__elephc_eval_register_native_method_param_type")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native method return-type registration call.
@@ -4439,28 +4329,7 @@ fn register_eval_native_method_return_type(
     is_static: bool,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let symbol = if is_static {
         ctx.emitter
             .target
@@ -4470,7 +4339,17 @@ fn register_eval_native_method_return_type(
             .target
             .extern_symbol("__elephc_eval_register_native_method_return_type")
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native method parameter-default registration call.
@@ -4483,35 +4362,9 @@ fn register_eval_native_method_param_default(
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        method_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        method_key_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    let symbol = match default {
+    let (symbol, value_1, value_2) = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                *payload,
-            );
-            if is_static {
+            let symbol = if is_static {
                 ctx.emitter.target.extern_symbol(
                     "__elephc_eval_register_native_static_method_param_default_scalar",
                 )
@@ -4519,21 +4372,16 @@ fn register_eval_native_method_param_default(
                 ctx.emitter
                     .target
                     .extern_symbol("__elephc_eval_register_native_method_param_default_scalar")
-            }
+            };
+            (
+                symbol,
+                EvalCAbiArg::Immediate(*kind),
+                EvalCAbiArg::Immediate(*payload),
+            )
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            if is_static {
+            let symbol = if is_static {
                 ctx.emitter.target.extern_symbol(
                     "__elephc_eval_register_native_static_method_param_default_string",
                 )
@@ -4541,22 +4389,17 @@ fn register_eval_native_method_param_default(
                 ctx.emitter
                     .target
                     .extern_symbol("__elephc_eval_register_native_method_param_default_string")
-            }
+            };
+            (
+                symbol,
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Object { .. } => {
             let spec = encode_eval_native_object_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            if is_static {
+            let symbol = if is_static {
                 ctx.emitter.target.extern_symbol(
                     "__elephc_eval_register_native_static_method_param_default_object",
                 )
@@ -4564,22 +4407,17 @@ fn register_eval_native_method_param_default(
                 ctx.emitter
                     .target
                     .extern_symbol("__elephc_eval_register_native_method_param_default_object")
-            }
+            };
+            (
+                symbol,
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            if is_static {
+            let symbol = if is_static {
                 ctx.emitter.target.extern_symbol(
                     "__elephc_eval_register_native_static_method_param_default_array",
                 )
@@ -4587,10 +4425,26 @@ fn register_eval_native_method_param_default(
                 ctx.emitter
                     .target
                     .extern_symbol("__elephc_eval_register_native_method_param_default_array")
-            }
+            };
+            (
+                symbol,
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(method_key_label),
+            EvalCAbiArg::Immediate(method_key_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            value_1,
+            value_2,
+        ],
+    );
 }
 
 /// Emits one native constructor signature registration call into the eval context.
@@ -4599,29 +4453,22 @@ fn register_eval_native_constructor(
     context_offset: usize,
     registration: &EvalNativeConstructorRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (class_name_label, class_name_len) =
         ctx.data.add_string(registration.class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        registration.signature.params.len() as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(registration.signature.params.len() as i64),
+        ],
+    );
     register_eval_native_constructor_bridge_support(
         ctx,
         context_offset,
@@ -4691,27 +4538,20 @@ fn register_eval_native_constructor_bridge_support(
     class_name_len: usize,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        if bridge_supported { 1 } else { 0 },
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_bridge_support");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(if bridge_supported { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native class-parent metadata registration call into the eval context.
@@ -4721,34 +4561,23 @@ fn register_eval_native_class_parent(
     class_name: &str,
     parent_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let (class_name_label, class_name_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
     let (parent_name_label, parent_name_len) = ctx.data.add_string(parent_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &parent_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        parent_name_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_class_parent");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Symbol(&parent_name_label),
+            EvalCAbiArg::Immediate(parent_name_len as i64),
+        ],
+    );
 }
 
 /// Emits one native property-type metadata registration call into the eval context.
@@ -4757,38 +4586,27 @@ fn register_eval_native_property_type(
     context_offset: usize,
     registration: &EvalNativePropertyTypeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}",
         registration.class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_property_type");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&property_key_label),
+            EvalCAbiArg::Immediate(property_key_len as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native interface-property metadata registration call into the eval context.
@@ -4797,7 +4615,6 @@ fn register_eval_native_interface_property(
     context_offset: usize,
     registration: &EvalNativeInterfacePropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.interface_name,
@@ -4805,27 +4622,7 @@ fn register_eval_native_interface_property(
         registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let mut flags = 0;
     if registration.requires_get {
         flags |= NATIVE_PROPERTY_REQUIRES_GET;
@@ -4833,16 +4630,22 @@ fn register_eval_native_interface_property(
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        flags,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_interface_property");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&property_key_label),
+            EvalCAbiArg::Immediate(property_key_len as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
 }
 
 /// Emits one native abstract-property metadata registration call into the eval context.
@@ -4851,33 +4654,12 @@ fn register_eval_native_abstract_property(
     context_offset: usize,
     registration: &EvalNativeAbstractPropertyRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
         "{}::{}::{}",
         registration.class_name, registration.declaring_class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let mut flags = 0;
     if registration.requires_get {
         flags |= NATIVE_PROPERTY_REQUIRES_GET;
@@ -4885,16 +4667,22 @@ fn register_eval_native_abstract_property(
     if registration.requires_set {
         flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        flags,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_abstract_property");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&property_key_label),
+            EvalCAbiArg::Immediate(property_key_len as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
 }
 
 /// Emits one native property-default metadata registration call into the eval context.
@@ -4909,68 +4697,50 @@ fn register_eval_native_property_default(
         registration.class_name, registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &property_key_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        property_key_len as i64,
-    );
-    let symbol = match &registration.default {
+    let (symbol, value_1, value_2) = match &registration.default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *payload,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_scalar")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_property_default_scalar"),
+                EvalCAbiArg::Immediate(*kind),
+                EvalCAbiArg::Immediate(*payload),
+            )
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_string")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_property_default_string"),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(&registration.default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 3),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_property_default_array")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_property_default_array"),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Object { .. } => return,
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&property_key_label),
+            EvalCAbiArg::Immediate(property_key_len as i64),
+            value_1,
+            value_2,
+        ],
+    );
 }
 
 /// Emits one native member-attribute metadata registration call into the eval context.
@@ -4979,24 +4749,21 @@ fn register_eval_native_member_attribute(
     context_offset: usize,
     registration: &EvalNativeMemberAttributeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
     let record = eval_native_member_attribute_record(registration);
     let (record_label, record_len) = ctx.data.add_string(&record);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &record_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        record_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_member_attribute");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(&record_label),
+            EvalCAbiArg::Immediate(record_len as i64),
+        ],
+    );
 }
 
 /// Encodes one member-attribute registration record for the eval bridge ABI.
@@ -5110,38 +4877,23 @@ fn register_eval_native_constructor_param(
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &param_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        param_name_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&param_name_label),
+            EvalCAbiArg::Immediate(param_name_len as i64),
+        ],
+    );
 }
 
 /// Emits one native constructor parameter-flags registration call.
@@ -5154,37 +4906,22 @@ fn register_eval_native_constructor_param_flags(
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        if is_by_ref { 1 } else { 0 },
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        if is_variadic { 1 } else { 0 },
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param_flags");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Immediate(if is_by_ref { 1 } else { 0 }),
+            EvalCAbiArg::Immediate(if is_variadic { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native constructor parameter-type registration call.
@@ -5196,38 +4933,23 @@ fn register_eval_native_constructor_param_type(
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        type_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param_type");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native constructor parameter-default registration call.
@@ -5239,90 +4961,61 @@ fn register_eval_native_constructor_param_default(
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    let symbol = match default {
+    let (symbol, value_1, value_2) = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                *payload,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_constructor_param_default_scalar")
+            (
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_constructor_param_default_scalar",
+                ),
+                EvalCAbiArg::Immediate(*kind),
+                EvalCAbiArg::Immediate(*payload),
+            )
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_constructor_param_default_string")
+            (
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_constructor_param_default_string",
+                ),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Object { .. } => {
             let spec = encode_eval_native_object_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_constructor_param_default_object")
+            (
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_constructor_param_default_object",
+                ),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_constructor_param_default_array")
+            (
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_constructor_param_default_array",
+                ),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(class_name_label),
+            EvalCAbiArg::Immediate(class_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            value_1,
+            value_2,
+        ],
+    );
 }
 
 /// Emits one native-function parameter-name registration call.
@@ -5334,38 +5027,23 @@ fn register_eval_native_function_param(
     param_index: usize,
     param_name: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &param_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        param_name_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_param");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&param_name_label),
+            EvalCAbiArg::Immediate(param_name_len as i64),
+        ],
+    );
 }
 
 /// Emits one native-function bridge-support registration call.
@@ -5376,27 +5054,20 @@ fn register_eval_native_function_bridge_support(
     function_name_len: usize,
     bridge_supported: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        if bridge_supported { 1 } else { 0 },
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_bridge_support");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Immediate(if bridge_supported { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native-function parameter-flags registration call.
@@ -5409,37 +5080,22 @@ fn register_eval_native_function_param_flags(
     is_by_ref: bool,
     is_variadic: bool,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        if is_by_ref { 1 } else { 0 },
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        if is_variadic { 1 } else { 0 },
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_param_flags");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Immediate(if is_by_ref { 1 } else { 0 }),
+            EvalCAbiArg::Immediate(if is_variadic { 1 } else { 0 }),
+        ],
+    );
 }
 
 /// Emits one native-function parameter-type registration call.
@@ -5451,38 +5107,23 @@ fn register_eval_native_function_param_type(
     param_index: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 5),
-        type_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_param_type");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native-function return-type registration call.
@@ -5493,33 +5134,22 @@ fn register_eval_native_function_return_type(
     function_name_len: usize,
     type_spec: &str,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
     let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        &type_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        type_len as i64,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_return_type");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Symbol(&type_label),
+            EvalCAbiArg::Immediate(type_len as i64),
+        ],
+    );
 }
 
 /// Emits one native function parameter-default registration call.
@@ -5531,90 +5161,61 @@ fn register_eval_native_function_param_default(
     param_index: usize,
     default: &EvalNativeCallableDefault,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        function_name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        function_name_len as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        param_index as i64,
-    );
-    let symbol = match default {
+    let (symbol, value_1, value_2) = match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                *kind,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                *payload,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_function_param_default_scalar")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_function_param_default_scalar"),
+                EvalCAbiArg::Immediate(*kind),
+                EvalCAbiArg::Immediate(*payload),
+            )
         }
         EvalNativeCallableDefault::String(value) => {
             let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_function_param_default_string")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_function_param_default_string"),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Object { .. } => {
             let spec = encode_eval_native_object_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_function_param_default_object")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_function_param_default_object"),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
         EvalNativeCallableDefault::Array(_) => {
             let spec = encode_eval_native_array_default(default);
             let (default_label, default_len) = ctx.data.add_string(&spec);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 4),
-                &default_label,
-            );
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_arg_reg_name(ctx.emitter.target, 5),
-                default_len as i64,
-            );
-            ctx.emitter
-                .target
-                .extern_symbol("__elephc_eval_register_native_function_param_default_array")
+            (
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_function_param_default_array"),
+                EvalCAbiArg::SymbolOwned(default_label),
+                EvalCAbiArg::Immediate(default_len as i64),
+            )
         }
     };
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::FrameOffset(context_offset),
+            EvalCAbiArg::Symbol(function_name_label),
+            EvalCAbiArg::Immediate(function_name_len as i64),
+            EvalCAbiArg::Immediate(param_index as i64),
+            value_1,
+            value_2,
+        ],
+    );
 }
 
 /// Loads the persistent eval context local into the selected integer argument register.
@@ -5631,14 +5232,6 @@ fn load_eval_context_local_to_arg(
 fn load_eval_context_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_CONTEXT_HANDLE_OFFSET);
-}
-
-/// Reloads the saved eval source string into the bridge code pointer/length arguments.
-fn move_saved_eval_code_to_eval_args(ctx: &mut FunctionContext<'_>) {
-    let code_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, code_ptr_arg, EVAL_CODE_PTR_OFFSET);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, code_len_arg, EVAL_CODE_LEN_OFFSET);
 }
 
 /// Ensures a persistent eval scope exists and stores its handle in the scratch frame.
@@ -5728,33 +5321,22 @@ fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Result<bool> 
     let (called_ptr_reg, called_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, called_ptr_reg, EVAL_CALLED_CLASS_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, called_len_reg, EVAL_CALLED_CLASS_LEN_OFFSET);
-    load_eval_context_to_arg(ctx, 0);
     let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_CALLED_CLASS_PTR_OFFSET,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        EVAL_CALLED_CLASS_LEN_OFFSET,
-    );
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_push_class_scope");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_CONTEXT_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&class_label),
+            EvalCAbiArg::Immediate(class_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CALLED_CLASS_PTR_OFFSET),
+            EvalCAbiArg::TemporaryStackValue(EVAL_CALLED_CLASS_LEN_OFFSET),
+        ],
+    );
     emit_eval_status_check(ctx);
     Ok(true)
 }
@@ -6161,52 +5743,59 @@ fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
 /// Calls `__elephc_eval_scope_set` for a boxed value identified by a static name.
 fn emit_eval_scope_set_name(ctx: &mut FunctionContext<'_>, name: &str, flags: i64) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
+    emit_eval_status_check(ctx);
+}
+
+/// Calls `__elephc_eval_scope_get` for a static name and caller-provided scratch slots.
+fn emit_eval_scope_get_name(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    out_cell_offset: usize,
+    out_flags_offset: usize,
+) {
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(out_cell_offset),
+            EvalCAbiArg::TemporaryStackAddress(out_flags_offset),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed global value.
 fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal, flags: i64) {
     let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
-    load_eval_global_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_GLOBAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
@@ -6216,26 +5805,21 @@ fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, aliases: &[Eval
         let (name_label, name_len) = ctx.data.add_string(alias.name.as_bytes());
         let (global_name_label, global_name_len) =
             ctx.data.add_string(alias.global_name.as_bytes());
-        load_eval_scope_to_arg(ctx, 0);
-        let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-        abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 2),
-            name_len as i64,
-        );
-        let global_name_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-        abi::emit_symbol_address(ctx.emitter, global_name_arg, &global_name_label);
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_arg_reg_name(ctx.emitter.target, 4),
-            global_name_len as i64,
-        );
         let symbol = ctx
             .emitter
             .target
             .extern_symbol("__elephc_eval_scope_mark_global_alias");
-        abi::emit_call_label(ctx.emitter, &symbol);
+        emit_eval_c_abi_call(
+            ctx,
+            &symbol,
+            &[
+                EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+                EvalCAbiArg::Symbol(&name_label),
+                EvalCAbiArg::Immediate(name_len as i64),
+                EvalCAbiArg::Symbol(&global_name_label),
+                EvalCAbiArg::Immediate(global_name_len as i64),
+            ],
+        );
         emit_eval_status_check(ctx);
     }
 }
@@ -6243,26 +5827,18 @@ fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, aliases: &[Eval
 /// Calls `__elephc_eval_scope_set` for one boxed local value.
 fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, flags: i64) {
     let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        EVAL_TEMP_CELL_OFFSET,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 4),
-        flags,
-    );
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackValue(EVAL_TEMP_CELL_OFFSET),
+            EvalCAbiArg::Immediate(flags),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
@@ -6326,68 +5902,39 @@ fn reload_eval_globals_from_local_scope(
     Ok(())
 }
 
-/// Calls `__elephc_eval_scope_get` for a static name and caller-provided scratch slots.
-fn emit_eval_scope_get_name(
-    ctx: &mut FunctionContext<'_>,
-    name: &str,
-    out_cell_offset: usize,
-    out_flags_offset: usize,
-) {
-    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, out_cell_offset);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, out_flags_offset);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
-}
-
 /// Calls `__elephc_eval_scope_get` and stores out cell/flags at the start of eval scratch.
 fn emit_eval_scope_get(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
     let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
-    load_eval_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+            EvalCAbiArg::TemporaryStackAddress(8),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_get` for one program global.
 fn emit_eval_global_scope_get(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
     let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
-    load_eval_global_scope_to_arg(ctx, 0);
-    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
-    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_c_abi_call(
+        ctx,
+        &symbol,
+        &[
+            EvalCAbiArg::TemporaryStackValue(EVAL_GLOBAL_SCOPE_HANDLE_OFFSET),
+            EvalCAbiArg::Symbol(&name_label),
+            EvalCAbiArg::Immediate(name_len as i64),
+            EvalCAbiArg::TemporaryStackAddress(0),
+            EvalCAbiArg::TemporaryStackAddress(8),
+        ],
+    );
     emit_eval_status_check(ctx);
 }
 

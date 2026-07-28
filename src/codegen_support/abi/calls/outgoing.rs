@@ -10,7 +10,7 @@
 
 use crate::codegen_support::{
     emit::Emitter,
-    platform::{Arch, Target},
+    platform::{Arch, Platform, Target},
 };
 use crate::types::PhpType;
 
@@ -80,6 +80,78 @@ pub fn build_outgoing_arg_assignments_for_target(
     }
 
     assignments
+}
+
+/// Plans outgoing arguments for the native C ABI rather than elephc's PHP ABI.
+///
+/// Windows x86_64 assigns the first four C arguments by positional slot: an
+/// integer in slot 0 uses `rcx`, while a float in slot 1 uses `xmm1`. The PHP
+/// ABI intentionally tracks integer and floating-point registers separately,
+/// so foreign calls must use this planner to avoid collapsing mixed signatures
+/// onto `rcx`/`xmm0`. Other targets share the regular assignment model.
+pub fn build_c_abi_outgoing_arg_assignments_for_target(
+    target: Target,
+    arg_types: &[PhpType],
+) -> Vec<OutgoingArgAssignment> {
+    if (target.platform, target.arch) != (Platform::Windows, Arch::X86_64) {
+        return build_outgoing_arg_assignments_for_target(target, arg_types, 0);
+    }
+
+    let mut assignments = Vec::with_capacity(arg_types.len());
+    let mut slot = 0usize;
+    let mut stack_only = false;
+    for ty in arg_types {
+        let slot_count = ty.register_count();
+        if !stack_only && slot + slot_count <= 4 {
+            assignments.push(OutgoingArgAssignment {
+                ty: ty.clone(),
+                start_reg: slot,
+                is_float: ty.is_float_reg(),
+            });
+            slot += slot_count;
+        } else {
+            assignments.push(OutgoingArgAssignment {
+                ty: ty.clone(),
+                start_reg: STACK_ARG_SENTINEL,
+                is_float: ty.is_float_reg(),
+            });
+            stack_only = true;
+        }
+    }
+    assignments
+}
+
+/// Compacts generic 16-byte overflow temporaries into native 8-byte MSx64 C slots.
+///
+/// `materialize_outgoing_args` deliberately leaves one 16-byte slot per PHP
+/// argument. Native Windows calls instead require consecutive eight-byte stack
+/// slots after shadow space. This post-pass preserves the reserved byte count
+/// while moving each overflow payload down to its C ABI position. It is a no-op
+/// on all other targets.
+pub fn compact_windows_c_abi_stack_args(
+    emitter: &mut Emitter,
+    assignments: &[OutgoingArgAssignment],
+) {
+    if (emitter.target.platform, emitter.target.arch) != (Platform::Windows, Arch::X86_64) {
+        return;
+    }
+    let mut source_offset = 0usize;
+    let mut destination_offset = 0usize;
+    for assignment in assignments
+        .iter()
+        .filter(|assignment| !assignment.in_register())
+    {
+        if source_offset != destination_offset {
+            emit_copy_stack_arg_slot(
+                emitter,
+                &assignment.ty,
+                source_offset,
+                destination_offset,
+            );
+        }
+        source_offset += arg_slot_size(&assignment.ty);
+        destination_offset += assignment.ty.register_count() * 8;
+    }
 }
 
 /// Returns the stack slot byte size for `ty`.
@@ -261,8 +333,9 @@ pub fn materialize_outgoing_args(
 /// x86_64 already gets the corresponding gap from `call` pushing the return address and the
 /// callee saving `rbp`.
 pub fn outgoing_call_stack_pad_bytes(target: Target, overflow_bytes: usize) -> usize {
-    match target.arch {
-        Arch::AArch64 if overflow_bytes > 0 => 16,
+    match (target.platform, target.arch) {
+        (Platform::Windows, Arch::X86_64) => 32,
+        (_, Arch::AArch64) if overflow_bytes > 0 => 16,
         _ => 0,
     }
 }

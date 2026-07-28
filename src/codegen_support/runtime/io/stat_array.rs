@@ -192,17 +192,20 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
 /// `emitter.target.arch == Arch::X86_64`.
 fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     let stat_buf = 144usize;
-    let mode_off = 24usize;
+    // The Windows C-symbol shims produce Elephc's portable stat layout rather
+    // than glibc's x86_64 structure. Keep Linux's native offsets unchanged.
+    let windows_layout = emitter.platform == crate::codegen_support::platform::Platform::Windows;
+    let mode_off = if windows_layout { emitter.platform.stat_mode_offset() } else { 24usize };
     let size_off = 48usize;
     let atime_off = 72usize;
     let mtime_off = 88usize;
     let ctime_off = 104usize;
     let ino_off = 8usize;
-    let uid_off = 28usize;
-    let gid_off = 32usize;
+    let uid_off = if windows_layout { emitter.platform.stat_uid_offset() } else { 28usize };
+    let gid_off = if windows_layout { emitter.platform.stat_gid_offset() } else { 32usize };
     let dev_off = 0usize;
-    let rdev_off = 40usize;
-    let nlink_off = 16usize;
+    let rdev_off = if windows_layout { emitter.platform.stat_rdev_offset() } else { 40usize };
+    let nlink_off = if windows_layout { emitter.platform.stat_nlink_offset() } else { 16usize };
     let blksize_off = 56usize;
     let blocks_off = 64usize;
 

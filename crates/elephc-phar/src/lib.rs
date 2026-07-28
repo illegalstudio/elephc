@@ -22,9 +22,7 @@
 //!   compatibility, not as a real confidentiality mechanism).
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const PHAR_FLAG_GZIP: u32 = 0x0000_1000;
 const PHAR_FLAG_BZIP2: u32 = 0x0000_2000;
@@ -455,7 +453,8 @@ pub unsafe extern "C" fn elephc_phar_delete_url(
 /// C ABI wrapper around [`set_zip_password`].
 ///
 /// Sets the password used to read and write traditional-PKWARE (ZipCrypto)
-/// encrypted ZIP entries; an empty password clears it. Always returns `1`.
+/// encrypted ZIP entries; an empty password clears it. Returns `1` on success
+/// and `0` if the bridge catches an unexpected panic.
 ///
 /// # Safety
 /// `password_ptr` must be valid for `password_len` bytes unless `password_len` is zero.
@@ -464,8 +463,9 @@ pub unsafe extern "C" fn elephc_phar_set_zip_password(
     password_ptr: *const u8,
     password_len: usize,
 ) -> usize {
-    let _ = std::panic::catch_unwind(|| set_zip_password(slice(password_ptr, password_len)));
-    1
+    usize::from(
+        std::panic::catch_unwind(|| set_zip_password(slice(password_ptr, password_len))).is_ok(),
+    )
 }
 
 /// C ABI wrapper around [`set_archive_compression`].
@@ -894,7 +894,7 @@ fn publish_result(bytes: Vec<u8>, out_len: *mut usize) -> *const u8 {
     let mut buffer = EXTRACT_BUFFER
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .expect("elephc_phar extract buffer poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     buffer.clear();
     buffer.extend_from_slice(&bytes);
     write_len(out_len, buffer.len());
@@ -916,7 +916,9 @@ fn write_streams() -> &'static Mutex<Vec<Option<WriteStream>>> {
 
 /// Allocates a write-stream slot and returns its synthetic descriptor.
 fn allocate_write_stream(stream: WriteStream) -> Option<usize> {
-    let mut streams = write_streams().lock().ok()?;
+    let mut streams = write_streams()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (slot, current) in streams.iter_mut().enumerate() {
         if current.is_none() {
             *current = Some(stream);
@@ -935,7 +937,9 @@ fn write_stream_slot(fd: usize) -> Option<usize> {
 /// Appends payload bytes to an open write stream.
 fn append_write_stream(fd: usize, data: &[u8]) -> Option<usize> {
     let slot = write_stream_slot(fd)?;
-    let mut streams = write_streams().lock().ok()?;
+    let mut streams = write_streams()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let stream = streams.get_mut(slot)?.as_mut()?;
     stream.payload.extend_from_slice(data);
     Some(data.len())
@@ -945,7 +949,9 @@ fn append_write_stream(fd: usize, data: &[u8]) -> Option<usize> {
 fn finalize_write_stream(fd: usize) -> Option<()> {
     let slot = write_stream_slot(fd)?;
     let stream = {
-        let mut streams = write_streams().lock().ok()?;
+        let mut streams = write_streams()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         streams.get_mut(slot)?.take()?
     };
     match stream.target {
@@ -1659,7 +1665,7 @@ fn write_zip_entry(
     let password = if encrypt { current_zip_password() } else { None };
     let (stored, flags) = match password {
         Some(pw) => (
-            zipcrypto_encrypt(&pw, &stored, (crc >> 24) as u8),
+            zipcrypto_encrypt(&pw, &stored, (crc >> 24) as u8)?,
             ZIP_FLAG_ENCRYPTED,
         ),
         None => (stored, 0u16),
@@ -1810,10 +1816,14 @@ fn strip_signature_trailer(archive: &[u8]) -> &[u8] {
     if n < 8 || &archive[n - 4..] != b"GBMB" {
         return archive;
     }
-    let flags = u32::from_le_bytes(archive[n - 8..n - 4].try_into().unwrap());
+    let Some(flags) = le32(archive, n - 8) else {
+        return archive;
+    };
     if flags == PHAR_OPENSSL_SIGNATURE_TYPE {
         if n >= 12 {
-            let sig_len = u32::from_le_bytes(archive[n - 12..n - 8].try_into().unwrap()) as usize;
+            let Some(sig_len) = le32(archive, n - 12).map(|len| len as usize) else {
+                return archive;
+            };
             if let Some(total) = sig_len.checked_add(12) {
                 if n >= total {
                     return &archive[..n - total];
@@ -2030,10 +2040,9 @@ fn read_signature_info(path: &[u8]) -> Option<(u32, Vec<u8>)> {
             if n < 8 || &data[n - 4..] != b"GBMB" {
                 return None;
             }
-            let flags = u32::from_le_bytes(data[n - 8..n - 4].try_into().unwrap());
+            let flags = le32(&data, n - 8)?;
             if flags == PHAR_OPENSSL_SIGNATURE_TYPE {
-                let sig_len =
-                    u32::from_le_bytes(data.get(n - 12..n - 8)?.try_into().unwrap()) as usize;
+                let sig_len = le32(&data, n.checked_sub(12)?)? as usize;
                 let start = n.checked_sub(12)?.checked_sub(sig_len)?;
                 Some((flags, data.get(start..n - 12)?.to_vec()))
             } else {
@@ -2414,39 +2423,19 @@ fn zipcrypto_decrypt(password: &[u8], data: &[u8], check_byte: u8) -> Option<Vec
 /// is 12 bytes longer than `data`. `check_byte` must be the byte the reader will
 /// verify (the CRC's high byte when no data descriptor is used). The first 11 header
 /// bytes are never read back, so their randomness affects only resistance to attack,
-/// not round-trip correctness.
-fn zipcrypto_encrypt(password: &[u8], data: &[u8], check_byte: u8) -> Vec<u8> {
+/// not round-trip correctness. Returns `None` if the operating-system CSPRNG is
+/// unavailable; callers then fail the archive write instead of emitting a
+/// predictable encryption header.
+fn zipcrypto_encrypt(password: &[u8], data: &[u8], check_byte: u8) -> Option<Vec<u8>> {
     let mut header = [0u8; 12];
-    header[..11].copy_from_slice(&zipcrypto_header_filler());
+    getrandom::getrandom(&mut header[..11]).ok()?;
     header[11] = check_byte;
     let mut keys = ZipCryptoKeys::new(password);
     let mut out = Vec::with_capacity(data.len() + 12);
     for &plain in header.iter().chain(data) {
         out.push(keys.encrypt(plain));
     }
-    out
-}
-
-/// Produces 11 non-constant filler bytes for a ZipCrypto encryption header, mixing
-/// a per-call atomic nonce with the current time through an xorshift64* step.
-/// Dependency-free; only needs to avoid an all-constant header, since the bytes are
-/// discarded on read.
-fn zipcrypto_header_filler() -> [u8; 11] {
-    static NONCE: AtomicU64 = AtomicU64::new(0);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let mut state = now ^ NONCE.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let mut filler = [0u8; 11];
-    for byte in filler.iter_mut() {
-        // xorshift64* advance, then take a high byte of the scrambled state.
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *byte = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as u8;
-    }
-    filler
+    Some(out)
 }
 
 /// Returns the password currently set for reading and writing encrypted ZIP
@@ -3077,7 +3066,8 @@ mod tests {
         let crc = crc32(content);
         // Reuse the production encryptor so the test fixture and the writer share a
         // single cipher direction (check byte = the CRC's high byte, no descriptor).
-        let enc = zipcrypto_encrypt(password, content, (crc >> 24) as u8);
+        let enc = zipcrypto_encrypt(password, content, (crc >> 24) as u8)
+            .expect("test host must expose operating-system entropy");
         let csz = enc.len() as u32;
         let usz = content.len() as u32;
         let mut out = Vec::new();
@@ -3204,6 +3194,26 @@ mod tests {
             Some(&stored[..])
         );
         assert_eq!(zip_local_flag(&plain, b"a.txt"), Some(0));
+    }
+
+    /// Verifies separate ZipCrypto writes receive independent system-random
+    /// headers while both ciphertexts remain decryptable with the same key.
+    #[test]
+    fn zipcrypto_headers_use_fresh_system_entropy() {
+        let password = b"secret";
+        let payload = b"same plaintext";
+        let check_byte = (crc32(payload) >> 24) as u8;
+        let first = zipcrypto_encrypt(password, payload, check_byte)
+            .expect("test host must expose operating-system entropy");
+        let second = zipcrypto_encrypt(password, payload, check_byte)
+            .expect("test host must expose operating-system entropy");
+
+        assert_ne!(&first[..12], &second[..12]);
+        assert_eq!(zipcrypto_decrypt(password, &first, check_byte).as_deref(), Some(&payload[..]));
+        assert_eq!(
+            zipcrypto_decrypt(password, &second, check_byte).as_deref(),
+            Some(&payload[..])
+        );
     }
 
     /// Signing a zip phar whose entries are encrypted still produces a readable
@@ -4088,6 +4098,40 @@ rNiobfy8sSb6iw==\n\
         let pb = path.to_string_lossy();
         assert_eq!(put_entry_bytes(pb.as_bytes(), b"a.txt", b"alpha"), Some(5));
         assert_eq!(set_stub_bytes(pb.as_bytes(), b"<?php echo 1;"), None);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Verifies UTF-8 archive paths and entry names survive the Windows-compatible
+    /// std path conversion across stream reads, metadata, signatures, and gzip I/O.
+    #[test]
+    fn unicode_paths_cover_stream_metadata_signature_and_compression() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_phar_données_日本語_{}.tar",
+            std::process::id()
+        ));
+        let path_text = path.to_str().expect("test temp path must be UTF-8");
+        let path_bytes = path_text.as_bytes();
+        let entry = "répertoire/東京.txt".as_bytes();
+        let metadata = b"a:1:{s:3:\"key\";s:5:\"value\";}";
+
+        assert_eq!(put_entry_bytes(path_bytes, entry, b"contenu"), Some(7));
+        assert_eq!(set_metadata_bytes(path_bytes, metadata), Some(()));
+        assert_eq!(sign_archive_hash(path_bytes, 3), Some(()));
+        assert_eq!(get_metadata_bytes(path_bytes).as_deref(), Some(&metadata[..]));
+        assert_eq!(read_signature_info(path_bytes).map(|info| info.0), Some(3));
+
+        let url = format!("phar://{path_text}/répertoire/東京.txt");
+        assert_eq!(extract_url_bytes(url.as_bytes()).as_deref(), Some(&b"contenu"[..]));
+
+        let compressed = gzip_archive(path_bytes).expect("gzip Unicode archive path");
+        assert_eq!(
+            extract_entry_bytes(&std::fs::read(path_text.to_owned() + ".gz").unwrap(), entry)
+                .as_deref(),
+            Some(&b"contenu"[..])
+        );
+        assert_eq!(decompress_archive(&compressed).as_deref(), Some(path_bytes));
+
+        std::fs::remove_file(path_text.to_owned() + ".gz").ok();
         std::fs::remove_file(&path).ok();
     }
 }

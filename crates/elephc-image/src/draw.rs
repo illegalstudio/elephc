@@ -296,8 +296,12 @@ fn fill_polygon(img: &mut RgbaImage, blending: bool, pts: &[(i64, i64)], src: Rg
     if pts.len() < 3 {
         return;
     }
-    let ymin = pts.iter().map(|p| p.1).min().unwrap();
-    let ymax = pts.iter().map(|p| p.1).max().unwrap();
+    let Some(ymin) = pts.iter().map(|p| p.1).min() else {
+        return;
+    };
+    let Some(ymax) = pts.iter().map(|p| p.1).max() else {
+        return;
+    };
     let n = pts.len();
     for y in ymin..=ymax {
         let mut xs: Vec<f64> = Vec::new();

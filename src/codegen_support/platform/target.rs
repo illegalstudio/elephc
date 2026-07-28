@@ -10,6 +10,7 @@
 
 use super::linux_transform::{map_syscall, needs_at_fdcwd, transform_for_linux};
 use super::toolchain::host_has_native_aarch64_toolchain;
+use super::windows_transform::transform_for_windows;
 
 /// Target platform for code generation.
 ///
@@ -41,7 +42,8 @@ pub struct Target {
 impl Platform {
     /// Detects the host operating system from the Rust compile-time target OS.
     ///
-    /// Returns `Platform::MacOS` when compiling on macOS, otherwise `Platform::Linux`.
+    /// Returns `Platform::MacOS` when compiling on macOS, `Platform::Windows` on Windows,
+    /// otherwise `Platform::Linux`.
     pub fn detect_host() -> Self {
         if cfg!(target_os = "macos") {
             Platform::MacOS
@@ -63,6 +65,51 @@ impl Platform {
         }
     }
 
+    /// Returns the PHP-compatible OS family string for this platform.
+    ///
+    /// Windows reports `"Windows"`, macOS reports `"Darwin"`, and Linux reports
+    /// `"Linux"`, matching PHP's `PHP_OS_FAMILY` constant.
+    pub fn php_os_family(&self) -> &'static str {
+        match self {
+            Platform::Windows => "Windows",
+            Platform::MacOS => "Darwin",
+            Platform::Linux => "Linux",
+        }
+    }
+
+    /// Returns the PHP-compatible end-of-line sequence for this platform.
+    ///
+    /// Windows uses `"\r\n"` (CRLF); macOS and Linux use `"\n"` (LF), matching PHP's
+    /// `PHP_EOL` constant.
+    pub fn php_eol(&self) -> &'static str {
+        match self {
+            Platform::Windows => "\r\n",
+            Platform::MacOS | Platform::Linux => "\n",
+        }
+    }
+
+    /// Returns the PHP-compatible directory separator for this platform.
+    ///
+    /// Windows uses `"\\"`; macOS and Linux use `"/"`, matching PHP's
+    /// `DIRECTORY_SEPARATOR` constant.
+    pub fn directory_separator(&self) -> &'static str {
+        match self {
+            Platform::Windows => "\\",
+            Platform::MacOS | Platform::Linux => "/",
+        }
+    }
+
+    /// Returns the PHP-compatible `PATH_SEPARATOR` for this platform.
+    ///
+    /// Windows uses `";"` to separate entries in `include_path`/`PATH`-like lists;
+    /// macOS and Linux use `":"`, matching PHP's `PATH_SEPARATOR` constant.
+    pub fn path_separator(&self) -> &'static str {
+        match self {
+            Platform::Windows => ";",
+            Platform::MacOS | Platform::Linux => ":",
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///
     /// These flags open a file for writing, creating it if it does not exist,
@@ -72,7 +119,38 @@ impl Platform {
         match self {
             Platform::MacOS => 0x601,
             Platform::Linux => 0x241,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x241,
+        }
+    }
+
+    /// Returns `O_EXCL`, used with `O_CREAT` for PHP's exclusive `x` fopen mode.
+    pub fn o_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0800,
+            Platform::Linux | Platform::Windows => 0x0080,
+        }
+    }
+
+    /// Returns the optional close-on-exec flag supported by this target's open ABI.
+    ///
+    /// Windows handle inheritance is configured independently by the Win32 shim, so
+    /// its CRT-compatible open path deliberately has no `O_CLOEXEC` bit here.
+    pub fn o_cloexec(&self) -> Option<u32> {
+        match self {
+            Platform::MacOS => Some(0x0100_0000),
+            Platform::Linux => Some(0x0008_0000),
+            Platform::Windows => None,
+        }
+    }
+
+    /// Returns the optional CRT text-mode flag accepted by this target's open path.
+    ///
+    /// The Windows runtime normally chooses `_O_BINARY`; PHP's `t` fopen modifier
+    /// explicitly requests `_O_TEXT` and must override that default.
+    pub fn o_text(&self) -> Option<u32> {
+        match self {
+            Platform::Windows => Some(0x4000),
+            Platform::MacOS | Platform::Linux => None,
         }
     }
 
@@ -82,7 +160,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x4048_7413,
             Platform::Linux => 0x5401,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x5401,
         }
     }
 
@@ -92,7 +170,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0004,
             Platform::Linux => 0x0800,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x0800,
         }
     }
 
@@ -102,7 +180,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0xffff,
             Platform::Linux => 1,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 1,
         }
     }
 
@@ -112,7 +190,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x1006,
             Platform::Linux => 20,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 20,
         }
     }
 
@@ -135,7 +213,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0200,
             Platform::Linux => 15,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 15,
         }
     }
 
@@ -146,7 +224,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x0020,
             Platform::Linux => 6,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 6,
         }
     }
 
@@ -164,7 +242,7 @@ impl Platform {
         match self {
             Platform::MacOS => 27,
             Platform::Linux => 26,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 26,
         }
     }
 
@@ -174,18 +252,22 @@ impl Platform {
         match self {
             Platform::MacOS => 61,
             Platform::Linux => 111,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 111,
         }
     }
 
-    /// `AF_INET6` family value — 30 on macOS (BSD), 10 on Linux. Passed to
-    /// `socket()` for IPv6 sockets and stored as the family byte in
-    /// `sockaddr_in6` before `bind()` / `connect()`.
+    /// `AF_INET6` family value — 30 on macOS (BSD), 10 on Linux, 23 on
+    /// Windows (`winsock2.h`). Passed to `socket()` for IPv6 sockets and
+    /// stored as the family byte in `sockaddr_in6` before `bind()` /
+    /// `connect()`, and passed as the `getaddrinfo`/`inet_pton`/`inet_ntop`
+    /// hint family on the Windows x86_64 helpers
+    /// (`__rt_resolve_host_v6`/`__rt_inet6_pton`/`__rt_format_sockaddr_in6`),
+    /// all of which read this accessor directly via `emitter.platform`.
     pub fn af_inet6(&self) -> i64 {
         match self {
             Platform::MacOS => 30,
             Platform::Linux => 10,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 23,
         }
     }
 
@@ -194,12 +276,16 @@ impl Platform {
     /// — putting `ai_addr` at offset 32. Linux (glibc) swaps the canonname
     /// and addr fields, so `ai_addr` lives at offset 24. The earlier fields
     /// (ai_flags/family/socktype/protocol/addrlen + pad) are identical at
-    /// 24 bytes total on both LP64 platforms.
+    /// 24 bytes total on both LP64 platforms. Win64 `ADDRINFOA`
+    /// (`ws2def.h`) uses the BSD/macOS field order — `ai_addrlen` is an
+    /// 8-byte `size_t` and `ai_canonname` precedes `ai_addr` — so `ai_addr`
+    /// sits at offset 32 on Windows, NOT the glibc 24 (loading at 24 would
+    /// read `ai_canonname`, a `char*`, and dereference it as a `sockaddr`).
     pub fn addrinfo_addr_offset(&self) -> i64 {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 24,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 32,
         }
     }
 
@@ -210,7 +296,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x201,
             Platform::Linux => 0x41,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x41,
         }
     }
 
@@ -221,7 +307,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0x209,
             Platform::Linux => 0x441,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x441,
         }
     }
 
@@ -233,7 +319,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("b.cc {}", label),
             Platform::Linux => format!("b.ge {}", label),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("b.ge {}", label),
         }
     }
 
@@ -242,7 +328,7 @@ impl Platform {
     /// Linux syscall results need a comparison against zero before branching on error,
     /// whereas macOS uses the condition flags set directly by `svc`.
     pub fn needs_cmp_before_error_branch(&self) -> bool {
-        matches!(self, Platform::Linux)
+        matches!(self, Platform::Linux | Platform::Windows)
     }
 
     /// Returns the platform errno value for `EAGAIN`/`EWOULDBLOCK`.
@@ -253,7 +339,7 @@ impl Platform {
         match self {
             Platform::MacOS => 35,
             Platform::Linux => 11,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 11,
         }
     }
 
@@ -264,7 +350,7 @@ impl Platform {
         match self {
             Platform::MacOS => 144,
             Platform::Linux => 128,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 128,
         }
     }
 
@@ -273,7 +359,7 @@ impl Platform {
         match self {
             Platform::MacOS => 4,
             Platform::Linux => 16,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 16,
         }
     }
 
@@ -285,7 +371,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest, base, offset),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest, base, offset),
         }
     }
 
@@ -294,7 +380,7 @@ impl Platform {
         match self {
             Platform::MacOS => 96,
             Platform::Linux => 48,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 48,
         }
     }
 
@@ -303,7 +389,7 @@ impl Platform {
         match self {
             Platform::MacOS => 2168,
             Platform::Linux => 128,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 128,
         }
     }
 
@@ -312,7 +398,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0,
             Platform::Linux => 8,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 8,
         }
     }
 
@@ -321,7 +407,7 @@ impl Platform {
         match self {
             Platform::MacOS => 8,
             Platform::Linux => 16,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 16,
         }
     }
 
@@ -330,7 +416,7 @@ impl Platform {
         match self {
             Platform::MacOS => 24,
             Platform::Linux => 32,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 32,
         }
     }
 
@@ -339,7 +425,7 @@ impl Platform {
         match self {
             Platform::MacOS => 48,
             Platform::Linux => 88,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 88,
         }
     }
 
@@ -348,7 +434,7 @@ impl Platform {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 72,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 72,
         }
     }
 
@@ -357,7 +443,7 @@ impl Platform {
         match self {
             Platform::MacOS => 64,
             Platform::Linux => 104,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 104,
         }
     }
 
@@ -366,7 +452,7 @@ impl Platform {
         match self {
             Platform::MacOS => 8,
             Platform::Linux => 8,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 8,
         }
     }
 
@@ -375,7 +461,7 @@ impl Platform {
         match self {
             Platform::MacOS => 16,
             Platform::Linux => 24,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 24,
         }
     }
 
@@ -384,7 +470,7 @@ impl Platform {
         match self {
             Platform::MacOS => 20,
             Platform::Linux => 28,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 28,
         }
     }
 
@@ -396,7 +482,7 @@ impl Platform {
         match self {
             Platform::MacOS => 0,
             Platform::Linux => 0,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0,
         }
     }
 
@@ -405,7 +491,7 @@ impl Platform {
         match self {
             Platform::MacOS => 24,
             Platform::Linux => 32,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 32,
         }
     }
 
@@ -414,7 +500,7 @@ impl Platform {
         match self {
             Platform::MacOS => 6,
             Platform::Linux => 20,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 20,
         }
     }
 
@@ -423,7 +509,7 @@ impl Platform {
         match self {
             Platform::MacOS => 112,
             Platform::Linux => 56,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 56,
         }
     }
 
@@ -432,7 +518,7 @@ impl Platform {
         match self {
             Platform::MacOS => 104,
             Platform::Linux => 64,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 64,
         }
     }
 
@@ -444,7 +530,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
         }
     }
 
@@ -455,7 +541,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
         }
     }
 
@@ -466,7 +552,7 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest_w, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
         }
     }
 
@@ -478,7 +564,7 @@ impl Platform {
         match self {
             Platform::MacOS => -2,
             Platform::Linux => -100,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => -100,
         }
     }
 
@@ -490,7 +576,7 @@ impl Platform {
         match self {
             Platform::MacOS => -1,
             Platform::Linux => 0x3FFF_FFFF,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 0x3FFF_FFFF,
         }
     }
 
@@ -499,7 +585,7 @@ impl Platform {
         match self {
             Platform::MacOS => 21,
             Platform::Linux => 19,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 19,
         }
     }
 
@@ -508,7 +594,7 @@ impl Platform {
         match self {
             Platform::MacOS => 32,
             Platform::Linux => 8,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 8,
         }
     }
 
@@ -522,12 +608,14 @@ impl Platform {
         24
     }
 
-    /// Returns the value of `LC_CTYPE` for `setlocale()`.
+    /// Returns the value of `LC_CTYPE` for `setlocale()`. msvcrt's
+    /// `<locale.h>` numbers categories `LC_ALL=0, LC_COLLATE=1, LC_CTYPE=2,
+    /// ...` — same as macOS/BSD (`LC_CTYPE=2`) — NOT glibc's `LC_CTYPE=0`.
     pub fn lc_ctype(&self) -> u32 {
         match self {
             Platform::MacOS => 2,
             Platform::Linux => 0,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => 2,
         }
     }
 
@@ -582,7 +670,10 @@ impl Target {
     ///
     /// Supported values: `macos-aarch64`, `macos-arm64`, `aarch64-apple-darwin`,
     /// `macos-x86_64`, `x86_64-apple-darwin`, `linux-aarch64`, `linux-arm64`,
-    /// `aarch64-unknown-linux-gnu`, `linux-x86_64`, `x86_64-unknown-linux-gnu`.
+    /// `aarch64-unknown-linux-gnu`, `linux-x86_64`, `x86_64-unknown-linux-gnu`,
+    /// `windows-x86_64`, `x86_64-pc-windows-gnu`, `x86_64-pc-windows-msvc`.
+    /// Both Windows triples select elephc's MinGW GNU-ABI/mingw-w64 backend; the
+    /// MSVC spelling is accepted as an input alias and does not select MSVC linkage.
     /// Returns an error for any unrecognized string.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
@@ -617,8 +708,8 @@ impl Target {
             (Platform::MacOS, Arch::X86_64) => "macos-x86_64",
             (Platform::Linux, Arch::AArch64) => "linux-aarch64",
             (Platform::Linux, Arch::X86_64) => "linux-x86_64",
-            (Platform::Windows, Arch::AArch64) => "windows-aarch64",
             (Platform::Windows, Arch::X86_64) => "windows-x86_64",
+            (Platform::Windows, Arch::AArch64) => "windows-aarch64",
         }
     }
 
@@ -631,6 +722,7 @@ impl Target {
             (Platform::MacOS, Arch::AArch64)
                 | (Platform::Linux, Arch::AArch64)
                 | (Platform::Linux, Arch::X86_64)
+                | (Platform::Windows, Arch::X86_64)
         )
     }
 
@@ -666,6 +758,7 @@ impl Target {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64) => asm.to_string(),
             (Platform::Linux, Arch::AArch64) => transform_for_linux(asm),
+            (Platform::Windows, Arch::X86_64) => transform_for_windows(asm),
             _ => asm.to_string(),
         }
     }
@@ -677,7 +770,7 @@ impl Target {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64) => ";",
             (Platform::Linux, Arch::AArch64) => "//",
-            (Platform::Windows, _) => ";",
+            (Platform::Windows, Arch::AArch64) => "//",
             (_, Arch::X86_64) => "#",
         }
     }
@@ -764,6 +857,7 @@ impl Target {
     ///
     /// On macOS always uses `as`. On Linux ARM64 uses `as` if a native toolchain
     /// is available, otherwise `aarch64-linux-gnu-as`. On Linux x86_64 uses `as`.
+    /// On Windows x86_64 uses `x86_64-w64-mingw32-as` (MinGW GAS).
     pub fn assembler_cmd(&self) -> &'static str {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "as",
@@ -775,7 +869,10 @@ impl Target {
                 }
             }
             (Platform::Linux, Arch::X86_64) => "as",
-            (Platform::Windows, _) => "as",
+            (Platform::Windows, Arch::X86_64) => "x86_64-w64-mingw32-as",
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)")
+            }
         }
     }
 
@@ -783,6 +880,7 @@ impl Target {
     ///
     /// On macOS always uses `ld`. On Linux ARM64 uses `gcc` if a native toolchain
     /// is available, otherwise `aarch64-linux-gnu-gcc`. On Linux x86_64 uses `gcc`.
+    /// On Windows x86_64 uses `x86_64-w64-mingw32-gcc` (MinGW GCC).
     pub fn linker_cmd(&self) -> &'static str {
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "ld",
@@ -794,7 +892,10 @@ impl Target {
                 }
             }
             (Platform::Linux, Arch::X86_64) => "gcc",
-            (Platform::Windows, _) => "gcc",
+            (Platform::Windows, Arch::X86_64) => "x86_64-w64-mingw32-gcc",
+            (Platform::Windows, Arch::AArch64) => {
+                panic!("Windows ARM64 target is not yet supported (see issue #379)")
+            }
         }
     }
 }

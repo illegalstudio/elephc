@@ -31,10 +31,14 @@ return function_exists("sys_get_temp_dir");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+    // The temporary directory is whatever php would resolve here, not the "/tmp"
+    // literal the interpreter used to return: TMPDIR wins, so on macOS this is a
+    // per-user /var/folders/<hash>/T path.
+    let temp_dir = super::super::builtins::filesystem::sys_get_temp_dir::eval_temp_dir();
     assert_eq!(
         values.output,
         format!(
-            "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:111",
+            "time:{}:{temp_dir}:cwd:call-time:{}:call-cwd:{temp_dir}:111",
             eval_compiler_php_version(),
             eval_compiler_php_version()
         )
@@ -134,12 +138,20 @@ return function_exists("strtotime");"#,
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `microtime()` returns a plausible float timestamp by all call paths.
+/// Verifies eval `microtime()` selects its return type from `as_float` on every call
+/// path, and that a float timestamp is plausible.
+///
+/// Only a truthy argument yields a float. The default and explicit-false forms
+/// return php's `"<usec fraction> <seconds>"` string, which begins with "0." and so
+/// compares below 1000000000 — verified against php 8.5:
+/// `microtime() > 1000000000` and `microtime(false) > 1000000000` are both false,
+/// while `microtime(true) > 1000000000` is true. This test previously asserted the
+/// opposite, encoding the always-float behaviour this dispatch used to have.
 #[test]
 fn execute_program_dispatches_microtime_builtin() {
     let program = parse_fragment(
-        br#"echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
-echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
+        br#"echo microtime() > 1000000000 ? "bad" : "str"; echo ":";
+echo microtime(as_float: false) > 1000000000 ? "bad" : "str"; echo ":";
 echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
 echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
 echo ":";
@@ -151,7 +163,7 @@ return function_exists("microtime");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "now:named:call:array:");
+    assert_eq!(values.output, "str:str:call:array:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `hrtime()`, `http_response_code()`, and `header()` dispatch paths.
@@ -215,12 +227,12 @@ fn execute_program_dispatches_stream_introspection_builtins() {
 $transports = stream_get_transports();
 $filters = stream_get_filters();
 echo count($wrappers) . ":" . $wrappers[0] . ":" . $wrappers[5] . ":";
-echo count($transports) . ":" . $transports[0] . ":" . $transports[8] . ":";
+echo count($transports) . ":" . $transports[0] . ":" . $transports[6] . ":";
 echo count($filters) . ":" . $filters[2] . ":";
 $call_wrappers = call_user_func("stream_get_wrappers");
 echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
-echo $call_transports[11] . ":";
+echo $call_transports[9] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
 echo $call_filters[13] . ":";
 echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports");
@@ -234,7 +246,7 @@ return function_exists("stream_get_filters");"#,
 
     assert_eq!(
         values.output,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
+        "11:file:https:10:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

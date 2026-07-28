@@ -38,6 +38,14 @@ relative-to = "target"
 path = "debug/libelephc_web.a"
 relative-to = "target"
 
+# Emit a machine-readable JUnit report for every `--profile ci` run. This is
+# purely additive (it writes `target/nextest/ci/junit.xml` and changes no test
+# outcome or console output), so the native codegen/non-codegen jobs are
+# unaffected. The `windows-codegen-gate` aggregate parses all 16 native Windows
+# reports and requires exactly one successful execution of every runnable test.
+[profile.ci.junit]
+path = "junit.xml"
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
@@ -77,6 +85,26 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# Every `codegen::eval` fixture drives the eval bridge, which compiles AND LINKS a
+# complete PHP program while the test is running -- the work the other entries in
+# this file get an override for, except that here it is the whole module rather
+# than a handful of cases. On an unloaded macOS AArch64 host they measure ~18-38s
+# each; on a loaded native-Windows shard, where the link is MinGW's, that lands on
+# either side of the 60s guard depending on the runner.
+#
+# The override is deliberately module-wide rather than a list of names. Naming the
+# two cases that tripped on one run only moved the problem: the next run terminated
+# two DIFFERENT eval fixtures on the same revision, because which of them crosses
+# the line is a property of runner load, not of the individual test. None of them
+# hangs -- each one that has been allowed to finish did.
+[[profile.default.overrides]]
+filter = 'test(/^codegen::eval::/)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(/^codegen::eval::/)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]

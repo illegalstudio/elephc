@@ -21,38 +21,88 @@ const CALLER_STACK_START_OFFSET: usize = 32;
 pub(crate) const STACK_ARG_SENTINEL: usize = usize::MAX;
 
 /// Returns the maximum number of integer arguments that can be passed in registers for the target ABI.
-/// AArch64: 8 (x0–x7). x86_64: 6 (rdi, rsi, rdx, rcx, r8, r9).
+/// AArch64: 8 (x0–x7). Linux x86_64: 6 (rdi, rsi, rdx, rcx, r8, r9). Windows x86_64: 4 (rcx, rdx, r8, r9).
 pub(crate) fn int_arg_reg_limit(target: Target) -> usize {
-    match target.arch {
-        Arch::AArch64 => MAX_INT_ARG_REGS,
-        Arch::X86_64 => 6,
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => MAX_INT_ARG_REGS,
+        (Platform::Linux, Arch::AArch64) => MAX_INT_ARG_REGS,
+        (Platform::Linux, Arch::X86_64) => 6,
+        (Platform::Windows, Arch::X86_64) => 4,
+        (Platform::MacOS, Arch::X86_64) => 6,
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)")
+        }
     }
 }
 
 /// Returns the maximum number of float arguments that can be passed in registers for the target ABI.
-/// Both AArch64 and x86_64 support 8 float registers (d0–d7 and xmm0–xmm7 respectively).
+/// AArch64: 8 (d0–d7). Linux x86_64: 8 (xmm0–xmm7). Windows x86_64: 4 (xmm0–xmm3).
 pub(crate) fn float_arg_reg_limit(target: Target) -> usize {
-    match target.arch {
-        Arch::AArch64 => MAX_FLOAT_ARG_REGS,
-        Arch::X86_64 => MAX_FLOAT_ARG_REGS,
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => MAX_FLOAT_ARG_REGS,
+        (Platform::Linux, Arch::AArch64) => MAX_FLOAT_ARG_REGS,
+        (Platform::Linux, Arch::X86_64) => MAX_FLOAT_ARG_REGS,
+        (Platform::Windows, Arch::X86_64) => 4,
+        (Platform::MacOS, Arch::X86_64) => MAX_FLOAT_ARG_REGS,
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)")
+        }
     }
 }
 
 /// Returns the frame-pointer offset where the caller's outgoing stack arguments begin.
 /// AArch64 call sites keep a 16-byte nested-call save slot above outgoing stack args;
 /// after the callee saves x29/x30, the first stack arg is therefore at x29+32.
-/// x86_64 reaches the first stack arg at rbp+16 after call pushes the return address.
+/// Linux x86_64 reaches the first stack arg at rbp+16 after call pushes the return address.
+/// Windows x86_64 reaches the first stack arg at rbp+48 after the callee saves rbp
+/// (32-byte shadow space + return address + saved frame pointer).
 pub(crate) fn caller_stack_start_offset(target: Target) -> usize {
-    match target.arch {
-        Arch::AArch64 => CALLER_STACK_START_OFFSET,
-        Arch::X86_64 => 16,
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => CALLER_STACK_START_OFFSET,
+        (Platform::Linux, Arch::AArch64) => CALLER_STACK_START_OFFSET,
+        (Platform::Linux, Arch::X86_64) => 16,
+        (Platform::Windows, Arch::X86_64) => 48,
+        (Platform::MacOS, Arch::X86_64) => 16,
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)")
+        }
     }
 }
 
 /// Returns the register name for the `idx`-th integer argument register.
 /// Panics if `idx >= int_arg_reg_limit(target)`.
 pub(crate) fn int_arg_reg_name(target: Target, idx: usize) -> &'static str {
-    match target.arch {
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"][idx],
+        (Platform::Linux, Arch::AArch64) => ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"][idx],
+        (Platform::Linux, Arch::X86_64) => ["rdi", "rsi", "rdx", "rcx", "r8", "r9"][idx],
+        (Platform::Windows, Arch::X86_64) => ["rcx", "rdx", "r8", "r9"][idx],
+        (Platform::MacOS, Arch::X86_64) => ["rdi", "rsi", "rdx", "rcx", "r8", "r9"][idx],
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)")
+        }
+    }
+}
+
+/// Returns the register used to pass the `idx`-th integer argument to a hand-written,
+/// System V AMD64-only `__rt_*` runtime helper (defined in `codegen_support::runtime::**`
+/// and reading its args from `rdi`/`rsi`/`rdx`/`rcx`/`r8`/`r9` on every target).
+///
+/// Use THIS function — never `int_arg_reg_name` — when staging arguments for such a
+/// hand-written SysV helper: on `windows-x86_64`, `int_arg_reg_name` yields the MSx64
+/// sequence (`rcx`/`rdx`/`r8`/`r9`), which would stage the argument in the wrong
+/// register and poison the call. Use `int_arg_reg_name` instead when the callee is a
+/// callable EMITTED by the codegen itself (descriptor invoker, user PHP function, or any
+/// callee that re-derives its own argument registers via `int_arg_reg_name` on the same
+/// target) — those callees expect MSx64 registers on `windows-x86_64` too, so both sides
+/// agree. AArch64 has a single calling convention, and Linux/macOS x86_64 already use the
+/// SysV register order, so this function returns byte-identical values to
+/// `int_arg_reg_name` on every non-Windows target — the register choice only diverges on
+/// `windows-x86_64`.
+pub(crate) fn runtime_helper_int_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
+    match emitter.target.arch {
+        // AAPCS64 passes the first 8 integer args in x0-x7; x86_64 SysV has only 6
+        // integer arg registers (rdi/rsi/rdx/rcx/r8/r9), so the tables differ in length.
         Arch::AArch64 => ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"][idx],
         Arch::X86_64 => ["rdi", "rsi", "rdx", "rcx", "r8", "r9"][idx],
     }
@@ -61,9 +111,15 @@ pub(crate) fn int_arg_reg_name(target: Target, idx: usize) -> &'static str {
 /// Returns the register name for the `idx`-th float argument register.
 /// Panics if `idx >= float_arg_reg_limit(target)`.
 pub(crate) fn float_arg_reg_name(target: Target, idx: usize) -> &'static str {
-    match target.arch {
-        Arch::AArch64 => ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][idx],
-        Arch::X86_64 => ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"][idx],
+    match (target.platform, target.arch) {
+        (Platform::MacOS, Arch::AArch64) => ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][idx],
+        (Platform::Linux, Arch::AArch64) => ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][idx],
+        (Platform::Linux, Arch::X86_64) => ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"][idx],
+        (Platform::Windows, Arch::X86_64) => ["xmm0", "xmm1", "xmm2", "xmm3"][idx],
+        (Platform::MacOS, Arch::X86_64) => ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"][idx],
+        (Platform::Windows, Arch::AArch64) => {
+            panic!("Windows ARM64 target is not yet supported (see issue #379)")
+        }
     }
 }
 

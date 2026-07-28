@@ -281,7 +281,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass capture environment after the string pointer/length pair
 
     emitter.label("__rt_array_map_str_call");
-    emitter.instruction("call r12");                                            // invoke the user callback and read the produced string result from rax=ptr, rdx=len
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("mov rsi, rax");                                        // move the callback-produced string pointer into the x86_64 array-push string payload register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the destination array pointer into the x86_64 array-push receiver register
     emitter.instruction("call __rt_array_push_str");                            // persist and append the callback-produced string into the destination array, returning the possibly-grown array pointer
@@ -346,7 +346,7 @@ fn emit_array_map_str_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass descriptor environment after the string pair
 
     emitter.label("__rt_array_map_str_owned_call");
-    emitter.instruction("call r12");                                            // invoke descriptor callback and receive owned string in rax/rdx
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload destination array pointer after callback clobbers caller-saved regs
     emitter.instruction("mov rcx, r13");                                        // copy loop index before destination string-slot scaling
     emitter.instruction("shl rcx, 4");                                          // compute 16-byte destination string slot offset

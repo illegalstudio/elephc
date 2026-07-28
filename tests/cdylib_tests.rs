@@ -211,6 +211,92 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_linux() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Verifies the Windows GNU cross path produces a PE DLL, a conventional
+/// import library, undecorated exports, and an import library consumable by a
+/// separately compiled C executable. Runtime execution remains a Wine/Windows
+/// runner gate rather than a host-independent structural check.
+#[test]
+fn test_windows_cdylib_cross_links_a_c_consumer_when_mingw_is_available() {
+    let mingw = "x86_64-w64-mingw32-gcc";
+    if Command::new(mingw).arg("--version").output().is_err() {
+        eprintln!("skipping Windows cdylib cross-link test: MinGW-w64 unavailable");
+        return;
+    }
+
+    let dir = make_test_dir("elephc_windows_cdylib");
+    fs::write(
+        dir.join("native.php"),
+        r#"<?php
+#[Export]
+function mixed(int $a, float $b, int $c, float $d, int $e): float {
+    return $a + $b + $c + $d + $e;
+}
+
+#[Export]
+function string_after_three(int $a, int $b, int $c, string $value): int {
+    return $a + $b + $c + strlen($value);
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args([
+            "--target",
+            "windows-x86_64",
+            "--emit",
+            "cdylib",
+            "native.php",
+        ])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "Windows cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let dll = dir.join("native.dll");
+    let import_lib = dir.join("libnative.dll.a");
+    assert!(dll.exists(), "expected PE DLL at {dll:?}");
+    assert!(import_lib.exists(), "expected import library at {import_lib:?}");
+    let asm = fs::read_to_string(dir.join("native.s")).expect("expected generated DLL assembly");
+    assert!(asm.contains("mov QWORD PTR [rbp - 48], rdi"), "{asm}");
+    assert!(asm.contains("mov QWORD PTR [rbp - 56], rsi"), "{asm}");
+    assert!(asm.contains("movdqu XMMWORD PTR [rbp - 80], xmm6"), "{asm}");
+    assert!(asm.contains("movdqu XMMWORD PTR [rbp - 224], xmm15"), "{asm}");
+    assert!(asm.contains("movdqu xmm15, XMMWORD PTR [rbp - 224]"), "{asm}");
+    assert!(asm.contains("mov rsi, QWORD PTR [rbp - 56]"), "{asm}");
+    assert!(asm.contains("mov rdi, QWORD PTR [rbp - 48]"), "{asm}");
+
+    let consumer = dir.join("consumer.c");
+    fs::write(
+        &consumer,
+        r#"#include <stddef.h>
+__declspec(dllimport) double mixed(long long, double, long long, double, long long);
+__declspec(dllimport) long long string_after_three(long long, long long, long long, const char *, size_t);
+int main(void) {
+    return mixed(1, 2.0, 3, 4.0, 5) == 15.0 &&
+           string_after_three(1, 2, 3, "abcd", 4) == 10 ? 0 : 1;
+}
+"#,
+    )
+    .unwrap();
+    let linked = Command::new(mingw)
+        .current_dir(&dir)
+        .args(["-o", "consumer.exe", "consumer.c", "-L.", "-lnative"])
+        .output()
+        .expect("failed to spawn MinGW C compiler");
+    assert!(
+        linked.status.success(),
+        "MinGW C consumer link failed:\n{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    assert!(dir.join("consumer.exe").exists());
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies that `#[Export]` signatures outside the v1 scalar set are rejected
 /// with a compile error instead of producing a trampoline with an undefined
 /// C ABI (arrays have no defined marshaling in v1).

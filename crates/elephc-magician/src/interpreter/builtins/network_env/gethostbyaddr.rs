@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::network_env` direct and by-value dispatch.
 //!
 //! Key details:
-//! - libc resolver storage is copied before any subsequent resolver lookup can overwrite it.
+//! - OS resolver storage is copied before any subsequent resolver lookup can overwrite it.
 
 use super::*;
 
@@ -41,21 +41,7 @@ pub(in crate::interpreter) fn eval_gethostbyaddr_result(
     let Ok(ipv4) = ip_text.parse::<std::net::Ipv4Addr>() else {
         return values.bool_value(false);
     };
-    let octets = ipv4.octets();
-    let resolved = unsafe {
-        // libc reads the stack-owned IPv4 octets during this call and returns
-        // static resolver storage, which is copied before the next resolver call.
-        let host = libc_gethostbyaddr(
-            octets.as_ptr().cast::<libc::c_void>(),
-            octets.len() as libc::socklen_t,
-            libc::AF_INET,
-        );
-        if host.is_null() || (*host).h_name.is_null() {
-            None
-        } else {
-            Some(CStr::from_ptr((*host).h_name).to_bytes().to_vec())
-        }
-    };
+    let resolved = eval_reverse_ipv4_name(ipv4.octets());
     match resolved {
         Some(name) if !name.is_empty() => values.string_bytes_value(&name),
         _ => values.string(ip_text.as_ref()),

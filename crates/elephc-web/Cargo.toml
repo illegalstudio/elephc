@@ -2,7 +2,7 @@
 name = "elephc-web"
 version = "0.1.0"
 edition = "2021"
-description = "Prefork HTTP server staticlib for the elephc --web flag (hyper + tokio)."
+description = "Cross-platform HTTP server staticlib for the elephc --web flag (hyper + tokio)."
 license = "MIT"
 publish = false
 
@@ -27,3 +27,9 @@ libc = "0.2"
 # flate2: optional gzip response compression (--gzip). Already in the workspace
 # dependency tree, so this adds no new external crate.
 flate2 = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Portable console Ctrl-C handling for the single-process Windows event loop.
+ctrlc = "3"
+# Native whole-file session locking and reparse-point-safe opens.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_IO"] }

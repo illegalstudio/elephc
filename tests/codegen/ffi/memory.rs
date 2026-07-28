@@ -57,8 +57,9 @@ free($buf);
 
 /// Verifies that `memset` accepts an arithmetic expression as the count argument.
 ///
-/// Fixture: malloc(4) buffer, active=1, memset($buf, 65, $active + 1) writes byte 65
-/// to 2 bytes. Assertions: first byte=65, second=65, third=0 (unwritten).
+/// Fixture: malloc(4) buffer is first zeroed, then active=1 and
+/// memset($buf, 65, $active + 1) writes byte 65 to 2 bytes.
+/// Assertions: first byte=65, second=65, third=0 (left at the known baseline).
 #[test]
 fn test_ffi_memset_accepts_arithmetic_count_argument() {
     let out = compile_and_run(
@@ -71,6 +72,7 @@ extern "System" {
 
 $buf = malloc(4);
 $active = 1;
+memset($buf, 0, 4);
 memset($buf, 65, $active + 1);
 echo ptr_read8($buf) . "," . ptr_read8(ptr_offset($buf, 1)) . "," . ptr_read8(ptr_offset($buf, 2));
 free($buf);
@@ -123,14 +125,14 @@ echo $pid > 0 ? "yes" : "no";
 /// Verifies that an extern function with a `string` parameter and `string` return type
 /// is resolved and called correctly.
 ///
-/// Fixture: extern function getenv("HOME") returning string, asserts strlen > 0.
+/// Fixture: extern function getenv("PATH") returning string, asserts strlen > 0.
 #[test]
 fn test_ffi_extern_string_return() {
     let out = compile_and_run(
         r#"<?php
 extern function getenv(string $name): string;
-$home = getenv("HOME");
-echo strlen($home) > 0 ? "ok" : "empty";
+$path = getenv("PATH");
+echo strlen($path) > 0 ? "ok" : "empty";
 "#,
     );
     assert_eq!(out, "ok");

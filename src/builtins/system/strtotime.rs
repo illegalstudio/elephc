@@ -21,6 +21,7 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strtotime,
     ),
+    requirements: crate::builtins::semantics::windows_timezone_requirements,
     summary: "Parses an English textual datetime description into a Unix timestamp.",
 }
 

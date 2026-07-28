@@ -231,7 +231,7 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction(&format!("test r10, r10"));                             // check whether the descriptor exposes a uniform invoker slot
     emitter.instruction(&format!("je {}", missing_label));                      // reject descriptors that cannot be called through the generic path
     emitter.instruction("mov rsi, rbx");                                        // pass boxed start-argument array as invoker argument 2
-    emitter.instruction("call r10");                                            // invoke descriptor adapter; rax = boxed Mixed return value
+    emitter.emit_platform_callback_call("r10", 2);
     emitter.instruction("mov r15, rax");                                        // preserve the Fiber callback return while releasing the argument container
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
@@ -626,7 +626,10 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
 
     spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r14");
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
+    let call_stack_padding = abi::outgoing_call_stack_pad_bytes(emitter.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, call_stack_padding);
     abi::emit_call_reg(emitter, "r13");
+    abi::emit_release_temporary_stack(emitter, call_stack_padding);
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
@@ -857,4 +860,40 @@ fn frame_arg_slot_offset(idx: usize) -> usize {
 /// alignment at calls.
 fn align16(n: usize) -> usize {
     (n + 15) & !15
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 descriptor-invoker Fiber wrapper emits the
+    /// reverse-ABI SysV->MSx64 remap immediately before the indirect `call r10`
+    /// into the generated uniform invoker (finding F1, reverse-ABI): without it,
+    /// the invoker would read its descriptor/argument-array arguments from the
+    /// wrong registers (rdi/rsi instead of rcx/rdx) on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_descriptor_invoker_wrapper_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_x86_64_descriptor_invoker_wrapper(&mut emitter, "fiber_invoker_0");
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect invoker call");
+    }
+
+    /// Verifies linux-x86_64 emission never sees the reverse-ABI remap: the remap
+    /// is windows-x86_64-only, so a linux-x86_64 descriptor-invoker wrapper must
+    /// stay byte-identical to before the remap was introduced.
+    #[test]
+    fn test_linux_x86_64_descriptor_invoker_wrapper_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_x86_64_descriptor_invoker_wrapper(&mut emitter, "fiber_invoker_0");
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+    }
 }

@@ -40,9 +40,5 @@ pub(in crate::interpreter) fn eval_getprotobynumber_result(
     let Ok(protocol) = libc::c_int::try_from(protocol) else {
         return values.bool_value(false);
     };
-    let entry = unsafe {
-        // libc returns a process-global protoent; copy the name before another lookup.
-        libc_getprotobynumber(protocol)
-    };
-    eval_protoent_name_or_false(entry, values)
+    eval_protoent_name_or_false(eval_protocol_name(protocol), values)
 }

@@ -91,6 +91,41 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     Ok(())
 }
 
+/// Returns whether a runtime call hands back storage the caller may have to release.
+///
+/// `fread()` returns a slice of the 64 KiB concat arena while the read fits in it, and
+/// an owned `__rt_heap_alloc` block when it does not. `sys_get_temp_dir()` splits the
+/// same way by target rather than by size: the Windows arm hands back an owned block
+/// holding the converted path, where the POSIX arm returns borrowed storage. Either
+/// way the caller cannot know at compile time which it got, so neither may be skipped
+/// here. `__rt_heap_free_safe` then tells them apart exactly rather than
+/// heuristically: `_concat_buf` and `_heap_buf` are separate `.comm` objects, so an
+/// arena pointer can never satisfy its managed-heap window test and passes through
+/// untouched, leaving only the owned block to be reclaimed.
+///
+/// Their `result_ownership()` stays `MayAliasArguments` deliberately. Calling them
+/// `Fresh` would be untrue — the borrowed case is not owned storage, and other passes
+/// read that contract — whereas this predicate only decides whether a release is
+/// emitted, which is safe to answer conservatively. None of them takes a string
+/// argument, so the aliasing the conservative classification guards against cannot
+/// arise for them.
+///
+/// Without this, the release the EIR already emits for these values was dropped in the
+/// backend, and every such call leaked its block for the life of the process.
+///
+/// `stream_get_contents()` is deliberately NOT listed. It would be unreachable here:
+/// its checker signature is the union `string|false`, so the value is never
+/// `PhpType::Str` and [`value_is_scratch_string`] returns before this predicate is
+/// consulted. Its release always takes the `__rt_decref_mixed` arm instead, and the
+/// block its accumulation buffer strands is a separate defect that lives in the
+/// boxing path — see the note in `io/fread.rs`.
+fn returns_arena_slice_or_owned_block(target: crate::ir::RuntimeFnId) -> bool {
+    matches!(
+        target,
+        crate::ir::RuntimeFnId::Fread | crate::ir::RuntimeFnId::SysGetTempDir
+    )
+}
+
 /// Returns whether a value is a transient string backed by concat scratch storage.
 fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     if ctx.value_php_type(value)? != PhpType::Str {
@@ -114,10 +149,12 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
-            )) => matches!(
-                target.result_ownership(),
-                crate::builtins::semantics::BuiltinResultOwnership::Fresh
-            ),
+            )) => {
+                matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                ) || returns_arena_slice_or_owned_block(target)
+            }
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,

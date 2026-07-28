@@ -301,7 +301,10 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS" | "SID") {
+        if matches!(
+            name.as_str(),
+            "PHP_OS" | "SID" | "PHP_EOL" | "DIRECTORY_SEPARATOR" | "PATH_SEPARATOR"
+        ) {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -348,47 +351,56 @@ pub(super) fn resolve_constant_name(
 }
 
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
-/// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
+/// resolution (e.g., PHP platform/version constants, SID, stream constants, and path flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-        if matches!(
-            name,
-            "PHP_OS"
-                | "SID"
-                | "PATHINFO_DIRNAME"
-                | "PATHINFO_BASENAME"
-                | "PATHINFO_EXTENSION"
-                | "PATHINFO_FILENAME"
-                | "PATHINFO_ALL"
-                | "FNM_NOESCAPE"
-                | "FNM_PATHNAME"
-                | "FNM_PERIOD"
-                | "FNM_CASEFOLD"
-                | "ARRAY_FILTER_USE_VALUE"
-                | "ARRAY_FILTER_USE_BOTH"
-                | "ARRAY_FILTER_USE_KEY"
-                | "STDIN"
-                | "STDOUT"
-                | "STDERR"
-                | "PHP_INT_MAX"
-                | "PHP_INT_MIN"
-                | "PHP_FLOAT_MAX"
-                | "PHP_FLOAT_MIN"
-                | "PHP_FLOAT_EPSILON"
-                | "INF"
-                | "NAN"
-                | "M_PI"
-                | "M_E"
-                | "M_SQRT2"
-                | "M_PI_2"
-                | "M_PI_4"
-                | "M_LOG2E"
-                | "M_LOG10E"
-                | "PHP_EOL"
-                | "DIRECTORY_SEPARATOR"
-        ) {
-            return true;
-        }
-    // Shared source-of-truth slices for JSON, stream/socket, and session constants.
+    if matches!(
+        name,
+        "PHP_OS"
+            | "PHP_OS_FAMILY"
+            | "SID"
+            | "PHP_EOL"
+            | "DIRECTORY_SEPARATOR"
+            | "PATH_SEPARATOR"
+            | "PHP_INT_SIZE"
+            | "PHP_VERSION"
+            | "PHP_MAJOR_VERSION"
+            | "PHP_MINOR_VERSION"
+            | "PHP_RELEASE_VERSION"
+            | "PHP_VERSION_ID"
+            | "PHP_EXTRA_VERSION"
+            | "PATHINFO_DIRNAME"
+            | "PATHINFO_BASENAME"
+            | "PATHINFO_EXTENSION"
+            | "PATHINFO_FILENAME"
+            | "PATHINFO_ALL"
+            | "FNM_NOESCAPE"
+            | "FNM_PATHNAME"
+            | "FNM_PERIOD"
+            | "FNM_CASEFOLD"
+            | "ARRAY_FILTER_USE_VALUE"
+            | "ARRAY_FILTER_USE_BOTH"
+            | "ARRAY_FILTER_USE_KEY"
+            | "STDIN"
+            | "STDOUT"
+            | "STDERR"
+            | "PHP_INT_MAX"
+            | "PHP_INT_MIN"
+            | "PHP_FLOAT_MAX"
+            | "PHP_FLOAT_MIN"
+            | "PHP_FLOAT_EPSILON"
+            | "INF"
+            | "NAN"
+            | "M_PI"
+            | "M_E"
+            | "M_SQRT2"
+            | "M_PI_2"
+            | "M_PI_4"
+            | "M_LOG2E"
+            | "M_LOG10E"
+    ) {
+        return true;
+    }
+    // Shared source-of-truth slices for JSON, stream/socket, session, and error constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())

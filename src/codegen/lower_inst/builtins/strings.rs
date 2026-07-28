@@ -658,7 +658,8 @@ pub(super) fn sprintf_spec_cats_for_format(
 
 /// Parses the conversion categories consumed by the runtime sprintf scanner.
 fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
-    let mut cats = Vec::new();
+    let mut cats: Vec<Option<SprintfSpecCat>> = Vec::new();
+    let mut sequential = 0usize;
     let mut index = 0;
     while index < format.len() {
         if format[index] != b'%' {
@@ -673,10 +674,46 @@ fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
             index += 1;
             continue;
         }
-        while index < format.len()
-            && matches!(format[index], b'-' | b'+' | b'0' | b' ' | b'#')
-        {
+        // php lets a specifier name its argument as "N$" ahead of the flags. The
+        // digits are ambiguous with a width, so they only count as a position when a
+        // '$' follows; otherwise the cursor rewinds and they are read as the width.
+        // Without this the '$' was taken for the conversion character, so the
+        // argument of "%1$s" was packed as an integer and reached the runtime with a
+        // garbage length.
+        let mut position = None;
+        let digits_start = index;
+        while index < format.len() && format[index].is_ascii_digit() {
             index += 1;
+        }
+        if index > digits_start && index < format.len() && format[index] == b'$' {
+            let digits = &format[digits_start..index];
+            let value = digits
+                .iter()
+                .fold(0usize, |acc, byte| acc.saturating_mul(10) + usize::from(byte - b'0'));
+            if value >= 1 {
+                position = Some(value - 1);
+            }
+            index += 1;
+        } else {
+            index = digits_start;
+        }
+        // Flags and the quoted pad character interleave freely: php accepts both
+        // "%'x-8s" and "%-'x8s". A quoted pad consumes exactly the byte that follows
+        // it, which may be a flag, a digit or even the conversion letter -- reading
+        // them in a fixed order made "%'x-8s" push a category for '-' and pack its
+        // string argument as an integer.
+        loop {
+            if index < format.len()
+                && matches!(format[index], b'-' | b'+' | b'0' | b' ' | b'#')
+            {
+                index += 1;
+                continue;
+            }
+            if index + 1 < format.len() && format[index] == b'\'' {
+                index += 2;
+                continue;
+            }
+            break;
         }
         while index < format.len() && format[index].is_ascii_digit() {
             index += 1;
@@ -690,14 +727,31 @@ fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
         if index >= format.len() {
             break;
         }
-        cats.push(match format[index] {
-            b'f' | b'e' | b'g' => SprintfSpecCat::Float,
+        let cat = match format[index] {
+            b'f' | b'e' | b'g' | b'E' | b'G' => SprintfSpecCat::Float,
             b's' => SprintfSpecCat::Str,
             _ => SprintfSpecCat::Int,
-        });
+        };
+        // A positional specifier does not advance the sequential counter, matching
+        // the runtime scanner: "%s|%2$s|%s" reads arguments 0, 1 and 1.
+        let slot = match position {
+            Some(slot) => slot,
+            None => {
+                let slot = sequential;
+                sequential += 1;
+                slot
+            }
+        };
+        if slot >= cats.len() {
+            cats.resize(slot + 1, None);
+        }
+        cats[slot] = Some(cat);
         index += 1;
     }
     cats
+        .into_iter()
+        .map(|cat| cat.unwrap_or(SprintfSpecCat::Int))
+        .collect()
 }
 
 /// Preserves the format string, evaluates the values array, and calls `__rt_vsprintf`.
@@ -1076,7 +1130,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // save the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // save the source length
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
-    ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
+    ctx.emitter.emit_call_c("compressBound");                                   // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
@@ -1087,7 +1141,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // pass the source pointer
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");                   // pass the source length
     ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 0]");                     // pass the requested compression level
-    ctx.emitter.instruction("call compress2");                                  // zlib-compress the source into the output buffer
+    ctx.emitter.emit_call_c("compress2");                                       // zlib-compress the source into the output buffer
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                   // return the compressed string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");                   // return the compressed string length
     ctx.emitter.instruction("add rsp, 64");                                     // release the zlib scratch storage
@@ -1160,13 +1214,14 @@ fn lower_gzdeflate_x86_64(
     zero: &str,
     zeroed: &str,
 ) -> Result<()> {
+    let zstream = crate::codegen_support::stream_filters::zlib::z_stream_layout(ctx.emitter.target);
     materialize_gz_level_x86_64(ctx, inst, "gzdeflate level")?;
     ctx.emitter.instruction("sub rsp, 160");                                    // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("mov QWORD PTR [rsp + 136], rdi");                  // save the compression level
     ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rsi");                  // save the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 120], rdx");                  // save the source length
     ctx.emitter.instruction("mov rdi, rdx");                                    // pass the source length to compressBound
-    ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
+    ctx.emitter.emit_call_c("compressBound");                                   // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
@@ -1175,7 +1230,7 @@ fn lower_gzdeflate_x86_64(
 
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
-    ctx.emitter.instruction("cmp r9, 112");                                     // check whether every z_stream byte is cleared
+    ctx.emitter.instruction(&format!("cmp r9, {}", zstream.size));              // check whether every target z_stream byte is cleared
     ctx.emitter.instruction(&format!("jge {}", zeroed));                        // continue after the z_stream has been zeroed
     ctx.emitter.instruction("mov BYTE PTR [rsp + r9], 0");                      // clear one z_stream byte
     ctx.emitter.instruction("inc r9");                                          // advance the z_stream clear index
@@ -1191,24 +1246,28 @@ fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve stack slots for the last deflateInit2_ args
     abi::emit_symbol_address(ctx.emitter, "rax", "_zlib_version");
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");                    // pass the zlib version string on the stack
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 112");                    // pass sizeof(z_stream) on the stack
-    ctx.emitter.instruction("call deflateInit2_");                              // initialize the raw-deflate zlib stream
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", zstream.size)); // pass target sizeof(z_stream) on the stack
+    ctx.emitter.emit_call_c("deflateInit2_");                                   // initialize the raw-deflate zlib stream
     ctx.emitter.instruction("add rsp, 16");                                     // release deflateInit2_ stack arguments
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 112]");                   // reload the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // set z_stream.next_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                   // reload the source length
     ctx.emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                    // set z_stream.avail_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                   // reload the destination pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // set z_stream.next_out
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // set z_stream.next_out
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 144]");                   // reload the destination capacity
-    ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // set z_stream.avail_out
+    ctx.emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // set z_stream.avail_out
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to deflate
     ctx.emitter.instruction("mov esi, 4");                                      // request a final deflate pass
-    ctx.emitter.instruction("call deflate");                                    // compress the full input
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // read z_stream.total_out
+    ctx.emitter.emit_call_c("deflate");                                         // compress the full input
+    if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        ctx.emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out is a u32
+    } else {
+        ctx.emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out is a u64
+    }
     ctx.emitter.instruction("mov QWORD PTR [rsp + 152], rax");                  // save the compressed length across deflateEnd
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to deflateEnd
-    ctx.emitter.instruction("call deflateEnd");                                 // release zlib's internal deflate state
+    ctx.emitter.emit_call_c("deflateEnd");                                      // release zlib's internal deflate state
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // return the compressed string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 152]");                  // return the compressed string length
     ctx.emitter.instruction("add rsp, 160");                                    // release z_stream scratch storage
@@ -1288,6 +1347,7 @@ fn lower_gzinflate_x86_64(
     fail: &str,
     done: &str,
 ) {
+    let zstream = crate::codegen_support::stream_filters::zlib::z_stream_layout(ctx.emitter.target);
     let sized = format!("{}_sized", zero);
     ctx.emitter.instruction("sub rsp, 160");                                    // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");                  // save the source pointer
@@ -1307,7 +1367,7 @@ fn lower_gzinflate_x86_64(
 
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
-    ctx.emitter.instruction("cmp r9, 112");                                     // check whether every z_stream byte is cleared
+    ctx.emitter.instruction(&format!("cmp r9, {}", zstream.size));              // check whether every target z_stream byte is cleared
     ctx.emitter.instruction(&format!("jge {}", zeroed));                        // continue after the z_stream has been zeroed
     ctx.emitter.instruction("mov BYTE PTR [rsp + r9], 0");                      // clear one z_stream byte
     ctx.emitter.instruction("inc r9");                                          // advance the z_stream clear index
@@ -1317,24 +1377,28 @@ fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer
     ctx.emitter.instruction("mov esi, -15");                                    // request raw inflate with negative window bits
     abi::emit_symbol_address(ctx.emitter, "rdx", "_zlib_version");
-    ctx.emitter.instruction("mov ecx, 112");                                    // pass sizeof(z_stream)
-    ctx.emitter.instruction("call inflateInit2_");                              // initialize the raw-inflate zlib stream
+    ctx.emitter.instruction(&format!("mov ecx, {}", zstream.size));             // pass target sizeof(z_stream)
+    ctx.emitter.emit_call_c("inflateInit2_");                                   // initialize the raw-inflate zlib stream
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 112]");                   // reload the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // set z_stream.next_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                   // reload the source length
     ctx.emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                    // set z_stream.avail_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                   // reload the destination pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // set z_stream.next_out
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // set z_stream.next_out
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 144]");                   // reload the destination capacity
-    ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // set z_stream.avail_out
+    ctx.emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // set z_stream.avail_out
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflate
     ctx.emitter.instruction("mov esi, 4");                                      // request a final inflate pass
-    ctx.emitter.instruction("call inflate");                                    // decompress the full input
+    ctx.emitter.emit_call_c("inflate");                                         // decompress the full input
     ctx.emitter.instruction("mov QWORD PTR [rsp + 136], rax");                  // save the inflate status code
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // read z_stream.total_out
+    if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        ctx.emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out is a u32
+    } else {
+        ctx.emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out is a u64
+    }
     ctx.emitter.instruction("mov QWORD PTR [rsp + 152], rax");                  // save the inflated length across inflateEnd
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflateEnd
-    ctx.emitter.instruction("call inflateEnd");                                 // release zlib's internal inflate state
+    ctx.emitter.emit_call_c("inflateEnd");                                      // release zlib's internal inflate state
     ctx.emitter.instruction("cmp QWORD PTR [rsp + 136], 1");                    // check for Z_STREAM_END success
     ctx.emitter.instruction(&format!("jne {}", fail));                          // return false for zlib inflate failures
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // return the decompressed string pointer
@@ -1399,7 +1463,7 @@ fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str, after: &st
     ctx.emitter.instruction("lea rsi, [rsp + 16]");                             // pass &destLen as the uncompress in/out length
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 0]");                    // pass the source pointer
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");                    // pass the source length
-    ctx.emitter.instruction("call uncompress");                                 // zlib-uncompress the source
+    ctx.emitter.emit_call_c("uncompress");                                      // zlib-uncompress the source
     ctx.emitter.instruction("test rax, rax");                                   // zero zlib status means success
     ctx.emitter.instruction(&format!("jz {}", ok));                             // load the success result for zero status
     ctx.emitter.instruction("xor eax, eax");                                    // use a null pointer as the failure sentinel
@@ -1505,8 +1569,6 @@ fn lower_substr_aarch64(
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov x3, x0");                                  // move the explicit substring length into the clamp register
-    } else {
-        ctx.emitter.instruction("mov x3, #-1");                                 // use -1 as the sentinel for an omitted substring length
     }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the substring offset after optional length materialization
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length
@@ -1520,13 +1582,20 @@ fn lower_substr_aarch64(
     ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmn x3, #1");                                      // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("b.eq {}", len_done));                     // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp x3, #0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("csel x3, xzr, x3, lt");                            // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp x3, x2");                                      // compare requested length against the remaining tail length
-    ctx.emitter.instruction("csel x2, x3, x2, lt");                             // shrink the result length when the requested length is shorter
-    ctx.emitter.label(len_done);
+    // php reads a negative length as "omit that many bytes from the end of the
+    // tail", not as "empty". Whether a length was passed is known here, so no
+    // in-band sentinel is needed — and -1 could never be one, since it is also a
+    // perfectly ordinary length.
+    if inst.operands.len() >= 3 {
+        ctx.emitter.instruction("cmp x3, #0");                                  // is the requested length negative?
+        ctx.emitter.instruction(&format!("b.ge {}", len_done));                 // a non-negative length only needs the tail clamp
+        ctx.emitter.instruction("add x3, x2, x3");                              // drop that many bytes from the end of the tail
+        ctx.emitter.instruction("cmp x3, #0");                                  // did the omission consume the whole tail?
+        ctx.emitter.instruction("csel x3, xzr, x3, lt");                        // an over-long omission yields the empty string
+        ctx.emitter.label(len_done);
+        ctx.emitter.instruction("cmp x3, x2");                                  // compare requested length against the remaining tail length
+        ctx.emitter.instruction("csel x2, x3, x2, lt");                         // shrink the result length when the requested length is shorter
+    }
     Ok(())
 }
 
@@ -1555,8 +1624,6 @@ fn lower_substr_x86_64(
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov rcx, rax");                                // move the explicit substring length into the clamp register
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, "rcx", -1);
     }
     abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
@@ -1571,14 +1638,19 @@ fn lower_substr_x86_64(
     ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add rdi, rax");                                    // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmp rcx, -1");                                     // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("je {}", len_done));                       // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp rcx, 0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("mov r8, 0");                                       // materialize zero for negative length clamping
-    ctx.emitter.instruction("cmovl rcx, r8");                                   // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp rcx, rsi");                                    // compare requested length against the remaining tail length
-    ctx.emitter.instruction("cmovl rsi, rcx");                                  // shrink the result length when the requested length is shorter
-    ctx.emitter.label(len_done);
+    // See the AArch64 arm: a negative length omits bytes from the end of the tail,
+    // and the argument count is known at compile time rather than in-band.
+    if inst.operands.len() >= 3 {
+        ctx.emitter.instruction("cmp rcx, 0");                                  // is the requested length negative?
+        ctx.emitter.instruction(&format!("jge {}", len_done));                  // a non-negative length only needs the tail clamp
+        ctx.emitter.instruction("add rcx, rsi");                                // drop that many bytes from the end of the tail
+        ctx.emitter.instruction("cmp rcx, 0");                                  // did the omission consume the whole tail?
+        ctx.emitter.instruction("mov r8, 0");                                   // materialize zero for clamping
+        ctx.emitter.instruction("cmovl rcx, r8");                               // an over-long omission yields the empty string
+        ctx.emitter.label(len_done);
+        ctx.emitter.instruction("cmp rcx, rsi");                                // compare requested length against the remaining tail length
+        ctx.emitter.instruction("cmovl rsi, rcx");                              // shrink the result length when the requested length is shorter
+    }
     ctx.emitter.instruction("mov rax, rdi");                                    // return the selected substring pointer in the string result register
     ctx.emitter.instruction("mov rdx, rsi");                                    // return the selected substring length in the string result register
     Ok(())
@@ -2461,7 +2533,7 @@ fn materialize_substr_replace_length_aarch64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov x7, x0");                                  // pass the explicit replacement length to the runtime helper
     } else {
-        ctx.emitter.instruction("mov x7, #-1");                                 // use -1 sentinel so replacement runs through the subject end
+        abi::emit_load_int_immediate(ctx.emitter, "x7", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
     }
     Ok(())
 }
@@ -2476,7 +2548,7 @@ fn materialize_substr_replace_length_x86_64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov r8, rax");                                 // pass the explicit replacement length to the runtime helper
     } else {
-        abi::emit_load_int_immediate(ctx.emitter, "r8", -1);
+        abi::emit_load_int_immediate(ctx.emitter, "r8", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
     }
     Ok(())
 }

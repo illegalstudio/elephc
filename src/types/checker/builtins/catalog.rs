@@ -57,6 +57,19 @@ pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns whether a PHP builtin is available on the selected target platform.
+///
+/// PHP only registers `lchown()` and `lchgrp()` when `HAVE_LCHOWN` is defined;
+/// its Windows builds do not define that capability, so those names must fall
+/// through to ordinary undefined-function handling there.
+pub(crate) fn builtin_available_on_platform(
+    canonical: &str,
+    platform: crate::codegen::platform::Platform,
+) -> bool {
+    platform != crate::codegen::platform::Platform::Windows
+        || !matches!(canonical, "lchown" | "lchgrp")
+}
+
 /// Returns PHP-visible registry names plus compiler-resident call-like names,
 /// without applying the strict-PHP filter.
 ///
@@ -94,6 +107,20 @@ pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
         .collect()
 }
 
+/// Returns the PHP-visible builtin names available on the selected platform.
+///
+/// Metadata exporters intentionally use the platform-neutral catalog, while
+/// runtime callable tables and target-specific compilation surfaces must use
+/// this filtered view so conditionally registered PHP builtins stay absent.
+pub(crate) fn supported_builtin_function_names_on_platform(
+    platform: crate::codegen::platform::Platform,
+) -> Vec<&'static str> {
+    supported_builtin_function_names()
+        .into_iter()
+        .filter(|name| builtin_available_on_platform(&name.to_ascii_lowercase(), platform))
+        .collect()
+}
+
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
 ///
 /// Returns `None` if the name is neither registry-backed nor compiler-resident,
@@ -110,6 +137,15 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Canonicalizes a builtin name only when it is available on the selected platform.
+pub(crate) fn canonical_builtin_function_name_on_platform(
+    name: &str,
+    platform: crate::codegen::platform::Platform,
+) -> Option<String> {
+    let canonical = canonical_builtin_function_name(name)?;
+    builtin_available_on_platform(&canonical, platform).then_some(canonical)
 }
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).
@@ -177,6 +213,49 @@ mod tests {
             names.contains(&"__catalog_probe_visible"),
             "supported_builtin_function_names must include non-internal registry entries"
         );
+    }
+
+    /// Verifies the Windows builtin surface omits link ownership functions,
+    /// while Unix targets retain both names.
+    #[test]
+    fn platform_availability_matches_php_lchown_capability() {
+        use crate::codegen::platform::Platform;
+
+        for name in ["lchown", "lchgrp"] {
+            assert!(!builtin_available_on_platform(name, Platform::Windows));
+            assert!(builtin_available_on_platform(name, Platform::Linux));
+            assert!(builtin_available_on_platform(name, Platform::MacOS));
+        }
+        assert!(builtin_available_on_platform("chown", Platform::Windows));
+        assert!(builtin_available_on_platform("chgrp", Platform::Windows));
+    }
+
+    /// Verifies target-aware catalog lookup removes link ownership functions
+    /// only on Windows while preserving their Unix callable metadata.
+    #[test]
+    fn target_catalog_lookup_filters_lchown_capability() {
+        use crate::codegen::platform::Platform;
+
+        for name in ["lchown", "lchgrp"] {
+            assert!(
+                canonical_builtin_function_name_on_platform(name, Platform::Windows).is_none()
+            );
+            assert_eq!(
+                canonical_builtin_function_name_on_platform(name, Platform::Linux).as_deref(),
+                Some(name)
+            );
+            assert_eq!(
+                canonical_builtin_function_name_on_platform(name, Platform::MacOS).as_deref(),
+                Some(name)
+            );
+        }
+
+        let windows = supported_builtin_function_names_on_platform(Platform::Windows);
+        assert!(!windows.contains(&"lchown"));
+        assert!(!windows.contains(&"lchgrp"));
+        let linux = supported_builtin_function_names_on_platform(Platform::Linux);
+        assert!(linux.contains(&"lchown"));
+        assert!(linux.contains(&"lchgrp"));
     }
 
     /// Verifies strict mode hides extension builtins from every catalog surface:

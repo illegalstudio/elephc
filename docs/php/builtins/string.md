@@ -16,6 +16,8 @@ sidebar:
 | [`chop()`](./string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`chr()`](./string/chr.md) | `(int $codepoint): string` | `string` | ✓ | ✓ |
 | [`crc32()`](./string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`escapeshellarg()`](./string/escapeshellarg.md) | `(string $arg): string` | `string` | ✓ | ✓ |
+| [`escapeshellcmd()`](./string/escapeshellcmd.md) | `(string $command): string` | `string` | ✓ | ✓ |
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`gzcompress()`](./string/gzcompress.md) | `(string $data, int $level = -1): string` | `string` | ✓ | ✓ |
@@ -41,7 +43,7 @@ sidebar:
 | [`lcfirst()`](./string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
-| [`mb_strlen()`](./string/mb_strlen.md) | `(string $string, string $encoding = null): int` | `int` | ✓ | ✓ |
+| [`mb_strlen()`](./string/mb_strlen.md) | `(string $string, mixed $encoding = null): int` | `int` | ✓ | ✓ |
 | [`md5()`](./string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |

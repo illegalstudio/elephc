@@ -10,6 +10,10 @@
 //!   `readdir`; the `d_name` field is copied to the heap so the name survives
 //!   the next `readdir`/`closedir` call.
 //! - A null pointer result marks end-of-directory and is boxed as PHP `false`.
+//! - The x86_64 `readdir` call site routes through `Emitter::emit_call_c`. On
+//!   Windows, `__rt_sys_readdir` consumes the pending `FindFirstFileExW` result
+//!   and advances with `FindNextFileW`, exposing the name through a compatible
+//!   scratch `dirent`. Other targets continue to use libc.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -133,7 +137,7 @@ fn emit_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // was a DIR* recorded for this descriptor?
     emitter.instruction("jz __rt_readdir_end_x86");                             // no handle recorded: report end of directory
     emitter.instruction("mov rdi, r10");                                        // DIR* argument for readdir
-    emitter.bl_c("readdir");
+    emitter.emit_call_c("readdir");                                             // Windows: advance the FindFirstFileExW/FindNextFileW enumeration
     emitter.instruction("test rax, rax");                                       // a NULL dirent means no more entries
     emitter.instruction("jz __rt_readdir_end_x86");                             // report end of directory once entries run out
 

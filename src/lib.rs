@@ -54,6 +54,7 @@ pub mod parser;
 pub mod pdo_prelude;
 /// Resolution of includes.
 pub mod resolver;
+mod source_path;
 /// Source span tracking.
 pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.

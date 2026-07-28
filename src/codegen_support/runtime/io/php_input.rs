@@ -40,9 +40,9 @@ pub fn emit_php_input(emitter: &mut Emitter, web: bool) {
     emitter.instruction("str x30, [sp]");                                       // preserve the caller return address before the nested helper calls
 
     if web {
-        emitter.bl_c("elephc_web_body_len");                                    // x0 = request body length (i64) from the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_body_len", 0);      // x0 = request body length (i64) from the bridge
         emitter.instruction("str x0, [sp, #8]");                                // spill the length across the body-pointer call
-        emitter.bl_c("elephc_web_body_ptr");                                    // x0 = pointer to the request body bytes from the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_body_ptr", 0);      // x0 = pointer to the request body bytes from the bridge
         emitter.instruction("ldr x1, [sp, #8]");                                // reload the body length into the ptr_read_string length argument
         emitter.instruction("bl __rt_ptr_read_string");                         // copy the body into an owned PHP string (x1=ptr, x2=len out)
     } else {
@@ -54,7 +54,7 @@ pub fn emit_php_input(emitter: &mut Emitter, web: bool) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
-/// Emits the x86_64 Linux variant of `__rt_php_input`.
+/// Emits the x86_64 variant of `__rt_php_input`.
 fn emit_php_input_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.blank();
     emitter.comment("--- runtime: php_input (file_get_contents('php://input')) ---");
@@ -65,9 +65,9 @@ fn emit_php_input_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned spill slot for the body length
 
     if web {
-        emitter.bl_c("elephc_web_body_len");                                    // rax = request body length (i64) from the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_body_len", 0);      // rax = request body length; Windows still reserves native shadow space
         emitter.instruction("mov QWORD PTR [rbp - 8], rax");                    // spill the length across the body-pointer call
-        emitter.bl_c("elephc_web_body_ptr");                                    // rax = pointer to the request body bytes from the bridge
+        emitter.emit_native_bridge_symbol_call("elephc_web_body_ptr", 0);      // rax = body pointer; Windows still reserves native shadow space
         emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                    // reload the body length into the ptr_read_string length argument
         emitter.instruction("call __rt_ptr_read_string");                       // copy the body into an owned PHP string (rax=ptr, rdx=len out)
     } else {
@@ -77,4 +77,45 @@ fn emit_php_input_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("add rsp, 16");                                         // release the aligned spill slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies both zero-argument Windows body getters reserve and release
+    /// MSx64 shadow space even though they do not need register remapping.
+    #[test]
+    fn windows_web_body_getters_use_native_shadow_space() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_php_input(&mut emitter, true);
+        let asm = emitter.output();
+        assert!(asm.contains("lea r11, [rip + elephc_web_body_len]"));
+        assert!(asm.contains("lea r11, [rip + elephc_web_body_ptr]"));
+        assert_eq!(asm.matches("sub rsp, 32").count(), 2, "{asm}");
+        assert_eq!(asm.matches("call r11").count(), 2, "{asm}");
+        assert_eq!(asm.matches("add rsp, 32").count(), 2, "{asm}");
+        assert!(!asm.contains("call elephc_web_body_"));
+    }
+
+    /// Verifies Linux x86 retains direct body-getter calls with no Windows shadow area.
+    #[test]
+    fn linux_x86_web_body_getters_remain_direct() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_php_input(&mut emitter, true);
+        let asm = emitter.output();
+        assert!(asm.contains("call elephc_web_body_len"));
+        assert!(asm.contains("call elephc_web_body_ptr"));
+        assert!(!asm.contains("sub rsp, 32"));
+    }
+
+    /// Verifies non-web Windows emission never references optional web bridge symbols.
+    #[test]
+    fn windows_non_web_input_does_not_reference_bridge() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_php_input(&mut emitter, false);
+        let asm = emitter.output();
+        assert!(!asm.contains("elephc_web_"));
+    }
 }

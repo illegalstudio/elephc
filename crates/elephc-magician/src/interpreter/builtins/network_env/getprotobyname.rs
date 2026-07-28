@@ -39,15 +39,10 @@ pub(in crate::interpreter) fn eval_getprotobyname_result(
     let Some(protocol) = eval_lowercase_c_string(protocol, values)? else {
         return values.bool_value(false);
     };
-    let entry = unsafe {
-        // libc returns a process-global protoent; copy scalar fields before another lookup.
-        libc_getprotobyname(protocol.as_ptr())
-    };
-    if entry.is_null() {
-        return values.bool_value(false);
+    match eval_protocol_number(&protocol) {
+        Some(number) => values.int(i64::from(number)),
+        None => values.bool_value(false),
     }
-    let number = unsafe { (*entry).p_proto };
-    values.int(i64::from(number))
 }
 
 
@@ -64,20 +59,13 @@ pub(in crate::interpreter) fn eval_lowercase_c_string(
     Ok(CString::new(bytes).ok())
 }
 
-/// Copies a protoent canonical name into a PHP string or returns PHP false.
+/// Copies a protocol canonical name into a PHP string or returns PHP false.
 pub(in crate::interpreter) fn eval_protoent_name_or_false(
-    entry: *mut libc::protoent,
+    name: Option<Vec<u8>>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if entry.is_null() {
-        return values.bool_value(false);
+    match name {
+        Some(name) => values.string_bytes_value(&name),
+        None => values.bool_value(false),
     }
-    let name = unsafe {
-        let name = (*entry).p_name;
-        if name.is_null() {
-            return values.bool_value(false);
-        }
-        CStr::from_ptr(name).to_bytes().to_vec()
-    };
-    values.string_bytes_value(&name)
 }

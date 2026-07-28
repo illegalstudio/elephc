@@ -1133,8 +1133,12 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         (
             "substr_strings",
+            // php reads a negative length as bytes omitted from the end, so
+            // substr('Hello', 1, -2) is "el". The empty expectation held only while
+            // -1 doubled as the "no length argument" sentinel and other negative
+            // lengths were clamped to zero.
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
-            "World:Hello:World:[]:[]",
+            "World:Hello:World:[]:[el]",
         ),
         (
             "substr_replace_strings",
@@ -6361,11 +6365,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+echo strlen(sys_get_temp_dir()) > 0 ? "T" : "!";
 "#;
+    // The temporary directory is checked by marker, like the working directory
+    // above it: php resolves it from TMPDIR, so it is a per-user path on macOS
+    // rather than the "/tmp" literal this fixture used to pin.
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 

@@ -98,7 +98,7 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
 
     // -- call stream_close($this) --
-    emitter.instruction("call r11");                                            // invoke stream_close on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
 
     emitter.label("__rt_uwfclose_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
@@ -168,7 +168,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
 
     // -- call stream_read($this, $count) → returns string in rax/rdx --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
-    emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    emitter.emit_platform_callback_call("r11", 2);
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
@@ -237,7 +237,7 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // -- call stream_write($this, $data) → returns int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload data string pointer as the second arg
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload data string length as the third arg
-    emitter.instruction("call r11");                                            // invoke stream_write on the wrapper object
+    emitter.emit_platform_callback_call("r11", 3);
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
@@ -293,7 +293,7 @@ fn emit_user_wrapper_feof_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfeof_eof_x86");                     // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfeof_eof_x86", VTABLE_SLOT_EOF);    // resolve stream_eof method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_eof on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -347,7 +347,7 @@ fn emit_user_wrapper_ftell_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwftell_fail_x86");                   // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwftell_fail_x86", VTABLE_SLOT_TELL); // resolve stream_tell method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_tell on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
@@ -401,7 +401,7 @@ fn emit_user_wrapper_fflush_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfflush_ok_x86");                    // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfflush_ok_x86", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_flush on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -468,7 +468,7 @@ fn emit_user_wrapper_fseek_linux_x86_64(emitter: &mut Emitter) {
     // -- call stream_seek($this, $offset, $whence) → returns bool/int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload offset
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload whence selector
-    emitter.instruction("call r11");                                            // invoke stream_seek on the wrapper object
+    emitter.emit_platform_callback_call("r11", 3);
     emitter.instruction("test rax, rax");                                       // did stream_seek return false?
     emitter.instruction("jz __rt_uwfseek_fail_x86");                            // stream_seek returned false → PHP -1 failure sentinel
     emitter.instruction("xor eax, eax");                                        // stream_seek succeeded → PHP fseek returns 0
@@ -532,7 +532,7 @@ fn emit_user_wrapper_flock_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwflock_false_x86", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into r11
 
     // -- call stream_lock($this, $operation) → returns bool in rax --
-    emitter.instruction("call r11");                                            // invoke stream_lock on the wrapper object
+    emitter.emit_platform_callback_call("r11", 2);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -591,7 +591,7 @@ fn emit_user_wrapper_ftruncate_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwftrunc_false_x86", VTABLE_SLOT_TRUNCATE); // resolve stream_truncate method pointer into r11
 
     // -- call stream_truncate($this, $new_size) → returns bool in rax --
-    emitter.instruction("call r11");                                            // invoke stream_truncate on the wrapper object
+    emitter.emit_platform_callback_call("r11", 2);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -770,7 +770,7 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwfstat_false_x86", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into r11
 
     // -- call stream_stat($this) → rax = raw return, normalized to a Mixed --
-    emitter.instruction("call r11");                                            // invoke stream_stat on the wrapper object
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // normalize the type-erased return into a boxed Mixed
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed Mixed stat array
@@ -840,4 +840,40 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); // load the requested wrapper method pointer
     emitter.instruction("test r11, r11");                                       // is the method missing?
     emitter.instruction(&format!("jz {}", missing_label));                      // method absent: take the fallback
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_user_wrapper_fwrite` call site emits the
+    /// reverse-ABI SysV->MSx64 remap immediately before the indirect `call r11`
+    /// into the wrapper's `stream_write($this, $data)` method (finding F1,
+    /// reverse-ABI): without it, the generated method would read $this/ptr/len
+    /// from the wrong registers on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_user_wrapper_fwrite_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_user_wrapper_fwrite(&mut emitter);
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let call_idx = asm.find("call r11").expect("expected indirect call r11");
+        assert!(remap_idx < call_idx, "remap must precede the indirect stream_write call");
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_user_wrapper_fwrite_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_user_wrapper_fwrite(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+    }
 }

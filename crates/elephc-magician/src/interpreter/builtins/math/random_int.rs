@@ -55,9 +55,13 @@ pub(in crate::interpreter) fn eval_random_int_result(
     if min > max {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let width = (i128::from(max) - i128::from(min) + 1) as u128;
-    let offset = (eval_random_u128() % width) as i128;
-    let sampled = i128::from(min) + offset;
+    // Inclusive width, so the full PHP integer range stays representable: max - min
+    // is UINT64_MAX for random_int(PHP_INT_MIN, PHP_INT_MAX), where max - min + 1
+    // would wrap. The CSPRNG draw is rejection-sampled, matching PHP's guarantee
+    // that random_int() is both cryptographically secure and unbiased.
+    let umax = (i128::from(max) - i128::from(min)) as u128 as u64;
+    let offset = eval_csprng_range(umax)?;
+    let sampled = i128::from(min) + i128::from(offset);
     let sampled = i64::try_from(sampled).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(sampled)
 }

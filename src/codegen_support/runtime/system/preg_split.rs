@@ -582,7 +582,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to PCRE2
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to PCRE2
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", regex_flags_off)); // pass PCRE2 POSIX compile flags from delimiter parsing
-    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
+    emitter.emit_call_c("pcre2_regcomp");                                       // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_split_fail_linux_x86_64");               // return an empty result array on compilation failure
 
@@ -595,7 +595,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     } else {
         emitter.instruction("shl rdi, 3");                                      // malloc bytes = nmatch * 8-byte regmatch_t slots
     }
-    emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
+    emitter.emit_call_c("malloc");                                              // allocate the regmatch_t vector for all capture groups
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees regex_t and returns an empty array
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
@@ -629,7 +629,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
     emitter.instruction("xor r8d, r8d");                                        // eflags = 0 for ordinary matching
-    emitter.bl_c("pcre2_regexec");                                                    // execute regex against remaining subject
+    emitter.emit_call_c("pcre2_regexec");                                       // execute regex against remaining subject
     emitter.instruction("test eax, eax");                                       // did regexec find another separator?
     emitter.instruction("jnz __rt_preg_split_last_linux_x86_64");               // no more matches means the trailing segment remains
 
@@ -713,9 +713,9 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         mixed_ptr_off,
     );
     emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage before freeing
-    emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources
+    emitter.emit_call_c("pcre2_regfree");                                       // release PCRE2 regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
+    emitter.emit_call_c("free");                                                // release the reusable regmatch_t vector
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return final result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 
@@ -726,7 +726,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_split_malloc_fail_linux_x86_64");
     emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage after allocation failure
-    emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources before returning empty
+    emitter.emit_call_c("pcre2_regfree");                                       // release PCRE2 regex resources before returning empty
     emit_preg_split_alloc_result_x86_64(emitter, "malloc_fail", preg_flags_off, array_ptr_off);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return empty result array pointer after allocation failure
 

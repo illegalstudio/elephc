@@ -105,7 +105,7 @@ fn emit_hash_init(emitter: &mut Emitter) {
 
             emitter.instruction("jz __rt_hash_init_unknown_x86");               // jump to the ValueError throw when unavailable
 
-            emitter.instruction("call r9");                                     // create the context, rax = handle (null on unknown algo)
+            emitter.emit_native_bridge_call("r9", 2);                           // create the context, rax = handle (null on unknown algo)
 
             emitter.instruction("test rax, rax");                               // null handle = unknown algorithm
 
@@ -183,7 +183,7 @@ fn emit_hash_update(emitter: &mut Emitter) {
 
             emitter.instruction("jz __rt_hash_update_done_x86");                // jump past the call when unavailable
 
-            emitter.instruction("call r9");                                     // elephc_crypto_update(ctx, data_ptr, data_len)
+            emitter.emit_native_bridge_call("r9", 3);                           // elephc_crypto_update(ctx, data_ptr, data_len)
 
             emitter.label("__rt_hash_update_done_x86");
             emitter.instruction("mov eax, 1");                                  // hash_update() returns true
@@ -264,7 +264,7 @@ fn emit_hash_final(emitter: &mut Emitter) {
 
             emitter.instruction("jz __rt_hash_final_empty_x86");                // skip the call when the runtime is unavailable
 
-            emitter.instruction("call r9");                                     // finalize+free the context, rax = raw digest length
+            emitter.emit_native_bridge_call("r9", 2);                           // finalize+free the context, rax = raw digest length
 
             emitter.instruction("jmp __rt_hash_final_len_x86");                 // proceed with the real digest length
 
@@ -341,7 +341,7 @@ fn emit_hash_copy(emitter: &mut Emitter) {
 
             emitter.instruction("jz __rt_hash_copy_done_x86");                  // skip the clone call when unavailable
 
-            emitter.instruction("call r9");                                     // clone the context, rax = new handle
+            emitter.emit_native_bridge_call("r9", 1);                           // clone the context, rax = new handle
 
             emitter.label("__rt_hash_copy_done_x86");
             emitter.instruction("mov rdi, rax");                                // Mixed payload = the cloned context handle
@@ -410,7 +410,7 @@ fn emit_hash_free(emitter: &mut Emitter) {
 
             emitter.instruction("jz __rt_hash_ctx_free_done_x86");              // jump to the return path when unavailable
 
-            emitter.instruction("call r9");                                     // elephc_crypto_free(ctx) — frees the context
+            emitter.emit_native_bridge_call("r9", 1);                           // elephc_crypto_free(ctx) — frees the context
 
             emitter.label("__rt_hash_ctx_free_done_x86");
             emitter.instruction("mov rsp, rbp");                                // release the frame
@@ -420,5 +420,53 @@ fn emit_hash_free(emitter: &mut Emitter) {
             emitter.instruction("ret");                                         // return
 
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_hash_init` indirect call into
+    /// `elephc_crypto_init` — a REAL native (MSx64-ABI) function reached
+    /// through the `_elephc_crypto_init_fn` pointer slot — goes through the
+    /// F46 native-bridge shim instead of a bare `call r9`: the fn-ptr is
+    /// relocated to r11, the 32-byte MSx64 shadow space is reserved, the two
+    /// SysV args (rdi=name ptr, rsi=name len) are remapped into rcx/rdx, and
+    /// the call goes through r11. Without this, elephc_crypto_init (compiled
+    /// to the MSx64 ABI on windows) would read its arguments from the wrong
+    /// registers — the root cause of the F46 hash_*/md5_*/sha1_* cluster.
+    #[test]
+    fn test_windows_x86_64_hash_init_native_bridge_call_remaps_two_args() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_hash_context(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r11, r9"), "expected the fn-ptr relocated off the MSx64 arg registers");
+        assert!(asm.contains("sub rsp, 32"), "expected the 32-byte MSx64 shadow space reserved");
+        assert!(asm.contains("mov rcx, rdi"), "expected MSx64 arg0 <- SysV arg0 (algorithm name ptr)");
+        assert!(asm.contains("mov rdx, rsi"), "expected MSx64 arg1 <- SysV arg1 (algorithm name len)");
+        assert!(asm.contains("call r11"), "expected the indirect call through the relocated pointer");
+        assert!(asm.contains("add rsp, 32"), "expected the shadow-space scratch released");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_hash_init` (and the other
+    /// HashContext helpers) stays byte-identical to before the F46
+    /// native-bridge shim was introduced: the MSx64 relocation and
+    /// shadow-space staging are windows-x86_64-only, so linux-x86_64 must
+    /// keep the plain bare `call r9` sequence into elephc-crypto.
+    #[test]
+    fn test_linux_x86_64_hash_context_calls_stay_bare_call_r9() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_hash_context(&mut emitter);
+        let asm = emitter.output();
+
+        assert_eq!(asm.matches("call r9").count(), 5, "expected all 5 HashContext call sites to stay bare call r9");
+        assert!(!asm.contains("mov r11"), "linux-x86_64 must not relocate any fn-ptr");
+        assert!(!asm.contains("call r11"));
+        assert!(!asm.contains("sub rsp, 32"), "linux-x86_64 must not reserve MSx64 shadow space");
     }
 }

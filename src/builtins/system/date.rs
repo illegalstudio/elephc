@@ -21,5 +21,6 @@ builtin! {
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Date),
         crate::builtins::semantics::BuiltinArgumentLowering::Date,
     ),
+    requirements: crate::builtins::semantics::windows_timezone_requirements,
     summary: "Formats a local time/date.",
 }

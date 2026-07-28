@@ -13,6 +13,8 @@ mod class_implements;
 mod dynamic_instanceof;
 mod matches;
 mod rethrow_current;
+mod setjmp;
+mod static_throw;
 mod throw_current;
 
 pub use class_implements::emit_class_implements_interface;
@@ -20,4 +22,6 @@ pub use cleanup_frames::emit_exception_cleanup_frames;
 pub use dynamic_instanceof::emit_dynamic_instanceof;
 pub use matches::emit_exception_matches;
 pub use rethrow_current::emit_rethrow_current;
+pub use setjmp::emit_setjmp_longjmp;
+pub use static_throw::emit_throw_static_exception;
 pub use throw_current::emit_throw_current;

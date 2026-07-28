@@ -21,7 +21,12 @@ mod ownership;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
-    lower_source_at(source, Path::new("main.php"), Path::new("."))
+    lower_source_with_target(source, Target::detect_host())
+}
+
+/// Runs frontend and EIR lowering for a source string using an explicit target.
+fn lower_source_with_target(source: &str, target: Target) -> crate::ir::Module {
+    lower_source_at_target(source, Path::new("main.php"), Path::new("."), target)
 }
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a file.
@@ -33,7 +38,16 @@ fn lower_file(path: &Path) -> crate::ir::Module {
 
 /// Runs the `--emit-ir` frontend ordering for a source string and base path.
 fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate::ir::Module {
-    let target = Target::detect_host();
+    lower_source_at_target(source, main_file_path, parent, Target::detect_host())
+}
+
+/// Runs the `--emit-ir` frontend ordering with an explicit target selection.
+fn lower_source_at_target(
+    source: &str,
+    main_file_path: &Path,
+    parent: &Path,
+    target: Target,
+) -> crate::ir::Module {
     let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
     let parsed = crate::parser::parse(&tokens).expect("parse failed");
     let main_file_path = PathBuf::from(main_file_path);
@@ -47,8 +61,11 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::list_id_prelude::inject_if_used(ast);
     let ast = crate::var_export_prelude::inject_if_used(ast);
     let ast = crate::image_prelude::inject_if_used(ast, false);
-    let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let ast = crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
+    let ast = crate::name_resolver::resolve_for_platform(ast, target.platform)
+        .expect("name resolution failed");
+    let ast =
+        crate::autoload::run_for_platform(ast, parent, &autoload_registry, target.platform)
+            .expect("autoload failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);
@@ -61,6 +78,62 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
             main_file_path.display()
         )
     })
+}
+
+/// Verifies computed Windows proc_open settings remain real EIR operands while
+/// the three hidden marshalling operands preserve the nine-operand ABI shape.
+#[test]
+fn lowers_dynamic_windows_proc_open_marshalling_operands() {
+    let module = lower_source_with_target(
+        r#"<?php
+$pipes = [];
+$command = ['cmd.exe', '/c', 'exit 0'];
+$environment = ['VALUE' => 42];
+$options = ['bypass_shell' => true];
+proc_open($command, [1 => ['pipe', 'w']], $pipes, null, $environment, $options);
+"#,
+        Target::new(
+            crate::codegen::platform::Platform::Windows,
+            crate::codegen::platform::Arch::X86_64,
+        ),
+    );
+    let call = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .find(|instruction| {
+            instruction.op == crate::ir::Op::RuntimeCall
+                && instruction.immediate
+                    == Some(crate::ir::Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ProcOpen),
+                    ))
+        })
+        .unwrap_or_else(|| panic!("missing proc_open EIR call: {}", print_module(&module)));
+    assert_eq!(call.operands.len(), 9, "proc_open hidden marshalling ABI changed");
+}
+
+/// Verifies proc_open pipe reads retain the boxed Mixed resource published by
+/// the keyed runtime setter instead of treating its pointer as a raw fd.
+#[test]
+fn lowers_proc_open_pipe_readback_as_mixed_storage() {
+    let module = lower_source(
+        r#"<?php
+$pipes = [];
+$process = proc_open("echo hi", [1 => ["pipe", "w"]], $pipes);
+echo fread($pipes[1], 100);
+"#,
+    );
+    let read = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.instructions)
+        .find(|instruction| instruction.op == crate::ir::Op::HashGet)
+        .unwrap_or_else(|| panic!("missing proc_open pipe lookup: {}", print_module(&module)));
+    assert_eq!(
+        read.result_php_type.codegen_repr(),
+        crate::types::PhpType::Mixed,
+        "proc_open publishes boxed resource entries through the Mixed hash contract",
+    );
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.

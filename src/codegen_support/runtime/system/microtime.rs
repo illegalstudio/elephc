@@ -9,7 +9,7 @@
 //! - System helpers must preserve PHP-visible behavior while crossing libc, syscall, JSON, regex, and date formatter boundaries.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 
 /// __rt_microtime: get current time as float seconds via gettimeofday syscall.
 /// Output: d0 = seconds.microseconds as float
@@ -31,11 +31,28 @@ pub(crate) fn emit_microtime(emitter: &mut Emitter) {
     // -- call gettimeofday syscall --
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timeval struct on stack
     emitter.instruction("mov x1, #0");                                          // x1 = NULL (timezone not needed)
-    emitter.syscall(116);
-
-    // -- extract tv_sec and tv_usec --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = tv_sec (seconds)
-    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = tv_usec (microseconds)
+    // Darwin's gettimeofday trap returns 0 and does not fill the caller's timeval --
+    // populating it is libsystem's job, through the commpage, not the kernel's. The
+    // raw trap therefore left the struct holding whatever the stack carried at that
+    // depth, so microtime(true) returned around 3.67e12 (a microsecond uptime counter
+    // left by an earlier runtime call) rather than an epoch value -- and looked
+    // correct in any program where a preceding libc call had left a real timeval in
+    // those bytes, which is why it read as intermittent. Going through libc gets the
+    // documented behaviour, and matches what the x86_64 arm already does. Linux fills
+    // the struct from the trap, so that arm keeps it.
+    if emitter.platform == Platform::Linux {
+        emitter.syscall(116);
+        emitter.instruction("ldr x0, [sp, #0]");                                // x0 = tv_sec (seconds)
+        emitter.instruction("ldr x1, [sp, #8]");                                // x1 = tv_usec (microseconds)
+    } else {
+        emitter.bl_c("gettimeofday");                                           // let libsystem fill the timeval it owns
+        emitter.instruction("ldr x0, [sp, #0]");                                // x0 = tv_sec (seconds)
+        // Darwin's suseconds_t is 32 bits, so tv_usec occupies four bytes and the
+        // next four are padding libc does not clear. A 64-bit load folded that
+        // padding into the microseconds: whenever it held 1, the result landed
+        // 2**32 microseconds -- 4294.967296 seconds -- past the real time.
+        emitter.instruction("ldr w1, [sp, #8]");                                // x1 = tv_usec, zero-extended from its 32-bit field
+    }
 
     // -- convert to float: d0 = tv_sec + tv_usec / 1000000.0 --
     emitter.instruction("scvtf d0, x0");                                        // d0 = (double)tv_sec
@@ -65,7 +82,7 @@ fn emit_microtime_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack storage for one timeval struct plus scratch padding before the libc call
     emitter.instruction("lea rdi, [rsp]");                                      // pass the temporary timeval storage as the first SysV integer argument to libc gettimeofday()
     emitter.instruction("xor esi, esi");                                        // pass NULL as the timezone pointer because elephc only needs the current Unix timestamp
-    emitter.bl_c("gettimeofday");                                               // fill the temporary timeval with the current wall-clock time through libc
+    emitter.emit_call_c("gettimeofday");                                        // fill the temporary timeval with the current wall-clock time through libc
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rsp]");                      // convert tv_sec from the temporary timeval into the base double-precision second count
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rsp + 8]");                  // convert tv_usec from the temporary timeval into a double-precision microsecond count
     emitter.instruction("mov r10, 1000000");                                    // materialize the number of microseconds per second before converting it into a floating divisor
@@ -187,7 +204,7 @@ fn emit_microtime_build_into_linux_x86_64(emitter: &mut Emitter) {
     // -- call gettimeofday --
     emitter.instruction("lea rdi, [rsp]");                                      // rdi = pointer to the timeval storage
     emitter.instruction("xor esi, esi");                                        // rsi = NULL (timezone not needed)
-    emitter.bl_c("gettimeofday");                                          // fill the timeval with the current wall-clock time
+    emitter.emit_call_c("gettimeofday");                                    // fill the timeval with the current wall-clock time
 
     // -- reload the buffer and write the "0." prefix --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                       // rdi = destination buffer (reloaded after the libc call)

@@ -16,6 +16,7 @@ mod symbols;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
@@ -31,7 +32,6 @@ struct Imports {
 
 /// Internal symbol table for tracking declared functions, classes, interfaces, traits,
 /// constants, and extern symbols within a namespace scope.
-#[derive(Default)]
 struct Symbols {
     functions: HashMap<String, String>,
     classes: HashMap<String, String>,
@@ -40,11 +40,21 @@ struct Symbols {
     constants: HashSet<String>,
     extern_functions: HashMap<String, String>,
     extern_classes: HashMap<String, String>,
+    platform: Platform,
 }
 
-/// Resolves PHP namespace/use statements and rewrites names to canonical forms across the program.
+/// Resolves names for the host platform.
+#[allow(dead_code)]
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
-    let mut symbols = Symbols::default();
+    resolve_for_platform(program, Platform::detect_host())
+}
+
+/// Resolves PHP namespace/use statements using the selected target's builtin surface.
+pub fn resolve_for_platform(
+    program: Program,
+    platform: Platform,
+) -> Result<Program, CompileError> {
+    let mut symbols = Symbols::new(platform);
     symbols::collect_symbols(&program, None, &mut symbols);
     statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)
 }
@@ -132,6 +142,12 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }
 
+/// Returns whether `name` is a builtin available on the selected target platform.
+pub(crate) fn is_builtin_function_on_platform(name: &str, platform: Platform) -> bool {
+    crate::types::checker::builtins::canonical_builtin_function_name_on_platform(name, platform)
+        .is_some()
+}
+
 /// Reports whether `name` matches one of PHP's procedural date/time aliases
 /// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
 /// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,
@@ -147,4 +163,36 @@ pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
 /// known alias call survives desugaring because its argument count was out of range.
 pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> {
     expressions::date_procedural_alias_arity(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Platform;
+    use crate::parser::ast::{CallableTarget, StmtKind};
+
+    /// Verifies namespaced calls only fall back to `lchown` where the target exposes it.
+    #[test]
+    fn namespaced_lchown_fallback_is_target_aware() {
+        let tokens = crate::lexer::tokenize("<?php namespace App; $cb = lchown(...);")
+            .expect("tokenize namespaced callable");
+        let program = crate::parser::parse(&tokens).expect("parse namespaced callable");
+
+        for (platform, expected) in [
+            (Platform::Windows, "App\\lchown"),
+            (Platform::Linux, "lchown"),
+        ] {
+            let resolved =
+                resolve_for_platform(program.clone(), platform).expect("resolve callable");
+            let Some(StmtKind::Assign { value, .. }) =
+                resolved.first().map(|stmt| &stmt.kind)
+            else {
+                panic!("expected resolved assignment");
+            };
+            let ExprKind::FirstClassCallable(CallableTarget::Function(name)) = &value.kind else {
+                panic!("expected resolved function callable");
+            };
+            assert_eq!(name.as_str(), expected);
+        }
+    }
 }

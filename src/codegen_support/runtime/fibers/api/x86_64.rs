@@ -56,8 +56,8 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
 /// Returns a pointer to the freshly built Fiber object in rax.
 /// On stack allocation failure branches to `__rt_fiber_throw_state_error` (no return).
 pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
-    let initial_frame_bytes = fiber_initial_stack_frame_bytes(emitter.target.arch);
-    let initial_entry_offset = fiber_initial_entry_offset(emitter.target.arch);
+    let initial_frame_bytes = fiber_initial_stack_frame_bytes(emitter.target);
+    let initial_entry_offset = fiber_initial_entry_offset(emitter.target);
 
     emitter.blank();
     emitter.comment("--- runtime: fiber_construct ---");

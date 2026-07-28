@@ -95,6 +95,116 @@ fn test_strrev() {
     assert_eq!(out, "olleH");
 }
 
+/// Verifies platform-compatible shell argument and command escaping, including namespace fallback.
+#[test]
+fn test_shell_escaping_posix_and_namespaced_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+echo escapeshellarg("a'b"), "|";
+echo escapeshellcmd("a&b"), "|";
+namespace Demo;
+echo EsCaPeShElLcMd("x|y");
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "\"a'b\"|a^&b|x^|y"
+    } else {
+        "'a'\\''b'|a\\&b|x\\|y"
+    };
+    assert_eq!(out, expected);
+}
+
+/// Verifies shell escaping preserves valid UTF-8 and quotes empty arguments.
+#[test]
+fn test_shell_escaping_unicode_and_empty() {
+    let out = compile_and_run(
+        r#"<?php
+echo escapeshellarg("日本語"), ":", escapeshellarg("");
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "\"日本語\":\"\""
+    } else {
+        "'日本語':''"
+    };
+    assert_eq!(out, expected);
+}
+
+/// Verifies shell escaping switches from the 64 KiB concat scratch buffer to owned storage.
+#[test]
+fn test_shell_escaping_large_results_use_heap_storage() {
+    if target().platform == Platform::Windows {
+        // Windows intentionally enforces PHP's 8192-byte command limit; the
+        // dedicated PE test covers those ValueError paths instead.
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$quotes = str_repeat("'", 20000);
+$metacharacters = str_repeat("&", 40000);
+echo strlen(escapeshellarg($quotes)), ':', strlen(escapeshellcmd($metacharacters));
+"#,
+    );
+    assert_eq!(out, "80002:80000");
+}
+
+/// Verifies shell helpers reject embedded NUL bytes through catchable PHP `ValueError` objects.
+#[test]
+fn test_shell_escaping_nul_value_errors_are_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo escapeshellarg(hex2bin("610062"));
+} catch (\ValueError $error) {
+    echo "arg";
+}
+echo ":";
+try {
+    echo escapeshellcmd(hex2bin("610062"));
+} catch (\ValueError $error) {
+    echo "cmd";
+}
+"#,
+    );
+    assert_eq!(out, "arg:cmd");
+}
+
+/// Verifies PHP weak scalar coercions reach shell escaping while preserving string results.
+#[test]
+fn test_shell_escaping_accepts_weak_scalar_strings() {
+    let out = compile_and_run(
+        r#"<?php
+echo escapeshellarg(1), ':', escapeshellarg(1.5), ':';
+echo escapeshellarg(true), ':', escapeshellcmd(false);
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "\"1\":\"1.5\":\"1\":"
+    } else {
+        "'1':'1.5':'1':"
+    };
+    assert_eq!(out, expected);
+}
+
+/// Verifies a union composed solely of weak scalar string inputs remains accepted and coerced.
+#[test]
+fn test_shell_escaping_accepts_scalar_only_union() {
+    let out = compile_and_run(
+        r#"<?php
+function shell_scalar(bool $value): int|false {
+    return $value ? 2 : false;
+}
+echo escapeshellarg(shell_scalar(true)), ':', escapeshellcmd(shell_scalar(false));
+"#,
+    );
+    let expected = if target().platform == Platform::Windows {
+        "\"2\":"
+    } else {
+        "'2':"
+    };
+    assert_eq!(out, expected);
+}
+
 /// Verifies grapheme_strrev reverses ASCII text like strrev while returning the PHP string|false shape.
 #[test]
 fn test_grapheme_strrev_ascii() {

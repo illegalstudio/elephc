@@ -1,5 +1,5 @@
 //! Purpose:
-//! C-ABI surface for the elephc `--web` prefork HTTP server bridge. Exposes the
+//! C-ABI surface for the elephc `--web` HTTP server bridge. Exposes the
 //! server entry point and (in later phases) request/response marshaling under
 //! `#[no_mangle] extern "C"` symbols the compiled PHP program calls/links.
 //!
@@ -10,8 +10,9 @@
 //! - Tests: directly through the `rlib` crate type.
 //!
 //! Key details:
-//! - One process per prefork worker means no shared-thread state: per-worker
-//!   request/response data lives in plain process statics, not behind a mutex.
+//! - Unix uses one process per prefork worker; Windows uses one process and one
+//!   PHP execution thread. Request/response data therefore lives in plain
+//!   process statics, not behind a mutex.
 
 mod multipart;
 mod request_state;

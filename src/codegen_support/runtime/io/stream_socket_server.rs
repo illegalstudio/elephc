@@ -157,6 +157,31 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.instruction("b __rt_stream_socket_server_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
+
+    // -- setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) --
+    // php enables SO_REUSEADDR by default on every listener and treats the
+    // socket.so_reuseaddr context option purely as an opt-out
+    // (main/streams/xp_socket.c). Without it a server cannot rebind its own port
+    // while the previous socket is still in TIME_WAIT. The IPv6 helper already
+    // does this; the option value is staged in the sockaddr area, which is only
+    // built further down, so no extra frame slot is needed.
+    {
+        let (sol_socket, so_reuseaddr): (i64, i64) = match plat {
+            Platform::MacOS => (0xffff, 4),
+            Platform::Linux => (1, 2),
+            Platform::Windows => (1, 2),
+        };
+        emitter.instruction("mov w9, #1");                                      // SO_REUSEADDR option value = 1
+        emitter.instruction("str w9, [sp, #40]");                               // stage it in the not-yet-built sockaddr area
+        emitter.instruction("ldr x0, [sp, #32]");                               // reload the socket descriptor
+        emitter.instruction(&format!("mov x1, #{}", sol_socket));               // level: SOL_SOCKET
+        emitter.instruction(&format!("mov x2, #{}", so_reuseaddr));             // name: SO_REUSEADDR
+        emitter.instruction("add x3, sp, #40");                                 // pointer to the option value
+        emitter.instruction("mov x4, #4");                                      // option length = sizeof(int)
+        emitter.syscall(105);                                                   // best-effort: a failure must not fail the bind
+    }
+
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the descriptor for the options helper
     emitter.instruction("bl __rt_apply_socket_server_opts");                    // apply so_reuseport before bind (best-effort)
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the descriptor (helper clobbers x0)
 
@@ -363,7 +388,22 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did socket() fail?
     emitter.instruction("js __rt_stream_socket_server_fail_x86");               // socket() failed
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
-    emitter.instruction("mov rdi, rax");                                        // pass the fd to the options helper
+
+    // -- setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) --
+    // See the AArch64 arm: php enables this by default on every listener. The
+    // POSIX level/optname pair is emitted verbatim because the Windows shim
+    // translates them to their Winsock values itself (shims_net.rs), and the
+    // option value is staged in the sockaddr area, which is built further down.
+    emitter.instruction("mov DWORD PTR [rbp - 40], 1");                         // SO_REUSEADDR option value = 1
+    emitter.instruction("mov rdi, rax");                                        // fd
+    emitter.instruction("mov rsi, 1");                                          // level: POSIX SOL_SOCKET
+    emitter.instruction("mov rdx, 2");                                          // name: POSIX SO_REUSEADDR
+    emitter.instruction("lea r10, [rbp - 40]");                                 // pointer to the option value
+    emitter.instruction("mov r8, 4");                                           // option length = sizeof(int)
+    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
+    emitter.instruction("syscall");                                             // best-effort: a failure must not fail the bind
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the fd for the options helper
     emitter.instruction("call __rt_apply_socket_server_opts");                  // apply so_reuseport before bind (best-effort)
 
     emitter.instruction("mov WORD PTR [rbp - 40], 2");                          // Linux sin_family = AF_INET

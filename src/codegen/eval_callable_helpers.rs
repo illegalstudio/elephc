@@ -311,8 +311,14 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable invoker frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve descriptor, arg-array, and eval result slots
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the runtime callable descriptor pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the boxed Mixed invoker argument array
+    emitter.instruction(&format!(                                               // save the runtime callable descriptor pointer
+        "mov QWORD PTR [rbp - 8], {}",
+        abi::int_arg_reg_name(emitter.target, 0)
+    ));
+    emitter.instruction(&format!(                                               // save the boxed Mixed invoker argument array
+        "mov QWORD PTR [rbp - 16], {}",
+        abi::int_arg_reg_name(emitter.target, 1)
+    ));
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // clear result kind and padding before the FFI call
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // clear result value pointer before the FFI call
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // clear result error pointer before the FFI call
@@ -327,7 +333,12 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     ));                                                                          // pass the captured eval callback as FFI argument 2
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the boxed Mixed invoker argument array
     emitter.instruction("lea rcx, [rbp - 48]");                                 // pass writable eval result storage
-    abi::emit_call_label(emitter, &symbol);
+    if module.target.platform == crate::codegen::platform::Platform::Windows {
+        abi::emit_symbol_address(emitter, "r11", &symbol);
+        emitter.emit_native_bridge_call("r11", 4);                              // enter magician through the MSx64 Rust ABI
+    } else {
+        abi::emit_call_label(emitter, &symbol);
+    }
     emitter.instruction("test eax, eax");                                       // did magician complete callback dispatch successfully?
     emitter.instruction(&format!("je {}", done_label));                         // return the boxed result on success
     emitter.instruction("cmp eax, 3");                                          // status 3 means an eval Throwable escaped
@@ -802,8 +813,11 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &actual_types, 0);
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
-    let (actual_stack_offsets, actual_overflow_bytes) =
+    let (mut actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    shift_descriptor_entry_stack_offsets(&mut actual_stack_offsets, actual_call_pad_bytes);
+    let actual_call_stack_bytes = actual_overflow_bytes + actual_call_pad_bytes;
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(emitter, frame_size);
@@ -820,8 +834,8 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
             incoming_stack_offsets[idx],
         );
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_reserve_temporary_stack(emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_call_stack_bytes);
     }
     for (idx, (ty, assignment)) in actual_types
         .iter()
@@ -842,8 +856,8 @@ fn emit_eval_instance_method_descriptor_entry_wrapper_body(
         );
     }
     abi::emit_call_label(emitter, &method_symbol(class_name, method_key));
-    if actual_overflow_bytes > 0 {
-        abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_call_stack_bytes);
     }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
@@ -868,8 +882,11 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &actual_types, 0);
     let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
-    let (actual_stack_offsets, actual_overflow_bytes) =
+    let (mut actual_stack_offsets, actual_overflow_bytes) =
         descriptor_entry_stack_offsets(&actual_assignments);
+    let actual_call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    shift_descriptor_entry_stack_offsets(&mut actual_stack_offsets, actual_call_pad_bytes);
+    let actual_call_stack_bytes = actual_overflow_bytes + actual_call_pad_bytes;
     let frame_size = descriptor_entry_frame_size(visible_arg_types.len());
 
     abi::emit_frame_prologue(emitter, frame_size);
@@ -886,8 +903,8 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
             incoming_stack_offsets[idx],
         );
     }
-    if actual_overflow_bytes > 0 {
-        abi::emit_reserve_temporary_stack(emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_reserve_temporary_stack(emitter, actual_call_stack_bytes);
     }
     for (idx, (ty, assignment)) in actual_types
         .iter()
@@ -912,8 +929,8 @@ fn emit_eval_static_method_descriptor_entry_wrapper_body(
         }
     }
     abi::emit_call_label(emitter, &static_method_symbol(impl_class, method_key));
-    if actual_overflow_bytes > 0 {
-        abi::emit_release_temporary_stack(emitter, actual_overflow_bytes);
+    if actual_call_stack_bytes > 0 {
+        abi::emit_release_temporary_stack(emitter, actual_call_stack_bytes);
     }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
@@ -995,6 +1012,13 @@ fn descriptor_entry_stack_offsets(
         next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
     }
     (offsets, next_offset)
+}
+
+/// Shifts eval descriptor overflow arguments above the platform caller-stack prefix.
+fn shift_descriptor_entry_stack_offsets(offsets: &mut [Option<usize>], prefix_bytes: usize) {
+    for offset in offsets.iter_mut().flatten() {
+        *offset += prefix_bytes;
+    }
 }
 
 /// Converts a descriptor overflow offset into a caller-stack frame offset.
@@ -1385,7 +1409,12 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     emitter.instruction("test rdi, rdi");                                       // check whether a context was passed by magician
     emitter.instruction(&format!("jz {}", fail_label));                         // reject dynamic eval callables when no context is active
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the original boxed eval callback value
-    abi::emit_call_label(emitter, &is_callable_symbol);
+    if module.target.platform == crate::codegen::platform::Platform::Windows {
+        abi::emit_symbol_address(emitter, "r11", &is_callable_symbol);
+        emitter.emit_native_bridge_call("r11", 2);                              // validate through magician's MSx64 Rust ABI
+    } else {
+        abi::emit_call_label(emitter, &is_callable_symbol);
+    }
     emitter.instruction("test eax, eax");                                       // check whether magician accepts the callback value
     emitter.instruction(&format!("jz {}", fail_label));                         // reject non-callable eval values
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed callback value to retain it
@@ -1489,8 +1518,10 @@ fn emit_x86_64_eval_callable_array_selector_slots(module: &Module, emitter: &mut
 
 /// Loads and unboxes one ARM64 callable-array slot through eval's array reader.
 fn emit_aarch64_eval_callable_array_slot(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    let value_int_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_int");
+    let array_get_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_get");
     abi::emit_load_int_immediate(emitter, "x0", index as i64);
     abi::emit_call_label(emitter, &value_int_symbol);
     emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the boxed callable-array index
@@ -1503,8 +1534,10 @@ fn emit_aarch64_eval_callable_array_slot(module: &Module, emitter: &mut Emitter,
 
 /// Loads and unboxes one x86_64 callable-array slot through eval's array reader.
 fn emit_x86_64_eval_callable_array_slot(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    let value_int_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_int");
+    let array_get_symbol =
+        abi::c_callback_internal_symbol(module.target, "__elephc_eval_value_array_get");
     abi::emit_load_int_immediate(emitter, "rdi", index as i64);
     abi::emit_call_label(emitter, &value_int_symbol);
     abi::emit_push_reg(emitter, "rax");

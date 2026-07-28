@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Program, StmtKind, TypeExpr};
+use crate::types::checker::builtins::canonical_builtin_function_name_on_platform;
 use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
@@ -38,7 +39,7 @@ impl Checker {
                     continue;
                 }
                 if let Some(builtin) =
-                    crate::types::checker::builtins::canonical_builtin_function_name(name)
+                    canonical_builtin_function_name_on_platform(name, self.target_platform)
                 {
                     errors.push(CompileError::new(
                         stmt.span,
@@ -71,7 +72,7 @@ impl Checker {
                     continue;
                 }
                 if let Some(builtin) =
-                    crate::types::checker::builtins::canonical_builtin_function_name(name)
+                    canonical_builtin_function_name_on_platform(name, self.target_platform)
                 {
                     errors.push(CompileError::new(
                         stmt.span,

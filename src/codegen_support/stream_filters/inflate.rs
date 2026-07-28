@@ -88,7 +88,7 @@ where
     emitter.instruction("mov x1, #-15");                                        // arg 1 = windowBits -15: raw inflate
     abi::emit_symbol_address(emitter, "x2", "_zlib_version");
     emitter.instruction("mov x3, #112");                                        // arg 3 = sizeof(z_stream) for the ABI check
-    emitter.bl_c("inflateInit2_"); // initialize a raw-inflate zlib stream
+    emitter.bl_c("inflateInit2_");                                              // initialize a raw-inflate zlib stream
 
     // -- point the stream at the slurped input and the output buffer --
     abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
@@ -103,11 +103,11 @@ where
     // -- inflate the whole input in a single Z_FINISH pass --
     emitter.instruction("mov x0, sp");                                          // arg 0 = z_stream pointer
     emitter.instruction("mov x1, #4");                                          // arg 1 = Z_FINISH
-    emitter.bl_c("inflate"); // decompress the entire input at once
+    emitter.bl_c("inflate");                                                    // decompress the entire input at once
     emitter.instruction("ldr x9, [sp, #40]");                                   // z_stream.total_out = decompressed length
     emitter.instruction("str x9, [sp, #136]");                                  // save the decompressed length
     emitter.instruction("mov x0, sp");                                          // arg 0 = z_stream pointer
-    emitter.bl_c("inflateEnd"); // release zlib's internal inflate state
+    emitter.bl_c("inflateEnd");                                                 // release zlib's internal inflate state
 
     // -- back the descriptor with an anonymous temp file of the plain bytes --
     emitter.instruction("bl __rt_tmpfile");                                     // create an unlinked temp file, x0 = fd
@@ -142,7 +142,7 @@ where
     // -- dup2(temp, fd): the descriptor now serves the decompressed bytes --
     emitter.instruction("ldr x0, [sp, #144]");                                  // oldfd = temp file
     emitter.instruction("ldr x1, [sp, #112]");                                  // newfd = the stream descriptor
-    emitter.bl_c("dup2"); // redirect the descriptor onto the temp file
+    emitter.bl_c("dup2");                                                       // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
     emitter.instruction("ldr x0, [sp, #144]");                                  // the temp-file descriptor
@@ -163,6 +163,7 @@ pub(crate) fn emit_x86_64<F>(emitter: &mut Emitter, mut next_label: F)
 where
     F: FnMut(&str) -> String,
 {
+    let zstream = super::zlib::z_stream_layout(emitter.target);
     let slurp = next_label("zlib_inflate_slurp");
     let slurp_done = next_label("zlib_inflate_slurped");
     let sized = next_label("zlib_inflate_sized");
@@ -210,10 +211,10 @@ where
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 128], rax");                      // save the decompressed buffer pointer
 
-    // -- zero the 112-byte z_stream so zalloc/zfree start NULL --
+    // -- zero the target-layout z_stream so zalloc/zfree start NULL --
     emitter.instruction("xor r9, r9");                                          // z_stream byte clear index
     emitter.label(&zero);
-    emitter.instruction("cmp r9, 112");                                         // cleared the whole z_stream struct?
+    emitter.instruction(&format!("cmp r9, {}", zstream.size));                  // cleared the whole target-layout z_stream struct?
     emitter.instruction(&format!("jge {}", zeroed));                            // the struct is fully zeroed
     emitter.instruction("mov BYTE PTR [rsp + r9], 0");                          // zero one z_stream byte
     emitter.instruction("inc r9");                                              // advance the clear index
@@ -224,8 +225,8 @@ where
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, -15");                                        // arg 1 = windowBits -15: raw inflate
     abi::emit_symbol_address(emitter, "rdx", "_zlib_version"); // arg 2 = the zlib version string
-    emitter.instruction("mov ecx, 112");                                        // arg 3 = sizeof(z_stream) for the ABI check
-    emitter.instruction("call inflateInit2_");                                  // initialize a raw-inflate zlib stream
+    emitter.instruction(&format!("mov ecx, {}", zstream.size));                 // arg 3 = target sizeof(z_stream) for the ABI check
+    emitter.emit_call_c("inflateInit2_");                                       // initialize a raw-inflate zlib stream
 
     // -- point the stream at the slurped input and the output buffer --
     abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf"); // scratch base address
@@ -233,18 +234,22 @@ where
     emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                       // compressed length
     emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                        // z_stream.avail_in = compressed length
     emitter.instruction("mov r9, QWORD PTR [rsp + 128]");                       // decompressed buffer pointer
-    emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // z_stream.next_out = decompressed buffer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", zstream.next_out)); // z_stream.next_out = decompressed buffer
     emitter.instruction("mov r9, QWORD PTR [rsp + 152]");                       // output buffer capacity
-    emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                       // z_stream.avail_out = output capacity
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], r9d", zstream.avail_out)); // z_stream.avail_out = output capacity
 
     // -- inflate the whole input in a single Z_FINISH pass --
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, 4");                                          // arg 1 = Z_FINISH
-    emitter.instruction("call inflate");                                        // decompress the entire input at once
-    emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                       // z_stream.total_out = decompressed length
+    emitter.emit_call_c("inflate");                                             // decompress the entire input at once
+    if emitter.target.platform == crate::codegen_support::platform::Platform::Windows {
+        emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", zstream.total_out)); // LLP64 z_stream.total_out = decompressed length
+    } else {
+        emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", zstream.total_out)); // LP64 z_stream.total_out = decompressed length
+    }
     emitter.instruction("mov QWORD PTR [rsp + 136], rax");                      // save the decompressed length
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
-    emitter.instruction("call inflateEnd");                                     // release zlib's internal inflate state
+    emitter.emit_call_c("inflateEnd");                                          // release zlib's internal inflate state
 
     // -- back the descriptor with an anonymous temp file of the plain bytes --
     emitter.instruction("call __rt_tmpfile");                                   // create an unlinked temp file, rax = fd
@@ -280,7 +285,7 @@ where
     // -- dup2(temp, fd): the descriptor now serves the decompressed bytes --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 144]");                      // oldfd = temp file
     emitter.instruction("mov rsi, QWORD PTR [rsp + 112]");                      // newfd = the stream descriptor
-    emitter.instruction("call dup2");                                           // redirect the descriptor onto the temp file
+    emitter.emit_call_c("dup2");                                                // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 144]");                      // the temp-file descriptor

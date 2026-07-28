@@ -74,6 +74,9 @@ fn requirement_json(requirement: BuiltinRequirement) -> Value {
         BuiltinRequirement::MacOsLibrary(name) => {
             json!({"kind": "macos_library", "name": name})
         }
+        BuiltinRequirement::WindowsLibrary(name) => {
+            json!({"kind": "windows_library", "name": name})
+        }
         BuiltinRequirement::RuntimeFeature(name) => {
             json!({"kind": "runtime_feature", "name": name})
         }
@@ -142,6 +145,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::ProcOpen => "proc_open",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",

@@ -396,7 +396,7 @@ pub fn emit_format_sockaddr_in6(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 stream runtime helper for format sockaddr in6.
 fn emit_format_sockaddr_in6_linux_x86_64(emitter: &mut Emitter) {
-    let af_inet6 = crate::codegen_support::platform::Platform::Linux.af_inet6();
+    let af_inet6 = emitter.platform.af_inet6();
     emitter.blank();
     emitter.comment("--- runtime: format_sockaddr_in6 ---");
     emitter.label_global("__rt_format_sockaddr_in6");
@@ -428,7 +428,7 @@ fn emit_format_sockaddr_in6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 64]");                                 // out buffer (46-byte INET6_ADDRSTRLEN)
     emitter.instruction("mov ecx, 46");                                         // INET6_ADDRSTRLEN
     emitter.instruction(&format!("mov edi, {}", af_inet6));                     // family: AF_INET6
-    emitter.instruction("call inet_ntop");                                      // rax = buf pointer or NULL
+    emitter.emit_call_c("inet_ntop");                                           // rax = buf pointer or NULL
     emitter.instruction("test rax, rax");                                       // libc returned NULL?
     emitter.instruction("jz __rt_fsa6_fail_x86");                               // bail on failure
 

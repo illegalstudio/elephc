@@ -17,7 +17,7 @@ mod macros;
 mod array;
 mod class_metadata;
 mod core;
-mod filesystem;
+pub(in crate::interpreter) mod filesystem;
 mod formatting;
 mod hooks;
 mod json;

@@ -9,6 +9,10 @@
 //! - The `DIR*` recorded by `__rt_opendir` in `_dir_handles` is cleared and
 //!   handed back to libc `closedir`, which closes the stream and its descriptor.
 //! - A descriptor with no recorded `DIR*` is a no-op.
+//! - The x86_64 libc-`DIR*` `closedir` call site routes through
+//!   `Emitter::emit_call_c`. On Windows, `__rt_sys_closedir` calls `FindClose`
+//!   and releases the retained search-pattern and directory-state allocations.
+//!   The glob-fd branch continues through its separate `globfree`/`close` path.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -86,7 +90,7 @@ fn emit_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_closedir_done_x86");                           // nothing recorded: nothing to close
     emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the fd->DIR* table entry
     emitter.instruction("mov rdi, r10");                                        // DIR* argument for closedir
-    emitter.bl_c("closedir");
+    emitter.emit_call_c("closedir");                                            // Windows: close the search handle and release the DIR state
 
     emitter.label("__rt_closedir_done_x86");
     emitter.instruction("add rsp, 16");                                         // release the scratch slot

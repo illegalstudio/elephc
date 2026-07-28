@@ -123,7 +123,7 @@ fn drivername_cell() -> &'static Mutex<CString> {
 fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
     let bytes: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
     let cstr = CString::new(bytes).unwrap_or_default();
-    let mut guard = cell.lock().unwrap();
+    let mut guard = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = cstr;
     guard.as_ptr()
 }
@@ -132,7 +132,7 @@ fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
 /// to the first byte, or null for an empty buffer. Valid until the next column
 /// data pointer call; elephc copies it immediately through `ptr_read_string`.
 fn store_bytes(bytes: Vec<u8>) -> *const c_char {
-    let mut guard = coldata_cell().lock().unwrap();
+    let mut guard = coldata_cell().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = bytes;
     if guard.is_empty() {
         std::ptr::null()
@@ -173,7 +173,7 @@ fn open_conn_for_dsn(dsn: &str) -> Result<Conn, String> {
 /// Registers a newly opened connection and returns the public handle ID.
 fn register_conn(conn: Conn) -> i64 {
     let id = next_id();
-    conns().lock().unwrap().insert(id, conn);
+    conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, conn);
     id
 }
 
@@ -191,8 +191,8 @@ fn open_nonpersistent_dsn(dsn: &str) -> i64 {
 
 /// Opens or reuses a process-local persistent connection for the full DSN.
 fn open_persistent_dsn(dsn: &str) -> i64 {
-    if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
-        if conns().lock().unwrap().contains_key(&id) {
+    if let Some(id) = persistent_conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(dsn).copied() {
+        if conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains_key(&id) {
             return id;
         }
     }
@@ -201,9 +201,9 @@ fn open_persistent_dsn(dsn: &str) -> i64 {
             let id = register_conn(conn);
             persistent_conns()
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(dsn.to_string(), id);
-            persistent_ids().lock().unwrap().insert(id);
+            persistent_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id);
             id
         }
         Err(msg) => {
@@ -225,7 +225,7 @@ pub extern "C" fn elephc_pdo_version() -> i32 {
 /// `elephc_pdo_driver_name`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_driver_name(conn_id: i64) -> *const c_char {
-    let name = match conns().lock().unwrap().get(&conn_id) {
+    let name = match conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&conn_id) {
         Some(Conn::Sqlite(_)) => "sqlite",
         Some(Conn::Postgres(_)) => "pgsql",
         Some(Conn::Mysql(_)) => "mysql",
@@ -275,20 +275,20 @@ pub unsafe extern "C" fn elephc_pdo_open_persistent(
 /// `elephc_pdo_open`. Valid until the next failed open.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
-    open_error_cell().lock().unwrap().as_ptr()
+    open_error_cell().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ptr()
 }
 
 /// Closes a connection (finalizing any SQLite statements still registered against
 /// it) and removes it from the table. Unknown handles are ignored.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_close(conn_id: i64) {
-    if persistent_ids().lock().unwrap().contains(&conn_id) {
+    if persistent_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&conn_id) {
         return;
     }
     // The SQLite db pointer of the connection being closed, so only *its*
     // statements are finalized (statements from other open SQLite connections
     // must be left alone). `None` when the connection is PostgreSQL or unknown.
-    let sqlite_db = match conns().lock().unwrap().get(&conn_id) {
+    let sqlite_db = match conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&conn_id) {
         Some(Conn::Sqlite(c)) => Some(c.db),
         _ => None,
     };
@@ -297,7 +297,7 @@ pub extern "C" fn elephc_pdo_close(conn_id: i64) {
     // live server-side and are dropped with the client.
     let owned: Vec<i64> = stmts()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .iter()
         .filter_map(|(k, s)| match s {
             Stmt::Sqlite(st) if sqlite_db == Some(st.db) => Some(*k),
@@ -307,7 +307,7 @@ pub extern "C" fn elephc_pdo_close(conn_id: i64) {
         })
         .collect();
     {
-        let mut guard = stmts().lock().unwrap();
+        let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         for k in owned {
             if let Some(Stmt::Sqlite(s)) = guard.get(&k) {
                 s.finalize();
@@ -315,10 +315,10 @@ pub extern "C" fn elephc_pdo_close(conn_id: i64) {
             guard.remove(&k);
         }
     }
-    if let Some(Conn::Sqlite(c)) = conns().lock().unwrap().get(&conn_id) {
+    if let Some(Conn::Sqlite(c)) = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&conn_id) {
         c.close();
     }
-    conns().lock().unwrap().remove(&conn_id);
+    conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&conn_id);
 }
 
 /// Runs one or more SQL statements with no result rows (`PDO::exec`). Returns the
@@ -328,7 +328,7 @@ pub extern "C" fn elephc_pdo_close(conn_id: i64) {
 /// `sql` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i64 {
-    let mut guard = conns().lock().unwrap();
+    let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(c)) => c.exec(sql),
         Some(Conn::Postgres(c)) => match cstr_arg(sql) {
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
 /// `name`, when non-null, must point to a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_char) -> i64 {
-    let mut guard = conns().lock().unwrap();
+    let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(c)) => c.last_insert_id(),
         Some(Conn::Postgres(c)) => c.last_insert_id(cstr_arg(name)),
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn elephc_pdo_last_insert_id(conn_id: i64, name: *const c_
 /// Returns the number of rows changed by the most recent statement.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
+    let guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&conn_id) {
         Some(Conn::Sqlite(c)) => c.changes(),
         Some(Conn::Postgres(c)) => c.changes,
@@ -374,7 +374,7 @@ pub extern "C" fn elephc_pdo_changes(conn_id: i64) -> i64 {
 /// Begins a transaction (`PDO::beginTransaction`). Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
+    let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(c)) => c.exec_simple(b"BEGIN"),
         Some(Conn::Postgres(c)) => c.exec_simple("BEGIN"),
@@ -386,7 +386,7 @@ pub extern "C" fn elephc_pdo_begin(conn_id: i64) -> i64 {
 /// Commits the active transaction (`PDO::commit`). Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
+    let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(c)) => c.exec_simple(b"COMMIT"),
         Some(Conn::Postgres(c)) => c.exec_simple("COMMIT"),
@@ -398,7 +398,7 @@ pub extern "C" fn elephc_pdo_commit(conn_id: i64) -> i64 {
 /// Rolls back the active transaction (`PDO::rollBack`). Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
-    let mut guard = conns().lock().unwrap();
+    let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&conn_id) {
         Some(Conn::Sqlite(c)) => c.exec_simple(b"ROLLBACK"),
         Some(Conn::Postgres(c)) => c.exec_simple("ROLLBACK"),
@@ -410,7 +410,7 @@ pub extern "C" fn elephc_pdo_rollback(conn_id: i64) -> i64 {
 /// Returns the driver's result code for the connection's last operation.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
-    let guard = conns().lock().unwrap();
+    let guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&conn_id) {
         Some(Conn::Sqlite(c)) => c.errcode(),
         Some(Conn::Postgres(c)) => c.errcode,
@@ -424,7 +424,7 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
     let msg = {
-        let guard = conns().lock().unwrap();
+        let guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get(&conn_id) {
             Some(Conn::Sqlite(c)) => c.errmsg(),
             Some(Conn::Postgres(c)) => c.errmsg.clone(),
@@ -443,7 +443,7 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_prepare(conn_id: i64, sql: *const c_char) -> i64 {
     let prepared: Result<Stmt, ()> = {
-        let mut guard = conns().lock().unwrap();
+        let mut guard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get_mut(&conn_id) {
             Some(Conn::Sqlite(c)) => c.prepare(sql).map(Stmt::Sqlite),
             Some(Conn::Postgres(c)) => match cstr_arg(sql) {
@@ -472,7 +472,7 @@ pub unsafe extern "C" fn elephc_pdo_prepare(conn_id: i64, sql: *const c_char) ->
     match prepared {
         Ok(stmt) => {
             let id = next_id();
-            stmts().lock().unwrap().insert(id, stmt);
+            stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, stmt);
             id
         }
         Err(()) => -1,
@@ -485,7 +485,7 @@ pub unsafe extern "C" fn elephc_pdo_prepare(conn_id: i64, sql: *const c_char) ->
 /// `name` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *const c_char) -> i64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(name) = cstr_arg(name) else {
         return 0;
     };
@@ -500,7 +500,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *co
 /// Binds an integer to the 1-based placeholder `idx`. Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.bind_int(idx, val),
         Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Int(val)),
@@ -512,7 +512,7 @@ pub extern "C" fn elephc_pdo_bind_int(stmt_id: i64, idx: i64, val: i64) -> i64 {
 /// Binds a double to the 1-based placeholder `idx`. Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.bind_double(idx, val),
         Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Float(val)),
@@ -528,7 +528,7 @@ pub extern "C" fn elephc_pdo_bind_double(stmt_id: i64, idx: i64, val: f64) -> i6
 /// `val`, when non-null, must point to a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_bind_text(stmt_id: i64, idx: i64, val: *const c_char) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.bind_text(idx, val),
         Some(Stmt::Postgres(s)) => {
@@ -552,7 +552,7 @@ pub unsafe extern "C" fn elephc_pdo_bind_text(stmt_id: i64, idx: i64, val: *cons
 /// Binds SQL NULL to the 1-based placeholder `idx`. Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.bind_null(idx),
         Some(Stmt::Postgres(s)) => s.bind(idx, pg::Bind::Null),
@@ -564,7 +564,7 @@ pub extern "C" fn elephc_pdo_bind_null(stmt_id: i64, idx: i64) -> i64 {
 /// Resets a statement, keeping its parameter bindings. Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.reset(),
         Some(Stmt::Postgres(s)) => s.reset(),
@@ -576,7 +576,7 @@ pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
 /// Clears all parameter bindings on a statement. Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
-    let mut guard = stmts().lock().unwrap();
+    let mut guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.clear_bindings(),
         Some(Stmt::Postgres(s)) => s.clear_bindings(),
@@ -589,12 +589,12 @@ pub extern "C" fn elephc_pdo_clear_bindings(stmt_id: i64) -> i64 {
 /// error.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
-    let mut sguard = stmts().lock().unwrap();
+    let mut sguard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match sguard.get_mut(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.step(),
         Some(Stmt::Postgres(s)) => {
             let conn_id = s.conn_id;
-            let mut cguard = conns().lock().unwrap();
+            let mut cguard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             match cguard.get_mut(&conn_id) {
                 Some(Conn::Postgres(c)) => s.step(c),
                 _ => -1,
@@ -602,7 +602,7 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
         }
         Some(Stmt::Mysql(s)) => {
             let conn_id = s.conn_id;
-            let mut cguard = conns().lock().unwrap();
+            let mut cguard = conns().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             match cguard.get_mut(&conn_id) {
                 Some(Conn::Mysql(c)) => s.step(c),
                 _ => -1,
@@ -615,7 +615,7 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
 /// Returns the number of result columns for the statement.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.column_count(),
         Some(Stmt::Postgres(s)) => s.column_count(),
@@ -628,7 +628,7 @@ pub extern "C" fn elephc_pdo_column_count(stmt_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char {
     let name = {
-        let guard = stmts().lock().unwrap();
+        let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get(&stmt_id) {
             Some(Stmt::Sqlite(s)) => s.column_name(i),
             Some(Stmt::Postgres(s)) => s.column_name(i),
@@ -643,7 +643,7 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
 /// (0-based): 1=int, 2=float, 3=text, 4=blob/bytea, 5=null.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.column_type(i),
         Some(Stmt::Postgres(s)) => s.column_type(i),
@@ -655,7 +655,7 @@ pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
 /// Returns the current row's column `i` (0-based) as an integer.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.column_int(i),
         Some(Stmt::Postgres(s)) => s.column_int(i),
@@ -667,7 +667,7 @@ pub extern "C" fn elephc_pdo_column_int(stmt_id: i64, i: i64) -> i64 {
 /// Returns the current row's column `i` (0-based) as a double.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.column_double(i),
         Some(Stmt::Postgres(s)) => s.column_double(i),
@@ -680,7 +680,7 @@ pub extern "C" fn elephc_pdo_column_double(stmt_id: i64, i: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_text(stmt_id: i64, i: i64) -> *const c_char {
     let text = {
-        let guard = stmts().lock().unwrap();
+        let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get(&stmt_id) {
             Some(Stmt::Sqlite(s)) => s.column_text(i),
             Some(Stmt::Postgres(s)) => s.column_text(i),
@@ -696,7 +696,7 @@ pub extern "C" fn elephc_pdo_column_text(stmt_id: i64, i: i64) -> *const c_char 
 /// NUL bytes when paired with `elephc_pdo_column_data_ptr`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
-    let guard = stmts().lock().unwrap();
+    let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(&stmt_id) {
         Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
         Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
@@ -710,7 +710,7 @@ pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_char {
     let bytes = {
-        let guard = stmts().lock().unwrap();
+        let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get(&stmt_id) {
             Some(Stmt::Sqlite(s)) => s.column_data(i),
             Some(Stmt::Postgres(s)) => s.column_data(i),
@@ -729,7 +729,7 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
         return 0;
     };
     let bytes = {
-        let guard = stmts().lock().unwrap();
+        let guard = stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.get(&stmt_id) {
             Some(Stmt::Sqlite(s)) => s.column_data(i),
             Some(Stmt::Postgres(s)) => s.column_data(i),
@@ -744,7 +744,7 @@ pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64)
 /// `0`; success returns `1`.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
-    match stmts().lock().unwrap().remove(&stmt_id) {
+    match stmts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&stmt_id) {
         Some(Stmt::Sqlite(s)) => {
             s.finalize();
             1
@@ -893,6 +893,89 @@ mod tests {
         assert_eq!(elephc_pdo_step(stmt), 1);
         assert_eq!(elephc_pdo_column_int(stmt, 0), 77);
         assert_eq!(elephc_pdo_finalize(stmt), 1);
+    }
+
+    /// A SQLite DSN containing non-ASCII path components creates and reopens
+    /// the same database, exercising the UTF-8 filename contract used by
+    /// SQLite's UTF-16 Windows VFS boundary.
+    #[test]
+    fn sqlite_unicode_path_round_trip() {
+        let root = std::env::temp_dir().join(format!(
+            "elephc-pdo-unicode-{}-Données-日本語",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create unicode sqlite test directory");
+        let path = root.join("base-éè-東京.sqlite");
+        let dsn = cs(&format!("sqlite:{}", path.display()));
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "unicode sqlite open failed");
+        let ddl = cs("CREATE TABLE unicode_data (value TEXT)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        let insert = cs("INSERT INTO unicode_data VALUES ('été 日本語')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, insert.as_ptr()) }, 1);
+        elephc_pdo_close(conn);
+
+        let reopened = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(reopened > 0, "unicode sqlite reopen failed");
+        let sql = cs("SELECT value FROM unicode_data");
+        let stmt = unsafe { elephc_pdo_prepare(reopened, sql.as_ptr()) };
+        assert_eq!(elephc_pdo_step(stmt), 1);
+        assert_eq!(unsafe { read(elephc_pdo_column_text(stmt, 0)) }, "été 日本語");
+        elephc_pdo_finalize(stmt);
+        elephc_pdo_close(reopened);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// SQLite transaction errors are observable: rollback removes pending
+    /// writes, commit persists successful writes, and an invalid extra commit
+    /// returns false rather than reporting a false success.
+    #[test]
+    fn sqlite_transactions_commit_rollback_and_error() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        let ddl = cs("CREATE TABLE tx (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+        assert_eq!(elephc_pdo_begin(conn), 1);
+        let first = cs("INSERT INTO tx VALUES (1)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, first.as_ptr()) }, 1);
+        assert_eq!(elephc_pdo_rollback(conn), 1);
+        assert_eq!(elephc_pdo_begin(conn), 1);
+        let second = cs("INSERT INTO tx VALUES (2)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, second.as_ptr()) }, 1);
+        assert_eq!(elephc_pdo_commit(conn), 1);
+        assert_eq!(elephc_pdo_commit(conn), 0, "commit without transaction must fail");
+        assert_ne!(elephc_pdo_errcode(conn), 0);
+        elephc_pdo_close(conn);
+    }
+
+    /// Two file-backed connections surface SQLite's lock error while one owns
+    /// an immediate write transaction; the blocked writer must return `-1` and
+    /// expose a non-zero error code instead of claiming success.
+    #[test]
+    fn sqlite_file_lock_reports_busy_error() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-pdo-lock-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let dsn = cs(&format!("sqlite:{}", path.display()));
+        let first = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        let second = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        let ddl = cs("CREATE TABLE locked (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(first, ddl.as_ptr()) }, 0);
+        let short_timeout = cs("PRAGMA busy_timeout=1");
+        assert_eq!(unsafe { elephc_pdo_exec(second, short_timeout.as_ptr()) }, 0);
+        let begin = cs("BEGIN IMMEDIATE");
+        assert_eq!(unsafe { elephc_pdo_exec(first, begin.as_ptr()) }, 0);
+        let insert = cs("INSERT INTO locked VALUES (1)");
+        assert_eq!(unsafe { elephc_pdo_exec(second, insert.as_ptr()) }, -1);
+        assert_ne!(elephc_pdo_errcode(second), 0);
+        let rollback = cs("ROLLBACK");
+        assert_eq!(unsafe { elephc_pdo_exec(first, rollback.as_ptr()) }, 0);
+        elephc_pdo_close(first);
+        elephc_pdo_close(second);
+        let _ = std::fs::remove_file(path);
     }
 
     /// Placeholder translation: `?` → `$1`, `:name` → `$N` (deduped), with

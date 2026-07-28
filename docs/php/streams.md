@@ -94,7 +94,10 @@ after calling the `setZipPassword(string $password)` compiler extension on a
 on read and zip entries are encrypted on write (the stub is encrypted too; the
 `.phar/signature.bin` entry stays in the clear). ZipCrypto is cryptographically
 weak — it is kept for compatibility with legacy archives, not as a real
-confidentiality mechanism. `Phar` and `PharData` expose a
+confidentiality mechanism. Its per-entry encryption headers use operating-system
+entropy; on Windows the bridge obtains those bytes from `BCryptGenRandom` and
+fails the archive write if the system provider is unavailable. `Phar` and
+`PharData` expose a
 baseline OOP surface with constructors, format/compression/signature constants,
 `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`,
 mixed metadata/string stub accessors, path helpers, and ArrayAccess read/write/isset
@@ -270,9 +273,9 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `unix`, `udg`, `tls`, `ssl`, `sslv2`, `sslv3`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`. TLS-version names all use rustls default negotiation. |
-| `stream_socket_server()` | `stream_socket_server($address): resource\|false` | Bind a server socket for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. |
-| `stream_socket_client()` | `stream_socket_client($address): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. |
+| `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `tls`, `ssl`, `sslv2`, `sslv3`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`, plus `unix` and `udg` on non-Windows targets. TLS-version names all use rustls default negotiation. |
+| `stream_socket_server()` | `stream_socket_server($address): resource\|false` | Bind a server socket for `[tcp://]host:port` or `udp://host:port`, and on non-Windows targets `unix:///path` or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. PHP does not register Unix-domain transports on Windows, so those addresses return `false` there. |
+| `stream_socket_client()` | `stream_socket_client($address): resource\|false` | Open a client stream for `[tcp://]host:port` or `udp://host:port`, and on non-Windows targets `unix:///path` or `udg:///path`. PHP does not register Unix-domain transports on Windows, so those addresses return `false` there. |
 | `stream_socket_accept()` | `stream_socket_accept($socket): resource\|false` | Accept the next pending connection from a listening stream. |
 | `stream_socket_enable_crypto()` | `stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | Attach TLS to an already-connected TCP fd. `$enable=false` unwinds the session (sends `close_notify` and clears the per-fd TLS handle), leaving the fd a plain TCP socket, then reports `true`; it is a no-op when no session is attached. |
 | `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`, writing optional by-reference error outputs. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
@@ -288,8 +291,10 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `popen()` | `popen(string $command, string $mode): resource\|false` | Open a pipe to a process in read (`"r"`) or write (`"w"`) mode. |
 | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. |
 
-Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
-`udg:///path`. Host names are resolved through the system resolver to IPv4.
+Socket addresses use `[tcp://]host:port` or `udp://host:port`. Non-Windows
+targets also support `unix:///path` and `udg:///path`; matching php-src,
+Windows neither reports nor accepts these Unix-domain transports. Host names
+are resolved through the system resolver to IPv4.
 
 ## Directory streams
 

@@ -26,7 +26,11 @@ eval_builtin! {
 
 #[cfg_attr(target_os = "macos", link(name = "iconv"))]
 unsafe extern "C" {
+    /// Opens an iconv conversion descriptor for the requested encoding pair.
+    #[cfg_attr(windows, link_name = "libiconv_open")]
     fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> *mut c_void;
+    /// Converts an input byte buffer through an open iconv descriptor.
+    #[cfg_attr(windows, link_name = "libiconv")]
     fn iconv(
         cd: *mut c_void,
         inbuf: *mut *mut c_char,
@@ -34,6 +38,8 @@ unsafe extern "C" {
         outbuf: *mut *mut c_char,
         outbytesleft: *mut usize,
     ) -> usize;
+    /// Closes an iconv conversion descriptor and releases its native resources.
+    #[cfg_attr(windows, link_name = "libiconv_close")]
     fn iconv_close(cd: *mut c_void) -> i32;
 }
 

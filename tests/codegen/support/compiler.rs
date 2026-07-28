@@ -97,9 +97,16 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
-        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+        elephc::name_resolver::resolve_for_platform(resolved, target().platform)
+            .expect("name resolve failed");
+    let resolved = elephc::autoload::run_for_platform(
+        resolved,
+        dir,
+        &autoload_registry,
+        target().platform,
+    )
+    .expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -171,31 +178,65 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
     }
 }
 
-// Injects an exit harness into user assembly before the final `ret` instruction.
-// Rewrites macOS-style syscall sequence to Linux-style syscall sequence if needed,
-// then patches the assembly in-place using a target-specific needle. Panics if the
-// needle is not found (indicates a codegen emit change that broke the harness injection).
-/// Injects main exit harness into the compiler metadata registry.
+/// Injects a raw runtime harness immediately before the generated main exit sequence.
+///
+/// The fixture harnesses use the backend's internal register convention. Their
+/// syscall sequences are rewritten for the selected target before insertion;
+/// Windows terminates through `__rt_sys_exit`, while Linux retains syscall 60.
+/// Panics when the target-specific exit needle is absent so a bootstrap change
+/// cannot silently turn ownership checks into passing no-ops.
 pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = match (target().platform, target().arch) {
+    inject_main_exit_harness_for_target(target(), asm, harness)
+}
+
+/// Inserts a fixture harness at the supplied target's generated terminal exit path.
+///
+/// Windows has no fixed immediate exit-code instruction: the bootstrap preserves
+/// the compiled return code in `rbx` before flushing output and calling
+/// `__rt_sys_exit`. Selecting the final call keeps explicit PHP `exit()` paths
+/// out of the harness insertion point.
+fn inject_main_exit_harness_for_target(target: Target, asm: &str, harness: &str) -> String {
+    if matches!((target.platform, target.arch), (Platform::Windows, Arch::X86_64)) {
+        return inject_windows_main_exit_harness(asm, &target.transform_assembly(harness));
+    }
+
+    let needle = match (target.platform, target.arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
         (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
         (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 60\n    syscall",
-        (_, Arch::AArch64) => panic!(
+        (Platform::Windows, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
-        (_, Arch::X86_64) => panic!(
+        (Platform::MacOS, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
+        (Platform::Windows, Arch::X86_64) => unreachable!("handled above"),
     };
-    // Harness strings are written in macOS assembly dialect; transform for Linux if needed
-    let harness = target().transform_assembly(harness);
+    // Harness strings use the shared backend dialect; rewrite target syscalls before insertion.
+    let harness = target.transform_assembly(harness);
     let replacement = format!("{harness}\n{needle}");
     let patched = asm.replacen(needle, &replacement, 1);
     assert_ne!(patched, asm, "failed to inject main exit harness");
     patched
+}
+
+/// Inserts a fixture harness before the final Windows runtime-exit call while restoring
+/// the already-staged SysV exit-code register that arbitrary harness calls may clobber.
+fn inject_windows_main_exit_harness(asm: &str, harness: &str) -> String {
+    const WINDOWS_MAIN_EXIT_HOOK: &str = "    call __rt_sys_exit";
+
+    let hook = asm
+        .rfind(WINDOWS_MAIN_EXIT_HOOK)
+        .expect("failed to locate Windows main exit hook");
+    let harness = harness.trim_end_matches('\n');
+    format!(
+        "{}{}\n    mov rdi, rbx\n{}",
+        &asm[..hook],
+        harness,
+        &asm[hook..]
+    )
 }
 
 // Compiles a PHP source snippet and runs it with an injected harness, expecting a failure.
@@ -505,4 +546,49 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 
     let _ = fs::remove_dir_all(&dir);
     elephc_out
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit tests for target-specific codegen fixture assembly transformations.
+    //!
+    //! Called from:
+    //! - `cargo test --test codegen_tests` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Windows harness insertion must target the normal terminal exit rather
+    //!   than an earlier explicit PHP `exit()` call.
+
+    use super::*;
+
+    /// Verifies Windows harness injection selects the final runtime exit hook and restores
+    /// the preserved process exit code after arbitrary fixture calls.
+    #[test]
+    fn inject_main_exit_harness_uses_final_windows_exit_hook() {
+        let target = Target {
+            platform: Platform::Windows,
+            arch: Arch::X86_64,
+        };
+        let asm = concat!(
+            "__elephc_main:\n",
+            "    call __rt_sys_exit\n",
+            "    mov rdi, rbx\n",
+            "    call __rt_sys_exit\n",
+        );
+
+        let patched = inject_main_exit_harness_for_target(target, asm, "    call __rt_heap_check");
+
+        assert_eq!(
+            patched,
+            concat!(
+                "__elephc_main:\n",
+                "    call __rt_sys_exit\n",
+                "    mov rdi, rbx\n",
+                "    call __rt_heap_check\n",
+                "    mov rdi, rbx\n",
+                "    call __rt_sys_exit\n",
+            )
+        );
+    }
 }

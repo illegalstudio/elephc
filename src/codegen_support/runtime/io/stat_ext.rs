@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 use crate::codegen_support::abi;
 
 /// Emits the `__rt_filesize`, `__rt_filemtime` runtime helper assembly for stat ext.
@@ -263,12 +263,15 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
 /// buffer in C ABI space rather than relying on a fixed syscall buffer layout.
 fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     let frame_size = 144usize;
-    let mode_off = 24usize;
+    // The Windows `stat`/`lstat` C-symbol shims write the portable runtime
+    // layout, unlike glibc's x86_64 layout used by the native Linux path.
+    let windows_layout = emitter.platform == Platform::Windows;
+    let mode_off = if windows_layout { emitter.platform.stat_mode_offset() } else { 24usize };
     let atime_off = 72usize;
     let ctime_off = 104usize;
     let ino_off = 8usize;
-    let uid_off = 28usize;
-    let gid_off = 32usize;
+    let uid_off = if windows_layout { emitter.platform.stat_uid_offset() } else { 28usize };
+    let gid_off = if windows_layout { emitter.platform.stat_gid_offset() } else { 32usize };
 
     // Reusable prologue/epilogue helpers for the libc-stat-based scalar getters.
     let stat_call = |emitter: &mut Emitter| {
@@ -420,20 +423,52 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -- is_executable --
+    // Windows has no Unix exec bit. php-src asks GetBinaryTypeW and therefore
+    // rejects scripts and files that merely carry an executable-looking suffix.
+    // The Linux x86_64 path remains the libc access(X_OK) implementation.
     emitter.blank();
     emitter.comment("--- runtime: is_executable ---");
     emitter.label_global("__rt_is_executable");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("call __rt_cstr");                                      // null-terminate the path
-    emitter.instruction("mov rdi, rax");                                        // first libc access() argument
-    emitter.instruction("mov rsi, 1");                                          // X_OK = 1 (execute permission check)
-    emitter.instruction("call access");                                         // libc access(path, X_OK)
-    emitter.instruction("cmp eax, 0");                                          // did libc access() return success as a C int?
-    emitter.instruction("sete al");                                             // boolean byte
-    emitter.instruction("movzx rax, al");                                       // widen to canonical integer result
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return predicate
+    if emitter.platform == Platform::Windows {
+        emitter.instruction("push rbp");                                        // preserve caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base
+        emitter.instruction("sub rsp, 48");                                     // native shadow space plus result and owned-path locals
+        emitter.instruction("call __rt_cstr");                                  // materialize a NUL-terminated UTF-8 path
+        emitter.instruction("mov rdi, rax");                                    // pass the C path to strict UTF conversion
+        emitter.instruction("call __rt_win_utf8_to_utf16");                     // allocate a Unicode path for GetBinaryTypeW
+        emitter.instruction("test rax, rax");                                   // conversion succeeded?
+        emitter.instruction("jz __rt_is_executable_no");                        // invalid UTF-8 is not executable
+        emitter.instruction("mov QWORD PTR [rsp + 40], rax");                   // retain the owned wide path across the native call
+        emitter.instruction("mov rcx, rax");                                    // lpApplicationName = wide path
+        emitter.instruction("lea rdx, [rsp + 32]");                             // lpBinaryType = DWORD result storage
+        emitter.instruction("call GetBinaryTypeW");                             // recognize an actual Windows binary image
+        emitter.instruction("mov DWORD PTR [rsp + 36], eax");                   // preserve BOOL across path cleanup
+        emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                   // reload the owned wide path
+        emitter.instruction("call __rt_heap_free");                             // release the conversion
+        emitter.instruction("cmp DWORD PTR [rsp + 36], 0");                     // did Windows recognize a binary?
+        emitter.instruction("setne al");                                        // canonical boolean byte
+        emitter.instruction("movzx eax, al");                                   // widen to the runtime boolean representation
+        emitter.instruction("add rsp, 48");                                     // release native-call locals
+        emitter.instruction("pop rbp");                                         // restore caller frame pointer
+        emitter.instruction("ret");                                             // return predicate
+        emitter.label("__rt_is_executable_no");
+        emitter.instruction("xor eax, eax");                                    // conversion failure is not executable
+        emitter.instruction("add rsp, 48");                                     // release native-call locals
+        emitter.instruction("pop rbp");                                         // restore caller frame pointer
+        emitter.instruction("ret");                                             // return false
+    } else {
+        emitter.instruction("push rbp");                                        // preserve caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base
+        emitter.instruction("call __rt_cstr");                                  // null-terminate the path
+        emitter.instruction("mov rdi, rax");                                    // first libc access() argument
+        emitter.instruction("mov rsi, 1");                                      // X_OK = 1 (execute permission check)
+        emitter.instruction("call access");                                     // libc access(path, X_OK)
+        emitter.instruction("cmp eax, 0");                                      // did libc access() return success as a C int?
+        emitter.instruction("sete al");                                         // boolean byte
+        emitter.instruction("movzx rax, al");                                   // widen to canonical integer result
+        emitter.instruction("pop rbp");                                         // restore caller frame pointer
+        emitter.instruction("ret");                                             // return predicate
+    }
 
     // -- is_link --
     emitter.blank();

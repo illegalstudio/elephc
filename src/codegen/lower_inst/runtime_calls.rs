@@ -65,6 +65,8 @@ fn unary_string_symbol(runtime: UnaryStringRuntime) -> &'static str {
         UnaryStringRuntime::Base64Decode => "__rt_base64_decode",
         UnaryStringRuntime::Base64Encode => "__rt_base64_encode",
         UnaryStringRuntime::BinToHex => "__rt_bin2hex",
+        UnaryStringRuntime::EscapeShellArg => "__rt_escapeshellarg",
+        UnaryStringRuntime::EscapeShellCmd => "__rt_escapeshellcmd",
         UnaryStringRuntime::HexToBin => "__rt_hex2bin",
         UnaryStringRuntime::HtmlEntityDecode => "__rt_html_entity_decode",
         UnaryStringRuntime::NlToBr => "__rt_nl2br",

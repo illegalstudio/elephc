@@ -1,5 +1,5 @@
 //! Purpose:
-//! Owns session file I/O for `--web` mode: flock'd read/write/destroy/abort,
+//! Owns session file I/O for `--web` mode: locked read/write/destroy/abort,
 //! the `session_reset`/`lazy_write` snapshot and mtime-touch primitives, a
 //! filesystem existence check for `session.use_strict_mode`, and mtime-based
 //! garbage collection of `sess_<id>` files under the configured save path.
@@ -12,16 +12,18 @@
 //!
 //! Key details:
 //! - One process per prefork worker, single-threaded, so the held-fd state
-//!   (`state::SESSION_FD`) is race-free across a request's read → write/destroy/
-//!   abort/touch sequence.
+//!   (`SESSION_FILE`, exposed to sibling state as the `SESSION_FD` sentinel) is
+//!   race-free across a request's read → write/destroy/abort/touch sequence.
 //! - Save paths follow php-src's `[depth;[mode;]]path` grammar; every operation
 //!   shares the same ID-derived path calculation and no-follow/owner checks.
 //! - BUG-3: `write` now writes in place on the held fd/inode as its *primary*
-//!   path (`ftruncate`+`pwrite`+`fsync`), since the `flock` is held on that
-//!   inode — a temp+rename would swap in a new inode the lock no longer
-//!   covers, breaking concurrent-writer serialization. Temp+rename remains the
-//!   fallback for the no-fd-held branch (e.g. `session_regenerate_id`'s fresh
-//!   id, which has no concurrent reader to serialize against).
+//!   path (truncate+seek+write+sync), since the advisory lock is held on that
+//!   file — a temp+rename would swap in a new file the lock no longer covers,
+//!   breaking concurrent-writer serialization. Temp+rename remains the
+//!   fallback for the no-file-held branch (e.g. `session_regenerate_id`'s
+//!   fresh id, which has no concurrent reader to serialize against).
+//! - Unix uses `flock`; Windows uses an exclusive whole-file `LockFileEx`
+//!   range and retains the `File` so a pointer-sized HANDLE is never truncated.
 //! - §2.5 `touch` (lazy_write) MUST release the held lock exactly like
 //!   `write` does — leaving it held would self-deadlock the next `read`
 //!   (BUG-1's mechanism).
@@ -35,24 +37,37 @@ use super::state::{
     RET_STRING, SESSION_FD, SESSION_ID, SESSION_SNAPSHOT,
 };
 use std::ffi::c_char;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, File, FileTimes, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::os::unix::io::{AsRawFd, IntoRawFd};
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 
 /// Result of the most recent binary-safe files-handler read operation.
 static mut LAST_READ_OK: i64 = 1;
 
-/// Releases the held session-file lock (`flock(LOCK_UN)`) and closes the file
-/// descriptor. No-op when no fd is held. Single-threaded per worker.
+/// Session file kept open and exclusively locked between read and completion.
+///
+/// `SESSION_FD` remains the small cross-module held/not-held sentinel, while
+/// this owner retains the actual Rust file so Windows HANDLE values are never
+/// truncated into an `i32`.
+static mut SESSION_FILE: Option<File> = None;
+
+/// Releases and closes the held session file. No-op when none is held.
+/// Single-threaded per worker.
 pub(super) unsafe fn release_lock() {
-    let fd = *core::ptr::addr_of!(SESSION_FD);
-    if fd >= 0 {
-        libc::flock(fd, libc::LOCK_UN);
-        libc::close(fd);
-        core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), -1);
+    let file = core::ptr::replace(core::ptr::addr_of_mut!(SESSION_FILE), None);
+    if let Some(file) = file {
+        unlock_file(&file);
+        drop(file);
     }
+    core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), -1);
 }
 
 /// Builds the full path for a session file: `<save_path>/sess_<id>`.
@@ -127,27 +142,45 @@ pub(super) fn open_session_file(
     path: &std::path::Path,
     mode: u32,
 ) -> std::io::Result<std::fs::File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
+    #[cfg(windows)]
+    let _ = mode;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    options
         .mode(mode)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    let uid = unsafe { libc::getuid() };
-    let euid = unsafe { libc::geteuid() };
-    if uid != 0 && metadata.uid() != 0 && metadata.uid() != uid && metadata.uid() != euid {
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(windows)]
+    options.custom_flags(
+        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+    );
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        let metadata = file.metadata()?;
+        let uid = unsafe { libc::getuid() };
+        let euid = unsafe { libc::geteuid() };
+        if uid != 0 && metadata.uid() != 0 && metadata.uid() != uid && metadata.uid() != euid {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "session file is owned by another user",
+            ));
+        }
+    }
+    #[cfg(windows)]
+    if file.metadata()?.file_type().is_symlink() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "session file is owned by another user",
+            "session file is a reparse-point symbolic link",
         ));
     }
     Ok(file)
 }
 
 /// Acquires an exclusive advisory lock, retrying when interrupted by a signal.
-pub(super) fn lock_exclusive(fd: i32) -> bool {
+#[cfg(unix)]
+pub(super) fn lock_exclusive(file: &File) -> bool {
+    let fd = file.as_raw_fd();
     loop {
         let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
         if result == 0 {
@@ -159,9 +192,82 @@ pub(super) fn lock_exclusive(fd: i32) -> bool {
     }
 }
 
-/// Reads the session file for `id` under `save_path`. Opens with
-/// `O_RDWR | O_CREAT`, acquires `flock(LOCK_EX)`, reads the content, and stores
-/// the fd (held for later `session_write`/`session_destroy`/`session_abort`).
+/// Acquires an exclusive Windows byte-range lock covering the entire file.
+#[cfg(windows)]
+pub(super) fn lock_exclusive(file: &File) -> bool {
+    let mut overlapped = windows_sys::Win32::System::IO::OVERLAPPED::default();
+    unsafe {
+        windows_sys::Win32::Storage::FileSystem::LockFileEx(
+            file.as_raw_handle(),
+            windows_sys::Win32::Storage::FileSystem::LOCKFILE_EXCLUSIVE_LOCK,
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut overlapped,
+        ) != 0
+    }
+}
+
+/// Releases a Unix advisory lock held by `file`.
+#[cfg(unix)]
+fn unlock_file(file: &File) {
+    unsafe {
+        libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+    }
+}
+
+/// Releases the Windows byte-range lock held by `file`.
+#[cfg(windows)]
+fn unlock_file(file: &File) {
+    let mut overlapped = windows_sys::Win32::System::IO::OVERLAPPED::default();
+    unsafe {
+        windows_sys::Win32::Storage::FileSystem::UnlockFileEx(
+            file.as_raw_handle(),
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut overlapped,
+        );
+    }
+}
+
+/// Replaces a locked session file's contents in place and flushes them.
+pub(super) fn write_file_in_place(file: &mut File, data: &[u8]) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(data)?;
+    file.sync_all()
+}
+
+/// Opens a no-follow temporary session file for the atomic replacement path.
+fn open_temporary_session_file(path: &std::path::Path, mode: u32) -> std::io::Result<File> {
+    #[cfg(windows)]
+    let _ = mode;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options
+        .mode(mode)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(windows)]
+    options.custom_flags(
+        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+    );
+    options.open(path)
+}
+
+/// Updates a session file's access and modification timestamps to now.
+fn touch_session_file(path: &std::path::Path) -> std::io::Result<()> {
+    let now = std::time::SystemTime::now();
+    OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_times(FileTimes::new().set_accessed(now).set_modified(now))
+}
+
+/// Reads the session file for `id` under `save_path`. Opens read/write with
+/// creation, acquires the platform lock, reads the content, and retains the
+/// file for later `session_write`/`session_destroy`/`session_abort`.
 /// When `read_and_close=1`, releases the lock and closes the fd immediately
 /// after reading (no write will happen at handler end). Publishes the exact file
 /// bytes in the shared pointer/length transfer buffer and returns its pointer.
@@ -189,20 +295,20 @@ pub unsafe extern "C" fn elephc_web_session_read_bytes(
     };
 
     // Open with O_RDWR | O_CREAT, mode 0600.
-    let file = match open_session_file(&path, config.mode) {
+    let mut file = match open_session_file(&path, config.mode) {
         Ok(f) => f,
         Err(_) => return publish_bytes(&[]),
     };
 
-    let fd = file.as_raw_fd();
     // Acquire exclusive lock (blocks until the lock is available).
-    if !lock_exclusive(fd) {
+    if !lock_exclusive(&file) {
         return publish_bytes(&[]);
     }
 
     // Read the full content.
     let mut data = Vec::new();
-    if (&file).read_to_end(&mut data).is_err() {
+    if file.read_to_end(&mut data).is_err() {
+        unlock_file(&file);
         return publish_bytes(&[]);
     }
 
@@ -211,10 +317,10 @@ pub unsafe extern "C" fn elephc_web_session_read_bytes(
         drop(file);
         // fd is closed by drop; flock is released on close.
     } else {
-        // Hold the fd open with the lock for later write/destroy/abort.
-        // Convert the File into a raw fd we own (leak the File wrapper).
-        let raw_fd = file.into_raw_fd();
-        core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), raw_fd);
+        // Retain the Rust file and lock for later write/destroy/abort. The
+        // numeric state is only a held/not-held sentinel on Windows.
+        core::ptr::write(core::ptr::addr_of_mut!(SESSION_FILE), Some(file));
+        core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), 0);
     }
 
     // Store the snapshot for session_reset/session_abort.
@@ -285,29 +391,12 @@ pub unsafe extern "C" fn elephc_web_session_write_bytes(
     };
     let data = input_bytes(data_ptr, data_len);
 
-    let fd = *core::ptr::addr_of!(SESSION_FD);
-    if fd >= 0 {
+    if *core::ptr::addr_of!(SESSION_FD) >= 0 {
         // Primary path (BUG-3): in-place write on the held fd/inode.
-        let mut offset = 0usize;
-        let mut ok = libc::ftruncate(fd, 0) == 0;
-        while ok && offset < data.len() {
-            let wrote = libc::pwrite(
-                fd,
-                data[offset..].as_ptr() as *const _,
-                data.len() - offset,
-                offset as libc::off_t,
-            );
-            if wrote > 0 {
-                offset += wrote as usize;
-            } else if wrote < 0
-                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-            {
-                continue;
-            } else {
-                ok = false;
-            }
-        }
-        ok = ok && libc::fsync(fd) == 0;
+        let file = &mut *core::ptr::addr_of_mut!(SESSION_FILE);
+        let ok = file
+            .as_mut()
+            .is_some_and(|held| write_file_in_place(held, data).is_ok());
         release_lock();
         return i64::from(ok);
     }
@@ -320,17 +409,10 @@ pub unsafe extern "C" fn elephc_web_session_write_bytes(
 
     let result = (|| -> std::io::Result<()> {
         {
-            let mut tmp = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(config.mode)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open(&tmp_path)?;
+            let mut tmp = open_temporary_session_file(&tmp_path, config.mode)?;
             tmp.write_all(data)?;
             // Ensure the data hits disk before the rename.
-            let tmp_fd = tmp.as_raw_fd();
-            let _ = libc::fsync(tmp_fd);
+            tmp.sync_all()?;
         }
         fs::rename(&tmp_path, &path)?;
         Ok(())
@@ -481,11 +563,8 @@ pub unsafe extern "C" fn elephc_web_session_touch(
             release_lock();
             return 0;
         };
-        if let Ok(path_cstr) = std::ffi::CString::new(path.to_string_lossy().into_owned()) {
-            // A null `times` pointer sets both atime and mtime to "now".
-            if libc::utimes(path_cstr.as_ptr(), std::ptr::null()) == 0 {
-                ok = 1;
-            }
+        if touch_session_file(&path).is_ok() {
+            ok = 1;
         }
     }
     release_lock();
@@ -662,7 +741,10 @@ mod tests {
                 payload
             );
             let metadata = fs::metadata(dir.join("b/i/sess_binaryid")).unwrap();
+            #[cfg(unix)]
             assert_eq!(metadata.mode() & 0o7777, 0o640);
+            #[cfg(windows)]
+            assert!(metadata.is_file());
             let _ = fs::remove_dir_all(dir);
         }
     }
@@ -672,6 +754,22 @@ mod tests {
         let mut bytes = [0u8; 8];
         read_random(&mut bytes);
         u64::from_le_bytes(bytes)
+    }
+
+    /// Sets a fixture file's access and modification times to a Unix timestamp.
+    fn set_file_timestamp(path: &std::path::Path, seconds: i64) {
+        let timestamp = std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(u64::try_from(seconds).unwrap_or(0));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(timestamp)
+                    .set_modified(timestamp),
+            )
+            .unwrap();
     }
 
     /// Verifies session read/write/destroy round-trip with file locking.
@@ -807,25 +905,13 @@ mod tests {
             let old_data = std::ffi::CString::new(b"x|i:2;".to_vec()).unwrap();
             elephc_web_session_write(old_ptr, sp_ptr, old_data.as_ptr());
             let old_path = session_file_path(&tmp, &old_id);
-            // Set mtime to 2 hours ago via libc::utimes (needs NUL-terminated path).
+            // Backdate the fixture through Rust's portable file-time API.
             let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
             let secs = two_hours_ago
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let times = [
-                libc::timeval {
-                    tv_sec: secs,
-                    tv_usec: 0,
-                },
-                libc::timeval {
-                    tv_sec: secs,
-                    tv_usec: 0,
-                },
-            ];
-            let path_cstr =
-                std::ffi::CString::new(old_path.to_string_lossy().into_owned()).unwrap_or_default();
-            let _ = libc::utimes(path_cstr.as_ptr(), times.as_ptr());
+            set_file_timestamp(&old_path, secs);
 
             // GC with maxlifetime=3600 (1 hour) should delete the old file only.
             let deleted = elephc_web_session_gc(sp_ptr, 3600);
@@ -861,12 +947,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            let times = [
-                libc::timeval { tv_sec: seconds, tv_usec: 0 },
-                libc::timeval { tv_sec: seconds, tv_usec: 0 },
-            ];
-            let path_c = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
-            libc::utimes(path_c.as_ptr(), times.as_ptr());
+            set_file_timestamp(&path, seconds);
             assert_eq!(elephc_web_session_gc(configured.as_ptr(), 3600), 1);
             assert!(!path.exists());
             let _ = fs::remove_dir_all(base);
@@ -998,19 +1079,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let times = [
-                libc::timeval {
-                    tv_sec: old_secs,
-                    tv_usec: 0,
-                },
-                libc::timeval {
-                    tv_sec: old_secs,
-                    tv_usec: 0,
-                },
-            ];
-            let path_cstr =
-                std::ffi::CString::new(path.to_string_lossy().into_owned()).unwrap_or_default();
-            let _ = libc::utimes(path_cstr.as_ptr(), times.as_ptr());
+            set_file_timestamp(&path, old_secs);
 
             // Hold the lock via read, then touch instead of write.
             elephc_web_session_read(id_ptr, sp_ptr, 0);
@@ -1102,19 +1171,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let times = [
-                libc::timeval {
-                    tv_sec: old_secs,
-                    tv_usec: 0,
-                },
-                libc::timeval {
-                    tv_sec: old_secs,
-                    tv_usec: 0,
-                },
-            ];
-            let path_cstr = std::ffi::CString::new(active_path.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let _ = libc::utimes(path_cstr.as_ptr(), times.as_ptr());
+            set_file_timestamp(&active_path, old_secs);
 
             // Mark this ID as the active session (mirrors what session_start
             // does via elephc_web_session_set_id).

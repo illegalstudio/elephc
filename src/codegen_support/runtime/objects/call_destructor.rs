@@ -96,6 +96,9 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: call_object_destructor ---");
     emitter.label_global("__rt_call_object_destructor");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer for both callback paths
+    emitter.instruction("mov rbp, rsp");                                        // establish one unwindable frame for the whole helper
+    emitter.instruction("sub rsp, 16");                                         // reserve the eval callback object spill slot
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
@@ -108,14 +111,9 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_call_object_destructor_static_x86");           // no eval callback installed → use static class table
     emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress before boxing borrowed $this
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
-    emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the eval callback frame
-    emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer across the callback
-    emitter.instruction("call r10");                                            // ask eval whether it owns and destructed this object
+    emitter.emit_native_bridge_call("r10", 1);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the object pointer after the callback
-    emitter.instruction("add rsp, 16");                                         // release the eval callback spill slot
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("test rax, rax");                                       // did eval handle this dynamic object?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // eval handled the dynamic object → skip static lookup
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // reload the refcount after an eval miss
@@ -132,11 +130,53 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
     emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress so a balanced self-ref cannot re-enter the free path
     emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
-    emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("call r10");                                            // invoke <class>::__destruct with rdi = $this (borrowed)
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.emit_platform_callback_call("r10", 1);
 
     emitter.label("__rt_call_object_destructor_ret");
+    emitter.instruction("leave");                                               // release the shared callback frame and restore rbp
     emitter.instruction("ret");                                                 // return to __rt_object_free_deep to release the storage
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_call_object_destructor` call site emits
+    /// the reverse-ABI SysV->MSx64 remap immediately before the indirect
+    /// `call r10` into the generated `__destruct` method (finding F1,
+    /// reverse-ABI): without it, the generated destructor would read `$this`
+    /// from the wrong register on windows-x86_64.
+    #[test]
+    fn test_windows_x86_64_call_object_destructor_remaps_before_indirect_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+
+        let remap_idx = asm.find("mov rcx, rdi").expect("expected SysV->MSx64 remap");
+        let shadow_idx = asm
+            .find("sub rsp, 32")
+            .expect("expected MSx64 shadow space before the destructor call");
+        let call_idx = asm.find("call r11").expect("expected relocated indirect call r11");
+        assert!(
+            shadow_idx < remap_idx && remap_idx < call_idx,
+            "shadow reservation and remap must precede the indirect __destruct call"
+        );
+        assert!(asm[call_idx..].contains("add rsp, 32"));
+    }
+
+    /// Verifies linux-x86_64 emission stays byte-identical to before the
+    /// reverse-ABI remap was introduced: the remap is windows-x86_64-only, so a
+    /// linux-x86_64 build must never see a `mov rcx, rdi` instruction.
+    #[test]
+    fn test_linux_x86_64_call_object_destructor_has_no_reverse_abi_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_call_object_destructor(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(!asm.contains("mov rcx, rdi"));
+        assert!(!asm.contains("sub rsp, 32"));
+    }
 }

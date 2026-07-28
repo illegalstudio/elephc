@@ -216,7 +216,7 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the converted array pointer
 
-    emitter.label("__rt_array_to_mixed_x86_box_owned");
+    emitter.label_global("__rt_array_to_mixed_x86_box_owned");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("jl __rt_array_to_mixed_x86_box_owned_frame");          // preserve scalar payloads verbatim
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6

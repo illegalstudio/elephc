@@ -2440,3 +2440,26 @@ echo ($a <=> $b);
     );
     assert_eq!(out, "101-1");
 }
+
+/// Verifies that a program using ONLY the OOP datetime surface — with no procedural
+/// `date()`/`mktime()`/`strtotime()` call anywhere — still resolves IANA zone offsets.
+///
+/// This is the regression guard for the windows elephc-tz bridge requirement: the
+/// synthetic OOP method bodies never flow through the builtin `check` hooks, so without
+/// the call-site gate in `require_datetime_tz_bridge_if_needed` such a program links
+/// without `-lelephc_tz` and fails at link time on `elephc_tz_offset`.
+#[test]
+fn test_oop_only_datetime_resolves_tz_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+$tz = new DateTimeZone("UTC");
+$d = new DateTime("2024-01-15 12:00:00", $tz);
+echo $tz->getOffset($d), "\n";
+
+$tzParis = new DateTimeZone("Europe/Paris");
+$dParis = new DateTime("2024-01-15 12:00:00", $tzParis);
+echo $tzParis->getOffset($dParis), "\n";
+"#,
+    );
+    assert_eq!(out, "0\n3600\n");
+}

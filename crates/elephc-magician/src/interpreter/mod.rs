@@ -80,6 +80,7 @@ use throwables::*;
 use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};

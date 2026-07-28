@@ -20,6 +20,8 @@ pub enum BuiltinRequirement {
     SystemLibrary(&'static str),
     /// Link a macOS-only system library while Linux resolves the API from libc.
     MacOsLibrary(&'static str),
+    /// Link a Windows-only system library while Unix targets resolve the API elsewhere.
+    WindowsLibrary(&'static str),
     /// Enable a named runtime feature collected from the final EIR module.
     RuntimeFeature(&'static str),
 }
@@ -60,6 +62,48 @@ pub fn file_get_contents_requirements(
             BuiltinRequirement::SystemLibrary("bz2"),
         ],
     }
+}
+
+/// Resolves the TLS bridge needed by `stream_socket_client()` from its address.
+///
+/// Resolves the TLS bridge needed by `stream_socket_client()` and `fsockopen()`.
+///
+/// php-src registers `ssl`, `sslv3`, `tls` and `tlsv1.0`..`tlsv1.3` as crypto
+/// transports whose factory handshakes inside the connect
+/// (`php_openssl_ssl_socket_factory`, ext/openssl/xp_ssl.c), so those addresses
+/// need the bridge. A literal address settles it at compile time; a runtime string
+/// could still carry a crypto scheme, so the bridge is linked conservatively --
+/// the same trade `file_get_contents_requirements` makes.
+///
+/// The lowering skips the handshake path on exactly the same condition, reading
+/// the literal back out of the `ConstStr` that defines the operand. The two must
+/// stay in step: if this said "no bridge" while the lowering still emitted the
+/// crypto path, the bridge exports would be undefined at link time. That failure
+/// is loud and caught by CI, never a silent plaintext connection.
+pub fn stream_socket_client_requirements(
+    input: &BuiltinRequirementInput<'_>,
+) -> Vec<BuiltinRequirement> {
+    match input.args.first().map(|arg| &arg.kind) {
+        Some(ExprKind::StringLiteral(address)) if !address_selects_tls_transport(address) => {
+            Vec::new()
+        }
+        _ => vec![BuiltinRequirement::Bridge("elephc_tls")],
+    }
+}
+
+/// Reports whether a stream address names one of PHP's crypto transports.
+///
+/// `sslv2` is deliberately excluded because php rejects it rather than
+/// negotiating. Scheme names are case-insensitive. An address with no `://` is a
+/// bare host, which `fsockopen()` accepts and which never selects a transport.
+pub fn address_selects_tls_transport(address: &str) -> bool {
+    let Some((scheme, _)) = address.split_once("://") else {
+        return false;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "ssl" | "sslv3" | "tls" | "tlsv1.0" | "tlsv1.1" | "tlsv1.2" | "tlsv1.3"
+    )
 }
 
 /// Resolves PHAR libraries needed by `file_put_contents()` from its filename expression.
@@ -128,12 +172,22 @@ pub fn stream_filter_requirements(
     if matches!(filter.as_str(), "zlib.deflate" | "zlib.inflate") {
         vec![BuiltinRequirement::SystemLibrary("z")]
     } else if filter.starts_with("convert.iconv.") {
-        vec![BuiltinRequirement::MacOsLibrary("iconv")]
+        vec![
+            BuiltinRequirement::MacOsLibrary("iconv"),
+            BuiltinRequirement::WindowsLibrary("iconv"),
+        ]
     } else if matches!(filter.as_str(), "bzip2.compress" | "bzip2.decompress") {
         vec![BuiltinRequirement::SystemLibrary("bz2")]
     } else {
         Vec::new()
     }
+}
+
+/// Requires the timezone bridge only on Windows, where the CRT lacks IANA zone data.
+pub fn windows_timezone_requirements(
+    _input: &BuiltinRequirementInput<'_>,
+) -> Vec<BuiltinRequirement> {
+    vec![BuiltinRequirement::WindowsLibrary("elephc_tz")]
 }
 
 #[cfg(test)]

@@ -107,17 +107,17 @@ impl HashCtx {
     }
 
     /// Finalizes the context into its raw digest, consuming it.
-    fn finalize(self) -> Vec<u8> {
+    fn finalize(self) -> Option<Vec<u8>> {
         match self {
-            HashCtx::Plain(s) => s.finalize_box(),
+            HashCtx::Plain(s) => Some(s.finalize_box()),
             HashCtx::Hmac { algo, opad_material, inner } => {
                 let inner_digest = inner.finalize_box();
-                // constructively unreachable: make() is a static table and this algo was accepted
-                // just above; note a panic here would abort across the extern "C" boundary.
-                let mut outer = make(&algo).expect("hmac algo was validated at init");
+                // Keep the FFI boundary fallible even if the static algorithm table and
+                // HMAC block-size table accidentally drift out of sync in the future.
+                let mut outer = make(&algo)?;
                 outer.update(&opad_material);
                 outer.update(&inner_digest);
-                outer.finalize_box()
+                Some(outer.finalize_box())
             }
         }
     }
@@ -169,9 +169,11 @@ pub unsafe extern "C" fn elephc_crypto_init_hmac(
     };
     let ipad: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
     let opad_material: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
-    // constructively unreachable: make() is a static table and this algo was accepted
-    // just above; note a panic here would abort across the extern "C" boundary.
-    let mut inner = make(&name).expect("algo validated by block_key");
+    // Treat registry drift as a normal bridge failure instead of panicking across C ABI.
+    let mut inner = match make(&name) {
+        Some(inner) => inner,
+        None => return std::ptr::null_mut(),
+    };
     inner.update(&ipad);
     Box::into_raw(Box::new(HashCtx::Hmac { algo: name, opad_material, inner })) as *mut c_void
 }
@@ -214,7 +216,10 @@ pub unsafe extern "C" fn elephc_crypto_final(ctx: *mut c_void, out_ptr: *mut u8)
         return -1;
     }
     let ctx = &*(ctx as *mut HashCtx);
-    let digest = ctx.clone_box().finalize();
+    let digest = match ctx.clone_box().finalize() {
+        Some(digest) => digest,
+        None => return -1,
+    };
     std::ptr::copy_nonoverlapping(digest.as_ptr(), out_ptr, digest.len());
     digest.len() as isize
 }

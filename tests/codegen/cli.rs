@@ -359,7 +359,10 @@ fn test_cli_timings_reports_assemble_and_link() {
     assert!(stderr.contains("assemble"), "missing assemble timing: {stderr}");
     assert!(stderr.contains("link"), "missing link timing: {stderr}");
     assert!(stderr.contains("total"), "missing total timing: {stderr}");
-    assert!(dir.join("main").exists(), "expected compiled binary to exist");
+    assert!(
+        target_binary_path(&dir.join("main")).exists(),
+        "expected compiled binary to exist"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

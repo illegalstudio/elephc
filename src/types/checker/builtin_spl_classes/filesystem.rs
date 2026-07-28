@@ -1592,16 +1592,31 @@ fn glob_iterator_construct_body() -> Vec<Stmt> {
 
 /// Builds RecursiveDirectoryIterator hasChildren().
 fn recursive_directory_has_children_body() -> Vec<Stmt> {
-    return_body(binary_expr(
+    let follows_symlinks = flag_enabled_expr(filesystem_flags_expr(), FS_FOLLOW_SYMLINKS);
+    let direct_directory = binary_expr(
+        function_call("is_dir", vec![file_path_arg_expr()]),
+        BinOp::And,
         binary_expr(
-            function_call("is_dir", vec![file_path_arg_expr()]),
-            BinOp::And,
-            binary_expr(
-                flag_enabled_expr(filesystem_flags_expr(), FS_FOLLOW_SYMLINKS),
-                BinOp::Or,
-                not_expr(function_call("is_link", vec![file_path_arg_expr()])),
-            ),
+            follows_symlinks.clone(),
+            BinOp::Or,
+            not_expr(function_call("is_link", vec![file_path_arg_expr()])),
         ),
+    );
+    let relative_link_target = path_join_expr(
+        function_call("dirname", vec![file_path_arg_expr()]),
+        function_call("readlink", vec![file_path_arg_expr()]),
+    );
+    let followed_relative_directory = binary_expr(
+        binary_expr(
+            follows_symlinks,
+            BinOp::And,
+            function_call("is_link", vec![file_path_arg_expr()]),
+        ),
+        BinOp::And,
+        function_call("is_dir", vec![relative_link_target]),
+    );
+    return_body(binary_expr(
+        binary_expr(direct_directory, BinOp::Or, followed_relative_directory),
         BinOp::And,
         not_expr(directory_is_dot_expr()),
     ))

@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - The x86_64 `opendir`/`readdir`/`closedir` call sites route through
+//!   `Emitter::emit_call_c`. On Windows, their shims enumerate with
+//!   `FindFirstFileExW`/`FindNextFileW` and release the search with `FindClose`;
+//!   other targets continue to use libc.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -112,14 +116,14 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the destination string array that will collect the directory entry names
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the destination string array pointer across the directory iteration loop
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the C directory path pointer before opening the directory stream
-    emitter.instruction("call opendir");                                        // open the directory stream through libc opendir()
+    emitter.emit_call_c("opendir");                                             // open the directory stream (Windows: FindFirstFileExW-backed shim)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the DIR* handle across the readdir() loop and the final closedir() call
     emitter.instruction("test rax, rax");                                       // detect opendir() failure before entering the directory iteration loop
     emitter.instruction("jz __rt_scandir_ret");                                 // return the empty result array when the directory stream cannot be opened
 
     emitter.label("__rt_scandir_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before asking libc for the next directory entry
-    emitter.instruction("call readdir");                                        // fetch the next directory entry through libc readdir()
+    emitter.emit_call_c("readdir");                                             // fetch the next entry (Windows: FindNextFileW-backed shim)
     emitter.instruction("test rax, rax");                                       // detect the end-of-directory marker before measuring a filename or appending it
     emitter.instruction("jz __rt_scandir_close");                               // stop iterating once libc readdir() reports that no more directory entries remain
     emitter.instruction(&format!("lea rsi, [rax + {}]", name_off));             // compute the pointer to dirent.d_name for the current Linux directory entry layout
@@ -139,7 +143,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_scandir_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
-    emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
+    emitter.emit_call_c("closedir");                                            // close the directory stream (Windows: FindClose-backed shim)
 
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register

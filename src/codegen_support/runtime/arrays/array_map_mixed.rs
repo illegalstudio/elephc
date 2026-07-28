@@ -142,7 +142,7 @@ fn emit_array_map_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass descriptor environment after the string pair
 
     emitter.label("__rt_array_map_mixed_call");
-    emitter.instruction("call r12");                                            // invoke descriptor callback and receive owned boxed Mixed in rax
+    emitter.emit_platform_callback_call("r12", 3);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload destination array pointer after callback clobbers caller-saved regs
     emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // transfer owned boxed Mixed pointer into destination slot
     emitter.instruction("add r13, 1");                                          // advance loop index after storing the mapped Mixed value

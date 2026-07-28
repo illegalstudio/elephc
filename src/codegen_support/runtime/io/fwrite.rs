@@ -13,7 +13,7 @@
 //! - A payload larger than the 64 KiB scratch is written unfiltered; v1 stream
 //!   filters target the common small-write case.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::{Arch, Platform}};
 
 const FILTER_BUF_SIZE: i64 = 65536;
 
@@ -146,15 +146,24 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
     // -- TLS dispatch: route through elephc_tls_write when fd has an
     //    attached session (Phase 11 B3). --
-    abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
-    emitter.instruction("cbz x14, __rt_fwrite_syscall");                        // no TLS attached → write syscall
-    emitter.instruction("mov x0, x14");                                         // handle as first arg
+    emitter.instruction("bl __rt_tls_session_get");                             // resolve the full-width descriptor through the bounded TLS map
+    emitter.instruction("cbz x0, __rt_fwrite_syscall");                         // no TLS attached → write syscall
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the payload pointer after the lookup helper
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the payload length after the lookup helper
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_write_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load runtime value
-    emitter.instruction("blr x9");                                              // x0 = bytes written or -1
+    emitter.emit_published_bridge_call("x9");                                  // x0 = bytes written or one documented TLS v2 sentinel
+    emitter.instruction("cmp x0, #-2");                                         // WouldBlock uses an internal retry sentinel, not PHP's write result
+    emitter.instruction("b.eq __rt_fwrite_tls_retry");                          // normalize a retryable TLS write to fwrite's existing -1 result
+    emitter.instruction("cmp x0, #-3");                                         // TimedOut is also a retryable TLS condition
+    emitter.instruction("b.ne __rt_fwrite_return");                             // completed writes, EOF-equivalent errors, and terminal errors keep their result
+    emitter.label("__rt_fwrite_tls_retry");
+    emitter.instruction("mov x0, #-1");                                         // preserve fwrite's historical PHP-visible error return
     emitter.instruction("b __rt_fwrite_return");                                // continue at target label
     emitter.label("__rt_fwrite_syscall");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the plain descriptor after the TLS lookup miss
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the plain-write payload pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the plain-write payload length
     emitter.syscall(4);
     emitter.label("__rt_fwrite_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -191,8 +200,19 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
 
     // -- look up the write filter for this descriptor --
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_win_stream_slot");                       // map opaque Windows descriptor to bounded filter-table slot
+        emitter.instruction("mov r10, rax");                                    // preserve compact slot for table lookup
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the real descriptor for later write/filter dispatch
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                   // restore the payload pointer clobbered by the slot lookup
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // restore the payload length clobbered by the slot lookup
+    }
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // write filter id for this descriptor
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("movzx ecx, BYTE PTR [r9 + r10]");                  // write filter id for compact stream slot
+    } else {
+        emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                  // write filter id for this descriptor
+    }
     emitter.instruction("test rcx, rcx");                                       // is a write filter attached?
     emitter.instruction("jz __rt_fwrite_direct_x86");                           // no filter: write the payload directly
     emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
@@ -270,22 +290,101 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fwrite_direct_x86");                          // fall through to the standard direct-write path
 
     emitter.label("__rt_fwrite_direct_x86");
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque descriptor before starting a new write operation
+        emitter.instruction("call __rt_win_stream_clear_timed_out");            // every write begins with timed_out=false, including TLS-dispatched writes
+    }
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // file descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer (original or filtered)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
     // -- TLS dispatch (Phase 11 B3) --
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle
-    emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
+    emitter.instruction("call __rt_tls_session_get");                           // resolve the full-width descriptor through the bounded TLS map
+    emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_fwrite_syscall_x86");                          // plain TCP → libc write
-    emitter.instruction("mov rdi, r11");                                        // handle as first arg
+    emitter.instruction("mov rdi, rax");                                        // handle as first arg
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the payload pointer after the lookup helper
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the payload length after the lookup helper
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_write_fn", 0);     // prepare SysV call argument
-    emitter.instruction("call r9");                                             // rax = bytes written or -1
-    emitter.instruction("jmp __rt_fwrite_return_x86");                          // continue at target label
+    emitter.emit_published_bridge_call("r9");                                  // rax = bytes written or one documented TLS v2 sentinel
+    emitter.instruction("cmp rax, -3");                                         // TLS v2 TimedOut requires PHP-visible Windows stream metadata
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("jne __rt_fwrite_tls_not_timed_out_x86");           // only TimedOut updates the stream timeout flag
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record TimedOut without any EOF mutation
+        emitter.instruction("mov rax, -1");                                     // preserve fwrite's historical PHP-visible error return
+        emitter.instruction("jmp __rt_fwrite_return_x86");                      // return the normalized error result
+        emitter.label("__rt_fwrite_tls_not_timed_out_x86");
+    } else {
+        emitter.instruction("je __rt_fwrite_tls_retry_x86");                    // normalize TimedOut to fwrite's established error result
+    }
+    emitter.instruction("cmp rax, -2");                                         // TLS v2 WouldBlock is internal to the bridge ABI
+    emitter.instruction("jne __rt_fwrite_return_x86");                          // completed writes and terminal errors keep their existing result
+    emitter.label("__rt_fwrite_tls_retry_x86");
+    emitter.instruction("mov rax, -1");                                         // preserve fwrite's historical PHP-visible error return
+    emitter.instruction("jmp __rt_fwrite_return_x86");                          // return the normalized retryable write failure
     emitter.label("__rt_fwrite_syscall_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the plain descriptor after the TLS lookup miss
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the plain-write payload pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the plain-write payload length
     emitter.instruction("call write");                                          // write the payload through libc write()
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("test rax, rax");                                   // only failed writes can carry ETIMEDOUT
+        emitter.instruction("jns __rt_fwrite_return_x86");                      // successful writes leave timed_out cleared
+        emitter.instruction("mov QWORD PTR [rbp - 32], rax");                   // preserve the write failure sentinel across errno lookup
+        emitter.instruction("call __errno_location");                           // inspect the POSIX-mapped Winsock error
+        emitter.instruction("cmp DWORD PTR [rax], 110");                        // ETIMEDOUT is observable but must not imply EOF
+        emitter.instruction("jne __rt_fwrite_restore_error_x86");               // unrelated write errors keep their existing return behavior
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // restore the opaque stream descriptor for timeout metadata
+        emitter.instruction("call __rt_win_stream_mark_timed_out");             // record timed_out without any EOF mutation
+        emitter.label("__rt_fwrite_restore_error_x86");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                   // restore the original write failure sentinel
+    }
     emitter.label("__rt_fwrite_return_x86");
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+
+    /// Verifies TLS v2 retry sentinels are normalized to fwrite's established
+    /// error result and that Windows records the TimedOut sentinel separately.
+    #[test]
+    fn tls_retry_sentinels_preserve_fwrite_result_and_windows_timeout_state() {
+        let mut linux = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_fwrite(&mut linux);
+        let linux_asm = linux.output();
+        assert!(linux_asm.contains("cmp rax, -3"));
+        assert!(linux_asm.contains("je __rt_fwrite_tls_retry_x86"));
+        assert!(linux_asm.contains("cmp rax, -2"));
+
+        let mut windows = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_fwrite(&mut windows);
+        let windows_asm = windows.output();
+        assert!(windows_asm.contains("call __rt_win_stream_mark_timed_out"));
+        assert!(windows_asm.contains("mov rax, -1"));
+
+        let mut arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_fwrite(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains("cmp x0, #-2"));
+        assert!(arm_asm.contains("cmp x0, #-3"));
+        assert!(arm_asm.contains("mov x0, #-1"));
+    }
+
+    /// Verifies Windows restores the payload arguments after resolving the
+    /// bounded stream slot so write filters see the caller's actual bytes.
+    #[test]
+    fn windows_filter_slot_lookup_preserves_fwrite_payload() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_fwrite(&mut emitter);
+        let asm = emitter.output();
+        let slot_call = asm.find("call __rt_win_stream_slot").expect("missing slot lookup");
+        let filtered_path = &asm[slot_call..];
+        assert!(filtered_path.contains("mov rsi, QWORD PTR [rbp - 16]"));
+        assert!(filtered_path.contains("mov rdx, QWORD PTR [rbp - 24]"));
+    }
 }

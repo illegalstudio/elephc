@@ -192,10 +192,14 @@ echo serialize(INF), "\n";
 echo serialize(-INF), "\n";
 echo serialize(NAN), "\n";
 var_dump(unserialize("d:INF;"));
+var_dump(unserialize("d:-INF;"));
 var_dump(is_nan(unserialize("d:NAN;")));
 "#,
     );
-    assert_eq!(out, "d:INF;\nd:-INF;\nd:NAN;\nfloat(INF)\nbool(true)\n");
+    assert_eq!(
+        out,
+        "d:INF;\nd:-INF;\nd:NAN;\nfloat(INF)\nfloat(-INF)\nbool(true)\n"
+    );
 }
 
 /// Regression: floats that serialize in exponential notation must use PHP's

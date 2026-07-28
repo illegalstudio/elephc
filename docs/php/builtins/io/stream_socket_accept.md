@@ -8,7 +8,7 @@ sidebar:
 ## stream_socket_accept()
 
 ```php
-function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): mixed
+function stream_socket_accept(resource $socket, float $timeout = null, string &$peer_name = null): mixed
 ```
 
 Accept a connection on a socket created by stream_socket_server().

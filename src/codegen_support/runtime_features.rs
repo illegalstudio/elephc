@@ -50,6 +50,28 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
+    /// True when the program links zlib (`-lz`). Gates the windows-x86_64
+    /// `__rt_sys_{compress2,deflate,inflate,…}` ABI shims so a program that
+    /// never compresses does not reference zlib symbols the base MinGW link
+    /// cannot resolve. No effect on non-Windows targets (shims are Windows-only).
+    pub zlib: bool,
+    /// True when the program links libbz2 (`-lbz2`). Gates the windows-x86_64
+    /// `__rt_sys_BZ2_*` ABI shims so a program that never uses bzip2 stream
+    /// filters does not reference libbz2 symbols the base MinGW link cannot
+    /// resolve. No effect on non-Windows targets (shims are Windows-only).
+    pub bzip2: bool,
+    /// True when the program links libiconv (`-liconv`). Gates the windows-x86_64
+    /// `__rt_sys_iconv_*` ABI shims so a program that never uses iconv stream
+    /// filters does not reference libiconv symbols the base MinGW link cannot
+    /// resolve. No effect on non-Windows targets (shims are Windows-only).
+    pub iconv: bool,
+    /// True when generated user assembly publishes or calls elephc-tls bridge exports.
+    /// Gates Windows SysV-to-MS x64 adapters so non-TLS binaries keep no bridge references.
+    pub tls: bool,
+    /// True when Windows date/time lowering publishes the elephc-tz offset export.
+    /// Set only for Windows EIR modules, so the target-neutral link-library
+    /// derivation can request the bridge without imposing it on Unix targets.
+    pub timezone_bridge: bool,
 }
 
 impl RuntimeFeatures {
@@ -63,6 +85,11 @@ impl RuntimeFeatures {
             eval_bridge: false,
             eval_scope: false,
             web: false,
+            zlib: false,
+            bzip2: false,
+            iconv: false,
+            tls: false,
+            timezone_bridge: false,
         }
     }
 
@@ -77,6 +104,11 @@ impl RuntimeFeatures {
             eval_bridge: true,
             eval_scope: true,
             web: true,
+            zlib: true,
+            bzip2: true,
+            iconv: true,
+            tls: true,
+            timezone_bridge: true,
         }
     }
 }
@@ -104,8 +136,9 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
     }
     if features.phar_archive {
         libs.push("elephc_phar".to_string());
-        libs.push("z".to_string());
-        libs.push("bz2".to_string());
+    }
+    if features.timezone_bridge {
+        libs.push("elephc_tz".to_string());
     }
     if features.descriptor_invoker {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
@@ -995,6 +1028,31 @@ mod tests {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
+    /// Verifies PHAR runtime support links only its self-contained Rust bridge.
+    #[test]
+    fn test_phar_runtime_features_require_only_elephc_phar() {
+        assert_eq!(
+            required_libraries_for_runtime_features(RuntimeFeatures {
+                phar_archive: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec!["elephc_phar".to_string()]
+        );
+    }
+
+    /// Verifies Windows date/time lowering can request the timezone bridge
+    /// through the target-neutral runtime-feature link derivation.
+    #[test]
+    fn test_timezone_runtime_feature_requires_elephc_tz() {
+        assert_eq!(
+            required_libraries_for_runtime_features(RuntimeFeatures {
+                timezone_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec!["elephc_tz".to_string()]
+        );
+    }
+
     /// Verifies eval runtime features request PCRE2 plus the magician bridge staticlib for final linking.
     #[test]
     fn test_eval_runtime_features_require_elephc_magician_library() {
@@ -1166,13 +1224,8 @@ mod tests {
     #[test]
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_library() {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures {
-            regex: false,
-            mb_strlen: false,
-            phar_archive: false,
             descriptor_invoker: true,
-            eval_bridge: false,
-            eval_scope: false,
-            web: false,
+            ..RuntimeFeatures::none()
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

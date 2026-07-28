@@ -11,13 +11,17 @@
 //! - Returns a null pointer when no entry matches; the builtin emitter boxes
 //!   that as PHP `false`.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// getprotobynumber: look up a protocol name by number.
 /// Input:  AArch64 x0 = protocol number
 ///         x86_64  rdi = protocol number
 /// Output: string pointer/length, or a null pointer when no entry matches
 pub fn emit_getprotobynumber(emitter: &mut Emitter) {
+    if emitter.platform == Platform::Windows {
+        emit_getprotobynumber_windows_x86_64(emitter);
+        return;
+    }
     if emitter.target.arch == Arch::X86_64 {
         emit_getprotobynumber_linux_x86_64(emitter);
         return;
@@ -155,6 +159,39 @@ pub fn emit_getprotobynumber(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // zero length for the not-found case
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return the not-found result
+}
+
+/// Emits the Windows x86_64 protocol-name lookup through Winsock.
+///
+/// `protoent.p_name` is a transient C string, so its byte span is measured and
+/// copied with `__rt_str_persist` before another Winsock lookup can overwrite it.
+fn emit_getprotobynumber_windows_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: getprotobynumber ---");
+    emitter.label_global("__rt_getprotobynumber");
+    emitter.instruction("sub rsp, 8");                                          // align nested SysV and MSx64-shim calls from the function-entry stack
+    emitter.instruction("call __rt_sys_getprotobynumber");                      // return a transient protoent pointer or null
+    emitter.instruction("test rax, rax");                                       // did Winsock find a protocol entry?
+    emitter.instruction("jz __rt_gpbnum_windows_missing");                      // return PHP false when no entry exists
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load protoent.p_name at the x64 structure head
+    emitter.instruction("test rax, rax");                                       // guard a malformed entry without a canonical name
+    emitter.instruction("jz __rt_gpbnum_windows_missing");                      // treat an absent canonical name as PHP false
+    emitter.instruction("xor edx, edx");                                        // initialize the C-string byte length accumulator
+    emitter.label("__rt_gpbnum_windows_strlen");
+    emitter.instruction("cmp BYTE PTR [rax + rdx], 0");                         // stop at the transient C-string terminator
+    emitter.instruction("je __rt_gpbnum_windows_persist");                      // persist once the complete byte span is known
+    emitter.instruction("inc rdx");                                             // count one canonical-name byte
+    emitter.instruction("jmp __rt_gpbnum_windows_strlen");                      // continue measuring the transient name
+    emitter.label("__rt_gpbnum_windows_persist");
+    emitter.instruction("call __rt_str_persist");                               // copy the result into owned storage before another lookup
+    emitter.instruction("add rsp, 8");                                          // release the alignment slot before returning the owned string
+    emitter.instruction("ret");                                                 // return the owned PHP string pair
+    emitter.label("__rt_gpbnum_windows_missing");
+    emitter.instruction("xor eax, eax");                                        // return a null string pointer for PHP false
+    emitter.instruction("xor edx, edx");                                        // return no string length on lookup failure
+    emitter.instruction("add rsp, 8");                                          // release the alignment slot before returning the missing result
+    emitter.instruction("ret");                                                 // return the missing-entry result pair
+    emitter.blank();
 }
 
 /// Emits the Linux x86_64 stream runtime helper for getprotobynumber.

@@ -14,6 +14,9 @@ impl EvalStreamResources {
 
     /// Opens a TCP listener resource for `stream_socket_server()`.
     pub(crate) fn open_tcp_listener(&mut self, address: &str) -> Option<i64> {
+        if eval_address_selects_tls(address) {
+            return None;
+        }
         let listener = TcpListener::bind(eval_tcp_address(address)).ok()?;
         let local = listener.local_addr().ok()?.to_string();
         let id = self.next_id;
@@ -36,6 +39,9 @@ impl EvalStreamResources {
 
     /// Opens a connected TCP stream resource and preserves the host I/O error on failure.
     pub(crate) fn open_tcp_stream_result(&mut self, address: &str) -> io::Result<i64> {
+        if eval_address_selects_tls(address) {
+            return Err(eval_tls_transport_unsupported());
+        }
         let stream = TcpStream::connect(eval_tcp_address(address))?;
         self.insert_tcp_stream(stream).ok_or_else(|| {
             io::Error::new(io::ErrorKind::Other, "failed to track eval TCP stream")
@@ -53,11 +59,10 @@ impl EvalStreamResources {
         host: &str,
         port: i64,
     ) -> io::Result<i64> {
-        let host = host
-            .strip_prefix("tcp://")
-            .or_else(|| host.strip_prefix("ssl://"))
-            .or_else(|| host.strip_prefix("tls://"))
-            .unwrap_or(host);
+        if eval_address_selects_tls(host) {
+            return Err(eval_tls_transport_unsupported());
+        }
+        let host = host.strip_prefix("tcp://").unwrap_or(host);
         self.open_tcp_stream_result(&format!("{host}:{port}"))
     }
 
@@ -107,9 +112,15 @@ impl EvalStreamResources {
             );
             Some((left_id, right_id))
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            None
+            let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+            let address = listener.local_addr().ok()?;
+            let left = TcpStream::connect(address).ok()?;
+            let (right, _) = listener.accept().ok()?;
+            let left_id = self.insert_tcp_stream(left)?;
+            let right_id = self.insert_tcp_stream(right)?;
+            Some((left_id, right_id))
         }
     }
 

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Target};
+use crate::codegen::platform::{Arch, Platform, Target};
 use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
@@ -161,6 +161,33 @@ fn try_handler_tokens(function: &Function) -> Vec<i64> {
 }
 
 /// Emits the process-entry prologue for the EIR main function.
+/// Emits `signal(SIGPIPE, SIG_IGN)` at program start on the POSIX targets.
+///
+/// PHP does the same (`php_ignore_sigpipe`, and the CLI SAPI sets the disposition
+/// before running any script), so writing to a socket or pipe whose peer has gone
+/// away makes `fwrite()` report failure instead of killing the process. Without
+/// it a compiled program dies from signal 13 with no output at all — the whole
+/// script is lost, not just the write. Windows has no SIGPIPE: a broken pipe there
+/// surfaces as an ordinary `WriteFile` error, which the shims already translate.
+fn emit_ignore_sigpipe(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.platform == Platform::Windows {
+        return;
+    }
+    ctx.emitter.comment("ignore SIGPIPE so a dead peer fails the write, not the process");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #13");                             // SIGPIPE
+            ctx.emitter.instruction("mov x1, #1");                              // SIG_IGN
+            ctx.emitter.bl_c("signal");                                         // install the ignore disposition
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 13");                             // SIGPIPE
+            ctx.emitter.instruction("mov esi, 1");                              // SIG_IGN
+            ctx.emitter.emit_call_c("signal");                                  // install the ignore disposition
+        }
+    }
+}
+
 pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
@@ -172,6 +199,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    emit_ignore_sigpipe(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -280,6 +308,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    emit_process_bootstrap_cleanup(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
@@ -292,6 +321,17 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Releases process-bootstrap storage that participates in runtime heap
+/// accounting before exit diagnostics inspect the allocator.
+fn emit_process_bootstrap_cleanup(ctx: &mut FunctionContext<'_>) {
+    if (ctx.emitter.platform, ctx.emitter.target.arch) != (Platform::Windows, Arch::X86_64) {
+        return;
+    }
+    ctx.emitter
+        .comment("release Windows UTF-8 argv bootstrap storage");
+    abi::emit_call_label(ctx.emitter, "__rt_sys_free_argv");
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -381,6 +421,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     }
     ctx.emitter.blank();
     ctx.emitter.label_global(WEB_HANDLER_SYMBOL);
+    emit_web_handler_abi_saves(ctx);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     // Reset all process-persistent state (function static locals, refcounted
     // static property values, and `_concat_off`) BEFORE this frame captures the
@@ -417,8 +458,87 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    emit_web_handler_abi_restores(ctx);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
+}
+
+/// Preserves the ABI callee-saved registers that elephc's internal convention treats as
+/// scratch, at the one place in a `--web` program that is a real ABI boundary.
+///
+/// `_elephc_web_handler` is an `extern "C" fn()` invoked directly by the bridge's Rust
+/// server loop, so it owes that caller the platform's callee-saved contract. The register
+/// allocator does not discharge it: `emit_callee_saved_saves` only spills
+/// `used_callee_saved()`, drawn from pools that deliberately exclude these registers --
+/// AArch64 allocates x21-x28, x86_64 allocates only rbx.
+///
+/// What the pools leave out is used anyway. `abi::nested_call_reg` hands out x19 and r12
+/// to preserve frame pointers across nested calls; the x86_64 pool's own comment records
+/// that r14/r15 are used as scratch by hand-written runtime routines "without
+/// ABI-compliant save/restore"; and `abi::float_spill_scratch_reg` stages float spills in
+/// xmm15. On Windows the asymmetry is wider still, because elephc's internal convention is
+/// SysV: rdi and rsi are argument scratch there and callee-saved under MSx64, and
+/// xmm6-xmm15 are callee-saved rather than the volatile range SysV makes them (helpers
+/// such as `__rt_php_round` write xmm6/xmm7 freely).
+///
+/// The saves precede `emit_frame_prologue` deliberately: AArch64 addresses locals relative
+/// to `sp`, so pushing after the frame is established would shift every local's offset.
+/// Each block is a multiple of 16 bytes, so stack alignment at entry is preserved.
+fn emit_web_handler_abi_saves(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter
+        .comment("preserve ABI callee-saved registers the allocator pools exclude");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x19, x20, [sp, #-16]!");               // x19 backs nested_call_reg; neither is in the allocator pool
+        }
+        Arch::X86_64 => {
+            for reg in ["r12", "r13", "r14", "r15"] {
+                ctx.emitter.instruction(&format!("push {}", reg));               // r12 backs nested_call_reg; r14/r15 are runtime scratch
+            }
+            if ctx.emitter.target.platform == Platform::Windows {
+                for reg in ["rdi", "rsi"] {
+                    ctx.emitter.instruction(&format!("push {}", reg));           // SysV argument scratch, but callee-saved under MSx64
+                }
+                ctx.emitter.instruction("sub rsp, 160");                         // room for the ten MSx64 callee-saved xmm registers
+                for idx in 0..10 {
+                    ctx.emitter.instruction(&format!(
+                        "movups XMMWORD PTR [rsp + {}], xmm{}",
+                        idx * 16,
+                        idx + 6
+                    ));                                                          // xmm6-xmm15 are volatile under SysV and preserved under MSx64
+                }
+            }
+        }
+    }
+}
+
+/// Restores what [`emit_web_handler_abi_saves`] preserved, in the mirror order.
+fn emit_web_handler_abi_restores(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter
+        .comment("restore ABI callee-saved registers before returning to the bridge");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldp x19, x20, [sp], #16");                 // release the pair saved ahead of the frame
+        }
+        Arch::X86_64 => {
+            if ctx.emitter.target.platform == Platform::Windows {
+                for idx in 0..10 {
+                    ctx.emitter.instruction(&format!(
+                        "movups xmm{}, XMMWORD PTR [rsp + {}]",
+                        idx + 6,
+                        idx * 16
+                    ));                                                          // reload the MSx64 callee-saved xmm range
+                }
+                ctx.emitter.instruction("add rsp, 160");                         // release the xmm save area
+                for reg in ["rsi", "rdi"] {
+                    ctx.emitter.instruction(&format!("pop {}", reg));            // mirror order of the MSx64-only integer saves
+                }
+            }
+            for reg in ["r15", "r14", "r13", "r12"] {
+                ctx.emitter.instruction(&format!("pop {}", reg));                // mirror order of the shared integer saves
+            }
+        }
+    }
 }
 
 /// Emits the `--web` process-entry stub that drives the bridge server entry.
@@ -452,7 +572,14 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
     let bridge_entry = target.extern_symbol("elephc_web_run");
+    let call_pad = abi::outgoing_call_stack_pad_bytes(target, 0);
+    if call_pad > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, call_pad);
+    }
     abi::emit_call_label(ctx.emitter, &bridge_entry);
+    if call_pad > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, call_pad);
+    }
     abi::emit_exit_with_result_reg(ctx.emitter);
 }
 

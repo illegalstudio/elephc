@@ -2,13 +2,13 @@
 title: "settype()"
 description: "Sets the type of a variable."
 sidebar:
-  order: 456
+  order: 463
 ---
 
 ## settype()
 
 ```php
-function settype(mixed $var, string $type): bool
+function settype(mixed &$var, string $type): bool
 ```
 
 Sets the type of a variable.

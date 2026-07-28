@@ -8,7 +8,7 @@ sidebar:
 ## filemtime()
 
 ```php
-function filemtime(string $filename): int
+function filemtime(string $filename): mixed
 ```
 
 Gets file modification time.
@@ -16,7 +16,7 @@ Gets file modification time.
 **Parameters**:
 - `$filename` (`string`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

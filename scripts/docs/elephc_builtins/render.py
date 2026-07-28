@@ -123,17 +123,13 @@ def _internals_short_description(b: dict) -> str:
 def _signature_line(b: dict) -> str:
     parts: list[str] = []
     for p in b["sig"]["params"]:
-        prefix = ""
-        if p["by_ref"]:
-            prefix += "&"
-        if not p.get("optional"):
-            prefix += ""
+        reference = "&" if p["by_ref"] else ""
         # PHP-style render: `string $name`
         if p.get("default") is not None:
             # already rendered PHP literal
-            parts.append(f"{p['type']} ${p['name']} = {p['default']}")
+            parts.append(f"{p['type']} {reference}${p['name']} = {p['default']}")
         else:
-            parts.append(f"{p['type']} ${p['name']}")
+            parts.append(f"{p['type']} {reference}${p['name']}")
     params = ", ".join(parts)
     if b["sig"]["variadic"]:
         sep = ", " if parts else ""

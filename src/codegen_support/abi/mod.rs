@@ -9,6 +9,7 @@
 //! - Shared lowering should go through this module instead of hardcoding platform registers or stack rules.
 
 mod bootstrap;
+mod callbacks;
 mod calls;
 mod frame;
 mod registers;
@@ -23,8 +24,13 @@ pub use bootstrap::{
     emit_enable_heap_debug_flag, emit_exit, emit_exit_with_result_reg,
     emit_store_process_args_to_globals,
 };
+pub use callbacks::{
+    c_callback_internal_symbol, c_callback_stack_arg_offset, emit_c_callback_entry,
+    emit_windows_c_abi_registers_for_runtime_helper,
+};
 pub use calls::{
-    build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg,
+    build_c_abi_outgoing_arg_assignments_for_target, build_outgoing_arg_assignments_for_target,
+    compact_windows_c_abi_stack_args, emit_call_label, emit_call_reg,
     emit_load_temporary_stack_slot, emit_pop_float_reg, emit_pop_reg, emit_pop_reg_pair,
     emit_push_float_reg, emit_push_reg, emit_push_reg_pair, emit_push_result_value,
     emit_release_temporary_stack, emit_reserve_temporary_stack, emit_store_incoming_param,
@@ -40,9 +46,9 @@ pub use frame::{
 #[cfg(test)]
 pub use frame::{emit_preserve_return_value, emit_restore_return_value};
 pub(crate) use registers::{
-    float_arg_reg_name, float_result_reg, float_spill_scratch_reg, int_arg_reg_name,
-    int_result_reg, secondary_scratch_reg, string_result_regs, symbol_scratch_reg,
-    tertiary_scratch_reg,
+    float_arg_reg_name, float_result_reg, float_spill_scratch_reg,
+    int_arg_reg_name, int_result_reg, runtime_helper_int_arg_reg, secondary_scratch_reg,
+    string_result_regs, symbol_scratch_reg, tertiary_scratch_reg,
 };
 pub use registers::{
     nested_call_reg, process_argc_reg, process_argv_reg, temp_int_reg, IncomingArgCursor,

@@ -147,19 +147,67 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
         "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
-        "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
+        "PHP_EOL" => Some(EvalPredefinedConstant::String(eval_php_eol())),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
-        "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
+        "PHP_OS_FAMILY" => Some(EvalPredefinedConstant::String(eval_php_os_family())),
+        "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String(eval_directory_separator())),
+        "PATH_SEPARATOR" => Some(EvalPredefinedConstant::String(eval_path_separator())),
         _ => None,
     }
 }
 
-/// Returns the PHP OS constant for the host platform running the eval bridge.
+/// Returns `PHP_OS` for the platform this interpreter was built for.
+///
+/// The interpreter is cross-compiled with the program, so `cfg!(target_os)` names
+/// the target rather than the build host. The Windows arm was missing, which made
+/// `eval('return PHP_OS;')` answer "Linux" inside a Windows binary whose compiled
+/// `PHP_OS` said "WINNT" — the same program disagreeing with itself.
 fn eval_php_os_name() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "windows") {
+        "WINNT"
+    } else if cfg!(target_os = "macos") {
         "Darwin"
     } else {
         "Linux"
+    }
+}
+
+/// Returns `PHP_OS_FAMILY` for the platform this interpreter was built for.
+fn eval_php_os_family() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "Darwin"
+    } else {
+        "Linux"
+    }
+}
+
+/// Returns `PHP_EOL`: `"\r\n"` on Windows (main/php.h), `"\n"` elsewhere.
+fn eval_php_eol() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Returns `DIRECTORY_SEPARATOR`: `DEFAULT_SLASH` is a backslash on Windows
+/// (Zend/zend_virtual_cwd.h) and a forward slash everywhere else.
+fn eval_directory_separator() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "\\"
+    } else {
+        "/"
+    }
+}
+
+/// Returns `PATH_SEPARATOR`: `";"` on Windows, `":"` elsewhere.
+fn eval_path_separator() -> &'static str {
+    if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
     }
 }
 
@@ -188,5 +236,55 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
         EvalMagicConst::Namespace => values.string(""),
         EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
+    }
+}
+
+#[cfg(test)]
+mod platform_constant_tests {
+    use super::{
+        eval_directory_separator, eval_path_separator, eval_php_eol, eval_php_os_family,
+        eval_php_os_name,
+    };
+
+    /// Verifies the interpreter reports the constants of the platform it was built
+    /// for, so an eval fragment cannot contradict the compiled constants in the same
+    /// binary. The Windows arms were missing entirely, which made a Windows program
+    /// answer PHP_OS "Linux" from inside eval() while its compiled PHP_OS said
+    /// "WINNT".
+    #[test]
+    fn reports_the_target_platform_constants() {
+        if cfg!(target_os = "windows") {
+            assert_eq!(eval_php_os_name(), "WINNT");
+            assert_eq!(eval_php_os_family(), "Windows");
+            assert_eq!(eval_php_eol(), "\r\n");
+            assert_eq!(eval_directory_separator(), "\\");
+            assert_eq!(eval_path_separator(), ";");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(eval_php_os_name(), "Darwin");
+            assert_eq!(eval_php_os_family(), "Darwin");
+            assert_eq!(eval_php_eol(), "\n");
+            assert_eq!(eval_directory_separator(), "/");
+            assert_eq!(eval_path_separator(), ":");
+        } else {
+            assert_eq!(eval_php_os_name(), "Linux");
+            assert_eq!(eval_php_os_family(), "Linux");
+            assert_eq!(eval_php_eol(), "\n");
+            assert_eq!(eval_directory_separator(), "/");
+            assert_eq!(eval_path_separator(), ":");
+        }
+    }
+
+    /// Verifies the POSIX separators never carry a Windows shape and vice versa, so a
+    /// future edit cannot make one constant disagree with the others.
+    #[test]
+    fn separators_are_internally_consistent() {
+        let sep = eval_directory_separator();
+        let path_sep = eval_path_separator();
+        let eol = eval_php_eol();
+        if sep == "\\" {
+            assert_eq!((path_sep, eol), (";", "\r\n"), "windows shape must be complete");
+        } else {
+            assert_eq!((sep, path_sep, eol), ("/", ":", "\n"), "posix shape must be complete");
+        }
     }
 }

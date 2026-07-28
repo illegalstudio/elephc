@@ -96,6 +96,28 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Verifies method callback adapters transfer a returned Mixed argument box and release all peers.
+#[test]
+fn test_method_callback_mixed_return_boxes_balance_gc_stats() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class MixedIdentity {
+    public function first(mixed $value): mixed { return $value; }
+}
+$identity = new MixedIdentity();
+for ($i = 0; $i < 100; $i++) {
+    $mapped = array_map([$identity, "first"], [1, 2, 3]);
+    echo $mapped[0];
+}
+unset($mapped);
+unset($identity);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Regression: a temporary object implicitly stringified via `__toString` in `echo` must
 /// be released, not leaked. 100 iterations would accumulate 100 leaked objects otherwise.
 #[test]
@@ -461,6 +483,9 @@ fn test_regression_string_property_persists_heap_slice_across_object_return() {
     let mut bytes = vec![b'X'; 1024 * 1024];
     bytes[..8].copy_from_slice(b"PLAYPAL\0");
     fs::write(&path, &bytes).unwrap();
+    // The path is embedded in a PHP double-quoted literal, where Windows
+    // backslashes could otherwise become escapes such as `\r` or `\t`.
+    let php_path = path.to_string_lossy().replace('\\', "/");
 
     let source = format!(
         r#"<?php
@@ -485,7 +510,7 @@ $maker = new Maker();
 $wad = $maker->make();
 echo $wad->name;
 "#,
-        path = path.display()
+        path = php_path
     );
 
     let out = compile_and_run_with_heap_size(&source, 67_108_864);
@@ -501,6 +526,7 @@ fn test_file_get_contents_owned_success_result_is_released_after_string_cast() {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let path = std::env::temp_dir().join(format!("elephc_fgc_owned_success_{}.txt", id));
     fs::write(&path, b"payload").unwrap();
+    let php_path = path.to_string_lossy().replace('\\', "/");
 
     let source = format!(
         r#"<?php
@@ -509,7 +535,7 @@ for ($i = 0; $i < 100; $i++) {{
 }}
 echo $contents;
 "#,
-        path = path.display()
+        path = php_path
     );
     let out = compile_and_run_with_heap_debug(&source);
     let _ = fs::remove_file(&path);

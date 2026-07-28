@@ -235,6 +235,7 @@ echo "end";
     );
     assert!(err.contains("uncaught"), "{err}");
 }
+/// Verifies a typed static property explicitly assigned zero remains readable.
 #[test]
 fn test_typed_static_property_initialized_to_zero_reads_normally() {
     let out = compile_and_run(
@@ -412,7 +413,8 @@ fn test_example_final_classes_compiles_and_runs() {
 #[test]
 fn test_example_typed_properties_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/typed-properties/main.php"));
-    assert_eq!(out, "Ada:42\nmissing email\n");
+    let eol = target().platform.php_eol();
+    assert_eq!(out, format!("Ada:42{eol}missing email{eol}"));
 }
 
 /// Verifies PHP 8.4 asymmetric visibility at runtime: a `public private(set)` property is

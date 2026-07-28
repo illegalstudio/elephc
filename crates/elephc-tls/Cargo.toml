@@ -22,3 +22,9 @@ rustls-pemfile = "2"
 # copy of the caller-owned TCP file descriptor without invalidating the
 # original. Keeps the crate musl-friendly (default features only).
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# php-src validates against the Windows certificate store when no explicit
+# cafile/capath is configured. Keep enterprise and administrator-installed
+# trust anchors visible to the Rust bridge as well.
+rustls-native-certs = "0.8"

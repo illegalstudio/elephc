@@ -44,6 +44,14 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("add x12, x11, x10");                                   // compute the result start pointer
     emitter.instruction("str x12, [sp, #16]");                                  // save the result start pointer
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the running byte total to zero
+    // The accumulation buffer starts as the rest of the concat arena and moves to the
+    // heap the moment the stream outgrows it. Without that it kept copying chunks past
+    // the arena's 64 KiB end: the returned string was still right -- read back from
+    // the overflowed region -- while whatever followed the buffer was destroyed.
+    emitter.instruction("str x12, [sp, #48]");                                  // accumulation base, initially inside the arena
+    emitter.instruction("mov x13, #65536");                                     // the arena's fixed capacity
+    emitter.instruction("sub x13, x13, x10");                                   // what is left of it from the result start
+    emitter.instruction("str x13, [sp, #56]");                                  // accumulation capacity
 
     // -- read 4096-byte chunks through fread until EOF --
     emitter.label("__rt_stream_get_contents_loop");
@@ -57,7 +65,18 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_contents_after_feof");
     emitter.instruction("ldr x9, [sp, #24]");                                   // running result length
     emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
+    // While the accumulation still lives in the arena, pointing __rt_fread at the
+    // compact tail makes the copy below a self-copy and costs nothing. Once it has
+    // moved to the heap the arena is ours again from the result start, so each chunk
+    // is read into that scratch and copied out.
+    emitter.instruction("ldr x14, [sp, #48]");                                  // accumulation base
+    emit_symbol_address(emitter, "x15", "_concat_buf");
+    emitter.instruction("sub x15, x14, x15");                                   // distance from the arena base
+    emitter.instruction("mov x16, #65536");                                     // the arena's fixed capacity
+    emitter.instruction("cmp x15, x16");                                        // is the accumulation still inside it?
+    emitter.instruction("b.hs __rt_stream_get_contents_scratch");               // heap-backed: read into the arena scratch
     emitter.instruction("add x12, x12, x9");                                    // compact append offset = start + total
+    emitter.label("__rt_stream_get_contents_scratch");
     emit_symbol_address(emitter, "x13", "_concat_off");
     emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
@@ -66,11 +85,53 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_stream_get_contents_release_done");       // empty read stops the read-all loop
     emitter.instruction("str x1, [sp, #32]");                                   // save chunk pointer across the copy
     emitter.instruction("str x2, [sp, #40]");                                   // save chunk length across the copy
+    // -- grow the accumulation buffer when this chunk would not fit --
+    // Doubling, so a stream of n bytes costs O(n) copying rather than O(n**2).
+    emitter.instruction("ldr x9, [sp, #24]");                                   // running result length
+    emitter.instruction("ldr x10, [sp, #40]");                                  // this chunk's length
+    emitter.instruction("add x14, x9, x10");                                    // bytes the buffer must hold
+    emitter.instruction("ldr x13, [sp, #56]");                                  // current capacity
+    emitter.instruction("cmp x14, x13");                                        // does the chunk still fit?
+    emitter.instruction("b.ls __rt_sgc_grow_done");                             // it fits: keep the current buffer
+    emitter.instruction("lsl x15, x13, #1");                                    // twice the current capacity
+    emitter.instruction("cmp x15, x14");                                        // is doubling already enough?
+    emitter.instruction("csel x15, x15, x14, hi");                              // take whichever is larger
+    emitter.instruction("str x15, [sp, #56]");                                  // publish the new capacity
+    emitter.instruction("mov x0, x15");                                         // allocate the grown buffer
+    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = the new accumulation base
+    emitter.instruction("mov x11, #1");                                         // heap kind 1 = owned elephc string
+    emitter.instruction("str x11, [x0, #-8]");                                  // stamp it: raw blocks are skipped by every decref
+    emitter.instruction("ldr x14, [sp, #48]");                                  // the old accumulation base
+    emitter.instruction("ldr x9, [sp, #24]");                                   // bytes accumulated so far
+    emitter.instruction("mov x12, #0");                                         // byte-copy index
+    emitter.label("__rt_sgc_grow_copy");
+    emitter.instruction("cmp x12, x9");                                         // copied everything accumulated?
+    emitter.instruction("b.ge __rt_sgc_grow_copied");                           // the move is complete
+    emitter.instruction("ldrb w11, [x14, x12]");                                // load one accumulated byte
+    emitter.instruction("strb w11, [x0, x12]");                                 // place it in the grown buffer
+    emitter.instruction("add x12, x12, #1");                                    // advance the copy index
+    emitter.instruction("b __rt_sgc_grow_copy");                                // continue the move
+    emitter.label("__rt_sgc_grow_copied");
+    emitter.instruction("str x0, [sp, #48]");                                   // publish the new base before any call can clobber x0
+    emit_symbol_address(emitter, "x13", "_concat_buf");
+    emitter.instruction("sub x15, x14, x13");                                   // distance of the old base from the arena
+    emitter.instruction("mov x13, #65536");                                     // the arena's fixed capacity
+    emitter.instruction("cmp x15, x13");                                        // was the old buffer the arena itself?
+    emitter.instruction("b.lo __rt_sgc_grow_release_arena");                    // yes: hand the arena space back
+    emitter.instruction("mov x0, x14");                                         // no: it was an earlier grown block
+    emitter.instruction("bl __rt_heap_free");                                   // release it
+    emitter.instruction("b __rt_sgc_grow_done");                                // the move is finished
+    emitter.label("__rt_sgc_grow_release_arena");
+    emitter.instruction("ldr x12, [sp, #8]");                                   // the result start offset
+    emit_symbol_address(emitter, "x13", "_concat_off");
+    emitter.instruction("str x12, [x13]");                                      // the arena is free again from there
+    emitter.label("__rt_sgc_grow_done");
+
+    emitter.instruction("ldr x11, [sp, #48]");                                  // accumulation base
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload running result length after __rt_fread
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
-    emitter.instruction("add x11, x11, x12");                                   // result base pointer
-    emitter.instruction("add x11, x11, x9");                                    // destination = result base + total
+    emitter.instruction("add x11, x11, x9");                                    // destination = accumulation base + total
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the chunk pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the chunk length
     emitter.instruction("mov x12, #0");                                         // byte-copy index
     emitter.label("__rt_stream_get_contents_copy");
     emitter.instruction("cmp x12, x2");                                         // copied this whole chunk?
@@ -84,10 +145,20 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #40]");                                  // copied chunk length
     emitter.instruction("add x9, x9, x10");                                     // include the copied chunk in the total
     emitter.instruction("str x9, [sp, #24]");                                   // store the updated result length
+    // Only an arena-backed accumulation owns arena space past the result start; once
+    // it is heap-backed the cursor stays where the loop head put it, so the next
+    // chunk reuses the same scratch.
+    emitter.instruction("ldr x14, [sp, #48]");                                  // accumulation base
+    emit_symbol_address(emitter, "x13", "_concat_buf");
+    emitter.instruction("sub x15, x14, x13");                                   // distance from the arena base
+    emitter.instruction("mov x13, #65536");                                     // the arena's fixed capacity
+    emitter.instruction("cmp x15, x13");                                        // is the accumulation still inside it?
+    emitter.instruction("b.hs __rt_stream_get_contents_tail_kept");             // heap-backed: leave the cursor alone
     emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
     emitter.instruction("add x12, x12, x9");                                    // compact tail offset after this chunk
     emit_symbol_address(emitter, "x13", "_concat_off");
     emitter.instruction("str x12, [x13]");                                      // publish the compacted concat-buffer tail
+    emitter.label("__rt_stream_get_contents_tail_kept");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the chunk pointer
     emitter.instruction("bl __rt_decref_any");                                  // release owned wrapper/filter chunks; concat slices are ignored
     emitter.instruction("b __rt_stream_get_contents_loop");                     // read the next chunk
@@ -97,7 +168,11 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // final empty chunk pointer
     emitter.instruction("bl __rt_decref_any");                                  // release it if it is heap-backed
     emitter.label("__rt_stream_get_contents_done");
-    emitter.instruction("ldr x1, [sp, #16]");                                   // return the result start pointer
+    // The accumulation base, not the arena slot it started in: for a stream that
+    // outgrew the arena the result lives in an owned block. Like __rt_fread's, that
+    // block is never reclaimed -- the result is borrowed by contract, so no caller
+    // releases it. See the KNOWN GAP note in io/fread.rs.
+    emitter.instruction("ldr x1, [sp, #48]");                                   // return the accumulation base
     emitter.instruction("ldr x2, [sp, #24]");                                   // return the accumulated result length
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
@@ -214,6 +289,13 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the running byte total to zero
+    // Same accumulation contract as the AArch64 arm: start in what is left of the
+    // arena and move to the heap the moment the stream outgrows it, rather than
+    // copying chunks past the arena's 64 KiB end.
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // accumulation base, initially inside the arena
+    emitter.instruction("mov rax, 65536");                                      // the arena's fixed capacity
+    emitter.instruction("sub rax, r10");                                        // what is left of it from the result start
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // accumulation capacity
 
     emitter.label("__rt_stream_get_contents_loop_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source file descriptor
@@ -226,7 +308,16 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_contents_after_feof_x86");
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // running result length
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // result start offset
+    // Arena-backed: point __rt_fread at the compact tail so the copy below is a
+    // self-copy. Heap-backed: the arena is ours again from the result start, so the
+    // chunk is read into that scratch and copied out.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // accumulation base
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // the arena base
+    emitter.instruction("sub r9, r10");                                         // distance from the arena base
+    emitter.instruction("cmp r9, 65536");                                       // is the accumulation still inside it?
+    emitter.instruction("jae __rt_stream_get_contents_scratch_x86");            // heap-backed: read into the arena scratch
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
+    emitter.label("__rt_stream_get_contents_scratch_x86");
     abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction("mov rsi, 4096");                                       // request one read-all chunk
@@ -235,10 +326,48 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_stream_get_contents_release_done_x86");        // empty read stops the read-all loop
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save chunk pointer across the copy
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save chunk length across the copy
+    // -- grow the accumulation buffer when this chunk would not fit --
+    // Doubling, so a stream of n bytes costs O(n) copying rather than O(n**2).
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // running result length
+    emitter.instruction("add r8, QWORD PTR [rbp - 48]");                        // bytes the buffer must hold
+    emitter.instruction("cmp r8, QWORD PTR [rbp - 64]");                        // does the chunk still fit?
+    emitter.instruction("jbe __rt_sgc_grow_done_x86");                          // it fits: keep the current buffer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // the current capacity
+    emitter.instruction("shl rax, 1");                                          // twice the current capacity
+    emitter.instruction("cmp rax, r8");                                         // is doubling already enough?
+    emitter.instruction("cmovb rax, r8");                                       // take whichever is larger
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // publish the new capacity
+    emitter.instruction("call __rt_heap_alloc");                                // rax = the new accumulation base
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string kind word carrying the x86_64 heap magic
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp it: raw blocks are skipped by every decref
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // the old accumulation base
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // bytes accumulated so far
+    emitter.instruction("xor rcx, rcx");                                        // byte-copy index
+    emitter.label("__rt_sgc_grow_copy_x86");
+    emitter.instruction("cmp rcx, r8");                                         // copied everything accumulated?
+    emitter.instruction("jge __rt_sgc_grow_copied_x86");                        // the move is complete
+    emitter.instruction("mov r9b, BYTE PTR [r11 + rcx]");                       // load one accumulated byte
+    emitter.instruction("mov BYTE PTR [rax + rcx], r9b");                       // place it in the grown buffer
+    emitter.instruction("inc rcx");                                             // advance the copy index
+    emitter.instruction("jmp __rt_sgc_grow_copy_x86");                          // continue the move
+    emitter.label("__rt_sgc_grow_copied_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // publish the new base before any call can clobber rax
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // the arena base
+    emitter.instruction("mov r9, r11");                                         // copy the old base for the range test
+    emitter.instruction("sub r9, r10");                                         // distance of the old base from the arena
+    emitter.instruction("cmp r9, 65536");                                       // was the old buffer the arena itself?
+    emitter.instruction("jb __rt_sgc_grow_release_arena_x86");                  // yes: hand the arena space back
+    emitter.instruction("mov rax, r11");                                        // no: it was an earlier grown block
+    emitter.instruction("call __rt_heap_free");                                 // release it
+    emitter.instruction("jmp __rt_sgc_grow_done_x86");                          // the move is finished
+    emitter.label("__rt_sgc_grow_release_arena_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // the result start offset
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // the arena is free again from there
+    emitter.label("__rt_sgc_grow_done_x86");
+
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload running result length after __rt_fread
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
-    emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // result base pointer
-    emitter.instruction("add r10, r8");                                         // destination = result base + total
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // accumulation base
+    emitter.instruction("add r10, r8");                                         // destination = accumulation base + total
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // source chunk pointer
     emitter.instruction("xor rcx, rcx");                                        // byte-copy index
     emitter.label("__rt_stream_get_contents_copy_x86");
@@ -252,9 +381,17 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // running result length before this chunk
     emitter.instruction("add r8, QWORD PTR [rbp - 48]");                        // include the copied chunk in the total
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // store the updated result length
+    // Only an arena-backed accumulation owns arena space past the result start; once
+    // it is heap-backed the cursor stays where the loop head put it.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // accumulation base
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // the arena base
+    emitter.instruction("sub r9, r10");                                         // distance from the arena base
+    emitter.instruction("cmp r9, 65536");                                       // is the accumulation still inside it?
+    emitter.instruction("jae __rt_stream_get_contents_tail_kept_x86");          // heap-backed: leave the cursor alone
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact tail offset after this chunk
     abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // publish the compacted concat-buffer tail
+    emitter.label("__rt_stream_get_contents_tail_kept_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the chunk pointer
     emitter.instruction("call __rt_decref_any");                                // release owned wrapper/filter chunks; concat slices are ignored
     emitter.instruction("jmp __rt_stream_get_contents_loop_x86");               // read the next chunk
@@ -262,7 +399,9 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_contents_release_done_x86");
     emitter.instruction("call __rt_decref_any");                                // release the empty chunk if it is heap-backed
     emitter.label("__rt_stream_get_contents_done_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result start pointer
+    // The accumulation base, not the arena slot it started in: for a stream that
+    // outgrew the arena the result lives in an owned block.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the accumulation base
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the accumulated result length
     emitter.instruction("add rsp, 64");                                         // release the helper locals
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

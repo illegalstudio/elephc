@@ -150,7 +150,7 @@ run(10);
 }
 
 /// Verifies that a nested elseif with `true` body is pruned when a composite guard makes it
-/// unreachable. Confirms "acx" with "dead" absent.
+/// unreachable. Confirms "acx" with "dead-composite" absent.
 #[test]
 fn test_dead_code_elimination_prunes_nested_elseif_from_composite_guard_refinement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_composite_guard_refinement");
@@ -162,7 +162,7 @@ function run($a, $b, $c) {
             if ($a && $b) {
                 echo "a";
             } elseif (true) {
-                echo "dead";
+                echo "dead-composite";
             }
         } else {
             echo "c";
@@ -192,7 +192,11 @@ run(false, false, false);
     );
 
     assert_eq!(out, "acx");
-    assert!(!user_asm.contains("dead"));
+    // The marker is distinctive, like every other fixture here: a bare "dead"
+    // also matches incidental prose in the emitted assembly -- the main prologue
+    // comments its SIGPIPE handler with "a dead peer" -- so the assertion failed
+    // while the branch was in fact pruned.
+    assert!(!user_asm.contains("dead-composite"));
 }
 
 /// Verifies that a nested subexpr contradicting a composite guard is pruned. Confirms "acx"

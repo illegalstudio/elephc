@@ -245,10 +245,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov ecx, ebx");                                        // variadic int precision = p
     emitter.instruction("movsd xmm0, QWORD PTR [rsp + 64]");                    // variadic double = input value
     emitter.instruction("mov eax, 1");                                          // one vector register used by the variadic call
-    emitter.instruction("call snprintf");                                       // format x at precision p into scratch
+    emitter.emit_call_c("snprintf");                                            // format x at precision p into scratch
     emitter.instruction("lea rdi, [rsp]");                                      // strtod source = formatted scratch
     emitter.instruction("xor esi, esi");                                        // strtod endptr = NULL
-    emitter.instruction("call strtod");                                         // parse the formatted string back to a double (xmm0)
+    emitter.emit_call_c("strtod");                                              // parse the formatted string back to a double (xmm0)
     emitter.instruction("movsd xmm1, QWORD PTR [rsp + 64]");                    // reload the original input double
     emitter.instruction("ucomisd xmm0, xmm1");                                  // did the formatted string round-trip exactly?
     emitter.instruction("je __rt_json_ftoa_probe_done_x");                      // shortest precision found
@@ -271,7 +271,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rsp + rax + 1]");                            // address of the exponent text after 'e'
     emitter.instruction("xor esi, esi");                                        // strtol endptr = NULL
     emitter.instruction("mov edx, 10");                                         // base 10
-    emitter.instruction("call strtol");                                         // E = parsed decimal exponent
+    emitter.emit_call_c("strtol");                                              // E = parsed decimal exponent
     emitter.instruction("mov r13, rax");                                        // keep E in a callee-saved register
 
     emitter.instruction("lea rax, [r13 + 1]");                                  // decpt = E + 1
@@ -293,7 +293,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rdx", "_fmt_star_f");
     emitter.instruction("movsd xmm0, QWORD PTR [rsp + 64]");                    // variadic double = input value
     emitter.instruction("mov eax, 1");                                          // one vector register used by the variadic call
-    emitter.instruction("call snprintf");                                       // format the decimal digits into concat_buf
+    emitter.emit_call_c("snprintf");                                            // format the decimal digits into concat_buf
     emitter.instruction("mov rdx, rax");                                        // result length = bytes written
     abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // original offset (unchanged by snprintf)
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");

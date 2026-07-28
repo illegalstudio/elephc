@@ -80,14 +80,14 @@ pub(in crate::interpreter) fn eval_basename_result(
 /// Extracts a PHP basename from one path byte string.
 pub(in crate::interpreter) fn eval_basename_bytes(path: &[u8], suffix: Option<&[u8]>) -> Vec<u8> {
     let mut end = path.len();
-    while end > 0 && path[end - 1] == b'/' {
+    while end > 0 && eval_basename_separator(path[end - 1]) {
         end -= 1;
     }
     if end == 0 {
         return Vec::new();
     }
     let mut start = end;
-    while start > 0 && path[start - 1] != b'/' {
+    while start > 0 && !eval_basename_separator(path[start - 1]) {
         start -= 1;
     }
     let mut result = path[start..end].to_vec();
@@ -97,4 +97,9 @@ pub(in crate::interpreter) fn eval_basename_bytes(path: &[u8], suffix: Option<&[
         }
     }
     result
+}
+
+/// Returns whether one byte separates path components on the current host platform.
+fn eval_basename_separator(byte: u8) -> bool {
+    byte == b'/' || cfg!(windows) && byte == b'\\'
 }

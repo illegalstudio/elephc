@@ -274,9 +274,7 @@ pub extern "C" fn elephc_imagick_add_image(dst_wand: i64, src_wand: i64) -> i64 
         let Some(src_handle) = current_handle(src_wand) else {
             return -1;
         };
-        let src_fmt = wands()
-            .lock()
-            .unwrap()
+        let src_fmt = lock_recover(wands())
             .get(&src_wand)
             .map(|w| w.format)
             .unwrap_or(FMT_PNG);

@@ -90,7 +90,7 @@ pub(in crate::interpreter) fn eval_dirname_once(path: &[u8]) -> Vec<u8> {
         return b".".to_vec();
     }
     let mut end = path.len();
-    while end > 0 && path[end - 1] == b'/' {
+    while end > 0 && eval_dirname_separator(path[end - 1]) {
         end -= 1;
     }
     if end == 0 {
@@ -99,9 +99,9 @@ pub(in crate::interpreter) fn eval_dirname_once(path: &[u8]) -> Vec<u8> {
     let mut cursor = end;
     while cursor > 0 {
         cursor -= 1;
-        if path[cursor] == b'/' {
+        if eval_dirname_separator(path[cursor]) {
             let mut parent_end = cursor;
-            while parent_end > 0 && path[parent_end - 1] == b'/' {
+            while parent_end > 0 && eval_dirname_separator(path[parent_end - 1]) {
                 parent_end -= 1;
             }
             return if parent_end == 0 {
@@ -112,4 +112,9 @@ pub(in crate::interpreter) fn eval_dirname_once(path: &[u8]) -> Vec<u8> {
         }
     }
     b".".to_vec()
+}
+
+/// Returns whether one byte separates path components on the current host platform.
+fn eval_dirname_separator(byte: u8) -> bool {
+    byte == b'/' || cfg!(windows) && byte == b'\\'
 }

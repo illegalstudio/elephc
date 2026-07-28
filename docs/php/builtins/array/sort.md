@@ -8,7 +8,7 @@ sidebar:
 ## sort()
 
 ```php
-function sort(array $array): bool
+function sort(array &$array): bool
 ```
 
 Sorts an array in ascending order.

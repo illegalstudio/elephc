@@ -219,14 +219,12 @@ fn emit_runtime_callable_invoker_impl(
 
 /// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
 fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg));              // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg));             // keep descriptor while loading its native entry
-        }
-    }
+    // The invoker receives the descriptor in its first ABI argument register, which is
+    // the target's user-call ABI (rdi on Linux x86_64, rcx on Windows x86_64, x0 on
+    // AArch64). Reading a hardcoded `rdi` would lose the descriptor on Windows, where
+    // the caller materializes it in `rcx`.
+    let descriptor_reg = abi::int_arg_reg_name(emitter.target, 0);
+    emitter.instruction(&format!("mov {}, {}", call_reg, descriptor_reg));      // keep the descriptor pointer while loading the target entry
     callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
@@ -1355,8 +1353,8 @@ fn emit_hash_lookup_for_param_or_index(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) {
-    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
-    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    let key_ptr_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
+    let key_len_reg = abi::runtime_helper_int_arg_reg(emitter, 2);
     let found_label = param_name.map(|_| ctx.next_label("invoker_assoc_key_found"));
 
     if let Some(name) = param_name {
@@ -1792,10 +1790,10 @@ fn emit_null_default_to_result(emitter: &mut Emitter, target_ty: Option<&PhpType
 
 /// Emits an empty indexed array of `elem_ty` into the integer result register.
 fn emit_empty_indexed_array(emitter: &mut Emitter, elem_ty: &PhpType) {
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 4);
+    abi::emit_load_int_immediate(emitter, abi::runtime_helper_int_arg_reg(emitter, 0), 4);
     abi::emit_load_int_immediate(
         emitter,
-        abi::int_arg_reg_name(emitter.target, 1),
+        abi::runtime_helper_int_arg_reg(emitter, 1),
         elem_ty.stack_size() as i64,
     );
     abi::emit_call_label(emitter, "__rt_array_new");
@@ -2061,7 +2059,16 @@ fn call_target_with_pushed_args(
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
+    let call_pad_bytes = if emitter.target.arch == Arch::AArch64 {
+        // `save_concat_offset_before_nested_call` already pushes one 16-byte slot on
+        // AArch64, which is the exact gap expected above spilled arguments.
+        0
+    } else {
+        abi::outgoing_call_stack_pad_bytes(emitter.target, overflow_bytes)
+    };
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, call_reg);
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     restore_concat_offset_after_nested_call(emitter, &sig.return_type);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
@@ -2115,8 +2122,8 @@ fn emit_loaded_assoc_variadic_array_arg(
         key: Box::new(PhpType::Mixed),
         value: Box::new(variadic_elem_ty.clone()),
     };
-    let capacity_reg = abi::int_arg_reg_name(emitter.target, 0);
-    let tag_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let capacity_reg = abi::runtime_helper_int_arg_reg(emitter, 0);
+    let tag_reg = abi::runtime_helper_int_arg_reg(emitter, 1);
 
     abi::emit_load_int_immediate(emitter, capacity_reg, 16);
     abi::emit_load_int_immediate(
@@ -2511,6 +2518,69 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies nested Windows callable targets receive the mandatory MS x64 shadow space.
+    #[test]
+    fn windows_invoker_target_call_reserves_shadow_space() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        let sig = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        };
+
+        call_target_with_pushed_args("r12", &[], &sig, &mut emitter);
+
+        let output = emitter.output();
+        let reserve = output.find("    sub rsp, 32\n").expect("shadow-space reserve");
+        let call = output.find("    call r12\n").expect("target call");
+        let release = output.rfind("    add rsp, 32\n").expect("shadow-space release");
+        assert!(reserve < call && call < release);
+    }
+
+    /// Verifies the saved concat slot itself provides ARM64's spilled-argument call gap.
+    #[test]
+    fn arm64_invoker_target_call_does_not_double_pad_spilled_args() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        let sig = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        };
+        let arg_types = vec![PhpType::Int; 9];
+
+        call_target_with_pushed_args("x20", &arg_types, &sig, &mut emitter);
+
+        let output = emitter.output();
+        let save_concat = output
+            .find("str x10, [sp, #-16]!")
+            .expect("concat-offset save");
+        let call = output[save_concat..]
+            .find("blr x20")
+            .map(|offset| save_concat + offset)
+            .expect("nested callable target call");
+        let call_setup = &output[save_concat..call];
+        assert!(
+            !call_setup.contains("sub sp, sp, #16"),
+            "the concat save already supplies ARM64's 16-byte call gap:\n{call_setup}"
+        );
+    }
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]

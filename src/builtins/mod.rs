@@ -18,9 +18,16 @@ pub mod registry;
 pub mod docs;
 mod convert;
 mod requirements;
+/// Shared scheme predicate: the codegen lowering and the builtin requirement must
+/// agree on which stream addresses select a crypto transport.
+pub(crate) use requirements::address_selects_tls_transport;
 mod array;
 mod callables;
 mod io;
+pub(crate) use io::proc_open::{
+    argument_at as proc_open_argument_at, static_windows_command_line,
+    static_windows_environment_block, static_windows_options, WINDOWS_PROC_OPTION_BITS,
+};
 mod string;
 mod math;
 mod spl;

@@ -9,7 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
-use super::expr::{expr_has_side_effects, prune_expr};
+use super::expr::prune_expr;
 use super::loop_exit::block_contains_loop_exit;
 
 /// Recursively processes a block of statements, pruning each one and stopping early
@@ -306,7 +306,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            if expr_is_observable(&expr) {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,

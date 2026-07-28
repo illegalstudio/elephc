@@ -389,7 +389,7 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_ob_invoke_desc_missing_x86");                  // no invoker recorded — pass the raw bytes through
     emitter.instruction("mov rdi, r10");                                        // invoker arg0 = the callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // invoker arg1 = the boxed argument container
-    emitter.instruction("call r11");                                            // run the handler → boxed Mixed result
+    emitter.emit_platform_callback_call("r11", 2);                            // run the generated invoker with the target callback ABI
     // -- map the result BEFORE releasing the container (aliasing safety) --
     emitter.instruction("call __rt_ob_result_to_bytes");                        // map the result cell to the replacement triple
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the replaced flag
@@ -451,7 +451,7 @@ fn emit_ob_eval_trampoline_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the installed magician hook
     emitter.instruction("test r9, r9");                                         // is an eval hook installed?
     emitter.instruction("jz __rt_ob_eval_trampoline_none_x86");                 // no hook installed — pass the raw bytes through
-    emitter.instruction("call r9");                                             // hook(id, buf, len, phase) → Mixed result cell
+    emitter.emit_native_bridge_call("r9", 4);                                 // call the Rust hook with the target C ABI
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_ob_result_to_bytes");                         // tail-map the result cell to the replacement triple
     emitter.label("__rt_ob_eval_trampoline_none_x86");
@@ -614,5 +614,47 @@ mod tests {
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
         assert!(linux_x86.contains("_ob_in_handler"));
         assert!(linux_x86.contains("call __rt_mixed_cast_string"));
+    }
+
+    /// Verifies Windows remaps descriptor invoker arguments into MSx64 registers.
+    #[test]
+    fn windows_descriptor_invoker_uses_platform_callback_abi() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_ob_invoke_descriptor(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("sub rsp, 32"));
+        assert!(asm.contains("mov rdx, rsi"));
+        assert!(asm.contains("mov rcx, rdi"));
+        assert!(asm.contains("call r11"));
+        assert!(asm.contains("add rsp, 32"));
+    }
+
+    /// Verifies Windows calls the installed Rust eval hook through the native C ABI.
+    #[test]
+    fn windows_eval_hook_uses_native_bridge_abi() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_ob_eval_trampoline(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r11, r9"));
+        assert!(asm.contains("sub rsp, 32"));
+        assert!(asm.contains("mov r9, rcx"));
+        assert!(asm.contains("mov r8, rdx"));
+        assert!(asm.contains("mov rdx, rsi"));
+        assert!(asm.contains("mov rcx, rdi"));
+        assert!(asm.contains("call r11"));
+        assert!(asm.contains("add rsp, 32"));
+    }
+
+    /// Verifies non-Windows x86_64 keeps bare internal and callback calls.
+    #[test]
+    fn linux_x86_64_handler_calls_stay_bare() {
+        let asm = render(Platform::Linux, Arch::X86_64);
+
+        assert!(asm.contains("call r10"));
+        assert!(asm.contains("call r11"));
+        assert!(asm.contains("call r9"));
+        assert!(!asm.contains("mov r11, r9"));
     }
 }

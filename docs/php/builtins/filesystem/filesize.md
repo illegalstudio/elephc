@@ -8,7 +8,7 @@ sidebar:
 ## filesize()
 
 ```php
-function filesize(string $filename): int
+function filesize(string $filename): mixed
 ```
 
 Gets file size.
@@ -16,7 +16,7 @@ Gets file size.
 **Parameters**:
 - `$filename` (`string`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

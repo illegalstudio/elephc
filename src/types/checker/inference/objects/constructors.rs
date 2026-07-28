@@ -77,6 +77,7 @@ impl Checker {
         if is_phar_archive_class(&class_name) {
             self.require_phar_archive_libraries();
         }
+        self.require_datetime_tz_bridge_if_needed(&class_name);
         if matches!(
             class_name.as_str(),
             "CallbackFilterIterator" | "RecursiveCallbackFilterIterator"
@@ -205,11 +206,39 @@ impl Checker {
         Ok(())
     }
 
-    /// Records the PHAR bridge and decompression libraries needed by PHAR archive helpers.
+    /// Records the pure-Rust PHAR bridge needed by archive helpers.
+    ///
+    /// Gzip and bzip2 decoding live inside `elephc-phar`; PHAR objects must not
+    /// pull the unrelated system `libz`/`libbz2` stream-filter dependencies.
     pub(crate) fn require_phar_archive_libraries(&mut self) {
         self.require_builtin_library("elephc_phar");
-        self.require_builtin_library("z");
-        self.require_builtin_library("bz2");
+    }
+
+    /// Records the windows-only elephc-tz bridge requirement for the OOP
+    /// datetime surface (`DateTime`/`DateTimeZone`/`DateTimeImmutable`/
+    /// `DatePeriod`; see `is_elephc_tz_backed_datetime_class`).
+    ///
+    /// The synthetic methods these classes inject (`getOffset`, `format`,
+    /// `setTimezone`, the zone-aware constructor, `getTimestamp`,
+    /// `createFromFormat`, `DatePeriod::createFromISO8601String`, ...) resolve
+    /// IANA zone offsets through the same elephc-tz bridge as the procedural
+    /// `date`/`mktime`/`strtotime` builtins (see
+    /// `crate::builtins::system::date::check`), directly or by constructing a
+    /// `DateTime`/`DateTimeImmutable` internally. Unlike those procedural
+    /// builtins, the OOP methods' PHP bodies are synthetic and never flow
+    /// through `type_check_methods_until_stable` (they are not part of the
+    /// user program's `flattened_classes`), so their internal `date()`/
+    /// `mktime()`/`new DateTime(...)` calls never reach `check_builtin` or
+    /// `infer_new_object_type` and never trigger the requirement themselves.
+    /// This call site — reached whenever a program actually constructs or
+    /// statically calls one of the tz-backed classes — is the pay-for-use
+    /// substitute: `require_windows_builtin_library` is a no-op off windows,
+    /// and a program that never touches these classes never links
+    /// `-lelephc_tz`.
+    pub(crate) fn require_datetime_tz_bridge_if_needed(&mut self, class_name: &str) {
+        if is_elephc_tz_backed_datetime_class(class_name) {
+            self.require_windows_builtin_library("elephc_tz");
+        }
     }
 
     /// Returns true when construct internal iterator from builtin get iterator.
@@ -596,8 +625,15 @@ impl Checker {
     ) -> Result<Option<FunctionSig>, CompileError> {
         let lookup_name = function_name.trim_start_matches('\\');
         let builtin_key = php_symbol_key(lookup_name);
-        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
-            return Ok(Some(sig));
+        if crate::types::checker::builtins::canonical_builtin_function_name_on_platform(
+            &builtin_key,
+            self.target_platform,
+        )
+        .is_some()
+        {
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+                return Ok(Some(sig));
+            }
         }
         let canonical =
             match self.canonical_function_name_folded(lookup_name) {
@@ -1136,7 +1172,7 @@ impl Checker {
         name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        if crate::name_resolver::is_builtin_function(name) {
+        if crate::name_resolver::is_builtin_function_on_platform(name, self.target_platform) {
             return Ok(());
         }
 
@@ -1238,6 +1274,35 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
 /// Returns `true` if `class_name` is backed by the PHAR bridge.
 fn is_phar_archive_class(class_name: &str) -> bool {
     matches!(class_name, "Phar" | "PharData")
+}
+
+/// Returns `true` if `class_name` is one of the builtin OOP datetime classes
+/// (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DatePeriod`) whose
+/// synthetic methods resolve IANA zone offsets through the windows-only
+/// elephc-tz bridge, directly or transitively.
+///
+/// `DatePeriod` is included even though it models a range rather than a
+/// single instant: its `createFromISO8601String` static factory (the only
+/// entry point that accepts a raw ISO 8601 string rather than pre-built
+/// `DateTimeInterface` objects — see `date_period.rs`'s module preamble)
+/// constructs a `new DateTime(...)` in its own synthetic body, which never
+/// flows through `infer_new_object_type` for the same reason described on
+/// `require_datetime_tz_bridge_if_needed`. The `(start, interval, end)`/
+/// `(start, interval, recurrences)` constructor forms take
+/// already-constructed `DateTimeInterface` objects, so those paths ride free
+/// on the requirement the caller's own `new DateTime(...)`/`new
+/// DateTimeImmutable(...)` already recorded.
+///
+/// `DateInterval` is deliberately excluded: it models a pure duration, and
+/// neither its constructor (parses `PnYnMnD...` strings) nor
+/// `createFromDateString` (parses relative-unit strings like `"3 days"`) nor
+/// `format` ever call `date()`/`mktime()`/`strtotime()` or construct a
+/// `DateTime`/`DateTimeZone`, so it never resolves a zone offset.
+fn is_elephc_tz_backed_datetime_class(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DatePeriod"
+    )
 }
 
 /// Returns `true` if the attribute name/arg slices are mismatched or any

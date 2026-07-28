@@ -86,7 +86,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov x0, #2");                                          // duplicate stderr (always available)
     emitter.bl_c("dup");                                                        // x0 = new fd (-1 on failure)
-    emitter.instruction("cmp x0, #0");                                          // did dup fail?
+    emitter.instruction("cmp w0, #0");                                          // dup returns a C int: a 64-bit compare reads -1 as 0xffffffff and never trips this branch
     emitter.instruction("b.lt __rt_opendir_glob_fail");                         // dup failed → bail
     emitter.instruction("cmp x0, #255");                                        // out-of-range for the 256-slot table?
     emitter.instruction("b.gt __rt_opendir_glob_fail");                         // can't register this fd
@@ -152,7 +152,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov edi, 2");                                          // duplicate stderr (always available)
-    emitter.instruction("call dup");                                            // rax = new fd (-1 on failure)
+    emitter.emit_call_c("dup");                                                 // rax = new fd (-1 on failure)
     emitter.instruction("test rax, rax");                                       // did dup fail?
     emitter.instruction("js __rt_opendir_glob_fail_x86");                       // negative → bail
     emitter.instruction("cmp rax, 255");                                        // out-of-range for the 256-slot table?

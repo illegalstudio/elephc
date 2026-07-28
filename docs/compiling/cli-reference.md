@@ -32,7 +32,7 @@ binary is written next to it, named after the source without its extension.
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
-| `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web` | — | off | Compile a standalone HTTP server binary instead of a CLI executable. Unix uses prefork workers; Windows uses one event-loop worker. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
 be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
@@ -46,10 +46,10 @@ runtime arguments (not elephc compiler flags):
 | Argument | Required | Default | Description |
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
-| `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
+| `--workers N` | No | CPU count | Number of prefork worker processes on Unix. Windows always uses one event-loop worker and ignores values other than 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
-| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a worker whose request handler runs longer than N seconds. |
+| `--max-requests N` | No | `0` (never) | Recycle each Unix worker after N requests; stop the Windows server cleanly after N requests. |
+| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a timed-out Unix worker; terminate the Windows server for external restart. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
@@ -61,8 +61,8 @@ elephc --web app.php
 ```
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
-emit cookies with `setcookie()`. The server shuts down cleanly on
-`SIGINT`/`SIGTERM` and respawns workers that die.
+emit cookies with `setcookie()`. Unix shuts down on `SIGINT`/`SIGTERM` and
+respawns failed workers; Windows handles Ctrl-C in its single process.
 
 The served program receives the HTTP request through the standard superglobals
 `$_SERVER`, `$_GET`, `$_POST`, and `php://input`, and controls the response
@@ -73,7 +73,7 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64`, or experimental `windows-x86_64` (plus alias spellings; recognized `macos-x86_64` remains unsupported) | host platform | Select the compilation target. Windows uses a MinGW ABI/sysroot; GNU tools are the default and an LLVM/LLD path is opt-in. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
@@ -81,7 +81,6 @@ spellings.
 ## Optimization and code generation
 
 | Flag | Values | Default | Env override | Description |
-|---|---|---|---|---|
 | `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
 | `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
@@ -171,3 +170,13 @@ changing every invocation:
 | `ELEPHC_IR_OPT` | `on`, `off` | `--ir-opt=` |
 | `ELEPHC_REGALLOC` | `linear`, `stack` | `--regalloc=` |
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
+
+Windows cross-compilation also accepts toolchain-only environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `ELEPHC_WINDOWS_TOOLCHAIN` | `gnu` (default) or `llvm`. |
+| `ELEPHC_WINDOWS_SYSROOT` | MinGW sysroot used by LLVM mode for CRT objects and import libraries. |
+| `ELEPHC_WINDOWS_GCC` | Override the GNU MinGW driver used directly and for sysroot discovery. |
+| `ELEPHC_WINDOWS_CLANG` | Override the Clang executable used in LLVM mode. |
+| `ELEPHC_WINDOWS_LLD` | Override the linker name/path passed through Clang's `-fuse-ld`. |

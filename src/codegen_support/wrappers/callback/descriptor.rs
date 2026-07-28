@@ -8,12 +8,13 @@
 //! Key details:
 //! - Runtime array helpers expect callee-saved loop registers to survive callback invocation.
 //! - Descriptor invokers return boxed `Mixed`; wrappers cast or detach results before returning.
+//! - Native MSx64 trampolines preserve the additional nonvolatile registers before entering internal helpers.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::arrays::emit_array_value_type_stamp;
 use crate::codegen_support::callable_descriptor;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 use crate::types::PhpType;
 
@@ -56,7 +57,7 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
     emitter.instruction("ldr x19, [x20]");                                      // load the selected callable descriptor from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
@@ -96,7 +97,7 @@ fn emit_x86_64_descriptor_callback_wrapper(
     emitter.instruction(&format!("mov r13, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
     emitter.instruction("mov r12, QWORD PTR [r13]");                            // load the selected callable descriptor from env slot zero
 
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, false);
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
@@ -146,7 +147,7 @@ fn emit_aarch64_extern_callback_trampoline(
     emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
 
     abi::emit_load_symbol_to_reg(emitter, "x19", &trampoline.descriptor_slot_label, 0);
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, true);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
@@ -166,11 +167,19 @@ fn emit_x86_64_extern_callback_trampoline(
     let wrapper = extern_trampoline_wrapper_view(trampoline);
     let visible_count = wrapper.visible_arg_types.len();
     let slot_count = (visible_count + 1).max(1);
-    let frame_size = align16(slot_count * 16 + 64);
+    let is_windows_native = emitter.target.platform == Platform::Windows;
+    let frame_size = if is_windows_native {
+        align16(slot_count * 16 + 240)
+    } else {
+        align16(slot_count * 16 + 64)
+    };
     let saved_descriptor_offset = slot_count * 16 + 16;
     let saved_env_offset = slot_count * 16 + 24;
     let saved_runtime_index_offset = slot_count * 16 + 32;
     let saved_runtime_count_offset = slot_count * 16 + 40;
+    let saved_rdi_offset = slot_count * 16 + 48;
+    let saved_rsi_offset = slot_count * 16 + 56;
+    let saved_xmm_base_offset = slot_count * 16 + 80;
 
     emitter.blank();
     emitter.comment(&format!(
@@ -184,9 +193,21 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::store_at_offset(emitter, "r13", saved_env_offset);
     abi::store_at_offset(emitter, "r14", saved_runtime_index_offset);
     abi::store_at_offset(emitter, "r15", saved_runtime_count_offset);
+    // -- preserve MSx64 registers not preserved by the internal SysV-compatible ABI --
+    if is_windows_native {
+        abi::store_at_offset(emitter, "rdi", saved_rdi_offset);
+        abi::store_at_offset(emitter, "rsi", saved_rsi_offset);
+        for xmm_index in 6..=15 {
+            let offset = saved_xmm_base_offset + (xmm_index - 6) * 16;
+            emitter.instruction(&format!(                                       // preserve an MSx64 nonvolatile vector register across SysV helpers
+                "movdqu XMMWORD PTR [rbp - {}], xmm{}",
+                offset, xmm_index
+            ));
+        }
+    }
 
     abi::emit_load_symbol_to_reg(emitter, "r12", &trampoline.descriptor_slot_label, 0);
-    spill_visible_args(emitter, &wrapper.visible_arg_types);
+    spill_visible_args(emitter, &wrapper.visible_arg_types, true);
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
@@ -196,6 +217,18 @@ fn emit_x86_64_extern_callback_trampoline(
     abi::load_at_offset(emitter, "r14", saved_runtime_index_offset);
     abi::load_at_offset(emitter, "r13", saved_env_offset);
     abi::load_at_offset(emitter, "r12", saved_descriptor_offset);
+    // -- restore MSx64 registers after all internal SysV-compatible helper calls --
+    if is_windows_native {
+        for xmm_index in (6..=15).rev() {
+            let offset = saved_xmm_base_offset + (xmm_index - 6) * 16;
+            emitter.instruction(&format!(                                       // restore an MSx64 nonvolatile vector register after SysV helpers
+                "movdqu xmm{}, XMMWORD PTR [rbp - {}]",
+                xmm_index, offset
+            ));
+        }
+        abi::load_at_offset(emitter, "rsi", saved_rsi_offset);
+        abi::load_at_offset(emitter, "rdi", saved_rdi_offset);
+    }
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }
@@ -390,7 +423,10 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
         descriptor_arg_reg,
     );
     abi::emit_push_reg(emitter, array_arg_reg); // preserve the boxed argument container for release after descriptor invocation
+    let call_pad_bytes = abi::outgoing_call_stack_pad_bytes(emitter.target, 0);
+    abi::emit_reserve_temporary_stack(emitter, call_pad_bytes);
     abi::emit_call_reg(emitter, invoker_reg);
+    abi::emit_release_temporary_stack(emitter, call_pad_bytes);
     emit_release_preserved_mixed_argument_after_result(emitter);
 }
 
@@ -473,5 +509,97 @@ fn descriptor_array_frame_offset(
     match emitter.target.arch {
         Arch::AArch64 => frame_size - 16 - visible_count * 16,
         Arch::X86_64 => frame_arg_slot_offset(visible_count),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Verifies an extern callback receives mixed MSx64 arguments from their
+    /// positional registers and native eight-byte overflow slots.
+    #[test]
+    fn windows_extern_callback_spills_native_mixed_argument_layout() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        let trampoline = DeferredExternCallbackTrampoline {
+            label: "ffi_callback".to_string(),
+            descriptor_slot_label: "ffi_callback_descriptor".to_string(),
+            visible_arg_types: vec![
+                PhpType::Int,
+                PhpType::Float,
+                PhpType::Int,
+                PhpType::Float,
+                PhpType::Int,
+                PhpType::Float,
+            ],
+            return_type: PhpType::Int,
+        };
+
+        emit_x86_64_extern_callback_trampoline(&mut emitter, &trampoline);
+        let out = emitter.output();
+
+        assert!(out.contains("mov QWORD PTR [rbp - 16], rcx"));
+        assert!(out.contains("movsd QWORD PTR [rbp - 32], xmm1"));
+        assert!(out.contains("mov QWORD PTR [rbp - 48], r8"));
+        assert!(out.contains("movsd QWORD PTR [rbp - 64], xmm3"));
+        assert!(out.contains("mov r10, QWORD PTR [rbp + 48]"));
+        assert!(out.contains("movsd xmm15, QWORD PTR [rbp + 56]"));
+    }
+
+    /// Verifies a native MSx64 callback preserves every register that the
+    /// internal SysV-compatible helper convention is otherwise allowed to clobber.
+    #[test]
+    fn windows_extern_callback_preserves_msx64_nonvolatile_registers() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        let trampoline = DeferredExternCallbackTrampoline {
+            label: "ffi_callback".to_string(),
+            descriptor_slot_label: "ffi_callback_descriptor".to_string(),
+            visible_arg_types: vec![PhpType::Int],
+            return_type: PhpType::Float,
+        };
+
+        emit_x86_64_extern_callback_trampoline(&mut emitter, &trampoline);
+        let out = emitter.output();
+
+        assert!(out.contains("mov QWORD PTR [rbp - 80], rdi"), "{out}");
+        assert!(out.contains("mov QWORD PTR [rbp - 88], rsi"), "{out}");
+        assert!(
+            out.contains("movdqu XMMWORD PTR [rbp - 112], xmm6"),
+            "{out}"
+        );
+        assert!(
+            out.contains("movdqu XMMWORD PTR [rbp - 256], xmm15"),
+            "{out}"
+        );
+        assert!(
+            out.contains("movdqu xmm15, XMMWORD PTR [rbp - 256]"),
+            "{out}"
+        );
+        assert!(
+            out.contains("movdqu xmm6, XMMWORD PTR [rbp - 112]"),
+            "{out}"
+        );
+        assert!(out.contains("mov rsi, QWORD PTR [rbp - 88]"), "{out}");
+        assert!(out.contains("mov rdi, QWORD PTR [rbp - 80]"), "{out}");
+    }
+
+    /// Verifies the SysV trampoline remains free of MSx64-only register saves.
+    #[test]
+    fn linux_extern_callback_omits_msx64_nonvolatile_register_saves() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        let trampoline = DeferredExternCallbackTrampoline {
+            label: "ffi_callback".to_string(),
+            descriptor_slot_label: "ffi_callback_descriptor".to_string(),
+            visible_arg_types: vec![PhpType::Int],
+            return_type: PhpType::Float,
+        };
+
+        emit_x86_64_extern_callback_trampoline(&mut emitter, &trampoline);
+        let out = emitter.output();
+
+        assert!(!out.contains("XMMWORD PTR"), "{out}");
+        assert!(!out.contains("[rbp - 80], rdi"), "{out}");
+        assert!(!out.contains("[rbp - 88], rsi"), "{out}");
     }
 }

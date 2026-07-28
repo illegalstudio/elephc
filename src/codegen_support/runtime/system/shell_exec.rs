@@ -61,7 +61,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     // -- read loop: fgetc until EOF --
     emitter.label("__rt_shell_exec_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload FILE* from stack
-    emitter.bl_c("fgetc");                                           // read one byte → w0=char or -1 (EOF)
+    emitter.emit_call_c("fgetc");                                    // read one byte → w0=char or -1 (EOF)
     emitter.instruction("cmn w0, #1");                                          // compare 32-bit return with -1 (EOF)
     emitter.instruction("b.eq __rt_shell_exec_close");                          // if EOF, stop reading
 
@@ -118,7 +118,7 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_shell_exec_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the FILE* for the next fgetc() probe
-    emitter.bl_c("fgetc");                                                      // read one byte from the pipe → eax=byte or -1 (EOF)
+    emitter.emit_call_c("fgetc");                                               // read one byte from the pipe → eax=byte or -1 (EOF)
     emitter.instruction("cmp eax, -1");                                         // did the pipe reach EOF?
     emitter.instruction("je __rt_shell_exec_close");                            // stop reading once the full shell output has been consumed
 

@@ -22,9 +22,10 @@ use crate::types::{PhpType, TypeEnv};
 use super::Checker;
 
 pub(crate) use catalog::{
-    canonical_builtin_function_name, is_php_visible_builtin_function,
+    builtin_available_on_platform, canonical_builtin_function_name,
+    canonical_builtin_function_name_on_platform, is_php_visible_builtin_function,
     is_supported_builtin_function, strict_php_hidden_builtin,
-    supported_builtin_function_names,
+    supported_builtin_function_names_on_platform,
 };
 pub(crate) use callables::{
     array_element_type, array_filter_callback_arg_types, callback_supports_complex_descriptor_env,
@@ -54,6 +55,21 @@ impl Checker {
         }
     }
 
+    /// Records that a Windows target requires the given shared library.
+    ///
+    /// No-op on non-Windows targets. Used for libraries that live in libc on
+    /// Linux (glibc/musl) and libSystem on macOS but need explicit linkage on
+    /// Windows because msvcrt does not ship them — e.g. `iconv`, which the
+    /// `convert.iconv.*` stream filter lowers to `iconv_open`/`iconv`/
+    /// `iconv_close` C symbols resolved by a cross-built libiconv in CI.
+    pub(crate) fn require_windows_builtin_library(&mut self, library: &str) {
+        if self.target_platform == crate::codegen::platform::Platform::Windows
+            && !self.required_libraries.iter().any(|lib| lib == library)
+        {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
     pub fn check_builtin(
         &mut self,
@@ -67,6 +83,9 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        if !catalog::builtin_available_on_platform(&builtin_key, self.target_platform) {
+            return Ok(None);
+        }
         // `--strict-php` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must
@@ -130,6 +149,9 @@ impl Checker {
                     }
                     crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                         self.require_macos_builtin_library(library);
+                    }
+                    crate::builtins::semantics::BuiltinRequirement::WindowsLibrary(library) => {
+                        self.require_windows_builtin_library(library);
                     }
                     crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
                 }

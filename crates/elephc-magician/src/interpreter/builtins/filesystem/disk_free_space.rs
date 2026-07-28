@@ -61,8 +61,18 @@ pub(in crate::interpreter) fn eval_disk_space_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(directory)?;
+    #[cfg(unix)]
+    let result = eval_disk_space_bytes_unix(name, &bytes)?;
+    #[cfg(windows)]
+    let result = eval_disk_space_bytes_windows(name, &bytes)?;
+    values.float(result)
+}
+
+/// Queries Unix filesystem capacity through `statvfs`.
+#[cfg(unix)]
+fn eval_disk_space_bytes_unix(name: &str, bytes: &[u8]) -> Result<f64, EvalStatus> {
     let Ok(path) = CString::new(bytes) else {
-        return values.float(0.0);
+        return Ok(0.0);
     };
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
     let status = unsafe {
@@ -70,7 +80,7 @@ pub(in crate::interpreter) fn eval_disk_space_result(
         libc::statvfs(path.as_ptr(), stats.as_mut_ptr())
     };
     if status != 0 {
-        return values.float(0.0);
+        return Ok(0.0);
     }
     let stats = unsafe {
         // `statvfs` succeeded, so libc initialized the full stat buffer.
@@ -86,5 +96,48 @@ pub(in crate::interpreter) fn eval_disk_space_result(
         "disk_total_space" => stats.f_blocks,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    values.float((block_size as f64) * (blocks as f64))
+    Ok((block_size as f64) * (blocks as f64))
+}
+
+/// Queries Windows filesystem capacity through `GetDiskFreeSpaceExW`.
+#[cfg(windows)]
+fn eval_disk_space_bytes_windows(name: &str, bytes: &[u8]) -> Result<f64, EvalStatus> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// Reads total and available byte counts for the filesystem containing a Windows path.
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_for_caller: *mut u64,
+            total_bytes: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+
+    let path = String::from_utf8_lossy(bytes);
+    let wide: Vec<u16> = std::ffi::OsStr::new(path.as_ref())
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut available = 0_u64;
+    let mut total = 0_u64;
+    let mut free = 0_u64;
+    let status = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            &mut total,
+            &mut free,
+        )
+    };
+    if status == 0 {
+        return Ok(0.0);
+    }
+    let bytes = match name {
+        "disk_free_space" => available,
+        "disk_total_space" => total,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    Ok(bytes as f64)
 }

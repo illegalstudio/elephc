@@ -89,6 +89,18 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_cli_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
+    // When the codegen suite is measured against a cross-compilation target
+    // (`ELEPHC_TEST_TARGET`), tell the CLI to compile for that same target so
+    // CLI-subprocess fixtures stay consistent with the in-process helpers, which
+    // read the target from `target()`. The CLI parses `--target` last-wins, so a
+    // later explicit `--target` in a test's own args still overrides this; that
+    // keeps target-selection fixtures (e.g. windows_pe, cli.rs) working. When the
+    // env var is unset there is no flag, so native behavior is byte-identical.
+    if let Ok(value) = std::env::var("ELEPHC_TEST_TARGET") {
+        if !value.is_empty() {
+            cmd.arg("--target").arg(value);
+        }
+    }
     cmd
 }
 
@@ -200,9 +212,16 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
-        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+        elephc::name_resolver::resolve_for_platform(resolved, target().platform)
+            .expect("name resolve failed");
+    let resolved = elephc::autoload::run_for_platform(
+        resolved,
+        &dir,
+        &autoload_registry,
+        target().platform,
+    )
+    .expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -257,7 +276,9 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved =
+        elephc::name_resolver::resolve_for_platform(resolved, target().platform)
+            .expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -329,9 +350,16 @@ pub(crate) fn compile_and_run_files_with_defines(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
-        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+        elephc::name_resolver::resolve_for_platform(resolved, target().platform)
+            .expect("name resolve failed");
+    let resolved = elephc::autoload::run_for_platform(
+        resolved,
+        base_dir,
+        &autoload_registry,
+        target().platform,
+    )
+    .expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -412,7 +440,8 @@ pub(crate) fn compile_files_fails_with_defines(
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::autoload::collect_aliases(resolved);
-        let resolved = elephc::name_resolver::resolve(resolved)?;
+        let resolved =
+            elephc::name_resolver::resolve_for_platform(resolved, target().platform)?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
         Ok(())
@@ -427,6 +456,10 @@ pub(crate) fn compile_files_fails_with_defines(
 // Used for tests that verify runtime behavior with specific input (e.g., read(), fgets).
 /// Provides the Compile and run with stdin helper used by the projects module.
 pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
+    // Skip early on the windows target when the MinGW/Wine toolchain is missing,
+    // before touching the assembler or Wine (this helper assembles/runs inline
+    // rather than through `assemble_from_stdin`/`run_binary`).
+    ensure_windows_runnable_or_skip();
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -439,7 +472,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved =
+        elephc::name_resolver::resolve_for_platform(resolved, target().platform)
+            .expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -468,7 +503,16 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, &user_asm).unwrap();
+    // Apply the windows syscall→shim rewrite before assembling; a no-op on native
+    // targets, so the assembled bytes are unchanged there.
+    let windows_asm;
+    let user_asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(&user_asm);
+        windows_asm.as_str()
+    } else {
+        user_asm.as_str()
+    };
+    fs::write(&asm_path, user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
@@ -488,19 +532,14 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     );
 
     use std::io::Write;
-    let bin_cmd = if target().platform == Platform::Linux
+    let mut cmd = if target().platform == Platform::Windows {
+        // Run the cross-compiled `.exe` under Wine, still piping stdin below.
+        build_run_command(&bin_path)
+    } else if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
     {
-        "qemu-aarch64-static"
-    } else {
-        bin_path.to_str().unwrap()
-    };
-    let mut cmd = if target().platform == Platform::Linux
-        && target().arch == Arch::AArch64
-        && cfg!(target_arch = "x86_64")
-    {
-        let mut c = Command::new(bin_cmd);
+        let mut c = Command::new("qemu-aarch64-static");
         c.arg(&bin_path);
         c
     } else {

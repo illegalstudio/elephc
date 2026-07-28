@@ -38,7 +38,7 @@ builtin! {
 /// Validates the stream resource and links required filter libraries for known literal filter names.
 ///
 /// Checks that arg[0] is a stream resource. For a string-literal arg[1], links the appropriate
-/// system library: `z` for zlib filters, `iconv` (macOS only) for iconv filters, `bz2` for
+/// system library: `z` for zlib filters, `iconv` (macOS and Windows) for iconv filters, `bz2` for
 /// bzip2 filters. Dynamic filter names are routed through the runtime filter registry. Returns `Mixed`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(

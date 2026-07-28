@@ -8,7 +8,7 @@ sidebar:
 ## natcasesort()
 
 ```php
-function natcasesort(array $array): bool
+function natcasesort(array &$array): bool
 ```
 
 Sorts an array using a case-insensitive natural order algorithm.

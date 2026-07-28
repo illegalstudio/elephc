@@ -14,6 +14,12 @@
 //!   per-fd filter state and no `__rt_fread` change are needed.
 //! - `iconv_open`/`iconv`/`iconv_close` live in libc (glibc, macOS libSystem,
 //!   musl), so no extra `-l` and no function-pointer indirection are needed.
+//!   On windows-x86_64 the x86_64 call sites route through `Emitter::emit_call_c`
+//!   instead of `bl_c`: libiconv IS statically linked there (`src/linker.rs`
+//!   `-liconv`, MinGW sysroot), MSx64 ABI, so the three symbols get real
+//!   `__rt_sys_iconv_open`/`__rt_sys_iconv`/`__rt_sys_iconv_close` arg-shuffle
+//!   shims (`codegen_support::runtime::win32::emit_shim_iconv`) rather than
+//!   loud-fail stubs. The AArch64 body below is unaffected (still `bl_c`).
 //! - The `<from>` and `<to>` charset names are parsed from the filter name at
 //!   compile time and emitted as null-terminated C strings.
 //! - v1 limitations: the conversion direction is applied to the descriptor (so
@@ -90,7 +96,7 @@ pub(crate) fn emit_read_arm64<F>(
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
     abi::emit_symbol_address(emitter, "x0", to_sym);
     abi::emit_symbol_address(emitter, "x1", from_sym);
-    emitter.bl_c("iconv_open"); // open the charset conversion descriptor
+    emitter.bl_c("iconv_open");                                                 // open the charset conversion descriptor
     emitter.instruction("cmn x0, #1");                                          // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("b.eq {}", skip));                             // iconv_open failed → skip the conversion
     emitter.instruction("str x0, [sp, #40]");                                   // save the iconv conversion descriptor
@@ -111,13 +117,13 @@ pub(crate) fn emit_read_arm64<F>(
     emitter.instruction("add x2, sp, #56");                                     // &inbytesleft
     emitter.instruction("add x3, sp, #64");                                     // &outbuf
     emitter.instruction("add x4, sp, #72");                                     // &outbytesleft
-    emitter.bl_c("iconv"); // transcode the whole input in one pass
+    emitter.bl_c("iconv");                                                      // transcode the whole input in one pass
     emitter.instruction("ldr x9, [sp, #24]");                                   // output capacity
     emitter.instruction("ldr x10, [sp, #72]");                                  // bytes still free in the output buffer
     emitter.instruction("sub x9, x9, x10");                                     // converted length = capacity - free
     emitter.instruction("str x9, [sp, #80]");                                   // save the converted length
     emitter.instruction("ldr x0, [sp, #40]");                                   // conversion descriptor
-    emitter.bl_c("iconv_close"); // release the iconv descriptor
+    emitter.bl_c("iconv_close");                                                // release the iconv descriptor
 
     // -- back the descriptor with an anonymous temp file of the converted bytes --
     emitter.instruction("bl __rt_tmpfile");                                     // create an unlinked temp file, x0 = fd
@@ -152,7 +158,7 @@ pub(crate) fn emit_read_arm64<F>(
     // -- dup2(temp, fd): the descriptor now serves the converted bytes --
     emitter.instruction("ldr x0, [sp, #32]");                                   // oldfd = temp file
     emitter.instruction("ldr x1, [sp, #0]");                                    // newfd = the stream descriptor
-    emitter.bl_c("dup2"); // redirect the descriptor onto the temp file
+    emitter.bl_c("dup2");                                                       // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
     emitter.instruction("ldr x0, [sp, #32]");                                   // the temp-file descriptor
@@ -226,7 +232,7 @@ pub(crate) fn emit_read_x86_64<F>(
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
     abi::emit_symbol_address(emitter, "rdi", &to_sym); // arg 0 = tocode
     abi::emit_symbol_address(emitter, "rsi", &from_sym); // arg 1 = fromcode
-    emitter.instruction("call iconv_open");                                     // open the charset conversion descriptor
+    emitter.emit_call_c("iconv_open");                                          // open the charset conversion descriptor
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip));                               // iconv_open failed → skip the conversion
     emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the iconv conversion descriptor
@@ -247,12 +253,12 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.instruction("lea rdx, [rsp + 56]");                                 // &inbytesleft
     emitter.instruction("lea rcx, [rsp + 64]");                                 // &outbuf
     emitter.instruction("lea r8, [rsp + 72]");                                  // &outbytesleft
-    emitter.instruction("call iconv");                                          // transcode the whole input in one pass
+    emitter.emit_call_c("iconv");                                               // transcode the whole input in one pass
     emitter.instruction("mov r9, QWORD PTR [rsp + 24]");                        // output capacity
     emitter.instruction("sub r9, QWORD PTR [rsp + 72]");                        // converted length = capacity - free
     emitter.instruction("mov QWORD PTR [rsp + 80], r9");                        // save the converted length
     emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // conversion descriptor
-    emitter.instruction("call iconv_close");                                    // release the iconv descriptor
+    emitter.emit_call_c("iconv_close");                                         // release the iconv descriptor
 
     // -- back the descriptor with an anonymous temp file of the converted bytes --
     emitter.instruction("call __rt_tmpfile");                                   // create an unlinked temp file, rax = fd
@@ -288,7 +294,7 @@ pub(crate) fn emit_read_x86_64<F>(
     // -- dup2(temp, fd): the descriptor now serves the converted bytes --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // oldfd = temp file
     emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // newfd = the stream descriptor
-    emitter.instruction("call dup2");                                           // redirect the descriptor onto the temp file
+    emitter.emit_call_c("dup2");                                                // redirect the descriptor onto the temp file
 
     // -- close the now-redundant temp-file descriptor --
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // the temp-file descriptor

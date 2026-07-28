@@ -202,7 +202,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
-    let ast = match name_resolver::resolve(ast) {
+    let ast = match name_resolver::resolve_for_platform(ast, target.platform) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -214,7 +214,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
-    let ast = match autoload::run(ast, parent, &autoload_registry) {
+    let ast = match autoload::run_for_platform(ast, parent, &autoload_registry, target.platform) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -372,6 +372,19 @@ pub(crate) fn compile(config: CliConfig) {
     // web and non-web runtime objects distinct automatically.
     runtime_features.web = web;
 
+    // The windows-x86_64 third-party ABI shims (zlib/bzip2/pcre2/iconv) `call`
+    // real library symbols, so emit them only when the program actually links
+    // that library. Derived from the same `required_libraries` signal that adds
+    // `-lz`/`-lbz2`/`-liconv`, so shim emission and linking stay consistent; the
+    // runtime cache (keyed on the assembly hash) distinguishes the objects
+    // automatically. `regex` already gates the pcre2 shims.
+    let program_requires_lib = |name: &str| {
+        check_result.required_libraries.iter().any(|lib| lib == name)
+    };
+    runtime_features.zlib = program_requires_lib("z");
+    runtime_features.bzip2 = program_requires_lib("bz2");
+    runtime_features.iconv = program_requires_lib("iconv");
+
     if web && !extra_link_libs.iter().any(|lib| lib == "elephc_web") {
         extra_link_libs.push("elephc_web".to_string());
     }
@@ -395,6 +408,7 @@ pub(crate) fn compile(config: CliConfig) {
             .required_libraries
             .iter()
             .any(|lib| lib == "elephc_tls");
+    runtime_features.tls = requires_elephc_tls;
 
     crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();
@@ -429,11 +443,17 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
-    let user_asm = if emit_debug_info {
+    let mut user_asm = if emit_debug_info {
         debug_info::inject_line_directives(&user_asm, filename, target.platform)
     } else {
         user_asm
     };
+    // On Windows, rewrite the raw Linux `mov eax, N; syscall` sequences shared by
+    // the x86_64 backend into `call __rt_sys_<name>` shim calls before the assembly
+    // is written, source-mapped, or assembled. Linux/macOS assembly is untouched.
+    if target.platform == Platform::Windows {
+        user_asm = codegen::platform::transform_for_windows(&user_asm);
+    }
     timings.record_since("codegen", phase_started);
 
     for lib in &check_result.required_libraries {
@@ -539,8 +559,8 @@ pub(crate) fn compile(config: CliConfig) {
 /// derived from the input filename.
 ///
 /// Executable mode produces `<stem>` (no extension). Cdylib mode produces
-/// `lib<stem>.so` (Linux) or `lib<stem>.dylib` (macOS), matching the conventional
-/// shared-library naming that `dlopen(3)` and linker `-l` flags expect.
+/// `lib<stem>.so` (Linux), `lib<stem>.dylib` (macOS), or `<stem>.dll` (Windows),
+/// matching each platform's conventional loadable-library naming.
 fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
@@ -550,7 +570,7 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+            Platform::Windows => format!("{}.dll", stem),
         },
     };
     OutputPaths {

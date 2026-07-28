@@ -419,9 +419,14 @@ fn emit_var_dump_int_payload(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits `var_dump` output for a float payload in the floating result register.
+///
+/// `var_dump` renders floats at PHP's `serialize_precision = -1` (shortest
+/// round-trip), the same precision `json_encode`/`serialize` use — NOT the
+/// `precision = 14` setting `__rt_ftoa` implements for `echo`/`(string)`. This
+/// calls the Inf/NaN-safe `__rt_var_dump_ftoa` wrapper instead of `__rt_ftoa`.
 fn emit_var_dump_float(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_ftoa");
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_literal(ctx, b"float(");
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);

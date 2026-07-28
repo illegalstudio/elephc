@@ -65,7 +65,12 @@ impl Checker {
                         deprecation: None,
                     });
                 }
-                if crate::name_resolver::is_builtin_function(function_name) {
+                if crate::name_resolver::is_builtin_function(function_name)
+                    && crate::types::checker::builtins::builtin_available_on_platform(
+                        &crate::names::php_symbol_key(function_name.trim_start_matches('\\')),
+                        self.target_platform,
+                    )
+                {
                     return crate::types::first_class_callable_builtin_sig(function_name)
                         .ok_or_else(|| {
                             CompileError::new(
@@ -242,7 +247,10 @@ impl Checker {
         }
         match target {
             CallableTarget::Function(name) => {
-                if crate::name_resolver::is_builtin_function(name.as_str()) {
+                if crate::name_resolver::is_builtin_function_on_platform(
+                    name.as_str(),
+                    self.target_platform,
+                ) {
                     return Ok(base_sig);
                 }
                 let normalized_args =

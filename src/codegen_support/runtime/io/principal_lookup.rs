@@ -7,6 +7,15 @@
 //!
 //! Key details:
 //! - Helpers scan `/etc/passwd` or `/etc/group` with libc file I/O and return `-1` when absent.
+//! - The x86_64 call sites route `fopen`/`fgets`/`fclose`/`strncmp`/`strchr`/
+//!   `strtoul` through `Emitter::emit_call_c` (not a bare `instruction("call
+//!   ...")`): on windows-x86_64 each reaches a real `__rt_sys_*` msvcrt
+//!   arg-shuffle shim (`codegen_support::runtime::win32::
+//!   emit_shim_msvcrt_passwd_lookup`) — all six are standard msvcrt symbols.
+//!   `/etc/passwd`/`/etc/group` do not exist on Windows, so `fopen` returns
+//!   `NULL` there naturally and this loop's existing `fail_label` path
+//!   handles it — no bespoke Windows behavior is needed. Byte-identical on
+//!   every other target.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -43,7 +52,7 @@ fn emit_lookup_x86_64(emitter: &mut Emitter, label: &str, path_symbol: &str) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve principal byte length
     abi::emit_symbol_address(emitter, "rdi", path_symbol);
     abi::emit_symbol_address(emitter, "rsi", "_principal_lookup_read_mode");
-    emitter.instruction("call fopen");                                          // open the local principal database for reading
+    emitter.emit_call_c("fopen");                                               // open the local principal database for reading
     emitter.instruction("test rax, rax");                                       // did fopen return a FILE pointer?
     emitter.instruction(&format!("je {fail_label}"));                           // missing database behaves like an unknown principal
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve FILE pointer across loop calls
@@ -52,13 +61,13 @@ fn emit_lookup_x86_64(emitter: &mut Emitter, label: &str, path_symbol: &str) {
     abi::emit_symbol_address(emitter, "rdi", "_principal_lookup_buf");
     emitter.instruction("mov esi, 4096");                                       // maximum line bytes to read into the shared scratch buffer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // pass FILE pointer to fgets
-    emitter.instruction("call fgets");                                          // read one principal database line
+    emitter.emit_call_c("fgets");                                               // read one principal database line
     emitter.instruction("test rax, rax");                                       // did fgets return a line?
     emitter.instruction(&format!("je {close_fail_label}"));                     // EOF without a match returns not found
     abi::emit_symbol_address(emitter, "rdi", "_principal_lookup_buf");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // compare against the requested principal name
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // compare exactly the requested name length
-    emitter.instruction("call strncmp");                                        // compare database entry prefix with requested name
+    emitter.emit_call_c("strncmp");                                             // compare database entry prefix with requested name
     emitter.instruction("test eax, eax");                                       // did the prefix match?
     emitter.instruction(&format!("jne {loop_label}"));                          // keep scanning until the name matches
     abi::emit_symbol_address(emitter, "r8", "_principal_lookup_buf");
@@ -67,22 +76,22 @@ fn emit_lookup_x86_64(emitter: &mut Emitter, label: &str, path_symbol: &str) {
     emitter.instruction(&format!("jne {loop_label}"));                          // reject partial-prefix matches
     emitter.instruction("lea rdi, [r8 + rcx + 1]");                             // search after the entry-name delimiter
     emitter.instruction("mov esi, 58");                                         // delimiter byte ':'
-    emitter.instruction("call strchr");                                         // locate the delimiter before uid/gid
+    emitter.emit_call_c("strchr");                                              // locate the delimiter before uid/gid
     emitter.instruction("test rax, rax");                                       // was the numeric field delimiter present?
     emitter.instruction(&format!("je {loop_label}"));                           // malformed line: keep scanning
     emitter.instruction("lea rdi, [rax + 1]");                                  // numeric id starts after the second delimiter
     emitter.instruction("xor esi, esi");                                        // endptr = NULL
     emitter.instruction("mov edx, 10");                                         // parse decimal uid/gid
-    emitter.instruction("call strtoul");                                        // parse the numeric principal id
+    emitter.emit_call_c("strtoul");                                             // parse the numeric principal id
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve parsed id across fclose
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // close the database before returning a match
-    emitter.instruction("call fclose");                                         // release FILE handle
+    emitter.emit_call_c("fclose");                                              // release FILE handle
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return parsed uid/gid
     emitter.instruction(&format!("jmp {done_label}"));                          // skip not-found sentinel
 
     emitter.label(&close_fail_label);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // close the database after EOF
-    emitter.instruction("call fclose");                                         // release FILE handle
+    emitter.emit_call_c("fclose");                                              // release FILE handle
     emitter.label(&fail_label);
     emitter.instruction("mov rax, -1");                                         // not found sentinel
 

@@ -59,10 +59,16 @@ pub fn prepare_runtime_object(
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let runtime_asm =
+    let mut runtime_asm =
         codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
+    // On Windows, rewrite the shared x86_64 runtime's raw `mov eax, N; syscall`
+    // sequences into `call __rt_sys_<name>` shim calls before hashing, so the cache
+    // key reflects the final assembled bytes. Linux/macOS runtime asm is untouched.
+    if target.platform == Platform::Windows {
+        runtime_asm = codegen::platform::transform_for_windows(&runtime_asm);
+    }
     let runtime_hash = runtime_asm_hash(&runtime_asm);
-    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
+    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash)?);
     if cache_path.exists() {
         return Ok(PreparedRuntimeObject {
             path: cache_path,
@@ -92,35 +98,47 @@ pub fn prepare_runtime_object(
         )
     })?;
 
-    let mut assembler = Command::new(target.assembler_cmd());
-    if target.platform == Platform::MacOS {
-        assembler.args(["-arch", target.darwin_arch_name()]);
-    }
-    assembler.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
+    let mut assembler = if target.platform == Platform::Windows {
+        crate::windows_toolchain::assembler_command(&temp_asm_path, &temp_obj_path)?
+    } else {
+        let mut command = Command::new(target.assembler_cmd());
+        if target.platform == Platform::MacOS {
+            command.args(["-arch", target.darwin_arch_name()]);
+        }
+        command.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
+        command
+    };
+    let assembler_name = assembler.get_program().to_string_lossy().into_owned();
     let assembler_status = assembler.status().map_err(|err| {
         format!(
             "failed to run runtime assembler '{}' for '{}': {}",
-            target.assembler_cmd(),
+            assembler_name,
             temp_obj_path.display(),
             err
         )
     })?;
-    let _ = fs::remove_file(&temp_asm_path);
     if !assembler_status.success() {
         let _ = fs::remove_file(&temp_obj_path);
         return Err(format!(
-            "runtime assembler failed while building '{}'",
-            cache_path.display()
+            "runtime assembler failed while building '{}' (asm left at {})",
+            cache_path.display(),
+            temp_asm_path.display()
         ));
     }
 
     match fs::rename(&temp_obj_path, &cache_path) {
-        Ok(()) => Ok(PreparedRuntimeObject {
-            path: cache_path,
-            status: RuntimeCacheStatus::Miss,
-        }),
+        Ok(()) => {
+            // Object is safely in place — remove the temporary assembly source.
+            let _ = fs::remove_file(&temp_asm_path);
+            Ok(PreparedRuntimeObject {
+                path: cache_path,
+                status: RuntimeCacheStatus::Miss,
+            })
+        }
         Err(_err) if cache_path.exists() => {
+            // A concurrent run already produced the object — drop our temporaries.
             let _ = fs::remove_file(&temp_obj_path);
+            let _ = fs::remove_file(&temp_asm_path);
             Ok(PreparedRuntimeObject {
                 path: cache_path,
                 status: RuntimeCacheStatus::Hit,
@@ -149,14 +167,30 @@ fn runtime_cache_dir() -> PathBuf {
 }
 
 /// Builds the cache file name for a runtime object.
-fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
-    format!(
-        "runtime-v{}-{}-rt{:016x}-heap{}.o",
-        env!("CARGO_PKG_VERSION"),
-        target.as_str(),
-        runtime_hash,
-        heap_size
-    )
+fn runtime_cache_file_name(
+    heap_size: usize,
+    target: Target,
+    runtime_hash: u64,
+) -> Result<String, String> {
+    if target.platform == Platform::Windows {
+        let toolchain = crate::windows_toolchain::WindowsToolchain::configured()?.cache_key();
+        Ok(format!(
+            "runtime-v{}-{}-{}-rt{:016x}-heap{}.o",
+            env!("CARGO_PKG_VERSION"),
+            target.as_str(),
+            toolchain,
+            runtime_hash,
+            heap_size
+        ))
+    } else {
+        Ok(format!(
+            "runtime-v{}-{}-rt{:016x}-heap{}.o",
+            env!("CARGO_PKG_VERSION"),
+            target.as_str(),
+            runtime_hash,
+            heap_size
+        ))
+    }
 }
 
 /// Computes a 64-bit FNV-1a hash of the given assembly string.

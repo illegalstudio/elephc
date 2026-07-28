@@ -23,7 +23,7 @@
 //!   contract or PHP's four-argument bucket-brigade form. Optional lifecycle
 //!   hooks are honored, and `$this->params` is seeded before `onCreate()`.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::{Arch, Platform}};
 
 const USER_FILTER_REGISTRATIONS_CAP: u32 = 128;
 
@@ -354,7 +354,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_sfau_oncreate_skip_x86");                      // method absent → skip the hook
     emitter.instruction("mov rdi, rax");                                        // $this in SysV first arg
-    emitter.instruction("call r11");                                            // call onCreate($this) → rax = bool
+    emitter.emit_platform_callback_call("r11", 1);
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_sfau_oncreate_skip_x86");                     // truthy result → proceed
     // onCreate returned false → release the obj and bail without
@@ -367,6 +367,14 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
 
     // -- record state per direction bit --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("call __rt_win_stream_slot");                       // map opaque Windows descriptor to a bounded filter-state slot
+        emitter.instruction("mov QWORD PTR [rbp - 48], rax");                   // retain compact slot through direction bookkeeping
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // restore the filter instance after the slot lookup clobbers its result register
+    } else {
+        emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                   // non-Windows keeps its established descriptor-indexed behavior
+    }
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // all fixed filter tables consume the compact/legacy slot
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload resolved id (u8 in the low byte)
     abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
@@ -374,22 +382,22 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     // mode & 1 → read direction
     emitter.instruction("test rsi, 1");                                         // STREAM_FILTER_READ bit set?
     emitter.instruction("jz __rt_sfau_skip_read_x86");                          // skip read-direction state otherwise
-    emitter.instruction("mov r10, rdi");                                        // fd
-    emitter.instruction("add r10, r10");                                        // fd*2 — read slot
-    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2] = obj
+    emitter.instruction("mov r10, rdi");                                        // compact stream slot
+    emitter.instruction("add r10, r10");                                        // slot*2 — read slot
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[slot*2] = obj
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // load runtime data address
-    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[fd] = id (low 8 bits)
+    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[slot] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_read_x86");
 
     // mode & 2 → write direction
     emitter.instruction("test rsi, 2");                                         // STREAM_FILTER_WRITE bit set?
     emitter.instruction("jz __rt_sfau_skip_write_x86");                         // skip write-direction state otherwise
-    emitter.instruction("mov r10, rdi");                                        // fd
-    emitter.instruction("add r10, r10");                                        // fd*2
+    emitter.instruction("mov r10, rdi");                                        // compact stream slot
+    emitter.instruction("add r10, r10");                                        // slot*2
     emitter.instruction("add r10, 1");                                          // fd*2 + 1 — write slot
-    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2 + 1] = obj
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[slot*2 + 1] = obj
     abi::emit_symbol_address(emitter, "r11", "_stream_write_filters");          // load runtime data address
-    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[fd] = id (low 8 bits)
+    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[slot] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_write_x86");
 
     emitter.instruction("mov eax, 1");                                          // success
@@ -496,6 +504,18 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
 
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("mov r9, rdi");                                         // fd
+    if emitter.target.platform == Platform::Windows {
+        emitter.instruction("sub rsp, 32");                                     // reserve aligned spills for direction and filter input
+        emitter.instruction("mov QWORD PTR [rsp], rcx");                        // preserve read/write direction across the slot-registry call
+        emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // preserve the filter input pointer across the slot-registry call
+        emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // preserve the filter input length clobbered by the slot registry
+        emitter.instruction("call __rt_win_stream_slot");                       // map opaque Windows descriptor to bounded user-filter slot
+        emitter.instruction("mov r9, rax");                                     // instance table uses the compact slot, never a raw SOCKET
+        emitter.instruction("mov rcx, QWORD PTR [rsp]");                        // restore the user-filter direction for instance indexing
+        emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // restore the PHP string pointer for the filter callback
+        emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");                   // restore the PHP string length for the filter callback
+        emitter.instruction("add rsp, 32");                                     // release the aligned slot-registry spill area
+    }
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
     abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
@@ -541,7 +561,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r10");                                             // restore filter method ptr
 
     // -- call filter($this=rdi, string=rsi/rdx) → returns string in rax/rdx --
-    emitter.instruction("call r10");                                            // invoke the user filter method
+    emitter.emit_platform_callback_call("r10", 3);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the post-filter string in rax/rdx
 
@@ -674,6 +694,10 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         let skip = format!("__rt_ufrf_dir{}_skip_x86", dir);
         let no_method = format!("__rt_ufrf_dir{}_no_method_x86", dir);
         emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // fd
+        if emitter.target.platform == Platform::Windows {
+            emitter.instruction("call __rt_win_stream_slot");                   // map opaque Windows descriptor to bounded user-filter slot
+            emitter.instruction("mov rdi, rax");                                // instance table uses only the compact slot
+        }
         emitter.instruction("mov r10, rdi");                                    // move runtime value between registers
         emitter.instruction("add r10, r10");                                    // fd*2
         if dir == 1 {
@@ -690,10 +714,14 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("test r14, r14");                                   // check whether the runtime value is zero
         emitter.instruction(&format!("jz {}", no_method));                      // branch when the checked value is zero or equal
         emitter.instruction("mov rdi, r11");                                    // $this
-        emitter.instruction("call r14");                                        // call external helper
+        emitter.emit_platform_callback_call("r14", 1);
         emitter.label(&no_method);
         // Clear the slot.
         emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // prepare SysV call argument
+        if emitter.target.platform == Platform::Windows {
+            emitter.instruction("call __rt_win_stream_slot");                   // map opaque Windows descriptor to bounded user-filter slot
+            emitter.instruction("mov rdi, rax");                                // instance table uses only the compact slot
+        }
         emitter.instruction("mov r10, rdi");                                    // move runtime value between registers
         emitter.instruction("add r10, r10");                                    // advance runtime pointer or counter
         if dir == 1 {
@@ -708,4 +736,92 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Regression tests for target-aware user stream-filter runtime emission.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Windows callback adapters need MSx64 shadow space and compact stream
+    //!   lookup must preserve the pending filter payload.
+
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies Windows user-filter lifecycle and transform callbacks cross from
+    /// the runtime's SysV register staging to generated PHP's MSx64 ABI.  Each
+    /// call needs shadow space and must target the adapter's relocated `r11`,
+    /// rather than directly calling the original vtable register.
+    #[test]
+    fn windows_x86_user_filter_callbacks_use_platform_adapter() {
+        let target = Target::new(Platform::Windows, Arch::X86_64);
+
+        let mut attach = Emitter::new(target);
+        emit_stream_filter_attach_user(&mut attach);
+        let attach_asm = attach.output();
+        assert!(attach_asm.contains("sub rsp, 32"));
+        assert!(attach_asm.contains("mov rcx, rdi"));
+        assert!(attach_asm.contains("call r11"));
+        let slot_lookup = attach_asm
+            .find("call __rt_win_stream_slot")
+            .expect("Windows user-filter attachment must allocate a compact stream slot");
+        let restore_instance = attach_asm[slot_lookup..]
+            .find("mov rax, QWORD PTR [rbp - 40]")
+            .map(|offset| slot_lookup + offset)
+            .expect("slot lookup must restore the user-filter instance before recording it");
+        let record_instance = attach_asm[restore_instance..]
+            .find("_user_filter_instances")
+            .map(|offset| restore_instance + offset)
+            .expect("restored user-filter instance must be recorded in the per-stream table");
+        assert!(slot_lookup < restore_instance && restore_instance < record_instance);
+
+        let mut apply = Emitter::new(target);
+        emit_apply_user_stream_filter(&mut apply);
+        let apply_asm = apply.output();
+        let save_dir = apply_asm
+            .find("mov QWORD PTR [rsp], rcx")
+            .expect("Windows slot lookup must preserve the filter direction");
+        let save_ptr = apply_asm
+            .find("mov QWORD PTR [rsp + 8], rsi")
+            .expect("Windows slot lookup must preserve the filter input pointer");
+        let save_len = apply_asm
+            .find("mov QWORD PTR [rsp + 16], rdx")
+            .expect("Windows slot lookup must preserve the filter input length");
+        let slot_lookup = apply_asm
+            .find("call __rt_win_stream_slot")
+            .expect("Windows user filters must map opaque descriptors to slots");
+        let restore_dir = apply_asm
+            .find("mov rcx, QWORD PTR [rsp]")
+            .expect("Windows slot lookup must restore the filter direction");
+        let restore_ptr = apply_asm
+            .find("mov rsi, QWORD PTR [rsp + 8]")
+            .expect("Windows slot lookup must restore the filter input pointer");
+        let restore_len = apply_asm
+            .find("mov rdx, QWORD PTR [rsp + 16]")
+            .expect("Windows slot lookup must restore the filter input length");
+        assert!(save_dir < save_ptr && save_ptr < save_len && save_len < slot_lookup);
+        assert!(
+            slot_lookup < restore_dir && restore_dir < restore_ptr && restore_ptr < restore_len
+        );
+        assert!(apply_asm.contains("sub rsp, 32"));
+        assert!(apply_asm.contains("mov r8, rdx"));
+        assert!(apply_asm.contains("mov rdx, rsi"));
+        assert!(apply_asm.contains("mov rcx, rdi"));
+        assert!(apply_asm.contains("call r11"));
+        assert!(!apply_asm.contains("call r10\n"));
+
+        let mut release = Emitter::new(target);
+        emit_user_filter_release_fd(&mut release);
+        let release_asm = release.output();
+        assert_eq!(release_asm.matches("call r11").count(), 2);
+        assert_eq!(release_asm.matches("sub rsp, 32").count(), 2);
+        assert!(!release_asm.contains("call r14\n"));
+    }
 }

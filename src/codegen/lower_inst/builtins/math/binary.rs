@@ -110,7 +110,7 @@ pub(crate) fn lower_fmod(
             ctx.emitter.instruction("movapd xmm2, xmm0");                       // preserve the divisor while ordering libc fmod arguments
             ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the dividend into the first libc fmod argument
             ctx.emitter.instruction("movapd xmm1, xmm2");                       // move the divisor into the second libc fmod argument
-            ctx.emitter.bl_c("fmod");
+            ctx.emitter.emit_call_c("fmod");                                    // Windows-safe: shadow space via __rt_sys_fmod
         }
     }
     store_if_result(ctx, inst)
@@ -131,14 +131,14 @@ pub(crate) fn lower_pow(
         Arch::AArch64 => {
             ctx.emitter.instruction("fmov d1, d0");                             // move the exponent into the second libc pow argument
             abi::emit_pop_float_reg(ctx.emitter, "d0");
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
             ctx.emitter.instruction("movapd xmm2, xmm0");                       // preserve the exponent while ordering libc pow arguments
             ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the base into the first libc pow argument
             ctx.emitter.instruction("movapd xmm1, xmm2");                       // move the exponent into the second libc pow argument
-            ctx.emitter.bl_c("pow");
+            ctx.emitter.emit_call_c("pow");                                     // Windows-safe: shadow space via __rt_sys_pow
         }
     }
     store_if_result(ctx, inst)

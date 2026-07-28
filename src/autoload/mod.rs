@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
 
+use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
@@ -110,10 +111,21 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
 /// the program, look it up first in the composer.json PSR-4 index and
 /// then in the user-registered closure rules; parse the referenced file,
 /// run resolver+name_resolver on it, and append. Iterate until stable.
+#[allow(dead_code)]
 pub fn run(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+) -> Result<Program, CompileError> {
+    run_for_platform(program, base_dir, registry, Platform::detect_host())
+}
+
+/// Runs autoload resolution against the selected target platform's builtin surface.
+pub fn run_for_platform(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
+    platform: Platform,
 ) -> Result<Program, CompileError> {
     if registry.is_empty() {
         return Ok(program);
@@ -129,7 +141,7 @@ pub fn run(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            prefix.extend(load_autoloaded_file(&canonical, base_dir)?);
+            prefix.extend(load_autoloaded_file(&canonical, base_dir, platform)?);
         }
     }
     if !prefix.is_empty() {
@@ -149,7 +161,7 @@ pub fn run(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    let loaded = load_autoloaded_file(&canonical, base_dir)?;
+                    let loaded = load_autoloaded_file(&canonical, base_dir, platform)?;
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -200,7 +212,11 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
 }
 
 /// Load, parse, and resolve a single autoloaded PHP file, returning its statements.
-fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, CompileError> {
+fn load_autoloaded_file(
+    path: &Path,
+    base_dir: &Path,
+    platform: Platform,
+) -> Result<Program, CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
@@ -216,7 +232,8 @@ fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, Compile
     crate::strict_php::check_file(&parsed, &file_label)?;
     let resolved = crate::resolver::resolve(parsed, path.parent().unwrap_or(base_dir))?;
     let resolved = alias::collect_aliases(resolved);
-    let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
+    let canonicalized: Vec<Stmt> =
+        crate::name_resolver::resolve_for_platform(resolved, platform)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.

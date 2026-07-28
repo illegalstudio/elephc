@@ -15,7 +15,9 @@ builtin! {
     name: "filemtime",
     area: Io,
     params: [filename: Str],
-    returns: Int,
+    // php returns int|false: false when the path cannot be stat'ed. Declaring Int
+    // discarded the false and handed back the raw payload register.
+    returns: Mixed,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filemtime,
     ),

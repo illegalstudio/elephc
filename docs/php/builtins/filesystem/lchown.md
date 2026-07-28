@@ -8,14 +8,14 @@ sidebar:
 ## lchown()
 
 ```php
-function lchown(string $filename, string $user): bool
+function lchown(string $filename, mixed $user): bool
 ```
 
 Changes user ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string`)
+- `$user` (`mixed`)
 
 **Returns**: `bool`
 

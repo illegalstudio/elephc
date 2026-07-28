@@ -53,12 +53,19 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x2, x0, gt");                                 // min(offset, len)
 
     // -- compute replace length --
-    emitter.instruction("cmn x7, #1");                                          // check if length == -1 (sentinel)
-    emitter.instruction("b.ne 2f");                                             // if not sentinel, use given length
-    emitter.instruction("sub x7, x2, x0");                                      // length = remaining from offset
+    // php reads a negative length as "stop that many bytes before the end of the
+    // subject", not as "replace nothing". The length is clamped to the available
+    // bytes here rather than through end = offset + length, because the until-end
+    // sentinel is now i64::MAX and that sum would overflow.
+    emitter.instruction("sub x8, x2, x0");                                      // bytes available from the replacement offset
+    emitter.instruction("cmp x7, #0");                                          // is the requested length negative?
+    emitter.instruction("b.ge 2f");                                             // a non-negative length only needs the upper clamp
+    emitter.instruction("add x7, x8, x7");                                      // stop that many bytes before the end
+    emitter.instruction("cmp x7, #0");                                          // did the omission consume the whole window?
+    emitter.instruction("csel x7, xzr, x7, lt");                                // an over-long omission replaces nothing
     emitter.raw("2:");
-    emitter.instruction("cmp x7, #0");                                          // clamp negative length to 0
-    emitter.instruction("csel x7, xzr, x7, lt");                                // max(0, length)
+    emitter.instruction("cmp x7, x8");                                          // clamp the length to the available bytes
+    emitter.instruction("csel x7, x8, x7, gt");                                 // never replace past the end of the subject
     emitter.instruction("add x8, x0, x7");                                      // end = offset + length
     emitter.instruction("cmp x8, x2");                                          // clamp end to string length
     emitter.instruction("csel x8, x2, x8, gt");                                 // min(end, len)
@@ -149,14 +156,20 @@ fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, rcx");                                         // compare the requested replacement offset against the full subject-string length
     emitter.instruction("cmovg r9, rcx");                                       // clamp the replacement offset to the end of the subject string when needed
     emitter.instruction("mov r10, r8");                                         // start from the requested replacement length before sentinel and bounds clamping
-    emitter.instruction("cmp r10, -1");                                         // check whether the caller omitted the optional replacement length
-    emitter.instruction("jne __rt_substr_replace_len_known_linux_x86_64");      // skip the sentinel expansion when the caller supplied an explicit replacement length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the subject-string length before deriving the tail replacement span
-    emitter.instruction("sub r10, r9");                                         // replace the remainder of the subject string when the optional length is omitted
+    // See the AArch64 arm: a negative length stops that many bytes before the end,
+    // and the clamp happens against the available bytes rather than through
+    // end = offset + length, which the i64::MAX sentinel would overflow.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the subject-string length
+    emitter.instruction("sub rcx, r9");                                         // bytes available from the replacement offset
+    emitter.instruction("cmp r10, 0");                                          // is the requested replacement length negative?
+    emitter.instruction("jge __rt_substr_replace_len_known_linux_x86_64");      // a non-negative length only needs the upper clamp
+    emitter.instruction("add r10, rcx");                                        // stop that many bytes before the end
+    emitter.instruction("cmp r10, 0");                                          // did the omission consume the whole window?
+    emitter.instruction("jge __rt_substr_replace_len_known_linux_x86_64");      // the window still holds bytes
+    emitter.instruction("xor r10d, r10d");                                      // an over-long omission replaces nothing
     emitter.label("__rt_substr_replace_len_known_linux_x86_64");
-    emitter.instruction("cmp r10, 0");                                          // check whether the requested replacement length is negative
-    emitter.instruction("mov rcx, 0");                                          // materialize zero for the negative-length clamp
-    emitter.instruction("cmovl r10, rcx");                                      // clamp negative replacement lengths back to zero
+    emitter.instruction("cmp r10, rcx");                                        // clamp the length to the available bytes
+    emitter.instruction("cmovg r10, rcx");                                      // never replace past the end of the subject
     emitter.instruction("mov r11, r9");                                         // seed the suffix start from the clamped replacement offset
     emitter.instruction("add r11, r10");                                        // compute the byte offset immediately after the replaced slice
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the full subject-string length before clamping the suffix start

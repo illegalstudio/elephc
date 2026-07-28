@@ -24,6 +24,7 @@
 
 use std::ffi::{c_char, CString};
 
+#[cfg(not(test))]
 extern "C" {
     /// Per-request output-capture flag defined in the compiled program's runtime
     /// `.comm` storage (`elephc_web_capture`). Non-zero routes the runtime's
@@ -33,6 +34,11 @@ extern "C" {
     /// `elephc_web_capture` on Linux — matching the runtime's `.comm` and load.
     static mut elephc_web_capture: u8;
 }
+
+/// Test-local stand-in for the generated runtime's capture flag.
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_web_capture: u8 = 0;
 
 /// Process-static per-worker response body. Bytes echoed by the PHP handler land
 /// here while capture is enabled; the server scaffold flushes it to the client
@@ -245,6 +251,7 @@ pub(crate) fn set_request(
     body: Vec<u8>,
     meta: RequestMeta,
 ) {
+    /// Converts request text to a NUL-free C string for the runtime request state.
     fn cstr(s: &str) -> CString {
         CString::new(s.replace('\0', "")).unwrap_or_default()
     }

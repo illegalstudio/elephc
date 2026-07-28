@@ -122,7 +122,7 @@ fn emit_hash_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_hash_fn", 0);   // load the published elephc_crypto_hash function pointer
     emitter.instruction("test r9, r9");                                         // a null slot means the program never linked elephc-crypto → unknown algo
     emitter.instruction("jz __rt_hash_unknown_linux_x86_64");                   // throw the unknown-algorithm ValueError when the slot is null
-    emitter.instruction("call r9");                                             // compute the raw digest into the stack buffer; rax = digest length or -1
+    emitter.emit_native_bridge_call("r9", 5);                                   // compute the raw digest into the stack buffer; rax = digest length or -1
 
     // -- handle an unknown algorithm (-1) before formatting --
     emitter.instruction("test rax, rax");                                       // did elephc_crypto_hash reject the algorithm name?
@@ -146,4 +146,62 @@ fn emit_hash_linux_x86_64(emitter: &mut Emitter) {
         "_hash_unknown_algo_msg",
         HASH_UNKNOWN_ALGO_MSG.len(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_hash` indirect call into
+    /// `elephc_crypto_hash` — a REAL native (MSx64-ABI) function reached
+    /// through the `_elephc_crypto_hash_fn` pointer slot — goes through the
+    /// F46 native-bridge shim instead of a bare `call r9`: the fn-ptr is
+    /// relocated to r11, the 5-int-arg call reserves 48 bytes (32-byte MSx64
+    /// shadow space + one 8-byte slot for the 5th SysV arg, 16-byte aligned),
+    /// the 5th arg (r8, the digest output buffer pointer) is staged onto the
+    /// MSx64 stack BEFORE the remap's `mov r8, rdx` clobbers r8, and the
+    /// first 4 SysV args are remapped into rcx/rdx/r8/r9 before the call.
+    /// Without this, elephc_crypto_hash (compiled to the MSx64 ABI on
+    /// windows) would read its 5 arguments from the wrong registers.
+    #[test]
+    fn test_windows_x86_64_hash_native_bridge_call_stages_5th_arg_before_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_hash(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r11, r9"), "expected the fn-ptr relocated off the MSx64 arg registers");
+        assert!(asm.contains("sub rsp, 48"), "expected 32-byte shadow + one 8-byte 5th-arg slot");
+        let stage_idx = asm
+            .find("mov QWORD PTR [rsp + 32], r8")
+            .expect("expected the 5th SysV int arg staged to the MSx64 stack slot");
+        let remap_idx = asm
+            .find("mov r8, rdx")
+            .expect("expected the remap's mov r8, rdx (MSx64 arg2 <- SysV arg2)");
+        assert!(stage_idx < remap_idx, "the 5th-arg stack stage must precede the remap's mov r8, rdx clobber");
+        assert!(asm.contains("mov rcx, rdi"), "expected MSx64 arg0 <- SysV arg0");
+        assert!(asm.contains("mov rdx, rsi"), "expected MSx64 arg1 <- SysV arg1");
+        assert!(asm.contains("mov r9, rcx"), "expected MSx64 arg3 <- SysV arg3");
+        assert!(asm.contains("call r11"), "expected the indirect call through the relocated pointer");
+        assert!(asm.contains("add rsp, 48"), "expected the shadow + stack-arg scratch released");
+        assert!(!asm.contains("call r9\n"), "must not leave a bare call r9 (F46: MSx64 callee reading SysV registers)");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_hash` stays byte-identical to
+    /// before the F46 native-bridge shim was introduced: the MSx64 relocation
+    /// and shadow-space staging are windows-x86_64-only, so linux-x86_64 must
+    /// keep the plain bare `call r9` into `elephc_crypto_hash`.
+    #[test]
+    fn test_linux_x86_64_hash_call_stays_bare_call_r9() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_hash(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("    call r9\n"), "expected the byte-identical bare call r9");
+        assert!(!asm.contains("mov r11"), "linux-x86_64 must not relocate the fn-ptr");
+        assert!(!asm.contains("sub rsp, 48"), "linux-x86_64 must not reserve MSx64 shadow space");
+        assert!(!asm.contains("call r11"));
+    }
 }

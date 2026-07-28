@@ -57,3 +57,37 @@ fn test_emit_extern_symbol_address_uses_got_relocations_on_aarch64() {
         )
     );
 }
+
+/// Verifies `emit_extern_symbol_address` on windows-x86_64 emits a GOT-free,
+/// direct RIP-relative LEA instead of the ELF-style `@GOTPCREL` load: PE/COFF
+/// has no GOTPCREL relocation, and MinGW's assembler treats `@GOTPCREL` as a
+/// literal name suffix rather than a relocation, producing an undefined
+/// reference at link time. These "extern" symbols resolve against a
+/// statically-linked `.a` archive built into the same image rather than a
+/// DLL, so no `__imp_` indirection is needed either.
+#[test]
+fn test_emit_extern_symbol_address_uses_rip_relative_lea_on_windows_x86_64() {
+    let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+    crate::codegen_support::abi::symbols::emit_extern_symbol_address(&mut emitter, "r9", "demo_extern");
+    let asm = emitter.output();
+
+    assert_eq!(asm, "    lea r9, [rip + demo_extern]\n");
+    assert!(
+        !asm.contains("GOTPCREL"),
+        "windows PE/COFF must never emit @GOTPCREL (MinGW treats it as a literal suffix, not a relocation)"
+    );
+}
+
+/// Verifies `emit_extern_symbol_address` on linux-x86_64 stays byte-identical
+/// to before the windows-x86_64 GOT-free LEA arm was added: it must still
+/// emit the exact ELF `@GOTPCREL[rip]` form.
+#[test]
+fn test_emit_extern_symbol_address_stays_gotpcrel_on_linux_x86_64_after_windows_fix() {
+    let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+    crate::codegen_support::abi::symbols::emit_extern_symbol_address(&mut emitter, "r9", "demo_extern");
+
+    assert_eq!(
+        emitter.output(),
+        "    mov r9, QWORD PTR demo_extern@GOTPCREL[rip]\n"
+    );
+}

@@ -55,6 +55,28 @@ fn emit_array_rand_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_rand");
 
     emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the source indexed-array logical length into the x86_64 random-uniform bound register
+    emitter.instruction("sub rsp, 8");                                          // align the x86_64 stack before the nested random-uniform helper call
     emitter.instruction("call __rt_random_uniform");                            // sample a random scalar index in the half-open range [0, length)
+    emitter.instruction("add rsp, 8");                                          // restore the caller stack after the nested random-uniform helper call
     emitter.instruction("ret");                                                 // return the sampled scalar index in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the x86_64 array-rand wrapper aligns the stack before its
+    /// nested helper call, including when the final PE runs under MSx64.
+    #[test]
+    fn x86_64_array_rand_aligns_nested_call() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_array_rand(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("sub rsp, 8\n"));
+        assert!(asm.contains("call __rt_random_uniform\n"));
+        assert!(asm.contains("add rsp, 8\n"));
+    }
 }

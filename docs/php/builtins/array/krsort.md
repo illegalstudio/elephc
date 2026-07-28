@@ -8,7 +8,7 @@ sidebar:
 ## krsort()
 
 ```php
-function krsort(array $array): bool
+function krsort(array &$array): bool
 ```
 
 Sorts an array by key in descending order.

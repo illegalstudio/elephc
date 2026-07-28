@@ -2,20 +2,20 @@
 title: "mb_strlen()"
 description: "Returns the character count of a string in the requested encoding."
 sidebar:
-  order: 390
+  order: 397
 ---
 
 ## mb_strlen()
 
 ```php
-function mb_strlen(string $string, string $encoding = null): int
+function mb_strlen(string $string, mixed $encoding = null): int
 ```
 
 Returns the character count of a string in the requested encoding.
 
 **Parameters**:
 - `$string` (`string`)
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`mixed`), default `null`, optional
 
 **Returns**: `int`
 

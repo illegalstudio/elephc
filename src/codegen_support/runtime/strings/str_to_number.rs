@@ -79,7 +79,7 @@ fn emit_str_to_number_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the C-string start pointer for the no-consumption check
     emitter.instruction("lea rsi, [rbp - 16]");                                 // pass the address of the local end-pointer slot to strtod
     emitter.instruction("mov rdi, rax");                                        // pass the C-string start pointer as strtod's first argument
-    emitter.instruction("call strtod");                                         // parse the C string as a double through libc
+    emitter.emit_call_c("strtod");                                              // parse the C string as a double through libc
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load the end pointer returned by strtod
     emitter.instruction("cmp r8, QWORD PTR [rbp - 8]");                         // reject strings where strtod consumed no numeric bytes
     emitter.instruction("je __rt_str_to_number_false_linux_x86_64");            // no consumed bytes means this is not a numeric string
@@ -307,7 +307,7 @@ fn emit_str_looks_like_int_for_coercion_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sliic_parse_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the C-string start pointer for strtod
     emitter.instruction("lea rsi, [rbp - 16]");                                 // pass the address of the local end-pointer slot to strtod
-    emitter.instruction("call strtod");                                         // parse the C string as a double through libc
+    emitter.emit_call_c("strtod");                                              // parse the C string as a double through libc
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load the end pointer returned by strtod
     emitter.instruction("cmp r8, QWORD PTR [rbp - 8]");                         // reject strings where strtod consumed no numeric bytes
     emitter.instruction("je __rt_sliic_false_x");                               // no consumed bytes means this is not coercible to int

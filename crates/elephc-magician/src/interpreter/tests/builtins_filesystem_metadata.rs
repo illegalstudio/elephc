@@ -218,7 +218,7 @@ return true;"#
     let _ = std::fs::remove_file(&filename);
     let _ = std::fs::remove_file(&link);
     std::fs::write(&filename, b"hello").expect("write stat fixture");
-    std::os::unix::fs::symlink(&filename, &link).expect("create stat symlink");
+    create_file_symlink(&filename, &link).expect("create stat symlink");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
@@ -258,7 +258,7 @@ return true;"#
     let _ = std::fs::remove_file(&filename);
     let _ = std::fs::remove_file(&link);
     std::fs::write(&filename, b"hello").expect("write stat array fixture");
-    std::os::unix::fs::symlink(&filename, &link).expect("create stat array symlink");
+    create_file_symlink(&filename, &link).expect("create stat array symlink");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
@@ -271,4 +271,16 @@ return true;"#
         "stat:mode:lstat:missing:callstat:calllstat:cleanup:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Creates a file symlink with the host platform's standard-library API.
+fn create_file_symlink(original: &str, link: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(original, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(original, link)
+    }
 }

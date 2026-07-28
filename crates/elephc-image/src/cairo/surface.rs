@@ -49,9 +49,7 @@ pub extern "C" fn elephc_cairo_surface_destroy(s: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_cairo_surface_width(s: i64) -> i64 {
     ffi_guard(-1, move || {
-        surfaces()
-            .lock()
-            .unwrap()
+        lock_recover(surfaces())
             .get(&s)
             .map_or(-1, |pm| pm.width() as i64)
     })
@@ -61,9 +59,7 @@ pub extern "C" fn elephc_cairo_surface_width(s: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_cairo_surface_height(s: i64) -> i64 {
     ffi_guard(-1, move || {
-        surfaces()
-            .lock()
-            .unwrap()
+        lock_recover(surfaces())
             .get(&s)
             .map_or(-1, |pm| pm.height() as i64)
     })

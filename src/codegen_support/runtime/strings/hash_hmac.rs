@@ -20,7 +20,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::hash_crypto;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::platform::{Arch, Platform};
 use crate::codegen_support::runtime::data::HASH_HMAC_UNKNOWN_ALGO_MSG;
 
 /// Emits the `__rt_hash_hmac` runtime helper for the `hash_hmac()` built-in.
@@ -148,10 +148,21 @@ fn emit_hash_hmac_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // a null slot means the program never linked elephc-crypto → unknown algo
     emitter.instruction("jz __rt_hash_hmac_unknown_linux_x86_64");              // throw the unknown-algorithm ValueError when the slot is null
     emitter.instruction("lea r10, [rbp - 64]");                                 // address of the stack-backed 64-byte raw-digest output buffer
-    emitter.instruction("sub rsp, 16");                                         // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
-    emitter.instruction("mov QWORD PTR [rsp], r10");                            // 7th arg (output buffer address) at [rsp+0]
-    emitter.instruction("call rax");                                            // compute the raw HMAC into the stack buffer; rax = digest length or -1
-    emitter.instruction("add rsp, 16");                                         // release the stack-arg slot
+    if emitter.target.platform == Platform::Windows && emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov r11, rax");                                    // relocate fn-ptr off the MSx64 arg registers
+        emitter.instruction("sub rsp, 64");                                     // 32-byte shadow + three 8-byte stack-arg slots (16-aligned)
+        emitter.instruction("mov QWORD PTR [rsp + 32], r8");                    // MSx64 5th arg = data_ptr (SysV r8) — save before the remap clobbers r8
+        emitter.instruction("mov QWORD PTR [rsp + 40], r9");                    // MSx64 6th arg = data_len (SysV r9) — save before the remap clobbers r9
+        emitter.instruction("mov QWORD PTR [rsp + 48], r10");                   // MSx64 7th arg = output-buffer address (already in r10)
+        emitter.remap_sysv_args_to_platform_for_callback(4);                    // args 0-3 SysV→MSx64 (rcx←rdi, rdx←rsi, r8←rdx, r9←rcx), reverse order
+        emitter.instruction("call r11");                                        // invoke elephc_crypto_hmac via the relocated pointer (MSx64 ABI)
+        emitter.instruction("add rsp, 64");                                     // release shadow + stack-arg scratch
+    } else {
+        emitter.instruction("sub rsp, 16");                                     // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
+        emitter.instruction("mov QWORD PTR [rsp], r10");                        // 7th arg (output buffer address) at [rsp+0]
+        emitter.instruction("call rax");                                        // compute the raw HMAC into the stack buffer; rax = digest length or -1
+        emitter.instruction("add rsp, 16");                                     // release the stack-arg slot
+    }
 
     // -- handle an unknown algorithm / non-crypto checksum (-1) before formatting --
     emitter.instruction("test rax, rax");                                       // did elephc_crypto_hmac reject the algorithm name?
@@ -175,4 +186,75 @@ fn emit_hash_hmac_linux_x86_64(emitter: &mut Emitter) {
         "_hash_hmac_unknown_algo_msg",
         HASH_HMAC_UNKNOWN_ALGO_MSG.len(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Verifies the windows-x86_64 `__rt_hash_hmac` indirect call into
+    /// `elephc_crypto_hmac` — a REAL native (MSx64-ABI) function reached
+    /// through the `_elephc_crypto_hmac_fn` pointer slot — goes through the
+    /// bespoke F46 7-int-arg native-bridge shim instead of a bare `call rax`:
+    /// the fn-ptr is relocated to r11, 64 bytes are reserved (32-byte MSx64
+    /// shadow space + three 8-byte slots for the 5th/6th/7th SysV int args,
+    /// 16-byte aligned), the 5th/6th/7th args (r8/r9/r10: data_ptr, data_len,
+    /// the digest output buffer pointer) are staged onto the MSx64 stack
+    /// BEFORE the remap's `mov r8, rdx` clobbers r8, and the first 4 SysV
+    /// args are remapped into rcx/rdx/r8/r9 before the call. Without this,
+    /// elephc_crypto_hmac (compiled to the MSx64 ABI on windows) would read
+    /// its 7 arguments from the wrong registers.
+    #[test]
+    fn test_windows_x86_64_hash_hmac_native_bridge_call_stages_7th_arg_before_remap() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_hash_hmac(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r11, rax"), "expected the fn-ptr relocated off the MSx64 arg registers");
+        assert!(asm.contains("sub rsp, 64"), "expected 32-byte shadow + three 8-byte 5th/6th/7th-arg slots");
+        let stage_r8_idx = asm
+            .find("mov QWORD PTR [rsp + 32], r8")
+            .expect("expected the 5th SysV int arg (data_ptr) staged to the MSx64 stack slot");
+        let stage_r9_idx = asm
+            .find("mov QWORD PTR [rsp + 40], r9")
+            .expect("expected the 6th SysV int arg (data_len) staged to the MSx64 stack slot");
+        let stage_r10_idx = asm
+            .find("mov QWORD PTR [rsp + 48], r10")
+            .expect("expected the 7th arg (output buffer address) staged to the MSx64 stack slot");
+        let remap_idx = asm
+            .find("mov r8, rdx")
+            .expect("expected the remap's mov r8, rdx (MSx64 arg2 <- SysV arg2)");
+        assert!(stage_r8_idx < remap_idx, "the 5th-arg stack stage must precede the remap's mov r8, rdx clobber");
+        assert!(stage_r9_idx < remap_idx, "the 6th-arg stack stage must precede the remap's mov r8, rdx clobber");
+        assert!(stage_r10_idx < remap_idx, "the 7th-arg stack stage must precede the remap's mov r8, rdx clobber");
+        assert!(asm.contains("mov rcx, rdi"), "expected MSx64 arg0 <- SysV arg0");
+        assert!(asm.contains("mov rdx, rsi"), "expected MSx64 arg1 <- SysV arg1");
+        assert!(asm.contains("mov r9, rcx"), "expected MSx64 arg3 <- SysV arg3");
+        assert!(asm.contains("call r11"), "expected the indirect call through the relocated pointer");
+        assert!(asm.contains("add rsp, 64"), "expected the shadow + stack-arg scratch released");
+        assert!(!asm.contains("call rax\n"), "must not leave a bare call rax (F46: MSx64 callee reading SysV registers)");
+    }
+
+    /// Verifies linux-x86_64 emission for `__rt_hash_hmac` stays byte-identical
+    /// to before the F46 native-bridge shim was introduced: the MSx64
+    /// relocation and shadow-space staging are windows-x86_64-only, so
+    /// linux-x86_64 must keep the plain bare `call rax` into
+    /// `elephc_crypto_hmac` with the original 16-byte stack-arg slot.
+    #[test]
+    fn test_linux_x86_64_hash_hmac_call_stays_bare_call_rax() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_hash_hmac(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("    sub rsp, 16\n"), "expected the byte-identical 16-byte stack-arg slot reservation");
+        assert!(asm.contains("    mov QWORD PTR [rsp], r10\n"), "expected the byte-identical 7th-arg stack store");
+        assert!(asm.contains("    call rax\n"), "expected the byte-identical bare call rax");
+        assert!(asm.contains("    add rsp, 16\n"), "expected the byte-identical stack-arg slot release");
+        assert!(!asm.contains("mov r11"), "linux-x86_64 must not relocate the fn-ptr");
+        assert!(!asm.contains("sub rsp, 64"), "linux-x86_64 must not reserve MSx64 shadow space");
+        assert!(!asm.contains("call r11"));
+    }
 }

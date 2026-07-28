@@ -502,7 +502,11 @@ impl MyStmt {
             let mut rows = Vec::new();
             if is_select {
                 for row in res.by_ref() {
-                    rows.push(decode_row(row?.unwrap(), &col_kinds));
+                    let row = row?;
+                    let values = (0..row.len())
+                        .map(|index| row.as_ref(index).cloned().unwrap_or(Value::NULL))
+                        .collect();
+                    rows.push(decode_row(values, &col_kinds));
                 }
             }
             let affected = res.affected_rows() as i64;

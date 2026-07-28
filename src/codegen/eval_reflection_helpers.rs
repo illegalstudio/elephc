@@ -352,6 +352,6 @@ fn emit_set_repeated_property_x86_64(emitter: &mut Emitter, layout: &ReflectionA
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

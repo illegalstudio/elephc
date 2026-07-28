@@ -653,6 +653,10 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type_x";
     let union_type_label = "__elephc_eval_reflection_owner_new_union_type_x";
     let intersection_type_label = "__elephc_eval_reflection_owner_new_intersection_type_x";
+    let target = emitter.target;
+    let stack_arg_offset = |argument_index| {
+        abi::c_callback_stack_arg_offset(target, argument_index)
+    };
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 144");                                        // reserve slots for inputs, object, metadata arrays, and name parts
@@ -662,25 +666,25 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed ReflectionAttribute array
     emitter.instruction("mov QWORD PTR [rbp - 88], r8");                        // save the boxed ReflectionClass interface-name array
     emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // save the boxed ReflectionClass trait-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the boxed ReflectionClass method-name array from the first stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(6))); // load the boxed ReflectionClass method-name array from the first stack argument
     emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // save the boxed ReflectionClass method-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load the boxed ReflectionClass property-name array from the second stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(7))); // load the boxed ReflectionClass property-name array from the second stack argument
     emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // save the boxed ReflectionClass property-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 32]");                       // load the boxed ReflectionClass method objects array from the third stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(8))); // load the boxed ReflectionClass method objects array from the third stack argument
     emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // save the boxed ReflectionClass method objects array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 40]");                       // load the boxed ReflectionClass property objects array from the fourth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(9))); // load the boxed ReflectionClass property objects array from the fourth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // save the boxed ReflectionClass property objects array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 48]");                       // load the boxed ReflectionClass parent value from the fifth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(10))); // load the boxed ReflectionClass parent value from the fifth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the boxed ReflectionClass parent value
-    emitter.instruction("mov rax, QWORD PTR [rbp + 56]");                       // load ReflectionClass modifier flags from the sixth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(11))); // load ReflectionClass modifier flags from the sixth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
-    emitter.instruction("mov rax, QWORD PTR [rbp + 64]");                       // load owner modifier/count metadata from the seventh stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(12))); // load owner modifier/count metadata from the seventh stack argument
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save owner modifier/count metadata
-    emitter.instruction("mov rax, QWORD PTR [rbp + 72]");                       // load ReflectionMethod getModifiers bitmask from the eighth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(13))); // load ReflectionMethod getModifiers bitmask from the eighth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save ReflectionMethod getModifiers bitmask
-    emitter.instruction("mov rax, QWORD PTR [rbp + 80]");                       // load boxed ReflectionClassConstant value from the ninth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(14))); // load boxed ReflectionClassConstant value from the ninth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
-    emitter.instruction("mov rax, QWORD PTR [rbp + 88]");                       // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", stack_arg_offset(15))); // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
@@ -2304,7 +2308,8 @@ fn emit_set_owner_constructor_property_x86_64(
     let (Some(low), Some(high)) = (layout.constructor_lo, layout.constructor_hi) else {
         return;
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp + 96]");                       // reload the boxed ReflectionClass constructor value
+    let constructor_offset = abi::c_callback_stack_arg_offset(emitter.target, 16);
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp + {}]", constructor_offset)); // reload the boxed ReflectionClass constructor value
     emitter.instruction("test rax, rax");                                       // check whether the boxed constructor value is null
     emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null constructor metadata
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed constructor value across incref
@@ -2559,6 +2564,6 @@ fn emit_set_owner_attrs_property_x86_64(
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
-    let symbol = module.target.extern_symbol(name);
-    emitter.label_global(&symbol);
+    debug_assert_eq!(module.target, emitter.target);
+    abi::emit_c_callback_entry(emitter, name);
 }

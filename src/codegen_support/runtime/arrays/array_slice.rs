@@ -54,8 +54,14 @@ pub fn emit_array_slice(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, x9");                                          // check if offset >= array length
     emitter.instruction("b.ge __rt_array_slice_empty");                         // if so, result is empty array
     emitter.instruction("sub x3, x9, x1");                                      // x3 = max possible length = array_len - offset
-    emitter.instruction("cmn x2, #1");                                          // check if length == -1 (to end)
-    emitter.instruction("csel x2, x3, x2, eq");                                 // if length == -1, use remaining length
+    // php reads a negative length as "stop that many elements before the end of the
+    // window", not as "select nothing".
+    emitter.instruction("cmp x2, #0");                                          // is the requested length negative?
+    emitter.instruction("b.ge __rt_array_slice_len_clamp");                     // a non-negative length only needs the upper clamp
+    emitter.instruction("add x2, x3, x2");                                      // stop that many elements before the end
+    emitter.instruction("cmp x2, #0");                                          // did the omission consume the whole window?
+    emitter.instruction("csel x2, xzr, x2, lt");                                // an over-long omission selects nothing
+    emitter.label("__rt_array_slice_len_clamp");
     emitter.instruction("cmp x2, x3");                                          // clamp length to max possible
     emitter.instruction("csel x2, x3, x2, gt");                                 // if length > remaining, use remaining
     emitter.instruction("str x1, [sp, #16]");                                   // save computed offset
@@ -126,9 +132,14 @@ fn emit_array_slice_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_slice_empty_x86");                      // return an empty indexed array when the requested slice offset starts beyond the source length
     emitter.instruction("mov rcx, r10");                                        // seed the maximum removable-length scratch register from the source indexed-array logical length
     emitter.instruction("sub rcx, rsi");                                        // compute the remaining scalar payload count from the normalized slice offset to the end of the source indexed array
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_slice should run until the end of the source indexed array
-    emitter.instruction("jne __rt_array_slice_known_len_x86");                  // keep the explicit requested slice length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining scalar payload count in the source indexed array
+    // php reads a negative length as "stop that many elements before the end of the
+    // window", not as "select nothing".
+    emitter.instruction("cmp rdx, 0");                                          // is the requested length negative?
+    emitter.instruction("jge __rt_array_slice_known_len_x86");                  // a non-negative length only needs the upper clamp
+    emitter.instruction("add rdx, rcx");                                        // stop that many elements before the end
+    emitter.instruction("cmp rdx, 0");                                          // did the omission consume the whole window?
+    emitter.instruction("jge __rt_array_slice_known_len_x86");                  // the window still holds elements
+    emitter.instruction("xor edx, edx");                                        // an over-long omission selects nothing
 
     emitter.label("__rt_array_slice_known_len_x86");
     emitter.instruction("cmp rdx, rcx");                                        // clamp the requested slice length so it cannot extend beyond the source indexed-array bounds

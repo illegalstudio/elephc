@@ -285,3 +285,108 @@ pub(crate) fn pack_color(pixel: Rgba<u8>) -> i64 {
     let gd_alpha = ((255 - a as u32) * 127 / 255) as i64;
     (gd_alpha << 24) | ((r as i64) << 16) | ((g as i64) << 8) | b as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use super::*;
+
+    /// All statically enabled raster codecs encode and decode a small image
+    /// through the same staging-buffer ABI used by generated PHP programs.
+    #[test]
+    fn static_codec_round_trip_matrix() {
+        let handle = gd::elephc_img_create_truecolor(3, 2);
+        assert!(handle > 0);
+        gd::elephc_img_set_pixel(handle, 1, 1, 0x00_33_66_cc);
+
+        for format in [FMT_PNG, FMT_JPEG, FMT_GIF, FMT_BMP, FMT_WEBP] {
+            assert_eq!(codec::elephc_img_encode(handle, format, 85), 0);
+            let len = codec::elephc_img_encoded_len();
+            assert!(len > 0, "format {format} produced no bytes");
+            let stage = codec::elephc_img_stage_ptr(len);
+            assert!(!stage.is_null());
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    codec::elephc_img_encoded_ptr(),
+                    stage,
+                    len as usize,
+                );
+            }
+            let decoded = codec::elephc_img_create_from_stage(len);
+            assert!(decoded > 0, "format {format} did not decode");
+            assert_eq!(gd::elephc_img_sx(decoded), 3);
+            assert_eq!(gd::elephc_img_sy(decoded), 2);
+            gd::elephc_img_destroy(decoded);
+            codec::elephc_img_encoded_clear();
+        }
+        gd::elephc_img_destroy(handle);
+    }
+
+    /// File-backed PNG I/O preserves a non-ASCII path and image geometry,
+    /// exercising Rust's UTF-8-to-native-path conversion used on Windows.
+    #[test]
+    fn unicode_file_path_round_trip() {
+        let root = std::env::temp_dir().join(format!(
+            "elephc-image-Données-日本語-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create Unicode image directory");
+        let path = root.join("résultat-東京.png");
+        let c_path = CString::new(path.to_string_lossy().as_bytes()).expect("valid image path");
+
+        let handle = gd::elephc_img_create_truecolor(4, 3);
+        assert!(handle > 0);
+        assert_eq!(
+            unsafe { codec::elephc_img_write_file(handle, FMT_PNG, c_path.as_ptr(), -1) },
+            0
+        );
+        let decoded = unsafe { codec::elephc_img_create_from_file(c_path.as_ptr(), FMT_PNG) };
+        assert!(decoded > 0);
+        assert_eq!((gd::elephc_img_sx(decoded), gd::elephc_img_sy(decoded)), (4, 3));
+
+        let tga_path = root.join("résultat-東京.tga");
+        let c_tga = CString::new(tga_path.to_string_lossy().as_bytes()).expect("valid TGA path");
+        assert_eq!(
+            unsafe { codec::elephc_img_write_file(handle, FMT_TGA, c_tga.as_ptr(), -1) },
+            0
+        );
+        let decoded_tga =
+            unsafe { codec::elephc_img_create_from_file(c_tga.as_ptr(), FMT_TGA) };
+        assert!(decoded_tga > 0);
+        assert_eq!(
+            (gd::elephc_img_sx(decoded_tga), gd::elephc_img_sy(decoded_tga)),
+            (4, 3)
+        );
+
+        gd::elephc_img_destroy(handle);
+        gd::elephc_img_destroy(decoded);
+        gd::elephc_img_destroy(decoded_tga);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Oversized ABI buffer requests fail with null instead of overflowing a
+    /// length conversion or attempting an aborting allocation.
+    #[test]
+    fn oversized_transfer_buffers_fail_cleanly() {
+        assert!(codec::elephc_img_stage_ptr(i64::MAX).is_null());
+        assert!(xfer::elephc_img_in_ptr(i64::MAX).is_null());
+    }
+
+    /// Bundled bitmap text renders a Latin-1 accented glyph without consulting
+    /// an OS font installation or a platform-specific font path.
+    #[test]
+    fn bundled_unicode_bitmap_font_renders_accented_glyph() {
+        let handle = gd::elephc_img_create_truecolor(8, 8);
+        let text = CString::new("é").expect("valid Unicode test text");
+        unsafe { text::elephc_img_string(handle, 1, 0, 0, 0x00_ff_00_00, text.as_ptr()) };
+        let guard = lock_recover(images());
+        let rendered = guard
+            .get(&handle)
+            .is_some_and(|obj| obj.img.pixels().any(|pixel| pixel.0[0] != 0));
+        drop(guard);
+        gd::elephc_img_destroy(handle);
+        assert!(rendered, "accented glyph was left blank");
+    }
+}

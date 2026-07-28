@@ -708,13 +708,9 @@ fn emit_generator_callback(
         }
     }
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
-    // ARM64 keeps a 16-byte nested-call save slot below the outgoing stack arguments;
-    // x86_64 needs no such pad because the call instruction itself pushes the return address.
-    let call_pad = if overflow_bytes > 0 && target.arch == Arch::AArch64 {
-        16
-    } else {
-        0
-    };
+    // Preserve the target's caller-side stack contract: AArch64 needs its nested-call
+    // save slot when arguments overflow, while Windows x86_64 always needs shadow space.
+    let call_pad = abi::outgoing_call_stack_pad_bytes(target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, call_pad);
 
     // -- run the body, park its return value, and yield a null fiber transfer value --
@@ -726,7 +722,7 @@ fn emit_generator_callback(
             emitter.instruction(&format!("call {}", body_label));               // run the generator body to completion; rax = boxed return value
         }
     }
-    abi::emit_release_temporary_stack(emitter, call_pad); // drop the ARM64 nested-call alignment pad
+    abi::emit_release_temporary_stack(emitter, call_pad); // drop the target-specific nested-call padding
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
     match target.arch {
         Arch::AArch64 => {

@@ -128,9 +128,15 @@ pub extern "C" fn elephc_img_stage_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
+        let Ok(len) = usize::try_from(len) else {
+            return std::ptr::null_mut();
+        };
         let mut guard = lock_recover(stage_cell());
         guard.clear();
-        guard.resize(len as usize, 0);
+        if guard.try_reserve_exact(len).is_err() {
+            return std::ptr::null_mut();
+        }
+        guard.resize(len, 0);
         guard.as_mut_ptr()
     })
 }

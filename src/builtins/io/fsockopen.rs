@@ -29,6 +29,7 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fsockopen,
     ),
+    requirements: crate::builtins::semantics::stream_socket_client_requirements,
     summary: "Open Internet or Unix domain socket connection.",
     php_manual: "function.fsockopen",
 }

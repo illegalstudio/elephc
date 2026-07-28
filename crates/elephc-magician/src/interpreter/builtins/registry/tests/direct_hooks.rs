@@ -40,6 +40,7 @@ use super::*;
                 "natcasesort",
                 "natsort",
                 "pfsockopen",
+                "proc_open",
                 "rsort",
                 "settype",
                 "shuffle",
