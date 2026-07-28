@@ -147,6 +147,13 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [sp, #65]");                                 // lc16[1] (second char)
     emitter.instruction("cmp w11, #47");                                        // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("b.eq __rt_strtotime_slash_entry");                     // → slash-date strategy
+    // R1: check for YY-MM-DD (2-digit ISO year, length 8) before the ≥10 ISO check
+    emitter.instruction("cmp x2, #8");                                          // YY-MM-DD is exactly 8 chars
+    emitter.instruction("b.ne __rt_strtotime_iso_4digit_check");                // not 8 → skip 2-digit path
+    emitter.instruction("ldrb w11, [sp, #66]");                                 // lc16[2] (third char)
+    emitter.instruction("cmp w11, #45");                                        // '-' ?
+    emitter.instruction("b.eq __rt_strtotime_iso_2digit_entry");                // YY-MM-DD → 2-digit ISO path
+    emitter.label("__rt_strtotime_iso_4digit_check");
     emitter.instruction("cmp x2, #10");                                         // ISO date needs ≥ 10 chars
     emitter.instruction("b.lt __rt_strtotime_textual_entry");                   // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("ldrb w11, [sp, #68]");                                 // lc16[4] (offset 4 of date)
@@ -372,6 +379,13 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 63]");                      // lc16[1]
     emitter.instruction("cmp r8b, 47");                                         // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("je __rt_strtotime_slash_entry_linux_x86_64");          // → slash-date strategy
+    // R1: check for YY-MM-DD (2-digit ISO year, length 8) before the ≥10 ISO check
+    emitter.instruction("cmp rsi, 8");                                          // YY-MM-DD is exactly 8 chars
+    emitter.instruction("jne __rt_strtotime_iso_4digit_check_x86_64");          // not 8 → skip 2-digit path
+    emitter.instruction("movzx r8d, BYTE PTR [rbp - 62]");                      // lc16[2] (third char)
+    emitter.instruction("cmp r8b, 45");                                         // '-' ?
+    emitter.instruction("je __rt_strtotime_iso_2digit_entry_linux_x86_64");     // YY-MM-DD → 2-digit ISO path
+    emitter.label("__rt_strtotime_iso_4digit_check_x86_64");
     emitter.instruction("cmp rsi, 10");                                         // ISO date needs ≥ 10 chars
     emitter.instruction("jl __rt_strtotime_textual_entry_linux_x86_64");        // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 60]");                      // lc16[4] (offset 4 of date)

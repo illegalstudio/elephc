@@ -223,18 +223,45 @@ pub(super) fn resolve_expr(
             imports,
             symbols,
         ))),
-        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
-            class_name: resolved_name(resolve_special_or_class_name(
+        ExprKind::NewObject { class_name, args } => {
+            let resolved_class = resolved_name(resolve_special_or_class_name(
                 class_name,
                 current_namespace,
                 imports,
                 symbols,
-            )),
-            args: args
+            ));
+            let resolved_args: Vec<Expr> = args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
-                .collect(),
-        },
+                .collect();
+            // `new DatePeriod($specification[, $options])` is the deprecated string overload.
+            // Its arity is distinct from the three- or four-argument object overloads, so route
+            // both literal and runtime strings through the supported static factory.
+            let bare_class = resolved_class.trim_start_matches('\\');
+            if bare_class.eq_ignore_ascii_case("DatePeriod")
+                && (resolved_args.len() == 1 || resolved_args.len() == 2)
+            {
+                let method_args = if resolved_args.len() >= 2 {
+                    resolved_args
+                } else {
+                    // Single-arg form: `new DatePeriod("R4/...")` → createFromISO8601String with
+                    // default options=0.
+                    let mut with_options = resolved_args;
+                    with_options.push(Expr::new(ExprKind::IntLiteral(0), crate::span::Span::dummy()));
+                    with_options
+                };
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Named(resolved_class.clone()),
+                    method: php_symbol_key("createFromISO8601String"),
+                    args: method_args,
+                }
+            } else {
+                ExprKind::NewObject {
+                    class_name: resolved_class,
+                    args: resolved_args,
+                }
+            }
+        }
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),
@@ -561,21 +588,10 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
         args: args.to_vec(),
     };
     match bare.as_str() {
-        // idate($fmt[, $ts]) returns the integer value of a single date() specifier; it is exactly
-        // `intval(date($fmt[, $ts]))` for every integer-yielding specifier, so desugar to that and
-        // reuse the existing date()/intval() codegen rather than a dedicated builtin.
+        // Keep validation at runtime so literal and computed formats share PHP's `int|false`
+        // behavior. The synthetic helper delegates valid one-character specifiers to `date()`.
         "idate" if args.len() == 1 || args.len() == 2 => {
-            let date_call = Expr::new(
-                ExprKind::FunctionCall {
-                    name: resolved_name("date".to_string()),
-                    args: args.to_vec(),
-                },
-                args[0].span,
-            );
-            Some(ExprKind::FunctionCall {
-                name: resolved_name("intval".to_string()),
-                args: vec![date_call],
-            })
+            Some(static_call("DateTime", "__elephc_idate"))
         }
         // mktime()/gmmktime() (PHP 8.0+): every argument is optional; omitted ones default to the
         // corresponding component of the current local (mktime) or UTC (gmmktime) time. Desugar to the
@@ -621,8 +637,10 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
                 args: full,
             })
         }
-        "date_create" if args.len() <= 2 => Some(new_object("DateTime")),
-        "date_create_immutable" if args.len() <= 2 => Some(new_object("DateTimeImmutable")),
+        "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
+        "date_create_immutable" if args.len() <= 2 => {
+            Some(static_call("DateTimeImmutable", "__elephc_date_create"))
+        }
         "date_create_from_format" if args.len() == 2 || args.len() == 3 => {
             Some(static_call("DateTime", "createFromFormat"))
         }
@@ -793,7 +811,7 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
         "date_format" if args.len() == 2 => Some(method(0, "format", &[1])),
         "date_add" if args.len() == 2 => Some(method(0, "add", &[1])),
         "date_sub" if args.len() == 2 => Some(method(0, "sub", &[1])),
-        "date_modify" if args.len() == 2 => Some(method(0, "modify", &[1])),
+        "date_modify" if args.len() == 2 => Some(static_call("DateTime", "__elephc_date_modify")),
         "date_timestamp_get" if args.len() == 1 => Some(method(0, "getTimestamp", &[])),
         "date_timestamp_set" if args.len() == 2 => Some(method(0, "setTimestamp", &[1])),
         "date_timezone_get" if args.len() == 1 => Some(method(0, "getTimezone", &[])),

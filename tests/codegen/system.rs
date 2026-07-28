@@ -429,11 +429,11 @@ echo date("Y-m-d H:i:s", $lower);
     assert_eq!(out, "2024-06-15 12:00:00,2024-06-15 12:30:00");
 }
 
-/// Verifies `strtotime` returns `false` (PHP's failure value) for malformed ISO-like strings
-/// that have extra junk after the datetime; a strict `=== false` check distinguishes failure
-/// from any valid timestamp.
+/// Pins the current strict ISO-subset rejection behavior while documenting the audited timelib
+/// gap: PHP 8.5 also rejects cases 1, 2, and 4, but accepts the one-letter-zone, slash-date, and
+/// `0x` forms in cases 3, 5, and 6. A strict `=== false` distinguishes failure from timestamp zero.
 #[test]
-fn test_strtotime_rejects_malformed_iso_datetime() {
+fn test_strtotime_iso_datetime_subset_rejections() {
     let out = compile_and_run(
         r#"<?php
 echo (strtotime("2024-06-15 12:30:45 extra") === false ? "F" : "x") . ",";
@@ -3228,4 +3228,108 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 "#,
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
+}
+
+/// G19: the procedural `date_create()` alias returns `false` (not a throw) when the string fails to
+/// parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_create` wrapper
+/// catches the ctor's `DateMalformedStringException` and returns `false`.
+#[test]
+fn test_date_create_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$d = date_create("totoro");
+echo ($d === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G19: the procedural `date_create_immutable()` alias returns `false` on an unparseable string,
+/// matching PHP-src's `DateTimeImmutable|false` contract (via the synthetic
+/// `__elephc_date_create` wrapper on `DateTimeImmutable`).
+#[test]
+fn test_date_create_immutable_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$d = date_create_immutable("totoro");
+echo ($d === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G19b: the procedural `date_modify()` alias returns `false` (not a throw) when the modifier fails
+/// to parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_modify`
+/// wrapper catches `modify()`'s `DateMalformedStringException` and returns `false`.
+#[test]
+fn test_date_modify_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime("2024-01-01");
+$r = date_modify($d, "totoro");
+echo ($r === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G15: `idate("")` with an empty format returns `false`. PHP also emits an `E_WARNING`; elephc does
+/// not (no warning system), so only the `false` return is asserted.
+#[test]
+fn test_idate_empty_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo (idate("") === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies an unrecognized literal `idate()` format returns `false`.
+#[test]
+fn test_idate_unknown_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo (idate("q") === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies computed formats take the same runtime validation path as literals.
+#[test]
+fn test_idate_dynamic_unknown_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$format = "q";
+echo (idate($format) === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G15 regression: a recognized `idate` specifier still returns the integer value, not `false`.
+#[test]
+fn test_idate_valid_format_returns_int() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo (idate("Y", 1718452800) > 2020) ? "int" : "other";
+"#,
+    );
+    assert_eq!(out, "int");
+}
+
+/// R1: `strtotime` accepts a two-digit ISO year `YY-MM-DD` and applies PHP's shorthand (70-100 →
+/// 1970-2000, 0-69 → 2000-2069), matching PHP-src. `gmdate` is used to avoid local-timezone noise.
+#[test]
+fn test_strtotime_two_digit_iso_year() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo gmdate("Y-m-d", strtotime("99-01-01")), "|", gmdate("Y-m-d", strtotime("50-06-15"));
+"#,
+    );
+    assert_eq!(out, "1999-01-01|2050-06-15");
 }

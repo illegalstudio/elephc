@@ -115,6 +115,27 @@ echo $dt instanceof DateTimeInterface ? "yes" : "no";
     assert_eq!(out, "yes");
 }
 
+/// Verifies `DateTimeInterface` declares `diff()` and the serialization hooks from php-src.
+#[test]
+fn test_datetime_interface_diff_and_serialize_contract() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+function distance(DateTimeInterface $from, DateTimeInterface $to): DateInterval {
+    return $from->diff($to, true);
+}
+function state(DateTimeInterface $date) {
+    return $date->__serialize();
+}
+$a = new DateTime("2024-01-01");
+$b = new DateTimeImmutable("2024-01-04");
+$state = state($a);
+echo distance($a, $b)->days, "|", $state["timezone"];
+"#,
+    );
+    assert_eq!(out, "3|UTC");
+}
+
 /// Verifies `DateTime::setTime()` replaces the time-of-day while keeping the date (mutates `$this`).
 #[test]
 fn test_datetime_mutable_set_time() {
@@ -862,7 +883,7 @@ $r = date_format($d, "Y-m-d H:i");
 date_timezone_set($d, timezone_open("Europe/Paris"));
 echo $r, "|", date_format($d, "H:i"), "|", timezone_name_get(date_timezone_get($d)), "|",
      date_offset_get($d), "|",
-     date_diff(date_create("@1704067200"), date_create("@1719835200"))->days;
+     date_diff(new DateTime("@1704067200"), new DateTime("@1719835200"))->days;
 "#,
     );
     assert_eq!(out, "2024-07-01 12:00|14:00|Europe/Paris|7200|182");
@@ -875,7 +896,7 @@ fn test_procedural_date_mutation_aliases() {
     let out = compile_and_run(
         r#"<?php
 date_default_timezone_set("UTC");
-$d = date_create();
+$d = new DateTime();
 date_date_set($d, 2024, 1, 15);
 date_time_set($d, 9, 30, 0);
 date_add($d, new DateInterval("P1M"));
@@ -940,16 +961,21 @@ fn test_datetime_create_from_object_conversions() {
         r#"<?php
 date_default_timezone_set("UTC");
 $src = new DateTime("2024-06-15 12:00:00");
+$src->setMicrosecond(123456);
 $src->setTimezone(new DateTimeZone("Europe/Paris"));
 $im = DateTimeImmutable::createFromMutable($src);
 $back = DateTime::createFromInterface($im);
 $plain = new DateTimeImmutable("2024-03-10 08:30:00");
 $dt = DateTime::createFromImmutable($plain);
 echo $im->format("Y-m-d H:i"), " ", $im->getTimezone()->getName(), "|",
-     $back->format("H:i"), "|", $dt->format("Y-m-d H:i:s");
+     $src->getMicrosecond(), ":", $im->getMicrosecond(), ":", $back->format("H:i.u"), "|",
+     $dt->format("Y-m-d H:i:s");
 "#,
     );
-    assert_eq!(out, "2024-06-15 14:00 Europe/Paris|14:00|2024-03-10 08:30:00");
+    assert_eq!(
+        out,
+        "2024-06-15 14:00 Europe/Paris|123456:123456:14:00.123456|2024-03-10 08:30:00"
+    );
 }
 
 /// Verifies `setISODate()` maps an ISO 8601 week date to the Gregorian date while keeping the
@@ -962,16 +988,21 @@ fn test_datetime_set_isodate() {
         r#"<?php
 date_default_timezone_set("UTC");
 $d = new DateTime("2024-01-01 09:30:15");
+$d->setMicrosecond(123456);
 $d->setISODate(2024, 10, 3);
 $im = new DateTimeImmutable("2020-06-15 12:00:00");
+$im = $im->setMicrosecond(654321);
 $im2 = $im->setISODate(2026, 1, 1);
 $e = new DateTime("2024-06-15 00:00:00");
 date_isodate_set($e, 2024, 53, 1);
-echo $d->format("Y-m-d H:i:s"), "|", $im2->format("Y-m-d"), "|", $im->format("Y-m-d"), "|",
+echo $d->format("Y-m-d H:i:s.u"), "|", $im2->format("Y-m-d.u"), "|", $im->format("Y-m-d"), "|",
      $e->format("Y-m-d");
 "#,
     );
-    assert_eq!(out, "2024-03-06 09:30:15|2025-12-29|2020-06-15|2024-12-30");
+    assert_eq!(
+        out,
+        "2024-03-06 09:30:15.123456|2025-12-29.654321|2020-06-15|2024-12-30"
+    );
 }
 
 /// resulting object formats back identically.
@@ -1033,10 +1064,8 @@ echo ($bad === false) ? "false" : "??";
 }
 
 /// Verifies the timezone format specifiers `O` (`+hhmm`), `P` (`+hh:mm`), `Z` (offset in seconds),
-/// `T` (3- or 4-letter abbreviation, matched greedily), and `e` (IANA name) parse and validate the subject substring
-/// against the rendered `date("X", $ts)` output of the constructed instant. A mismatch (e.g. `O`
-/// `+0500` against a Europe/Paris instant) returns `false`; a round-trip match yields a DateTime
-/// that re-formats to the same wall-clock.
+/// `T` (greedy abbreviation), and `e` (IANA name) select the parsed timezone and override the
+/// optional third argument. `Z` is a literal rather than a supported parser token.
 #[test]
 fn test_create_from_format_tz_specifiers() {
     let out = compile_and_run(
@@ -1046,23 +1075,20 @@ date_default_timezone_set("UTC");
 $paris = new DateTimeZone("Europe/Paris");
 $ts = (new DateTime("2024-07-15 12:00:00", $paris))->getTimestamp();
 
-// O: +0200 — round-trip and mismatch.
+// O/P embedded offsets override the optional Paris timezone; different offsets remain valid.
 $a = DateTime::createFromFormat("Y-m-d H:i:s O", "2024-07-15 12:00:00 +0200", $paris);
 echo ($a === false) ? "?" : "O:" . $a->format("Y-m-d H:i:s O") . "|";
-$badO = DateTime::createFromFormat("Y-m-d H:i:s O", "2024-07-15 12:00:00 +0500", $paris);
-echo ($badO === false) ? "O-bad|": "?|";
+$otherO = DateTime::createFromFormat("Y-m-d H:i:s O", "2024-07-15 12:00:00 +0500", $paris);
+echo ($otherO === false) ? "?" : "O5:" . $otherO->format("Y-m-d H:i:s O") . "|";
 
-// P: +02:00.
 $b = DateTime::createFromFormat("Y-m-d H:i:s P", "2024-07-15 12:00:00 +02:00", $paris);
 echo ($b === false) ? "?" : "P:" . $b->format("Y-m-d H:i:s P") . "|";
-$badP = DateTime::createFromFormat("Y-m-d H:i:s P", "2024-07-15 12:00:00 -05:00", $paris);
-echo ($badP === false) ? "P-bad|": "?|";
+$otherP = DateTime::createFromFormat("Y-m-d H:i:s P", "2024-07-15 12:00:00 -05:00", $paris);
+echo ($otherP === false) ? "?" : "P5:" . $otherP->format("Y-m-d H:i:s P") . "|";
 
-// Z: +7200 (Paris summer, no colon). Both signed and unsigned accepted.
+// Z is not a createFromFormat token in php-src.
 $c = DateTime::createFromFormat("Y-m-d H:i:s Z", "2024-07-15 12:00:00 +7200", $paris);
-echo ($c === false) ? "?" : "Z:" . $c->format("Y-m-d H:i:s Z") . "|";
-$d = DateTime::createFromFormat("Y-m-d H:i:s Z", "2024-01-15 12:00:00 +3600", $paris);
-echo ($d === false) ? "?" : "Zw:" . $d->format("Y-m-d H:i:s Z") . "|";
+echo ($c === false) ? "Z-false|" : "?";
 
 // T: 3- or 4-letter abbreviation. libc resolves this to "CEST" for Paris summer.
 $e = DateTime::createFromFormat("Y-m-d H:i:s T", "2024-07-15 12:00:00 CEST", $paris);
@@ -1073,14 +1099,9 @@ $f = DateTime::createFromFormat("Y-m-d H:i:s e", "2024-07-15 12:00:00 Europe/Par
 echo ($f === false) ? "?" : "e:" . $f->format("Y-m-d H:i:s e");
 "#,
     );
-    // The exact T value is libc-defined (CEST on most platforms); we only assert the parser
-    // round-trips whatever date("T") reports, so accept either "T:CEST..." or "T-false|".
-    // PHP's Z specifier renders the offset WITHOUT a leading + for positive values
-    // (matches our impl); the O specifier DOES include the leading +.
-    assert!(
-        out == "O:2024-07-15 12:00:00 +0200|O-bad|P:2024-07-15 12:00:00 +02:00|P-bad|Z:2024-07-15 12:00:00 7200|Zw:2024-01-15 12:00:00 3600|T:2024-07-15 12:00:00 CEST|e:2024-07-15 12:00:00 Europe/Paris"
-            || out == "O:2024-07-15 12:00:00 +0200|O-bad|P:2024-07-15 12:00:00 +02:00|P-bad|Z:2024-07-15 12:00:00 7200|Zw:2024-01-15 12:00:00 3600|T-false|e:2024-07-15 12:00:00 Europe/Paris",
-        "unexpected output: {out}"
+    assert_eq!(
+        out,
+        "O:2024-07-15 12:00:00 +0200|O5:2024-07-15 12:00:00 +0500|P:2024-07-15 12:00:00 +02:00|P5:2024-07-15 12:00:00 -05:00|Z-false|T:2024-07-15 12:00:00 CEST|e:2024-07-15 12:00:00 Europe/Paris"
     );
 }
 
@@ -1158,7 +1179,8 @@ echo DateTime::createFromTimestamp(1718452800)->format("Y-m-d H:i:s"), "|",
 }
 
 /// Verifies sub-second support: set/getMicrosecond, `format('u')`/`format('v')` reflecting the stored
-/// microseconds (escaped `\u` stays literal), preservation across a mutable setTimestamp and an
+/// microseconds (escaped `\u` stays literal), PHP's reset on mutable `setTimestamp` and preservation
+/// across an
 /// immutable operation chain, the `createFromFormat('u')` specifier, and `DateInterval->f` (always
 /// 0.0 at second resolution).
 #[test]
@@ -1182,7 +1204,7 @@ echo "|", $iv->f;
     );
     assert_eq!(
         out,
-        "123456|12:00:00.123456|12:00:00.123|12:00:00 u|123456|2025-03-04.000007|654321|0"
+        "123456|12:00:00.123456|12:00:00.123|12:00:00 u|0|2025-03-04.000007|654321|0"
     );
 }
 
@@ -1200,11 +1222,11 @@ $ok = DateTime::getLastErrors();
 DateTime::createFromFormat("Y-m-d", "not-a-date");
 $bad = DateTime::getLastErrors();
 $alias = date_get_last_errors();
-echo $ok["error_count"], "|", $ok["warning_count"], "|", $bad["error_count"], "|",
-     count($bad["errors"]), "|", $alias["error_count"];
+echo ($ok === false) ? "false" : "other", "|",
+     $bad["error_count"], "|", count($bad["errors"]), "|", $alias["error_count"];
 "#,
     );
-    assert_eq!(out, "0|0|1|1|1");
+    assert_eq!(out, "false|1|1|1");
 }
 
 /// Verifies the procedural `date_create_from_format` alias desugars to `DateTime::createFromFormat`,
@@ -1576,21 +1598,25 @@ echo (strptime("garbage", "%Y") === false ? "F" : "x");
     assert_eq!(out, "45,30,14,15,5,124,6,166,[]|15,5,124,6,166,[ rest]|14,30,0,0,0|F");
 }
 
-/// Verifies `timezone_name_from_abbr()` maps common timezone abbreviations to the IANA zone PHP
-/// returns (case-insensitively) and yields `false` for unknown abbreviations — including ones PHP
-/// itself does not resolve (e.g. "SGT"). Values cross-checked against PHP.
+/// Verifies `timezone_name_from_abbr()` searches the complete timelib-derived table
+/// case-insensitively, including uncommon and historically ambiguous rows, and returns `false`
+/// for abbreviations absent from php-src's table. Values cross-checked against PHP 8.5.6.
 #[test]
 fn test_timezone_name_from_abbr() {
     let out = compile_and_run(
         r#"<?php
 echo timezone_name_from_abbr("CEST"), "|", timezone_name_from_abbr("est"), "|";
 echo timezone_name_from_abbr("JST"), "|", timezone_name_from_abbr("MSK"), "|";
+echo timezone_name_from_abbr("bDsT"), "|", timezone_name_from_abbr("AMT", 5692, 0), "|";
 echo (timezone_name_from_abbr("ZZZ") === false ? "F" : "x"), "|";
 echo (timezone_name_from_abbr("SGT") === false ? "F" : "x"), "|";
 echo function_exists("timezone_name_from_abbr") ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "Europe/Berlin|America/New_York|Asia/Tokyo|Europe/Moscow|F|F|1");
+    assert_eq!(
+        out,
+        "Europe/Berlin|America/New_York|Asia/Tokyo|Europe/Moscow|Europe/London|Europe/Athens|F|F|1"
+    );
 }
 
 /// Verifies `DateTimeZone::getLocation()` (and the `timezone_location_get()`
@@ -2320,22 +2346,19 @@ echo count($t), "|", $f["ts"], "|", $f["offset"], "|", ($f["isdst"] ? "1" : "0")
     assert_eq!(out, "1|-9223372036854775808|0|0|UTC");
 }
 
-/// `DateTimeImmutable::getLastErrors()` is the per-class static mirror of
-/// `DateTime::getLastErrors()`: after a failed `createFromFormat()` it returns an array whose
-/// `error_count` is non-zero. The exact count depends on the specific parse failure and the shared
-/// last-errors state, so this asserts only the shape (array + non-zero errors), which both elephc
-/// and PHP agree on for an unparseable input.
+/// Verifies `DateTime` and `DateTimeImmutable` share the last parse-error state and preserve the
+/// php-src byte position/message for a truncated numeric field.
 #[test]
-fn test_datetime_immutable_get_last_errors() {
+fn test_datetime_get_last_errors_shared_between_classes() {
     let out = compile_and_run(
         r#"<?php
 date_default_timezone_set("UTC");
-DateTimeImmutable::createFromFormat("Y-m-d", "not-a-date");
-$e = DateTimeImmutable::getLastErrors();
-echo is_array($e) ? "arr" : "no", "|", ($e["error_count"] > 0 ? "err" : "ok");
+DateTimeImmutable::createFromFormat("Y-m-d", "2024-01");
+$e = DateTime::getLastErrors();
+echo $e["error_count"], "|", $e["errors"]["7"];
 "#,
     );
-    assert_eq!(out, "arr|err");
+    assert_eq!(out, "1|Not enough data available to satisfy format");
 }
 
 /// Regression: `createFromTimestamp()` keeps the fractional second as microseconds (PHP 8.4),
@@ -2439,4 +2462,543 @@ echo ($a <=> $b);
 "#,
     );
     assert_eq!(out, "101-1");
+}
+
+/// G10: `new DateTime("totoro")` throws `DateMalformedStringException` (PHP 8.3+).
+#[test]
+fn test_datetime_invalid_string_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $d = new DateTime("totoro");
+    echo "no-throw";
+} catch (DateMalformedStringException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G10b: `new DateTimeImmutable("totoro")` throws `DateMalformedStringException` (PHP 8.3+).
+#[test]
+fn test_datetime_immutable_invalid_string_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $d = new DateTimeImmutable("totoro");
+    echo "no-throw";
+} catch (DateMalformedStringException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G9: `new DateTimeZone("garbage")` throws `DateInvalidTimeZoneException` (PHP 8.3+).
+#[test]
+fn test_datetimezone_invalid_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $tz = new DateTimeZone("garbage");
+    echo "no-throw";
+} catch (DateInvalidTimeZoneException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Verifies PHP canonicalizes compact numeric zones while preserving their wall-clock/offset
+/// semantics (including second precision and the optional `GMT` prefix), rejects normalized
+/// offsets of 100 hours or more, and resolves abbreviation zones without changing their public
+/// name.
+#[test]
+fn test_datetimezone_offset_valid() {
+    let out = compile_and_run(
+        r#"<?php
+$tz = new DateTimeZone("+0200");
+$d = new DateTime("2024-01-01 12:00:00", $tz);
+$a = new DateTime("2024-07-15 12:00:00", new DateTimeZone("CEST"));
+$seconds = new DateTimeZone("GMT+02:30:45");
+$sd = new DateTime("2024-01-01 12:00:00", $seconds);
+$zero = new DateTimeZone("-000000");
+try {
+    new DateTimeZone("+9999");
+    $bad = "N";
+} catch (DateInvalidTimeZoneException $e) {
+    $bad = "Y";
+}
+echo $tz->getName(), "|", $d->format("H:i P"), "|", $d->getOffset(), "|",
+     $a->getTimezone()->getName(), "|", $a->format("H:i P T"), "|",
+     $seconds->getName(), "|", $sd->format("H:i:s P"), "|", $sd->getOffset(), "|",
+     $zero->getName(), "|", $bad;
+"#,
+    );
+    assert_eq!(
+        out,
+        "+02:00|12:00 +02:00|7200|CEST|12:00 +02:00 CEST|+02:30:45|12:00:00 +02:30|9045|+00:00|Y"
+    );
+}
+
+/// G24: `DateTime::createFromTimestamp(float)` preserves the fractional part as microseconds.
+#[test]
+fn test_create_from_timestamp_float_keeps_micros() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo DateTime::createFromTimestamp(1700000000.123456)->format("u");
+"#,
+    );
+    assert_eq!(out, "123456");
+}
+
+/// G25: `DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY)` without a country code throws
+/// `ValueError` (PHP 8.0+). Reinforces the existing per-country test with the bare no-code path.
+#[test]
+fn test_list_identifiers_per_country_no_code_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $x = DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY);
+    echo "no-throw";
+} catch (ValueError $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// G19c: the `date_create_from_format` procedural alias returns `false` (not a throw) when the
+/// subject fails to match the format, matching `DateTime::createFromFormat`.
+#[test]
+fn test_date_create_from_format_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$bad = date_create_from_format("Y-m-d", "not-a-date");
+echo ($bad === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies `createFromDateString()` exposes `from_string` through serialization state.
+#[test]
+fn test_dateinterval_from_string_serialization_state() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = DateInterval::createFromDateString("2 days");
+$state = $iv->__serialize();
+echo $state["from_string"] ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "true");
+}
+
+/// Verifies PHP's two exclusive `DateInterval::__serialize()` shapes: relative-string intervals
+/// expose only their source metadata, while ISO intervals have no `date_string` key.
+#[test]
+fn test_dateinterval_date_string_serialization_state() {
+    let out = compile_and_run(
+        r#"<?php
+$a = DateInterval::createFromDateString("2 days");
+$as = $a->__serialize();
+echo $as["date_string"], "|", ($as["from_string"] ? "t" : "f"), "|";
+$b = new DateInterval("P1Y");
+$bs = $b->__serialize();
+echo (isset($bs["date_string"]) ? "Y" : "N"), "|", ($bs["from_string"] ? "t" : "f");
+"#,
+    );
+    assert_eq!(out, "2 days|t|N|f");
+}
+
+/// G6: `DatePeriod::getEndDate()` return type is `?DateTimeInterface` — the returned object satisfies
+/// `instanceof DateTimeInterface` (it is a `DateTime`, which implements the interface).
+#[test]
+fn test_dateperiod_get_end_date_returns_interface() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+$e = $p->getEndDate();
+echo ($e instanceof DateTimeInterface) ? "iface" : "no";
+"#,
+    );
+    assert_eq!(out, "iface");
+}
+
+/// G7: `DatePeriod::getStartDate()` return type is `DateTimeInterface` — the returned object
+/// satisfies `instanceof DateTimeInterface`.
+#[test]
+fn test_dateperiod_get_start_date_returns_interface() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+$s = $p->getStartDate();
+echo ($s instanceof DateTimeInterface) ? "iface" : "no";
+"#,
+    );
+    assert_eq!(out, "iface");
+}
+
+/// G8: `DatePeriod` implements `IteratorAggregate` (PHP 5.3+, formally since 8.0) in addition to
+/// `Iterator`. `instanceof IteratorAggregate` must be true.
+#[test]
+fn test_dateperiod_instanceof_iterator_aggregate() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo ($p instanceof IteratorAggregate) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// G4: `DatePeriod::$start` exposes the start instant (PHP 8.2+ public readonly virtual property).
+#[test]
+fn test_dateperiod_start_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$start = new DateTime("2024-01-01");
+$p = new DatePeriod($start, new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->start->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-01-01");
+}
+
+/// G4: `DatePeriod::$end` exposes the end instant (null in the recurrence-count form).
+#[test]
+fn test_dateperiod_end_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->end->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-01-04");
+}
+
+/// G4: `DatePeriod::$interval` exposes the step interval.
+#[test]
+fn test_dateperiod_interval_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+echo $p->interval->format("%d");
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// G4: `DatePeriod::$current` reflects the live cursor during iteration.
+#[test]
+fn test_dateperiod_current_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), new DateTime("2024-01-04"));
+foreach ($p as $d) {
+    echo $p->current->format("Y-m-d"), "|";
+}
+"#,
+    );
+    assert_eq!(out, "2024-01-01|2024-01-02|2024-01-03|");
+}
+
+/// Verifies PHP's distinction between the public minimum-yield count and `getRecurrences()`.
+#[test]
+fn test_dateperiod_recurrences_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$s = new DateTime("2024-01-01");
+$i = new DateInterval("P1D");
+foreach ([0, DatePeriod::EXCLUDE_START_DATE, DatePeriod::INCLUDE_END_DATE,
+          DatePeriod::EXCLUDE_START_DATE | DatePeriod::INCLUDE_END_DATE] as $option) {
+    $p = new DatePeriod($s, $i, 3, $option);
+    echo $p->recurrences, ":", $p->getRecurrences(), "|";
+}
+$end = new DateTime("2024-01-04");
+foreach ([0, DatePeriod::EXCLUDE_START_DATE, DatePeriod::INCLUDE_END_DATE,
+          DatePeriod::EXCLUDE_START_DATE | DatePeriod::INCLUDE_END_DATE] as $option) {
+    $p = new DatePeriod($s, $i, $end, $option);
+    echo $p->recurrences, ":", ($p->getRecurrences() === null ? "N" : "X"), "|";
+}
+"#,
+    );
+    assert_eq!(out, "4:3|3:3|5:3|4:3|1:N|0:N|2:N|1:N|");
+}
+
+/// G4: `DatePeriod::$include_start_date` / `$include_end_date` reflect the option flags.
+#[test]
+fn test_dateperiod_include_start_end_date_property() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(
+    new DateTime("2024-01-01"),
+    new DateInterval("P1D"),
+    new DateTime("2024-01-04"),
+    DatePeriod::EXCLUDE_START_DATE | DatePeriod::INCLUDE_END_DATE,
+);
+echo $p->include_start_date ? "1" : "0", "|", $p->include_end_date ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "0|1");
+}
+
+/// G13: `DateTime::diff()` produces a `DateInterval` whose `$days` is the whole-day total (int),
+/// and `format("%a")` renders that total. Directly constructed intervals keep `days === false`.
+#[test]
+fn test_diff_days_is_int() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$a = new DateTime("2020-01-01");
+$b = new DateTime("2021-03-15");
+$d = $a->diff($b);
+echo $d->days, "|", $d->format("%a");
+"#,
+    );
+    assert_eq!(out, "439|439");
+}
+
+/// G13: a directly constructed `DateInterval` has `days === false`, and `format("%a")` renders
+/// `(unknown)`, matching PHP.
+#[test]
+fn test_diff_format_a_unknown_when_days_false() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = new DateInterval("P2W");
+echo ($iv->days === false) ? "F" : "T", "|", $iv->format("%a");
+"#,
+    );
+    assert_eq!(out, "F|(unknown)");
+}
+
+/// R3/R4: `DateTimeZone::getTransitions()` with no arguments reproduces PHP's full transition list
+/// — row 0 `ts = PHP_INT_MIN` (= `i64::MIN` on 64-bit), the count for the bundled tz data, and the
+/// expanded-year `time` format. Non-regression for the bridge's `format_utc_iso` formatter.
+#[test]
+fn test_get_transitions_row0_ts_php_int_min() {
+    let out = compile_and_run(
+        r#"<?php
+$t = (new DateTimeZone("Europe/Paris"))->getTransitions();
+echo $t[0]["ts"], "\n", $t[0]["time"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "-9223372036854775808\n-292277022657-01-27T08:29:52+00:00"
+    );
+}
+
+/// G12: `DateTime::__serialize()` returns the PHP-shaped array with `date`, `timezone_type`, and
+/// `timezone` keys.
+#[test]
+fn test_datetime_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime("2024-01-01 12:00:00.5", new DateTimeZone("Europe/Paris"));
+$a = $d->__serialize();
+echo $a["date"], "|", $a["timezone_type"], "|", $a["timezone"];
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|3|Europe/Paris");
+}
+
+/// G12: `DateTime::__unserialize()` reconstructs the object from the serialize array.
+#[test]
+fn test_datetime_unserialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime();
+$d->__unserialize(["date" => "2024-01-01 12:00:00.500000", "timezone_type" => 3, "timezone" => "Europe/Paris"]);
+echo $d->format("Y-m-d H:i:s.u"), "|", $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|Europe/Paris");
+}
+
+/// G12: `DateTime::__set_state()` reconstructs from an array (used by `var_export`).
+#[test]
+fn test_datetime_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = DateTime::__set_state(["date" => "2024-01-01 12:00:00.500000", "timezone_type" => 3, "timezone" => "Europe/Paris"]);
+echo $d->format("Y-m-d H:i:s.u"), "|", $d->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-01-01 12:00:00.500000|Europe/Paris");
+}
+
+/// G12: `DateTimeImmutable::__serialize()` / `__unserialize()` / `__set_state()` round-trip.
+#[test]
+fn test_datetime_immutable_serialize_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTimeImmutable("2024-06-15 08:30:00", new DateTimeZone("America/New_York"));
+$a = $d->__serialize();
+$d2 = DateTimeImmutable::__set_state($a);
+echo $d2->format("Y-m-d H:i:s"), "|", $d2->getTimezone()->getName();
+"#,
+    );
+    assert_eq!(out, "2024-06-15 08:30:00|America/New_York");
+}
+
+/// G12: `DateTimeZone::__serialize()` / `__set_state()` round-trip.
+#[test]
+fn test_datetimezone_serialize_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+$tz = new DateTimeZone("Europe/Paris");
+$a = $tz->__serialize();
+$tz2 = DateTimeZone::__set_state($a);
+echo $tz2->getName();
+"#,
+    );
+    assert_eq!(out, "Europe/Paris");
+}
+
+/// G12: `DateInterval::__serialize()` returns all public properties as an array.
+#[test]
+fn test_dateinterval_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = new DateInterval("P1Y2M3DT4H5M6S");
+$a = $iv->__serialize();
+echo $a["y"], "|", $a["m"], "|", $a["d"], "|", $a["h"], "|", $a["i"], "|", $a["s"], "|",
+     $a["f"], "|", $a["invert"], "|", ($a["days"] === false ? "F" : "T"), "|",
+     ($a["from_string"] === false ? "F" : "T");
+"#,
+    );
+    assert_eq!(out, "1|2|3|4|5|6|0|0|F|F");
+}
+
+/// Verifies `DateInterval::__set_state()` reconstructs both PHP serialization shapes.
+#[test]
+fn test_dateinterval_set_state() {
+    let out = compile_and_run(
+        r#"<?php
+$iv = DateInterval::__set_state(["y"=>1,"m"=>2,"d"=>3,"h"=>4,"i"=>5,"s"=>6,"f"=>0,"invert"=>0,"days"=>false,"from_string"=>false]);
+echo $iv->format("%y-%m-%d %h:%i:%s"), "|";
+$relative = DateInterval::__set_state(["from_string"=>true,"date_string"=>"2 days"]);
+echo $relative->format("%d"), "|", $relative->__serialize()["date_string"];
+"#,
+    );
+    assert_eq!(out, "1-2-3 4:5:6|2|2 days");
+}
+
+/// G12: `DatePeriod::__serialize()` returns the period's state as an array with `start`,
+/// `interval`, `recurrences`, `include_start_date`, `include_end_date`.
+#[test]
+fn test_dateperiod_serialize() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$p = new DatePeriod(new DateTime("2024-01-01"), new DateInterval("P1D"), 3);
+$a = $p->__serialize();
+echo $a["start"]->format("Y-m-d"), "|", $a["interval"]->format("%d"), "|", $a["recurrences"], "|",
+     $a["include_start_date"] ? "1" : "0", "|", $a["include_end_date"] ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "2024-01-01|1|4|1|0");
+}
+
+/// Verifies the deprecated string overload also accepts a runtime-computed specification.
+#[test]
+fn test_dateperiod_ctor_string_form() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$specification = "R3/2020-01-01T00:00:00Z/P1D";
+$p = new DatePeriod($specification);
+$n = 0;
+foreach ($p as $d) { $n++; }
+echo $n;
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// G11: `getLastErrors()` returns a detailed error array with positions. Trailing data on a
+/// `createFromFormat` mismatch is reported as an error at the trailing position.
+#[test]
+fn test_get_last_errors_trailing_data() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-01-01X");
+$e = DateTime::getLastErrors();
+echo $e["error_count"], "|", $e["errors"]["10"];
+"#,
+    );
+    assert_eq!(out, "1|Trailing data");
+}
+
+/// G11: `getLastErrors()` returns `false` when the last `createFromFormat` succeeded (no errors,
+/// no warnings).
+#[test]
+fn test_get_last_errors_no_errors_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-01-15");
+$r = DateTime::getLastErrors();
+echo ($r === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G11: `getLastErrors()` reports a warning "The parsed date was invalid" when the date overflows
+/// (e.g. month 13 → normalized to next year).
+#[test]
+fn test_get_last_errors_invalid_date_warning() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+DateTime::createFromFormat("Y-m-d", "2024-13-99");
+$e = DateTime::getLastErrors();
+echo $e["warning_count"], "|", $e["warnings"]["10"];
+"#,
+    );
+    assert_eq!(out, "1|The parsed date was invalid");
+}
+
+/// Verifies `timezone_name_from_abbr()` follows timelib's ordered lookup: an exact UTC-offset
+/// match disambiguates known abbreviations, while an unknown abbreviation can fall back solely
+/// by UTC offset and DST flag.
+#[test]
+fn test_timezone_name_from_abbr_with_offset() {
+    let out = compile_and_run(
+        r#"<?php
+echo timezone_name_from_abbr("CST"), "|",
+     timezone_name_from_abbr("CST", -18000, 1), "|",
+     timezone_name_from_abbr("CST", 28800, 0), "|",
+     timezone_name_from_abbr("IST", 3600, 0), "|",
+     timezone_name_from_abbr("CEST", 10800, 1), "|",
+     timezone_name_from_abbr("", 0, 0), "|",
+     timezone_name_from_abbr("???", 19800, 0);
+"#,
+    );
+    assert_eq!(
+        out,
+        "America/Chicago|America/Havana|Asia/Chongqing|Europe/Dublin|Europe/Kaliningrad|Europe/London|Asia/Kolkata"
+    );
 }
