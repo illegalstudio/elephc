@@ -1,8 +1,8 @@
 //! Purpose:
 //! Decides whether a parsed program references the timezone-introspection surface
-//! (`timezone_location_get`/`timezone_transitions_get`/`timezone_abbreviations_list`
-//! or the `getLocation`/`getTransitions`/`listAbbreviations` methods) so the
-//! `tz_prelude` is injected only for programs that use it.
+//! (`timezone_location_get`/`timezone_transitions_get`/`timezone_abbreviations_list`/
+//! `timezone_name_from_abbr` or the `getLocation`/`getTransitions`/`listAbbreviations`/
+//! `createFromFormat` methods) so the `tz_prelude` is injected only for programs that use it.
 //!
 //! Called from:
 //! - `crate::tz_prelude::inject_if_used`.
@@ -20,7 +20,7 @@
 use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
+    InstanceOfTarget, PackedField, StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 
 /// Returns whether any top-level statement references the introspection surface,
@@ -36,7 +36,29 @@ fn name_is_tz_fn(name: &Name) -> bool {
         segment.eq_ignore_ascii_case("timezone_location_get")
             || segment.eq_ignore_ascii_case("timezone_transitions_get")
             || segment.eq_ignore_ascii_case("timezone_abbreviations_list")
+            || segment.eq_ignore_ascii_case("timezone_name_from_abbr")
+            || segment.eq_ignore_ascii_case("date_create_from_format")
+            || segment.eq_ignore_ascii_case("date_create_immutable_from_format")
+            || segment.eq_ignore_ascii_case("serialize")
+            || segment.eq_ignore_ascii_case("unserialize")
+            || segment.eq_ignore_ascii_case("var_export")
     })
+}
+
+/// Returns whether a source name denotes one of PHP's date/time object classes whose synthetic
+/// methods may normalize a fixed offset or abbreviation through the timezone bridge.
+fn name_is_datetime_class(name: &Name) -> bool {
+    name.last_segment().is_some_and(|segment| {
+        segment.eq_ignore_ascii_case("DateTime")
+            || segment.eq_ignore_ascii_case("DateTimeImmutable")
+            || segment.eq_ignore_ascii_case("DateTimeZone")
+            || segment.eq_ignore_ascii_case("DatePeriod")
+    })
+}
+
+/// Returns whether a static receiver names one of the date/time object classes.
+fn receiver_is_datetime_class(receiver: &StaticReceiver) -> bool {
+    matches!(receiver, StaticReceiver::Named(name) if name_is_datetime_class(name))
 }
 
 /// Returns whether a function name is PHP's `eval` construct.
@@ -49,12 +71,18 @@ fn name_is_eval_fn(name: &Name) -> bool {
         .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
 }
 
-/// Returns whether a method name is one of the three introspection methods,
-/// compared case-insensitively as PHP method names are.
+/// Returns whether a method depends on timezone data, compared case-insensitively as PHP method
+/// names are. `createFromFormat` needs the abbreviation table when its format contains `T`.
 fn method_is_tz(method: &str) -> bool {
     method.eq_ignore_ascii_case("getLocation")
         || method.eq_ignore_ascii_case("getTransitions")
         || method.eq_ignore_ascii_case("listAbbreviations")
+        || method.eq_ignore_ascii_case("createFromFormat")
+        || method.eq_ignore_ascii_case("format")
+        || method.eq_ignore_ascii_case("getOffset")
+        || method.eq_ignore_ascii_case("__serialize")
+        || method.eq_ignore_ascii_case("__unserialize")
+        || method.eq_ignore_ascii_case("__set_state")
 }
 
 /// Returns whether a first-class-callable target references the introspection
@@ -62,7 +90,9 @@ fn method_is_tz(method: &str) -> bool {
 fn callable_target_refs_tz(target: &CallableTarget) -> bool {
     match target {
         CallableTarget::Function(name) => name_is_tz_fn(name),
-        CallableTarget::StaticMethod { method, .. } => method_is_tz(method),
+        CallableTarget::StaticMethod { receiver, method } => {
+            receiver_is_datetime_class(receiver) || method_is_tz(method)
+        }
         CallableTarget::Method { object, method } => method_is_tz(method) || expr_refs_tz(object),
     }
 }
@@ -158,8 +188,14 @@ fn expr_refs_tz(expr: &Expr) -> bool {
             method,
             args,
         } => expr_refs_tz(object) || expr_refs_tz(method) || args.iter().any(expr_refs_tz),
-        ExprKind::StaticMethodCall { method, args, .. } => {
-            method_is_tz(method) || args.iter().any(expr_refs_tz)
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            receiver_is_datetime_class(receiver)
+                || method_is_tz(method)
+                || args.iter().any(expr_refs_tz)
         }
         ExprKind::FirstClassCallable(target) => callable_target_refs_tz(target),
 
@@ -223,10 +259,10 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::ExprCall { callee, args } => {
             expr_refs_tz(callee) || args.iter().any(expr_refs_tz)
         }
-        ExprKind::NewObject { args, .. } => args.iter().any(expr_refs_tz),
-        ExprKind::NewDynamic { name_expr, args } => {
-            expr_refs_tz(name_expr) || args.iter().any(expr_refs_tz)
+        ExprKind::NewObject { class_name, args } => {
+            name_is_datetime_class(class_name) || args.iter().any(expr_refs_tz)
         }
+        ExprKind::NewDynamic { .. } => true,
         ExprKind::NewDynamicObject { class_name, args, .. } => {
             expr_refs_tz(class_name) || args.iter().any(expr_refs_tz)
         }
@@ -440,6 +476,15 @@ mod tests {
         )));
     }
 
+    /// `timezone_name_from_abbr(...)` is detected because its synthetic body reads
+    /// the complete abbreviation table from the timezone bridge.
+    #[test]
+    fn detects_name_from_abbr_dependency() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $name = timezone_name_from_abbr("CEST");"#
+        )));
+    }
+
     /// An instance `->getTransitions()` call is detected (by method name).
     #[test]
     fn detects_instance_method() {
@@ -453,6 +498,39 @@ mod tests {
     fn detects_static_method() {
         assert!(program_uses_tz_introspection(&parse(
             r#"<?php $a = DateTimeZone::listAbbreviations();"#
+        )));
+    }
+
+    /// `DateTime::createFromFormat()` is detected because the `T` format token resolves through
+    /// the bundled abbreviation table; false-positive linking for other formats is harmless.
+    #[test]
+    fn detects_create_from_format_dependency() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $d = DateTime::createFromFormat("Y-m-d T", "2024-01-01 UTC");"#
+        )));
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $d = date_create_immutable_from_format("Y-m-d", "2024-01-01");"#
+        )));
+    }
+
+    /// Constructing a date/time object is detected because fixed-offset and abbreviation zones
+    /// are normalized through the bridge-backed runtime-zone adapter.
+    #[test]
+    fn detects_datetime_construction_dependency() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $d = new DateTime("now", new DateTimeZone("CEST"));"#
+        )));
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $period = new DatePeriod("R2/2024-01-01T00:00:00Z/P1D");"#
+        )));
+    }
+
+    /// A dynamic construction is conservatively detected because it may resolve to `DateTimeZone`,
+    /// whose constructor validates identifiers through the timezone bridge.
+    #[test]
+    fn detects_dynamic_construction_dependency() {
+        assert!(program_uses_tz_introspection(&parse(
+            r#"<?php $class = "DateTimeZone"; $zone = new $class("UTC");"#
         )));
     }
 
@@ -486,7 +564,7 @@ mod tests {
     #[test]
     fn ignores_unrelated_program() {
         assert!(!program_uses_tz_introspection(&parse(
-            r#"<?php $s = "timezone_location_get"; echo $s; $d = new DateTimeZone("UTC"); echo $d->getName();"#
+            r#"<?php $s = "timezone_location_get"; echo $s; $d = new UnrelatedThing(); echo $d->getName();"#
         )));
     }
 }

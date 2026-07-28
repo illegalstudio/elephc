@@ -1,5 +1,5 @@
 //! Purpose:
-//! Injects the built-in `DatePeriod` class as a synthetic PHP `Iterator` over a date range.
+//! Injects the built-in `DatePeriod` class as a synthetic date-range iterator.
 //! Iterates from a start `DateTimeInterface` by a `DateInterval` up to an end `DateTimeInterface`.
 //!
 //! Called from:
@@ -14,8 +14,8 @@
 //!   modeled (`is_int()` on the third argument picks the form).
 //! - `createFromISO8601String()` (PHP 8.3+) is supported via a synthetic PHP-source body that
 //!   parses `Rn/start[/interval[/end]]` and forwards to the regular constructor; returns
-//!   `false` on malformed input. The deprecated `new DatePeriod(string)` constructor is not
-//!   registered; callers should use the static factory instead.
+//!   `false` on malformed input. The name resolver routes the deprecated
+//!   `new DatePeriod(string[, options])` overload through that factory.
 
 use std::collections::HashMap;
 
@@ -311,12 +311,12 @@ fn date_period_constructor() -> ClassMethod {
         call("is_int", vec![var("end")]),
         vec![
             assign_this("useCount", int_lit(1)),
-            assign_this("recurrences", cast_int(var("end"))),
+            assign_this("_recurrence_count", cast_int(var("end"))),
             assign_this("endTs", int_lit(0)),
         ],
         Some(vec![
             assign_this("useCount", int_lit(0)),
-            assign_this("recurrences", int_lit(0)),
+            assign_this("_recurrence_count", int_lit(0)),
             assign_this("endTs", mcall(var("end"), "getTimestamp", Vec::new())),
         ]),
     ));
@@ -351,18 +351,24 @@ fn date_period_constructor() -> ClassMethod {
             dummy(),
         ),
     ));
-    // `end` and `recurrences` depend on the form: count form → end=null, recurrences=int; end-date
-    // form → end=DateTimeInterface, recurrences=null-equivalent (0).
+    // `end` depends on the overload. The public `recurrences` property is the minimum
+    // number of yielded instances: explicit count + included start + included end.
     body.push(if_else(
         call("is_int", vec![var("end")]),
-        vec![
-            assign_this("end", null_lit()),
-            assign_this("_recurrences_pub", cast_int(var("end"))),
-        ],
-        Some(vec![
-            assign_this("end", var("end")),
-            assign_this("_recurrences_pub", int_lit(0)),
-        ]),
+        vec![assign_this("end", null_lit())],
+        Some(vec![assign_this("end", var("end"))]),
+    ));
+    body.push(assign_this(
+        "recurrences",
+        bin(
+            bin(
+                this_prop("_recurrence_count"),
+                BinOp::Add,
+                cast_int(this_prop("include_start_date")),
+            ),
+            BinOp::Add,
+            cast_int(this_prop("include_end_date")),
+        ),
     ));
     method(
         "__construct",
@@ -409,7 +415,7 @@ fn date_period_rewind() -> ClassMethod {
 
 /// `DatePeriod::valid(): bool`.
 ///
-/// Count form (`useCount`): valid while `idx <= recurrences - excludeStart`, which
+/// Count form (`useCount`): valid while `idx <= _recurrence_count - excludeStart`, which
 /// yields `recurrences + 1` dates including the start, or exactly `recurrences` dates
 /// when `EXCLUDE_START_DATE` drops the start. End-date form: valid while the cursor is
 /// before the end (`<=` when `INCLUDE_END_DATE` is set, `<` otherwise).
@@ -417,7 +423,7 @@ fn date_period_valid() -> ClassMethod {
     let count_branch = vec![ret(bin(
         this_prop("idx"),
         BinOp::LtEq,
-        bin(this_prop("recurrences"), BinOp::Sub, this_prop("excludeStart")),
+        bin(this_prop("_recurrence_count"), BinOp::Sub, this_prop("excludeStart")),
     ))];
     let date_branch = vec![if_else(
         this_prop("includeEnd"),
@@ -543,7 +549,7 @@ fn date_period_get_recurrences() -> ClassMethod {
         Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
         vec![if_else(
             this_prop("useCount"),
-            vec![ret(this_prop("recurrences"))],
+            vec![ret(this_prop("_recurrence_count"))],
             Some(vec![ret(null_lit())]),
         )],
     )
@@ -704,7 +710,7 @@ return [
     "current" => $this->current,
     "end" => $this->end,
     "interval" => $this->interval,
-    "recurrences" => $this->_recurrences_pub,
+    "recurrences" => $this->recurrences,
     "include_start_date" => $this->include_start_date,
     "include_end_date" => $this->include_end_date,
 ];
@@ -713,10 +719,15 @@ return [
 /// PHP source backing `DatePeriod::__set_state()`. Reconstructs from the array by forwarding to the
 /// constructor with the start/interval/end or start/interval/recurrences form.
 const DATEPERIOD_SET_STATE_SRC: &str = r#"<?php
+$options = ($array["include_start_date"] ? 0 : DatePeriod::EXCLUDE_START_DATE)
+    | ($array["include_end_date"] ? DatePeriod::INCLUDE_END_DATE : 0);
 if ($array["end"] === null) {
-    return new DatePeriod($array["start"], $array["interval"], $array["recurrences"]);
+    $count = $array["recurrences"]
+        - ($array["include_start_date"] ? 1 : 0)
+        - ($array["include_end_date"] ? 1 : 0);
+    return new DatePeriod($array["start"], $array["interval"], $count, $options);
 }
-return new DatePeriod($array["start"], $array["interval"], $array["end"]);
+return new DatePeriod($array["start"], $array["interval"], $array["end"], $options);
 "#;
 
 /// Builds `DatePeriod::__wakeup(): void` (no-op, reusing the datetime wakeup builder).
@@ -734,9 +745,11 @@ fn date_period_wakeup() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Void),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -758,7 +771,9 @@ fn date_period_serialize() -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         by_ref_return: false,
@@ -771,13 +786,17 @@ fn date_period_serialize() -> ClassMethod {
 /// Builds `DatePeriod::__unserialize(array $data): void`. Restores the mirror properties.
 fn date_period_unserialize() -> ClassMethod {
     let src = r#"<?php
-$this->start = $data["start"];
+$options = ($data["include_start_date"] ? 0 : DatePeriod::EXCLUDE_START_DATE)
+    | ($data["include_end_date"] ? DatePeriod::INCLUDE_END_DATE : 0);
+if ($data["end"] === null) {
+    $count = $data["recurrences"]
+        - ($data["include_start_date"] ? 1 : 0)
+        - ($data["include_end_date"] ? 1 : 0);
+    $this->__construct($data["start"], $data["interval"], $count, $options);
+} else {
+    $this->__construct($data["start"], $data["interval"], $data["end"], $options);
+}
 $this->current = $data["current"];
-$this->end = $data["end"];
-$this->interval = $data["interval"];
-$this->_recurrences_pub = $data["recurrences"];
-$this->include_start_date = $data["include_start_date"];
-$this->include_end_date = $data["include_end_date"];
 "#;
     let tokens = crate::lexer::tokenize(src).expect("DatePeriod::__unserialize body source must tokenize");
     let body = crate::parser::parse(&tokens).expect("DatePeriod::__unserialize body source must parse");
@@ -794,9 +813,11 @@ $this->include_end_date = $data["include_end_date"];
             None,
             false,
         )],
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        return_type: Some(TypeExpr::Void),
         by_ref_return: false,
         body,
         span: dummy(),
@@ -823,7 +844,9 @@ fn date_period_set_state() -> ClassMethod {
             None,
             false,
         )],
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("DatePeriod"))),
         by_ref_return: false,
@@ -859,6 +882,7 @@ fn nullable_object_property(name: &str, class_name: &str) -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(null_lit()),
         span: dummy(),
         attributes: Vec::new(),
@@ -875,16 +899,16 @@ fn date_period_properties() -> Vec<ClassProperty> {
     props.push(int_property("includeEnd"));
     props.push(int_property("curTs"));
     props.push(int_property("idx"));
-    // useCount selects the count form; recurrences holds its repeat count.
+    // useCount selects the count form; _recurrence_count holds its explicit repeat count.
     props.push(int_property("useCount"));
-    props.push(int_property("recurrences"));
+    props.push(int_property("_recurrence_count"));
     // PHP 8.2+ public readonly virtual properties, exposed here as public mirror properties
     // populated by the constructor and `current()`/`_advance` so the userland surface matches PHP.
     props.push(nullable_object_property("start", "DateTimeInterface"));
     props.push(nullable_object_property("current", "DateTimeInterface"));
     props.push(nullable_object_property("end", "DateTimeInterface"));
     props.push(nullable_object_property("interval", "DateInterval"));
-    props.push(int_property("_recurrences_pub"));
+    props.push(int_property("recurrences"));
     props.push(bool_property("include_start_date"));
     props.push(bool_property("include_end_date"));
     props

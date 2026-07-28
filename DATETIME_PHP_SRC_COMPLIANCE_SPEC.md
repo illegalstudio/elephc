@@ -1,27 +1,64 @@
 ---
-title: "DateTime PHP-src Compliance Spec v2 (consensus révisé)"
-description: "Gap analysis revue et corrigée par consensus Kimi K2.7 + Minimax M3 + GLM 5.2, vérifiée contre php -r."
+title: "DateTime PHP-src Compliance Spec v2.2 (audit post-rebase)"
+description: "Gap analysis confrontée à php-src/PHP 8.5.6 et relue par Kimi K2.7, Minimax M3 et GLM 5.2."
 ---
 
-# DateTime PHP-src Compliance Spec (v2 — consensus padawans)
+# DateTime PHP-src Compliance Spec (v2.2 — audit post-rebase)
 
 - **Worktree**: `/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/datetime-php-src-compliance`
 - **Branch**: `feat/datetime-php-src-compliance`
 - **Reference**: PHP-src `master` (PHP 8.5) `ext/date/php_date.stub.php` + `php_date.h` + `timelib`, **vérifié contre `php -r`** (PHP 8.5 local).
 - **Scope**: `ext/date`. `ext/calendar` OUT of scope (déjà bit-exact).
-- **Claim**: **Compliance fonctionnelle et de surface**, à l'exclusion des limitations documentées en §5 (serialize round-trip, deprecation notices runtime). Le terme "100% compliance" est reformulé en "100% de la surface observable, hors limitations documentées".
+- **Claim**: conformité élevée sur la surface implémentée, avec les écarts résiduels explicitement
+  documentés en §5 et §9. Les tests Elephc qui passent ne sont pas, à eux seuls, une preuve de
+  parité: le mode `ELEPHC_PHP_CHECK=1` signale certaines différences sous forme de notes non fatales.
+
+## État autoritatif de l'audit du 28 juillet 2026
+
+Cet audit a été refait après rebase sur `origin/main`, contre le stub officiel PHP 8.5 et un
+interpréteur PHP 8.5.6 local. Les trois relectures Ollama (Kimi K2.7, GLM-5.2, MiniMax M3)
+convergent sur les écarts vérifiés indépendamment.
+
+Corrigé dans cette révision:
+
+- `DatePeriod::$recurrences` et sa sérialisation suivent le minimum d'instances retournées, tandis
+  que `getRecurrences()` conserve le compte explicite;
+- le constructeur string de `DatePeriod` accepte une expression runtime;
+- l'état `getLastErrors()` est partagé entre `DateTime` et `DateTimeImmutable`, avec les positions
+  principales `Not enough data`/`Unexpected data`;
+- `DateTimeZone::getTransitions()` utilise la vraie borne par défaut `2147483647`;
+- les offsets `DateTimeZone` suivent les formes timelib, y compris le préfixe `GMT` et les
+  secondes, puis sont normalisés (`+0200` → `+02:00`, `GMT+023045` → `+02:30:45`);
+- `idate()` valide aussi les formats dynamiques;
+- `DateTimeInterface` déclare `diff()` et les hooks de sérialisation (les tableaux associatifs
+  restent typés `mixed` en interne, voir les écarts résiduels);
+- `from_string`/`date_string` restent dans l'état sérialisé de `DateInterval`, pas comme propriétés
+  publiques ordinaires; les formes relatives et ISO suivent les deux shapes exclusives de PHP;
+- `timezone_name_from_abbr()` suit la recherche ordonnée de timelib sur la table complète, puis
+  sa table de repli `(offset, isDST)`;
+- `createFromFormat()` traite `O`/`P`/`T`/`e` comme des zones embarquées qui remplacent le troisième
+  argument; `Z` reste un littéral;
+- `setTimestamp()` remet les microsecondes à zéro, tandis que les conversions mutable/immutable et
+  `setISODate()` les conservent;
+- les fuseaux numériques et abréviations sont adaptés au runtime système sans perdre leur nom PHP,
+  et les chaînes empruntées sont copiées avant transfert d'ownership.
+
+Écarts résiduels documentés, non masqués par la claim: table exhaustive des messages/comptages de
+`createFromFormat`, forme d'itérateur indépendante de `DatePeriod`, readonly virtuel de ses
+propriétés, notices runtime, comportement warning+`null` des pseudo-propriétés `DateInterval`, et
+grammaire libre timelib non exhaustive dans `date_parse()`/`strtotime()`.
 
 ## 0. Corrections de la v1 (consensus padawans, vérifiées par `php -r`)
 
 | ID v1 | Verdict `php -r` | Correction |
 |---|---|---|
-| **G1** (`timestampEnd=2147483647`) | **FAUX** — PHP 8.5 64-bit: `getTransitions()` borne sup = `PHP_INT_MAX` (i64::MAX). Paris retourne 185 rows, dernière ts=2140045200 (post-2038). elephc actuel `i64::MAX` est **déjà conforme**. | **G1 retiré du P0**. Le "remède" était une régression. Remplacer par audit: vérifier que elephc retourne 185 rows pour Paris (test). |
+| **G1** (`timestampEnd=2147483647`) | **VRAI** — le stub PHP 8.5 fixe explicitement la borne par défaut à `2147483647`, pas à `PHP_INT_MAX`. | Corrigé et verrouillé par test. |
 | **G19** (`date_create` throw propagate) | **FAUX** — `date_create('totoro')` retourne `bool(false)` (le wrapper attrape `DateMalformedStringException`). | **G19 corrigé**: `date_create`/`date_create_immutable` doivent catcher l'exception du ctor et retourner `false`. P0. |
 | **G24** (`createFromTimestamp` drop fractional) | **FAUX** — `createFromTimestamp(1700000000.123456)->format('u')` = `123456`. Microsecondes conservées. | **G24 corrigé**: conserver la partie fractionnaire comme microsecondes. P0 (bug si actuellement tronqué). |
 | **G15** (idate false sur format invalide) | **VRAI** mais nuance: format vide → warning + `false`; format non reconnu (`"q"`) → warning + `false`. elephc n'émet pas de warnings; conserver le retour `false`. | **G15 confirmé** P0. |
-| **G2** (`from_string`/`date_string`) | **VRAI** — `createFromDateString("2 days")` produit `$from_string=true; $date_string="2 days"`. | **G2 confirmé** P1. |
+| **G2** (`from_string`/`date_string`) | Ces clés existent dans la forme debug/sérialisée, mais ne sont pas des propriétés déclarées lisibles. | Stockage interne + clés de `__serialize`; pas de fausse surface publique. |
 | **R2** (format expanded year) | **FAUX (bridge déjà conforme)** — `format_utc_iso` produit `-292277022657-01-27T08:29:52+00:00` (format `X`-expanded). | **R2 retiré** — bridge déjà conforme. Test de non-régression. |
-| **G12** (stubs serialize) | Reformuler: ce n'est pas un "remedy de compliance" mais une **limitation documentée**. | **G12 reformulé** en limitation explicite, pas "remedy". |
+| **G12** (stubs serialize) | Les signatures font partie de la surface officielle. | Méthodes réelles et retours `void`; les tableaux associatifs restent typés `mixed` à cause de la distinction interne `AssocArray`/`Array`. |
 
 ## 1. Cartographie actuelle (résumé inchangé)
 
@@ -33,7 +70,7 @@ Builtins core + alias procéduraux + classes synthétiques + 10 exceptions + con
 
 | ID | Surface | PHP-src attendu (`php -r` vérifié) | elephc actuel | Remède |
 |---|---|---|---|---|
-| **G2** | `DateInterval::$from_string` + `$date_string` | `bool $from_string`, `string $date_string` (PHP 8.2+). `createFromDateString` set `from_string=true; date_string=$arg`. `__construct` set `from_string=false; date_string=""`. | Absentes | Ajouter 2 propriétés + setter dans `date_interval_create_from_date_string` et init dans `__construct`. |
+| **G2** | État debug/sérialisé `DateInterval` | Clés `from_string`/`date_string` dans la forme exposée par debug/sérialisation; lecture directe = warning de propriété indéfinie + `null`. | Anciennement exposées comme propriétés publiques | Conserver des champs internes et émettre les clés via `__serialize`; documenter l'absence de notices runtime. |
 | **G4** | `DatePeriod` propriétés readonly publiques | `start`, `current`, `end`, `interval`, `recurrences`, `include_start_date`, `include_end_date` (readonly, virtual). | Uniquement props internes | Voir §3.4. **Décision tranchée**: **propriétés miroir** mises à jour dans ctor/`_advance`/`rewind`/`next`/`current`. Pas de `__get` (casserait Reflection et `var_dump`). Les mirror props sont mutées par le runtime natif (le `readonly` userland ne s'applique pas au code synthétique). |
 | **G5** | `DatePeriod::__construct` 3e overload (string) | `new DatePeriod(string $isostr, int $options = 0)` — deprecated 8.3 mais enregistré, forward vers `createFromISO8601String`. | Non enregistré | Enregistrer le 3e overload. **Aucune notice** émise (elephc n'a pas de runtime deprecation). Test compare uniquement le résultat. |
 | **G6** | `DatePeriod::getEndDate()` return | `?DateTimeInterface` | `?DateTime` | Aligner return type. |
@@ -43,10 +80,10 @@ Builtins core + alias procéduraux + classes synthétiques + 10 exceptions + con
 | **G10** | `DateTime::__construct` validation | Lève `DateMalformedStringException` ("Failed to parse time string (X) at position N (c): The timezone could not be found in the database"). | Stocke sentinelle silencieusement | Garde dans le ctor: si `__elephc_strtotime_raw` retourne sentinelle, throw `DateMalformedStringException`. **Matrice de validation** en §3.7. |
 | **G10b** | `DateTimeImmutable::__construct` validation | Idem G10 (`DateMalformedStringException`). | Idem | Étendre G10 aux deux classes (ctor partagé). |
 | **G10c** | `DateTime::modify()` / `DateTimeImmutable::modify()` validation | Lève `DateMalformedStringException` sur string invalide (PHP 8.3+). | `strtotime` sentinelle silencieuse | Garde dans `modify()`: si `__elephc_strtotime_raw` sentinelle, throw `DateMalformedStringException`. |
-| **G11** | `DateTime::createFromFormat` + `DateTimeImmutable::createFromFormat` detailed errors | `getLastErrors()` retourne `['warning_count'=>int, 'warnings'=>[int_pos=>'msg'], 'error_count'=>int, 'errors'=>[int_pos=>'msg']]`. **Clés int** (offset byte). Messages exacts PHP: "Trailing data", "The parsed date was invalid", "Data missing", "The format separator does not match", "Unexpected character", etc. **Retourne `false` si aucune erreur/warning** (sinon array). | `error_count` 0/1 + 1 msg générique | Tracker `$warnings`/`$errors` comme arrays `position => message` dans `CREATE_FROM_FORMAT_SRC`. Counts = `count()`. `getLastErrors` retourne `false` si `warning_count==0 && error_count==0`, sinon l'array. Conserver `lastErrorCount` static pour fast-path. Voir §3.6 pour messages. |
+| **G11** | `DateTime::createFromFormat` + `DateTimeImmutable::createFromFormat` detailed errors | `getLastErrors()` retourne `['warning_count'=>int, 'warnings'=>[int_pos=>'msg'], 'error_count'=>int, 'errors'=>[int_pos=>'msg']]`. **Clés int** (offset byte). Messages exacts PHP: "Trailing data", "The parsed date was invalid", "Data missing", "The format separator does not match", "Unexpected character", etc. **Retourne `false` si aucune erreur/warning** (sinon array). | État global partagé, `false` si clean, diagnostics principaux positionnés; comptages multi-erreurs non exhaustifs. | Stockage scalaire sûr pour l'ownership, reconstruction de la shape publique à la demande; limitation exhaustive documentée en §9. |
 | **G13** | `diff()` `DateInterval::$days` | `int` après `diff()`, `false` pour interval direct. `format("%a")` → `(unknown)` si `days===false`, sinon le total. | Conforme storage | Test de régression. |
-| **G15** | `idate()` return | `int` sur format valide, `false` sur format **vide** OU **non reconnu** (`"q"`, `""`). PHP émet aussi `E_WARNING` ("Unrecognized date format token" / "idate format is one char"); **elephc n'a pas de système de warnings → retourne `false` silencieusement** (limitation documentée §5). | Toujours int (réécrit `intval(date(...))`) | Ajouter garde: si format n'est pas un des specifiers reconnus (`B d h H i I L m n N O P s t U w W y Y z Z`), retourner `false`. **Liste des specifiers reconnus** à coder explicitement. Pas de warning émis. |
-| **G17** | `timezone_name_from_abbr` `$utcOffset`/`$isDST` | PHP désambiguïse via offset/DST. | Pas de désambiguïsation | Implémenter (timelib `timelib_timezone_name_from_abbr`). Ajouter 2 params à la signature et les passer au body. Cross-check abbrs ambigus (`CST`). |
+| **G15** | `idate()` return | `int` sur format valide, `false` sur format vide ou inconnu. Les tokens reconnus sont `B d G g H h I i L m N n s t U W w Y y z Z` (`O`/`P` ne le sont pas). | Ancienne validation limitée aux littéraux | Helper runtime commun aux littéraux et expressions dynamiques; pas de warning émis. |
+| **G17** | `timezone_name_from_abbr` `$utcOffset`/`$isDST` | Recherche ordonnée de la table timelib; premier offset exact, puis fallback offset/DST si l'abréviation est inconnue. | Conforme via la table complète du bridge `elephc-tz` et le fallback php-src. | Verrouillé sur abréviations communes/rares, offsets ambigus et fallback sans abréviation. |
 | **G19** | `date_create` / `date_create_immutable` return | `DateTime|false` — **retourne `false` sur string invalide** (catch l'exception du ctor). | Réécrit en `new DateTime()` nu | **Corriger**: la réécriture name_resolver doit wrapper dans un try/catch et retourner `false` sur `DateMalformedStringException`. Test: `date_create('totoro')` → `false`. |
 | **G19b** | `date_modify` (alias procédural) return | `DateTime|false` — idem: catch l'exception de `modify()`. | Réécrit en `$d->modify()` nu | Wrapper dans try/catch `DateMalformedStringException` → `false`. Test: `date_modify($d, 'totoro')` → `false`. |
 | **G19c** | `date_create_from_format` / `date_create_immutable_from_format` return | `DateTime|false` / `DateTimeImmutable|false` — `false` si `createFromFormat` retourne `false` (déjà le cas via `getLastErrors`). | Conforme (createFromFormat retourne déjà false) | Test: `date_create_from_format('Y-m-d', 'garbage') === false`. |
@@ -71,7 +108,7 @@ Builtins core + alias procéduraux + classes synthétiques + 10 exceptions + con
 | **R1** | `strtotime` 2-digit ISO `YY-MM-DD` | PHP remap (70→1970, 0→2000). elephc rejette. | Aligner: accepter + shorthand. Modifier `__rt_strtotime_iso_entry`. |
 | **R2** | `getTransitions()` row 0 `time` format | **Bridge déjà conforme** (expanded year). | Test de non-régression. |
 | **R3** | `getTransitions()` row 0 `ts` | PHP 64-bit: `-9223372036854775808` (= `PHP_INT_MIN` = `i64::MIN`). elephc: `i64::MIN`. | **Conforme**. Documenter. |
-| **R4** | `getTransitions()` default `$timestampEnd` | PHP 8.5: `PHP_INT_MAX` (`i64::MAX`). | **elephc déjà conforme**. Test non-régression (185 rows Paris). |
+| **R4** | `getTransitions()` default `$timestampEnd` | PHP 8.5: `2147483647`. | Corrigé; test non-régression (185 rows Paris). |
 
 ## 3. Plan de remédiation v2
 
@@ -152,7 +189,11 @@ Messages PHP-src observés:
 - `"The format separator does not match"` — séparateur mismatch.
 - `"Unexpected character"` — char littéral mismatch.
 
-Implémentation: tracker `$warnings` et `$errors` comme arrays `position => message` dans `CREATE_FROM_FORMAT_SRC`. `warning_count = count($warnings)`, `error_count = count($errors)`. `getLastErrors()` retourne `false` si `error_count==0 && warning_count==0`, sinon l'array. Conserver `lastErrorCount` static pour le fast-path.
+Implémentation auditée: l'état est partagé sur `DateTime` et conservé sous forme de scalaires
+(`count`, position et message principal), afin de ne pas retenir de tableaux refcountés dans des
+propriétés statiques synthétiques. `getLastErrors()` reconstruit les tableaux PHP à la demande et
+retourne `false` quand les deux compteurs sont nuls. Cette représentation couvre les diagnostics
+principaux verrouillés, pas les comptages multi-erreurs exhaustifs de timelib.
 
 ### 3.7 Matrice de validation G9/G10 (cas de test)
 
@@ -177,7 +218,9 @@ Liste exhaustive (PHP `ext/date/php_date.c`): `B d h H i I L m n N O P s t U w W
 
 ## 4. Acceptance criteria (TDD)
 
-Tests écrits **d'abord**. Doivent passer sous `php -r` ET sous elephc (sortie identique). `ELEPHC_PHP_CHECK=1 cargo test --test codegen_tests <name>` = harness de parité (exécute `php -r` et compare stdout).
+Tests écrits **d'abord**. Les cas déclarés conformes sont confrontés à PHP 8.5. Le mode
+`ELEPHC_PHP_CHECK=1` exécute PHP et signale les écarts sous forme de notes informatives; une suite
+Elephc verte ne transforme pas ces notes en preuve de parité.
 
 ### 4.1 Tests P0
 
@@ -238,37 +281,42 @@ test_get_transitions_row0_time_expanded_year       // R2 (non-régression bridge
 test_get_transitions_row0_ts_php_int_min           // R3
 ```
 
-### 4.4 Tests P3 (limitation documentée)
+### 4.4 Tests de sérialisation
 
 ```rust
-test_datetime_serialize_throws_not_implemented    // G12 (limitation)
-test_datetime_wakeup_noop                          // G12 (limitation)
+test_datetime_serialize                            // shape DateTime
+test_datetime_unserialize                          // round-trip DateTime
+test_dateinterval_serialize                        // shape ISO sans date_string
+test_dateinterval_from_string_serialization_state // shape relative à deux clés
+test_dateperiod_serialize                          // compte public + options
 ```
 
 ### 4.5 Critère de fin
 
 - Tous les tests ci-dessus passent: `cargo test --test codegen_tests <name>`.
-- `ELEPHC_PHP_CHECK=1 cargo test --test codegen_tests datetime` vert (parité PHP).
+- `cargo test --test codegen_tests datetime`: **175 réussites, 0 échec, 0 ignored** lors de l'audit.
+- `ELEPHC_PHP_CHECK=1 cargo test --test codegen_tests datetime`: mêmes **175 réussites Elephc**;
+  les notes PHP restantes correspondent aux limitations listées en §9.
 - `cargo build` sans warnings.
 - `docs/php/datetime.md` mis à jour (limitations résolues retirées; limitations persistantes G12/G22/G23/S5 explicitement listées).
 - `examples/datetime/main.php` mis à jour si pertinent.
 - `ROADMAP.md`: item coché sous la version appropriée.
 - `CHANGELOG.md`: entry `feat:` au prochain release.
 
-## 5. Out of scope — Limitations documentées (consensus padawans v2)
+## 5. Hors scope et limites structurelles
 
-La claim "100% compliance" est reformulée en **"100% de la surface observable, hors limitations documentées ci-dessous"**:
+La sérialisation n'est plus une limitation globale: les hooks DateTime/DateTimeImmutable,
+DateTimeZone, DateInterval et DatePeriod sont fonctionnels et leurs shapes observables sont testées.
 
-| Limitation | Raison | Statut |
-|---|---|---|
-| **Serialize round-trip** (`__serialize`/`__unserialize`/`__set_state`/`__wakeup`) | elephc n'a pas d'infra `serialize()`/`unserialize()`/`var_export()`. | **Stubs P3**: méthodes déclarées qui lèvent `DateInvalidOperationException` ("serialization not supported in elephc"). **Note**: PHP-src utilise `DateObjectError` pour `__wakeup` (return-type compat) et `Error: Invalid serialization data` pour `__set_state` invalide; elephc stub un seul type car il n'y a pas de round-trip réel. Documenté comme limitation. **Pas un "remedy"**. |
-| **Deprecation notices runtime** (`strftime`/`gmstrftime` 8.1, `SUNFUNCS_RET_*` 8.4, ctor string `DatePeriod` 8.3) | elephc n'a pas de système de notices PHP (`E_DEPRECATED`/`E_WARNING`). | **Doc only**. Aucune notice émise. Conformité surface (méthodes disponibles), pas de conformité de notice. Inclut `idate()` `E_WARNING` sur format invalide (G15): elephc retourne `false` sans warning. |
-| **`#[Deprecated]` surface attributes** (strftime/gmstrftime/SUNFUNCS_RET_*/DatePeriod string ctor) | elephc ne supporte pas `#[Deprecated]` comme attribut reflection-visible sur les builtins synthétiques. | **Décision**: non ajouté (infra manquante). Documenté comme limitation surface. |
-| **`__debugInfo()`** (PHP 8.4) | elephc n'a pas de `var_dump` formaté pour DateTime. | Audit P2; marquer limitation si absent. |
-| **`ext/calendar`** | Déjà bit-exact, traité séparément. | Out of scope. |
-| **`IntlDateFormatter`** | Extension `intl`, hors `ext/date`. | Out of scope. |
-| **Windows target** | Worktree macOS/Linux. | Out of scope pour ce PR. |
-| **32-bit PHP_INT semantics** | elephc cible 64-bit uniquement. | Documenté. |
+| Limitation | Raison / statut |
+|---|---|
+| Notices runtime | Pas de canal complet `E_DEPRECATED`/`E_WARNING`; inclut strftime/gmstrftime, strptime, `SUNFUNCS_RET_*`, le ctor string DatePeriod, `RFC7231`, `idate()` invalide et les pseudo-propriétés DateInterval. |
+| Attributs `#[Deprecated]` | Pas de surface reflection-visible équivalente sur les builtins synthétiques. |
+| `__debugInfo()` | Pas de rendu `var_dump` DateTime équivalent. |
+| Signatures de hooks | Les tableaux associatifs sont typés `mixed` dans le checker, car le backend ne convertit pas encore `AssocArray<string,mixed>` vers `Array<mixed>`. |
+| `ext/calendar` | Traité séparément et hors du périmètre de cet audit. |
+| `IntlDateFormatter` | Extension `intl`, hors `ext/date`. |
+| 32-bit | Elephc cible les plateformes 64-bit supportées. |
 
 ## 6. Risques (consensus)
 
@@ -300,55 +348,45 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 - **S6** (Minimax+Kimi): format specifiers couverture. Décision: les 260 tests existants `tests/codegen/system.rs` sont la référence. Mapping à documenter dans le test header, pas de matrice paramétrique additionnelle.
 - **G11 état global** (Kimi): `DateTime::getLastErrors()` et `DateTimeImmutable::getLastErrors()` partagent l'état global. Test étendu + alias `date_get_last_errors()`.
 
-**Verdict consensus**: v2.1 est **complète et correcte pour implémentation TDD**. Les 3 padawans ont approuvé (avec les 3 limitations ci-dessus documentées, pas bloquantes). **Consensus absolu atteint.**
+**Verdict de la v2.1 historique**: cette première relecture avait validé le plan TDD, mais
+l'affirmation de conformité complète était trop forte. Le statut ci-dessous, issu de l'audit
+post-rebase, remplace ce verdict.
 
-## 9. Statut d'implémentation (post-TDD)
+## 9. Statut d'implémentation après audit
 
-### Implémenté et testé (P0/P1/P2 + G19/G19b)
+### Corrections verrouillées
 
-| Gap | Statut | Tests |
+| Surface | Statut | Régressions |
 |---|---|---|
-| G9 (DateTimeZone invalid throws) | ✅ Implémenté | `test_datetimezone_invalid_throws`, `test_datetimezone_offset_valid` |
-| G10/G10b (DateTime/Immutable ctor throws) | ✅ Implémenté (préexistant + test) | `test_datetime_invalid_string_throws`, `test_datetime_immutable_invalid_string_throws` |
-| G10c (modify throws) | ✅ Implémenté (préexistant) | `test_datetime_modify_malformed_throws` |
-| G15 (idate false) | ✅ Implémenté (compile-time literal check) | `test_idate_empty_format_returns_false`, `test_idate_unknown_format_returns_false`, `test_idate_valid_format_returns_int` |
-| G24 (createFromTimestamp float micros) | ✅ Implémenté (préexistant vérifié) | `test_create_from_timestamp_float_keeps_micros` |
-| G25 (listIdentifiers PER_COUNTRY ValueError) | ✅ Implémenté (préexistant) | `test_list_identifiers_per_country_no_code_throws` |
-| G19 (date_create false) | ✅ Implémenté (EIR fix + wrapper) | `test_date_create_invalid_returns_false`, `test_date_create_immutable_invalid_returns_false` |
-| G19b (date_modify false) | ✅ Implémenté (EIR fix + wrapper) | `test_date_modify_invalid_returns_false` |
-| G19c (date_create_from_format false) | ✅ Implémenté (préexistant) | `test_date_create_from_format_invalid_returns_false` |
-| G2 (DateInterval from_string/date_string) | ✅ Implémenté | `test_dateinterval_from_string_property`, `test_dateinterval_date_string_property` |
-| G4 (DatePeriod 7 readonly props) | ✅ Implémenté (mirror props) | `test_dateperiod_start_property`, `_end_property`, `_interval_property`, `_current_property`, `_recurrences_property`, `_include_start_end_date_property` |
-| G6 (getEndDate ?DateTimeInterface) | ✅ Implémenté | `test_dateperiod_get_end_date_returns_interface` |
-| G7 (getStartDate DateTimeInterface) | ✅ Implémenté (préexistant vérifié) | `test_dateperiod_get_start_date_returns_interface` |
-| G8 (IteratorAggregate) | ✅ Implémenté | `test_dateperiod_instanceof_iterator_aggregate` |
-| G13 (diff days int|false) | ✅ Implémenté (préexistant vérifié) | `test_diff_days_is_int`, `test_diff_format_a_unknown_when_days_false` |
-| R3/R4 (getTransitions row0 ts, borne sup) | ✅ Conforme (non-régression) | `test_get_transitions_row0_ts_php_int_min` |
+| `DatePeriod::$recurrences` | Corrigé: compte public PHP distinct de `getRecurrences()` | `test_dateperiod_recurrences_property`, `test_dateperiod_serialize` |
+| Constructeur string `DatePeriod` runtime | Corrigé par réécriture selon l'arité 1/2 | `test_dateperiod_ctor_string_form` |
+| `DateInterval` pseudo-propriétés | Retirées de la surface publique; forme sérialisée conservée | `test_dateinterval_*_serialization_state`, `test_dateinterval_serialize` |
+| `DateTimeInterface` | `diff`, `__wakeup`, `__serialize`, `__unserialize` ajoutés | `test_datetime_interface_diff_and_serialize_contract` |
+| `getTransitions()` | Borne par défaut `2147483647` | tests transition Paris/row 0 |
+| Offset `DateTimeZone` | Formes timelib, préfixe `GMT`, secondes et canonicalisation | `test_datetimezone_offset_valid` |
+| `getLastErrors()` | État global partagé + positions principales | `test_datetime_get_last_errors_shared_between_classes` |
+| `idate()` dynamique | Même validation runtime que les littéraux | `test_idate_dynamic_unknown_format_returns_false` |
+| `timezone_name_from_abbr()` | Table timelib complète, offset exact et fallback offset/DST | `test_timezone_name_from_abbr`, `test_timezone_name_from_abbr_with_offset` |
+| `createFromFormat()` zones | `O`/`P`/`T`/`e` remplacent le troisième argument; `Z` est littéral | `test_create_from_format_tz_specifiers` |
+| Microsecondes | `setTimestamp()` remet à zéro; conversions et `setISODate()` conservent | `test_datetime_microseconds`, `test_datetime_create_from_object_conversions`, `test_datetime_set_isodate` |
+| Ownership timezone | L'adaptateur retourne une chaîne possédée et ne libère plus le nom stocké | `test_date_create_with_timezone_arg`, filtre `timezone_` |
+| Rebase `origin/main` | Constructeurs AST remis au contrat courant | `cargo check --tests`, build/tests ciblés |
 
-### Limitations documentées (résiduelles — notices runtime uniquement)
+### Limitations résiduelles assumées
 
-| Gap | Statut | Détail |
-|---|---|---|
-| G22/G23 (deprecation notices runtime) | Documenté | elephc n'a pas de système de notices PHP. `strftime`/`gmstrftime` (8.1), `SUNFUNCS_RET_*` (8.4), `DatePeriod` string ctor (8.3) sont disponibles mais n'émettent pas de `E_DEPRECATED`. |
-| `idate()` E_WARNING | Documenté | `idate()` retourne `false` sur format invalide (conforme PHP) mais n'émet pas de `E_WARNING`. |
-| `getLastErrors()` per-character messages | Partiel | Les 3 cas principaux sont trackés (trailing data, invalid date, generic mismatch). PHP a une table complète de messages par position/caractère — non reproduite. |
+| Surface | Écart restant |
+|---|---|
+| Notices/warnings | Pas de `E_DEPRECATED`/`E_WARNING` runtime pour les surfaces documentées. |
+| `createFromFormat()` | Les principaux messages/positions sont reproduits, pas toute la table timelib ni tous les comptages multi-erreurs. |
+| `DatePeriod` | Elephc utilise encore l'objet comme `Iterator` en plus d'`IteratorAggregate`; `getIterator()` n'est pas indépendant et les propriétés miroir ne sont pas protégées readonly. |
+| `DateInterval` debug fields | La lecture directe est rejetée au lieu d'émettre un warning et de retourner `null`; la forme sérialisée reste conforme. |
+| Signatures de sérialisation | Les hooks sont présents et fonctionnels, mais leur tableau associatif est typé `mixed` dans le checker: le backend ne sait pas encore convertir `AssocArray<string,mixed>` vers son `Array<mixed>` indexé. |
+| Parsing libre | `date_parse_from_format()` ne reproduit pas encore chaque shape PHP; `date_parse()` n'a pas les comptages exhaustifs; `strtotime()` rejette encore certains cas timelib ambigus acceptés par PHP 8.5 (`2024/06/15`, `2024-0x-15`, suffixe de zone mono-lettre). |
 
-**Toutes les autres limitations de la spec v2.1 sont maintenant implémentées et testées.**
-| G22/G23 (deprecation notices/attributes) | Pas de système de notices PHP | doc §5 |
+### Résultat de validation
 
-### Tests ignorés (`#[ignore]` avec docblock)
-
-- `test_date_create_invalid_returns_false` (G19)
-- `test_date_create_immutable_invalid_returns_false` (G19)
-- `test_date_modify_invalid_returns_false` (G19b)
-- `test_strtotime_two_digit_iso_year` (R1)
-
-### Résultat de non-régression
-
-- `cargo test --test codegen_tests datetime`: 157 passed, 0 failed.
-- `cargo test --test codegen_tests test_date`: 160 passed, 3 ignored, 0 failed.
-- `cargo test --test codegen_tests test_idate`: 4 passed, 0 failed.
-- `cargo test --test codegen_tests test_strtotime`: 79 passed, 1 ignored, 0 failed.
-- `cargo test --test codegen_tests test_mktime`: 6 passed, 0 failed.
-- `cargo test --test codegen_tests test_timezone`: 12 passed, 0 failed.
-- `cargo build`: 0 warnings.
+- `CARGO_INCREMENTAL=0 cargo test --test codegen_tests datetime -- --nocapture`:
+  **175 réussites, 0 échec, 0 ignored**.
+- Même résultat avec `ELEPHC_PHP_CHECK=1`; les notes restantes correspondent aux limitations
+  ci-dessus et aux notices runtime absentes.
+- Aucun `#[ignore]` datetime n'est présenté comme une réussite.

@@ -429,11 +429,11 @@ echo date("Y-m-d H:i:s", $lower);
     assert_eq!(out, "2024-06-15 12:00:00,2024-06-15 12:30:00");
 }
 
-/// Verifies `strtotime` returns `false` (PHP's failure value) for malformed ISO-like strings
-/// that have extra junk after the datetime; a strict `=== false` check distinguishes failure
-/// from any valid timestamp.
+/// Pins the current strict ISO-subset rejection behavior while documenting the audited timelib
+/// gap: PHP 8.5 also rejects cases 1, 2, and 4, but accepts the one-letter-zone, slash-date, and
+/// `0x` forms in cases 3, 5, and 6. A strict `=== false` distinguishes failure from timestamp zero.
 #[test]
-fn test_strtotime_rejects_malformed_iso_datetime() {
+fn test_strtotime_iso_datetime_subset_rejections() {
     let out = compile_and_run(
         r#"<?php
 echo (strtotime("2024-06-15 12:30:45 extra") === false ? "F" : "x") . ",";
@@ -3278,13 +3278,24 @@ echo (idate("") === false) ? "false" : "other";
     assert_eq!(out, "false");
 }
 
-/// G15: `idate("q")` with an unrecognized single-character format returns `false`. The full set of
-/// recognized `idate` specifiers is `B d h H i I L m n N O P s t U w W y Y z Z`.
+/// Verifies an unrecognized literal `idate()` format returns `false`.
 #[test]
 fn test_idate_unknown_format_returns_false() {
     let out = compile_and_run(
         r#"<?php
 echo (idate("q") === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies computed formats take the same runtime validation path as literals.
+#[test]
+fn test_idate_dynamic_unknown_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$format = "q";
+echo (idate($format) === false) ? "false" : "other";
 "#,
     );
     assert_eq!(out, "false");
