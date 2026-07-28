@@ -729,6 +729,11 @@ Full OOP + procedural date/time surface (`DateTime`, `DateTimeImmutable`, `DateT
 - [x] `date_create()` / `date_create_immutable()` / `date_modify()` return `false` on invalid input (PHP `DateTime|false` parity via synthetic wrappers catching `DateMalformedStringException`; EIR mixed-receiver method dispatch fix ensures the wrappers compose with downstream method calls)
 - [x] `DateInterval` PHP 8.2+ public properties `from_string` and `date_string` (set by `createFromDateString`)
 - [x] `DatePeriod` PHP 8.2+ public readonly properties `start`, `current`, `end`, `interval`, `recurrences`, `include_start_date`, `include_end_date`; `implements IteratorAggregate`; `getStartDate(): DateTimeInterface` / `getEndDate(): ?DateTimeInterface` return types
+- [x] `DatePeriod` string ctor overload (`new DatePeriod("R4/...")`) via name_resolver rewrite to `createFromISO8601String`
+- [x] Serialization surface: `__serialize`/`__unserialize`/`__set_state`/`__wakeup` on `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod` — real implementations matching PHP's array shape
+- [x] `strtotime()` accepts 2-digit ISO year `YY-MM-DD` with PHP's shorthand (70-100→1970-2000, 0-69→2000-2069)
+- [x] `getLastErrors()` returns `false` when clean; otherwise returns full `[warning_count, warnings, error_count, errors]` with byte-position keys (trailing data, invalid date warning)
+- [x] `timezone_name_from_abbr()` disambiguates ambiguous abbreviations by UTC offset (CST, IST, BST, etc.)
 - [x] `DateTimeInterface` format constants (`ATOM`, `COOKIE`, `ISO8601`, `ISO8601_EXPANDED`, the `RFC*` family, `RSS`, `W3C`) on the interface and both classes
 - [x] `DateInterval` — ISO 8601 duration parsing, `format()` (`%y %m %d %h %i %s %a %R %r %f %F` …), `createFromDateString`
 - [x] `DatePeriod` — `Iterator` over a date range, end-date and recurrence-count forms, `EXCLUDE_START_DATE` / `INCLUDE_END_DATE`, `createFromISO8601String`

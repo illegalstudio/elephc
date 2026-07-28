@@ -325,15 +325,15 @@ Spec v2 → v2.1 revue par consensus de Kimi K2.7, Minimax M3, GLM 5.2 (round 2)
 | G13 (diff days int|false) | ✅ Implémenté (préexistant vérifié) | `test_diff_days_is_int`, `test_diff_format_a_unknown_when_days_false` |
 | R3/R4 (getTransitions row0 ts, borne sup) | ✅ Conforme (non-régression) | `test_get_transitions_row0_ts_php_int_min` |
 
-### Limitations documentées (non implémenté — runtime assembly / complexité)
+### Limitations documentées (résiduelles — notices runtime uniquement)
 
-| Gap | Raison | Statut |
+| Gap | Statut | Détail |
 |---|---|---|
-| R1 (strtotime 2-digit ISO YY-MM-DD) | Runtime assembly `__rt_strtotime_iso_entry` exige 4-digit year; modification ARM64+x86_64 dispatcher + nouveau path 2-digit ~40 lignes/arch | `#[ignore]` + doc §5 |
-| G5 (DatePeriod string ctor overload) | Deprecated PHP 8.3; `createFromISO8601String` existe déjà comme alternative; nécessite rendre `interval` optionnel + détecter string dans le ctor | doc §5 |
-| G11 (getLastErrors détaillé) | Body `CREATE_FROM_FORMAT_SRC` complexe (~370 lignes) à modifier pour tracker positions; risque élevé de casser les tests createFromFormat existants | doc §5 (count 0/1 fonctionne) |
-| G12 (serialize stubs) | Pas d'infra serialize/unserialize/var_export | doc §5 |
-| G17 (timezone_name_from_abbr disambiguation) | Table de disambiguation abbr→[zones avec offsets] complexe; edge case rare | doc §5 |
+| G22/G23 (deprecation notices runtime) | Documenté | elephc n'a pas de système de notices PHP. `strftime`/`gmstrftime` (8.1), `SUNFUNCS_RET_*` (8.4), `DatePeriod` string ctor (8.3) sont disponibles mais n'émettent pas de `E_DEPRECATED`. |
+| `idate()` E_WARNING | Documenté | `idate()` retourne `false` sur format invalide (conforme PHP) mais n'émet pas de `E_WARNING`. |
+| `getLastErrors()` per-character messages | Partiel | Les 3 cas principaux sont trackés (trailing data, invalid date, generic mismatch). PHP a une table complète de messages par position/caractère — non reproduite. |
+
+**Toutes les autres limitations de la spec v2.1 sont maintenant implémentées et testées.**
 | G22/G23 (deprecation notices/attributes) | Pas de système de notices PHP | doc §5 |
 
 ### Tests ignorés (`#[ignore]` avec docblock)

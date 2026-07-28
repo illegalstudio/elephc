@@ -386,14 +386,9 @@ date_sunset($ts, SUNFUNCS_RET_DOUBLE, $lat, $lon);                        // hou
 
 ### Not currently supported
 
-A few corners of PHP's date/time API are not implemented or diverge from PHP:
+A few corners of PHP's date/time API diverge from PHP:
 
-- **Detailed parse warnings**: `getLastErrors()`/`date_get_last_errors()` report whether the last `createFromFormat()` succeeded or failed (`error_count` 0/1) but do not retain PHP's per-character warning/error positions — only the pass/fail count, which covers the common `if (DateTime::getLastErrors()['error_count'])` guard.
-- **Serialization hooks**: the `__serialize()`/`__unserialize()`/`__wakeup()`/`__set_state()` magic methods are not defined on the date classes, because elephc has no object `serialize()`/`unserialize()`/`var_export()` round-trip for any class.
-- **`date_create()`/`date_create_immutable()`/`date_modify()`**: these procedural aliases return `false` on an unparseable string/modifier (catching the constructor's `DateMalformedStringException`), matching PHP's `DateTime|false` contract. (Previously propagated the exception; now fixed via synthetic wrappers.)
-- **`strtotime()` two-digit ISO year `YY-MM-DD`**: PHP remaps 2-digit ISO years (70→1970, 0→2000); elephc's ISO parser requires a 4-digit year and rejects `YY-MM-DD`. The shorthand is still applied to `M/D/YY` slash dates and `mktime()`/`gmmktime()` year arguments.
-- **`DatePeriod` string constructor overload**: the deprecated `new DatePeriod("R4/...", $options)` form (PHP 8.3) is not registered; use `DatePeriod::createFromISO8601String()` instead.
-- **`timezone_name_from_abbr()` offset/DST disambiguation**: the `$utcOffset`/`$isDST` arguments are accepted but not used to disambiguate ambiguous abbreviations (e.g. `CST`).
+- **Detailed parse warnings**: `getLastErrors()`/`date_get_last_errors()` now returns `false` when there are no errors or warnings, and otherwise returns the full `[warning_count, warnings, error_count, errors]` array with byte-position keys. The tracked cases are "Trailing data" (error at the trailing position), "The parsed date was invalid" (warning at the end position for overflow dates like month 13), and "The date string failed to match the format" (generic error at position 0). PHP's full per-character error/warning message table is not reproduced — only the principal cases.
 - **Deprecation notices**: `strftime()`/`gmstrftime()` (PHP 8.1), `SUNFUNCS_RET_*` constants (8.4), and the `DatePeriod` string constructor (8.3) are deprecated in PHP but emit no runtime notice in elephc (elephc has no PHP notice system). The functions/constants remain available.
 - **`idate()` warnings**: `idate()` returns `false` for an empty or unrecognized format (matching PHP), but does not emit PHP's `E_WARNING` (elephc has no warning system). The recognized specifier set is `B d G g H h I i L m N n s t U W w Y y z Z`.
 
