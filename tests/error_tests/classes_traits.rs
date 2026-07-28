@@ -255,6 +255,15 @@ fn test_error_date_period_too_few_args() {
     );
 }
 
+/// Verifies the string-form `DatePeriod` constructor uses php-src's overload diagnostic for invalid options.
+#[test]
+fn test_error_date_period_string_form_invalid_options() {
+    expect_error(
+        "<?php $p = new DatePeriod(\"R1/2024-01-01/P1D\", \"bad\");",
+        "DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments",
+    );
+}
+
 /// Verifies the builtin `DateTime` constructor rejects more than its 0-to-2 arguments.
 #[test]
 fn test_error_datetime_too_many_args() {
