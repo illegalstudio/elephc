@@ -92,6 +92,26 @@ pub fn ensure_source(
     offline: bool,
     downloader: &dyn Downloader,
 ) -> Result<PathBuf, NativeError> {
+    ensure_source_with_publish(
+        cached,
+        source,
+        offline,
+        downloader,
+        |temporary, cached| fs::rename(temporary, cached),
+    )
+}
+
+/// Runs source materialization with an injected verified-cache publication operation.
+fn ensure_source_with_publish<F>(
+    cached: &Path,
+    source: &SourceArchive,
+    offline: bool,
+    downloader: &dyn Downloader,
+    publish: F,
+) -> Result<PathBuf, NativeError>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
     let mut quarantine = None;
     if source_node_exists(cached)? {
         match verify_source(cached, source) {
@@ -114,7 +134,7 @@ pub fn ensure_source(
     let result = (|| {
         downloader.download_to(source, &temporary)?;
         verify_source(&temporary, source)?;
-        match fs::rename(&temporary, cached) {
+        match publish(&temporary, cached) {
             Ok(()) => Ok(cached.to_path_buf()),
             Err(error) => {
                 if source_node_exists(cached)? {
@@ -126,8 +146,8 @@ pub fn ensure_source(
             }
         }
     })();
+    let _ = fs::remove_file(&temporary);
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
         if let Some(quarantine) = &quarantine {
             if source_node_exists(cached).is_ok_and(|exists| !exists) { let _ = fs::rename(quarantine, cached); }
         }
@@ -175,7 +195,7 @@ fn remove_quarantine(path: &Path) {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// In-memory fake downloader that records whether network transport was requested.
@@ -186,6 +206,43 @@ mod tests {
         fn download_to(&self, _source: &SourceArchive, destination: &Path) -> Result<(), NativeError> {
             self.calls.set(self.calls.get() + 1);
             fs::write(destination, self.bytes).map_err(|error| NativeError::io("write fake download", destination, error))
+        }
+    }
+
+    /// Fake downloader that simulates another process publishing the verified cache entry.
+    struct ConcurrentPublisherDownloader<'a> {
+        bytes: &'a [u8],
+        cached: &'a Path,
+        calls: Cell<usize>,
+    }
+
+    impl Downloader for ConcurrentPublisherDownloader<'_> {
+        /// Writes both the unpublished temporary and a concurrent verified cache winner.
+        fn download_to(&self, _source: &SourceArchive, destination: &Path) -> Result<(), NativeError> {
+            self.calls.set(self.calls.get() + 1);
+            fs::write(destination, self.bytes)
+                .map_err(|error| NativeError::io("write concurrent fake download", destination, error))?;
+            fs::write(self.cached, self.bytes)
+                .map_err(|error| NativeError::io("publish concurrent fake cache", self.cached, error))
+        }
+    }
+
+    /// Fake downloader that leaves a partial temporary before returning a network error.
+    struct PartialFailingDownloader<'a> {
+        bytes: &'a [u8],
+        calls: Cell<usize>,
+    }
+
+    impl Downloader for PartialFailingDownloader<'_> {
+        /// Writes a partial response and then reports the injected transport failure.
+        fn download_to(&self, _source: &SourceArchive, destination: &Path) -> Result<(), NativeError> {
+            self.calls.set(self.calls.get() + 1);
+            fs::write(destination, self.bytes)
+                .map_err(|error| NativeError::io("write partial fake download", destination, error))?;
+            Err(NativeError::new(
+                NativeErrorKind::Network,
+                "injected download failure",
+            ))
         }
     }
 
@@ -224,6 +281,119 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(downloader.calls.get(), 1);
         fs::remove_file(path).unwrap();
+    }
+
+    /// Verifies fallback success removes the losing verified download temporary.
+    #[test]
+    fn fallback_success_removes_download_temporary() {
+        let bytes = b"fixture";
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        let source = SourceArchive { https_url: "https://example.invalid/source", sha256: Box::leak(digest.into_boxed_str()), exact_size: bytes.len() as u64, body_limit: 1024 };
+        let directory = unique_sibling(
+            &std::env::temp_dir().join("elephc-source-race"),
+            "test",
+        );
+        fs::create_dir_all(&directory).unwrap();
+        let cached = directory.join("source.tar.gz");
+        assert!(!cached.exists());
+
+        let downloader = ConcurrentPublisherDownloader {
+            bytes,
+            cached: &cached,
+            calls: Cell::new(0),
+        };
+        let publish_calls = Cell::new(0);
+        let published_temporary = RefCell::new(None::<PathBuf>);
+        let result = ensure_source_with_publish(
+            &cached,
+            &source,
+            false,
+            &downloader,
+            |temporary, destination| {
+                publish_calls.set(publish_calls.get() + 1);
+                let _ = published_temporary.replace(Some(temporary.to_path_buf()));
+                assert_eq!(destination, cached.as_path());
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected publish failure",
+                ))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(downloader.calls.get(), 1);
+        assert_eq!(publish_calls.get(), 1);
+        assert_eq!(result, cached);
+        let temporary = published_temporary.into_inner().unwrap();
+        assert!(!temporary.exists());
+        verify_source(&cached, &source).unwrap();
+        let metadata = fs::symlink_metadata(&cached).unwrap();
+        assert!(metadata.file_type().is_file());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.len(), bytes.len() as u64);
+
+        let cached_file_name = cached.file_name().unwrap().to_string_lossy();
+        let entries = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries,
+            vec![cached.file_name().unwrap().to_os_string()]
+        );
+        assert!(!entries.iter().any(|entry| entry
+            .to_string_lossy()
+            .starts_with(&format!(".{cached_file_name}.download."))));
+        assert!(!entries.iter().any(|entry| entry
+            .to_string_lossy()
+            .starts_with(&format!(".{cached_file_name}.quarantine."))));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Verifies a partial download failure skips publication and removes its temporary.
+    #[test]
+    fn download_failure_skips_publish_and_removes_temporary() {
+        let bytes = b"fixture";
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        let source = SourceArchive { https_url: "https://example.invalid/source", sha256: Box::leak(digest.into_boxed_str()), exact_size: bytes.len() as u64, body_limit: 1024 };
+        let directory = unique_sibling(
+            &std::env::temp_dir().join("elephc-source-download-failure"),
+            "test",
+        );
+        fs::create_dir_all(&directory).unwrap();
+        let cached = directory.join("source.tar.gz");
+        assert!(!cached.exists());
+
+        let downloader = PartialFailingDownloader {
+            bytes: b"partial",
+            calls: Cell::new(0),
+        };
+        let publish_calls = Cell::new(0);
+        let error = ensure_source_with_publish(
+            &cached,
+            &source,
+            false,
+            &downloader,
+            |_, _| {
+                publish_calls.set(publish_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(downloader.calls.get(), 1);
+        assert_eq!(publish_calls.get(), 0);
+        assert!(error.to_string().contains("injected download failure"));
+        let cached_file_name = cached.file_name().unwrap().to_string_lossy();
+        let entries = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert!(!entries.iter().any(|entry| entry
+            .to_string_lossy()
+            .starts_with(&format!(".{cached_file_name}.download."))));
+        assert!(entries.is_empty());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     /// Verifies a broken symlink at the content-addressed path is quarantined and replaced.

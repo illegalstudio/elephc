@@ -127,12 +127,7 @@ fn install(
     let cache = project_cache(cwd, &project, &reconcile_recovery)?;
     let _project_lock = if locked { None } else { Some(cache.lock(&cache.project_lock_path(&project.manifest), "install")?) };
     let manifest = ManifestDocument::load(&project.manifest)?;
-    let desired = NativeLock::from_manifest(&manifest).map_err(|error| {
-        error
-            .with_project(&project.root)
-            .with_default_recovery(&reconcile_recovery)
-    })?;
-    if locked {
+    let desired = if locked {
         let current = NativeLock::load(&project.lock).map_err(|_| {
             NativeError::new(
                 NativeErrorKind::Lock,
@@ -148,7 +143,14 @@ fn install(
                 .with_project(&project.root)
                 .with_default_recovery(&reconcile_recovery)
         })?;
-    }
+        None
+    } else {
+        Some(NativeLock::from_manifest(&manifest).map_err(|error| {
+            error
+                .with_project(&project.root)
+                .with_default_recovery(&reconcile_recovery)
+        })?)
+    };
     materialize_manifest(
         &manifest,
         target,
@@ -167,7 +169,7 @@ fn install(
                 &reconcile_recovery
             })
     })?;
-    if !locked {
+    if let Some(desired) = desired {
         atomic_write(&project.lock, desired.render()?.as_bytes())?;
     }
     Ok(success(format!(

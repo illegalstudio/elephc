@@ -8,13 +8,14 @@
 //! - Uses explicit static/PIC/8-bit/Unicode flags and only the two required Make targets.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::codegen_support::platform::Target;
 
-use super::super::error::{NativeError, NativeErrorKind};
+use super::super::error::NativeError;
 use super::super::recipe::RecipeRequest;
 use super::super::toolchain::run_checked;
+use super::util::{copy_regular, require_regular};
 
 /// Embedded shim source used by installed Elephc binaries without repository access.
 pub const SHIM_SOURCE: &str = include_str!("pcre2_shim.c");
@@ -29,7 +30,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     fs::create_dir_all(&library).map_err(|error| NativeError::io("create PCRE2 library directory", &library, error))?;
 
     let configure = request.source.join("configure");
-    require_regular(&configure)?;
+    require_regular("PCRE2", &configure)?;
     let mut command = request.toolchain.command(Path::new("/bin/sh"));
     command.current_dir(&build).arg(&configure).args([
         "--disable-shared",
@@ -49,10 +50,10 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     make.current_dir(&build).args(["libpcre2-8.la", "libpcre2-posix.la"]);
     run_checked(&mut make, "build trusted PCRE2 static library targets")?;
 
-    copy_regular(&build.join(".libs/libpcre2-8.a"), &library.join("libpcre2-8.a"))?;
-    copy_regular(&build.join(".libs/libpcre2-posix.a"), &library.join("libpcre2-posix.a"))?;
-    copy_regular(&build.join("src/pcre2.h"), &include.join("pcre2.h"))?;
-    copy_regular(&request.source.join("src/pcre2posix.h"), &include.join("pcre2posix.h"))?;
+    copy_regular("PCRE2", &build.join(".libs/libpcre2-8.a"), &library.join("libpcre2-8.a"))?;
+    copy_regular("PCRE2", &build.join(".libs/libpcre2-posix.a"), &library.join("libpcre2-posix.a"))?;
+    copy_regular("PCRE2", &build.join("src/pcre2.h"), &include.join("pcre2.h"))?;
+    copy_regular("PCRE2", &request.source.join("src/pcre2posix.h"), &include.join("pcre2posix.h"))?;
 
     for archive in [library.join("libpcre2-8.a"), library.join("libpcre2-posix.a")] {
         let mut inspect = request.toolchain.command(&request.toolchain.ar);
@@ -86,23 +87,6 @@ fn build_shim(request: &RecipeRequest<'_>, include: &Path, library: &Path) -> Re
     fs::remove_file(&source).map_err(|error| NativeError::io("remove PCRE2 shim source intermediate", &source, error))?;
     fs::remove_file(&object).map_err(|error| NativeError::io("remove PCRE2 shim object intermediate", &object, error))?;
     Ok(())
-}
-
-/// Requires a non-symlink regular file produced by the trusted recipe.
-fn require_regular(path: &Path) -> Result<(), NativeError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| NativeError::io("inspect PCRE2 recipe file", path, error))?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
-        return Err(NativeError::new(NativeErrorKind::Build, "PCRE2 recipe file is missing, empty, symlinked, or not regular").with_path(path));
-    }
-    Ok(())
-}
-
-/// Copies one verified regular recipe output to its retained staging path.
-fn copy_regular(source: &Path, destination: &Path) -> Result<PathBuf, NativeError> {
-    require_regular(source)?;
-    fs::copy(source, destination).map_err(|error| NativeError::io("copy retained PCRE2 output", destination, error))?;
-    require_regular(destination)?;
-    Ok(destination.to_path_buf())
 }
 
 #[cfg(test)]
