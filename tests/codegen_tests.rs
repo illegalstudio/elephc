@@ -7,6 +7,9 @@
 //! Key details:
 //! - Submodules register the codegen tree and shared runner helpers used by native binary fixtures.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 #[path = "codegen/support/mod.rs"]
 mod support;
 

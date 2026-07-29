@@ -55,6 +55,9 @@
 //!   elephc's does not — creating fixtures from PHP would put an unrelated divergence
 //!   inside an id assertion.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,6 +112,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.current_dir(dir);
     cmd.arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

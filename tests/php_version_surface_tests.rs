@@ -41,6 +41,9 @@
 //! - Compile-failure assertions filter stderr through `elephc_diagnostics` because the system
 //!   linker (GNU `ld` on Linux) emits warnings macOS does not.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -75,10 +78,24 @@ fn elephc_bin() -> String {
 
 /// Runs the compiler on `source` with extra flags and returns its raw output.
 fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::process::Output {
+    compile_raw_with_fixture(dir, source, stem, flags, false)
+}
+
+/// Runs the compiler with optional managed-PCRE2 project configuration.
+fn compile_raw_with_fixture(
+    dir: &Path,
+    source: &str,
+    stem: &str,
+    flags: &[&str],
+    managed_pcre2: bool,
+) -> std::process::Output {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    if managed_pcre2 {
+        managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
+    }
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
     cmd.output().expect("failed to spawn elephc")
@@ -87,6 +104,26 @@ fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::pro
 /// Compiles `source` to a plain executable with extra compiler flags and returns its path.
 fn compile_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
     let output = compile_raw(dir, source, stem, flags);
+    assert_successful_compile(dir, stem, output)
+}
+
+/// Compiles a managed-PCRE2 project with extra compiler flags and returns its path.
+fn compile_with_managed_pcre2(
+    dir: &Path,
+    source: &str,
+    stem: &str,
+    flags: &[&str],
+) -> PathBuf {
+    let output = compile_raw_with_fixture(dir, source, stem, flags, true);
+    assert_successful_compile(dir, stem, output)
+}
+
+/// Requires a successful compile and resolves the produced executable path.
+fn assert_successful_compile(
+    dir: &Path,
+    stem: &str,
+    output: std::process::Output,
+) -> PathBuf {
     assert!(
         output.status.success(),
         "elephc compile failed:\n{}",
@@ -112,6 +149,18 @@ fn run_binary(bin: &Path) -> String {
 fn run_for_profile(prefix: &str, source: &str, profile: &str) -> String {
     let dir = make_test_dir(prefix);
     let bin = compile_with_flags(&dir, source, "probe", &["--php-version", profile]);
+    run_binary(&bin)
+}
+
+/// Compiles and runs a managed-PCRE2 fixture for one `--php-version` profile.
+fn run_for_profile_with_managed_pcre2(prefix: &str, source: &str, profile: &str) -> String {
+    let dir = make_test_dir(prefix);
+    let bin = compile_with_managed_pcre2(
+        &dir,
+        source,
+        "probe",
+        &["--php-version", profile],
+    );
     run_binary(&bin)
 }
 
@@ -698,7 +747,7 @@ eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MI
       "|", PHP_RELEASE_VERSION, "|", PHP_EXTRA_VERSION, "|", PHP_SAPI, "|", phpversion(), "\n";
 var_dump(phpversion("json"), phpversion("nope_xyz"));');
 "#;
-    let out = run_for_profile("elephc_eval_version", source, "8.5");
+    let out = run_for_profile_with_managed_pcre2("elephc_eval_version", source, "8.5");
     assert_eq!(
         out,
         "8.5.0|80500|8|5|0||cli|8.5.0\nstring(5) \"8.5.0\"\nbool(false)\n"

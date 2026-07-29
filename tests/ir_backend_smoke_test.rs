@@ -8,6 +8,9 @@
 //! - These tests exercise binary-level CLI compilation instead of only testing
 //!   library helpers.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -1344,7 +1347,7 @@ echo "-";
 echo $parts[2];
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("simple_regex_builtins", source),
+        compile_and_run_ir_backend_with_managed_pcre2("simple_regex_builtins", source),
         "1:0:3:aNbN:3:a-c"
     );
 }
@@ -1369,7 +1372,7 @@ echo ":";
 echo count($matches);
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_match_captures", source),
+        compile_and_run_ir_backend_with_managed_pcre2("preg_match_captures", source),
         "1:3:[b][][b]:0:0"
     );
 }
@@ -1384,7 +1387,10 @@ function eir_regex_replace(array $matches): string {
 echo preg_replace_callback("/([a-z])([a-z])/", "eir_regex_replace", "ab cd");
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_replace_callback_static_string", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "preg_replace_callback_static_string",
+            source,
+        ),
         "[ab:a] [cd:c]"
     );
 }
@@ -1399,7 +1405,10 @@ function eir_regex_replace_fcc(array $matches): string {
 echo preg_replace_callback("/[A-Z]/", eir_regex_replace_fcc(...), "AB");
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_replace_callback_static_function_fcc", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "preg_replace_callback_static_function_fcc",
+            source,
+        ),
         "F1F1"
     );
 }
@@ -2096,7 +2105,7 @@ echo ($child instanceof $targetChild) ? "T" : "F";
 echo ($child instanceof $targetOther) ? "T" : "F";
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("dynamic_instanceof_targets", source),
+        compile_and_run_ir_backend_with_managed_pcre2("dynamic_instanceof_targets", source),
         "TTFTTFFTF"
     );
 }
@@ -2122,7 +2131,10 @@ echo ($child instanceof $baseName) ? "T" : "F";
 echo ($child instanceof $childName) ? "T" : "F";
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("dynamic_instanceof_classes_with_methods", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "dynamic_instanceof_classes_with_methods",
+            source,
+        ),
         "TT"
     );
 }
@@ -2275,7 +2287,7 @@ try {
 /// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
 #[test]
 fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
-    let run = compile_ir_backend_and_run(
+    let run = compile_ir_backend_and_run_with_managed_pcre2(
         "invalid_dynamic_instanceof_target",
         r#"<?php
 class User {}
@@ -6761,6 +6773,13 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
 }
 
+/// Compiles a managed-PCRE2 fixture, runs its output binary, and returns stdout.
+fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {
+    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);
+    assert!(run.status.success(), "IR backend binary failed for {name}");
+    String::from_utf8(run.stdout).unwrap()
+}
+
 /// Compiles `source`, runs the output binary with extra args, and returns stdout.
 fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str]) -> String {
     let run = compile_ir_backend_and_run(name, source, args);
@@ -6780,12 +6799,32 @@ fn compile_ir_backend_and_run(name: &str, source: &str, args: &[&str]) -> Output
     compile_ir_backend_and_run_with_compile_args(name, source, &[], args)
 }
 
+/// Compiles `source` with a managed-PCRE2 fixture, runs it, and returns raw output.
+fn compile_ir_backend_and_run_with_managed_pcre2(
+    name: &str,
+    source: &str,
+    args: &[&str],
+) -> Output {
+    compile_ir_backend_and_run_with_fixture(name, source, &[], args, true)
+}
+
 /// Compiles `source` with extra compiler flags, then runs the binary.
 fn compile_ir_backend_and_run_with_compile_args(
     name: &str,
     source: &str,
     compile_args: &[&str],
     run_args: &[&str],
+) -> Output {
+    compile_ir_backend_and_run_with_fixture(name, source, compile_args, run_args, false)
+}
+
+/// Compiles and runs one fixture with optional managed-PCRE2 project configuration.
+fn compile_ir_backend_and_run_with_fixture(
+    name: &str,
+    source: &str,
+    compile_args: &[&str],
+    run_args: &[&str],
+    managed_pcre2: bool,
 ) -> Output {
     let dir = std::env::temp_dir().join(format!(
         "elephc_ir_backend_{}_{}_{}",
@@ -6797,8 +6836,12 @@ fn compile_ir_backend_and_run_with_compile_args(
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("failed to write IR backend PHP fixture");
 
-    let compile = Command::new(elephc_cli_bin())
-        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+    let mut command = Command::new(elephc_cli_bin());
+    command.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    if managed_pcre2 {
+        managed_pcre2_support::configure_host_managed_pcre2(&mut command, &dir);
+    }
+    let compile = command
         .current_dir(&dir)
         .args(compile_args)
         .arg(&php_path)

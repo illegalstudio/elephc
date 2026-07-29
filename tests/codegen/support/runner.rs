@@ -28,12 +28,6 @@ struct TestBridgeStaticlib {
     package: &'static str,
 }
 
-/// Header/library pair used by the test-only system PCRE2 provider.
-struct TestPcre2Provider {
-    include_dir: std::path::PathBuf,
-    library_dir: std::path::PathBuf,
-}
-
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
@@ -534,9 +528,7 @@ fn test_link_plan(
     for requirement in &requirements.runtime_requirements {
         match requirement {
             elephc::codegen::LinkRequirement::NativePackage("pcre2") => {
-                plan.push(LinkItem::SearchPath(
-                    test_pcre2_provider().library_dir.clone(),
-                ));
+                plan.push(LinkItem::SearchPath(test_pcre2_library_dir()));
                 plan.push(LinkItem::managed_archive(
                     test_pcre2_shim_archive(),
                     "pcre2-test-provider",
@@ -639,147 +631,6 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
             command.args(["-framework", framework]);
         }
     }
-}
-
-/// Compiles and archives the embedded shim against the test provider's system PCRE2 headers.
-pub(crate) fn test_pcre2_shim_archive() -> &'static Path {
-    static SHIM: OnceLock<std::path::PathBuf> = OnceLock::new();
-
-    SHIM.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "elephc_test_pcre2_shim_{}_{}",
-            std::process::id(),
-            target().as_str()
-        ));
-        fs::create_dir_all(&dir).expect("failed to create PCRE2 shim test directory");
-        let source = dir.join("elephc_pcre2_shim.c");
-        let object = dir.join("elephc_pcre2_shim.o");
-        let archive = dir.join("libelephc_pcre2_shim.a");
-        fs::write(
-            &source,
-            include_str!("../../../src/native_deps/recipes/pcre2_shim.c"),
-        )
-        .expect("failed to write embedded PCRE2 shim source");
-
-        let compiler = test_c_compiler();
-        let mut compile = Command::new(compiler);
-        compile.args(["-c", "-fPIC", "-DPCRE2_STATIC"]);
-        if target().platform == Platform::MacOS {
-            compile.args(["-arch", target().darwin_arch_name()]);
-        }
-        compile.arg(format!(
-            "-I{}",
-            test_pcre2_provider().include_dir.display()
-        ));
-        let output = compile
-            .arg(&source)
-            .arg("-o")
-            .arg(&object)
-            .output()
-            .expect("failed to run C compiler for PCRE2 shim test provider");
-        assert!(
-            output.status.success(),
-            "PCRE2 shim test-provider compilation failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let archiver = compiler
-            .strip_suffix("gcc")
-            .map(|prefix| format!("{prefix}ar"))
-            .unwrap_or_else(|| "ar".to_string());
-        let output = Command::new(archiver)
-            .arg("rcs")
-            .arg(&archive)
-            .arg(&object)
-            .output()
-            .expect("failed to archive PCRE2 shim test provider");
-        assert!(
-            output.status.success(),
-            "PCRE2 shim test-provider archive failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        archive
-    })
-}
-
-/// Returns the target-aware C compiler used by the system-aligned shim test provider.
-fn test_c_compiler() -> &'static str {
-    match target().platform {
-        Platform::MacOS => "cc",
-        Platform::Linux => gcc_cmd(),
-        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-    }
-}
-
-/// Discovers one target-aligned system PCRE2 header/library prefix for codegen tests.
-fn test_pcre2_provider() -> &'static TestPcre2Provider {
-    static PROVIDER: OnceLock<TestPcre2Provider> = OnceLock::new();
-
-    PROVIDER.get_or_init(|| {
-        let candidates: Vec<(std::path::PathBuf, std::path::PathBuf)> = match target().platform {
-            Platform::MacOS => {
-                let mut candidates = Vec::new();
-                if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
-                    let pcre2 = std::path::PathBuf::from(prefix).join("opt/pcre2");
-                    candidates.push((pcre2.join("include"), pcre2.join("lib")));
-                }
-                candidates.extend([
-                    (
-                        "/opt/homebrew/opt/pcre2/include".into(),
-                        "/opt/homebrew/opt/pcre2/lib".into(),
-                    ),
-                    (
-                        "/usr/local/opt/pcre2/include".into(),
-                        "/usr/local/opt/pcre2/lib".into(),
-                    ),
-                ]);
-                candidates
-            }
-            Platform::Linux => {
-                let tuple = match target().arch {
-                    Arch::AArch64 => "aarch64-linux-gnu",
-                    Arch::X86_64 => "x86_64-linux-gnu",
-                };
-                vec![
-                    ("/usr/include".into(), "/usr/lib".into()),
-                    ("/usr/local/include".into(), "/usr/local/lib".into()),
-                    ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
-                    ("/usr/include".into(), format!("/lib/{tuple}").into()),
-                ]
-            }
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        };
-        for (include, library) in candidates {
-            let include_dir = include.as_path();
-            let library_dir = library.as_path();
-            let has_headers = include_dir.join("pcre2.h").is_file()
-                && include_dir.join("pcre2posix.h").is_file();
-            let has_posix = library_dir.join("libpcre2-posix.a").is_file();
-            let has_core = library_dir.join("libpcre2-8.a").is_file();
-            if has_headers && has_posix && has_core {
-                return TestPcre2Provider {
-                    include_dir: include_dir.to_path_buf(),
-                    library_dir: library_dir.to_path_buf(),
-                };
-            }
-        }
-        panic!(
-            "codegen regex tests require aligned pcre2.h, pcre2posix.h, \
-             libpcre2-posix.a and libpcre2-8.a"
-        );
-    })
-}
-
-/// Returns one header from the system-aligned PCRE2 test provider.
-pub(crate) fn test_pcre2_header_path(name: &str) -> std::path::PathBuf {
-    test_pcre2_provider().include_dir.join(name)
-}
-
-/// Returns one static archive from the system-aligned PCRE2 test provider.
-pub(crate) fn test_pcre2_static_archive_path(name: &str) -> std::path::PathBuf {
-    test_pcre2_provider()
-        .library_dir
-        .join(format!("lib{name}.a"))
 }
 
 /// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.

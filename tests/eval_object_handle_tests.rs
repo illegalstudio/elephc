@@ -42,6 +42,9 @@
 //!   adds static-glibc and `.note.GNU-stack` warnings that Apple's linker never
 //!   emits, so an unfiltered assertion would be non-portable.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -102,6 +105,7 @@ fn compile_php(stem: &str, source: &str, flags: &[&str]) -> PathBuf {
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, &dir);
     cmd.current_dir(&dir);
     cmd.arg(&php);
     for flag in flags {
