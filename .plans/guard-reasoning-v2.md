@@ -256,22 +256,22 @@ dead string literals are absent from generated assembly where useful
 New files (or clearly named cases in a new `range_guards.rs` /
 `relational_guards.rs` module pair):
 
-1. **Range intersect / nested relational:**  
-   `if ($x > 10) { if ($x > 5) { keep } else { dead } }` → else pruned;  
+1. **Range intersect / nested relational:**
+   `if ($x > 10) { if ($x > 5) { keep } else { dead } }` → else pruned;
    `if ($x > 10) { if ($x <= 10) { dead } }` still works (regression).
-2. **Range vs strict int:**  
-   `if ($x >= 0 && $x <= 0) { /* equiv exact 0 via intersect */ if ($x === 1) dead }`  
+2. **Range vs strict int:**
+   `if ($x >= 0 && $x <= 0) { /* equiv exact 0 via intersect */ if ($x === 1) dead }`
    Prefer two nested guards if `&&` strong-side recording is enough:
    `if ($x >= 0) { if ($x <= 0) { if ($x === 1) dead; if ($x === 0) keep } }`.
-3. **Elseif false prefix widens exclusion via range:**  
+3. **Elseif false prefix widens exclusion via range:**
    `if ($x < 0) {…} elseif ($x > 0) {…} else { /* x == 0 */ if ($x === 1) dead }`.
-4. **Switch int cases outside range:**  
+4. **Switch int cases outside range:**
    `if ($x > 5) { switch ($x) { case 0: dead; case 6: keep; } }`.
 5. **Overflow refusal:** `$x > i64::MAX` recording must not wrap; no prune from
    a bogus interval (fixture with `IntLiteral(i64::MAX)`).
-6. **Multi-var equality:**  
+6. **Multi-var equality:**
    `if ($x === $y) { if ($x !== $y) dead else keep }`.
-7. **Multi-var relational + exact substitution:**  
+7. **Multi-var relational + exact substitution:**
    `if ($x === 3) { if ($y > $x) { if ($y > 3) keep; if ($y <= 3) dead } }`.
 8. **Write invalidation:** assign to `$x` kills range + relational facts that
    mention `$x`; unrelated `$y` facts remain.
