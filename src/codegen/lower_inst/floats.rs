@@ -109,6 +109,27 @@ pub(super) fn lower_float_binop(
     let rhs_reg = abi::float_result_reg(ctx.emitter);
     require_float(ctx.load_value_to_reg(lhs, lhs_reg)?, inst)?;
     require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    // Reference PHP raises for a zero divisor rather than producing an infinity, and does so for
+    // `-0.0` too. The IEEE result would be a plausible-looking INF or NAN, so the guard runs
+    // before the divide rather than inspecting what it produced.
+    if aarch64_mnemonic == "fdiv" {
+        let scratch = abi::temp_int_reg(ctx.emitter.target);
+        let ok_label = ctx.next_label("fdiv_nonzero");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("fmov {}, {}", scratch, rhs_reg)); // divisor bits
+                ctx.emitter.instruction(&format!("lsl {}, {}, #1", scratch, scratch)); // drop the sign so -0.0 counts as zero
+                ctx.emitter.instruction(&format!("cbnz {}, {}", scratch, ok_label));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("movq {}, {}", scratch, rhs_reg)); // divisor bits
+                ctx.emitter.instruction(&format!("add {}, {}", scratch, scratch)); // drop the sign so -0.0 counts as zero
+                ctx.emitter.instruction(&format!("jnz {}", ok_label));
+            }
+        }
+        super::exceptions::emit_division_by_zero_error(ctx, "Division by zero");
+        ctx.emitter.label(&ok_label);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, rhs_reg, lhs_reg, rhs_reg)); // compute the floating-point arithmetic result

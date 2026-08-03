@@ -1,0 +1,29 @@
+{
+  "$schema": "elephc.wasm-php-oracle-suite.v2",
+  "references": {
+    "inventory": "docs/specs/wasm-inventory.json",
+    "specification": "docs/specs/wasm-compliance.md"
+  },
+  "protocol": {
+    "format": "@<idlen>:<id>:<typelen>:<type>:<payloadlen>:<payload>\\n",
+    "encoding": "lengths are unsigned decimal byte counts; id/type are ASCII"
+  },
+  "execution": {
+    "guest_program": "oracle.php",
+    "guest_env": {
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "TZ": "UTC"
+    },
+    "guest_preopens": {},
+    "timeout_seconds": 10,
+    "max_output_bytes": 1048576
+  },
+  "shard_count": 4,
+  "matrices": [
+    "matrices/scalar_strict.json",
+    "matrices/float_edges.json",
+    "matrices/binary_strings.json",
+    "matrices/object_identity_match.json"
+  ]
+}

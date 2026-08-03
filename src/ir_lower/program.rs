@@ -656,7 +656,13 @@ fn eval_scope_local_slot<'a>(
     function
         .locals
         .iter()
-        .find(|local| local.name.as_deref() == Some(name) && local.kind == LocalKind::PhpLocal)
+        .find(|local| {
+            local.name.as_deref() == Some(name)
+                && matches!(
+                    local.kind,
+                    LocalKind::PhpLocal | LocalKind::ClosureCapture
+                )
+        })
 }
 
 /// Returns true when a static function call matches the codegen-supported subset.

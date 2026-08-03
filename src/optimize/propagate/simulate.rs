@@ -201,9 +201,9 @@ fn simulate_loop_if_constant_paths(
         base_env
     };
 
-    match scalar_value(&condition) {
-        Some(value) if value.truthy() => simulate_loop_block_constant_paths(then_body, base_env),
-        Some(_) => simulate_loop_elseif_constant_paths(elseif_clauses, else_body, base_env),
+    match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+        Some(true) => simulate_loop_block_constant_paths(then_body, base_env),
+        Some(false) => simulate_loop_elseif_constant_paths(elseif_clauses, else_body, base_env),
         None => {
             let mut summary = simulate_loop_block_constant_paths(then_body, base_env.clone());
             summary.append(simulate_loop_elseif_constant_paths(
@@ -236,9 +236,9 @@ fn simulate_loop_elseif_constant_paths(
             branch_env
         };
 
-        match scalar_value(&condition) {
-            Some(value) if value.truthy() => simulate_loop_block_constant_paths(body, branch_env),
-            Some(_) => {
+        match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+            Some(true) => simulate_loop_block_constant_paths(body, branch_env),
+            Some(false) => {
                 simulate_loop_elseif_constant_paths(&elseif_clauses[1..], else_body, base_env)
             }
             None => {

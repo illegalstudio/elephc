@@ -54,6 +54,7 @@ pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
 /// truthiness lowering as well as from the boxed-Mixed runtime helpers.
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
+pub(crate) use arrays::array_offset_on_null_warning;
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// Emit full runtime helpers (orchestrates all runtime sections).

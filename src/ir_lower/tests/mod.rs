@@ -350,10 +350,13 @@ echo as_bool($argc), as_float("1.5"), as_int("2"), as_string(3);
     assert!(text.contains("is_truthy"), "missing EIR truthiness predicate: {text}");
     assert!(text.contains("php=float = cast"), "missing EIR float cast: {text}");
     assert!(text.contains("php=int = cast"), "missing EIR integer cast: {text}");
+    assert!(text.contains(" explicit F64"), "floatval must remain explicit: {text}");
+    assert!(text.contains(" explicit I64"), "intval must remain explicit: {text}");
     assert!(
         text.contains("php=string own=maybe_owned = cast"),
         "missing EIR string cast: {text}"
     );
+    assert!(text.contains(" explicit Str"), "strval must remain explicit: {text}");
     for builtin in ["boolval", "floatval", "intval", "strval"] {
         assert!(
             !text.contains(&format!("runtime.{builtin}"))
@@ -361,6 +364,31 @@ echo as_bool($argc), as_float("1.5"), as_int("2"), as_string(3);
             "{builtin} leaked through a builtin-specific backend operation: {text}"
         );
     }
+}
+
+/// Verifies every surviving PHP scalar cast carries explicit EIR semantics.
+#[test]
+fn source_level_casts_preserve_explicit_eir_semantics() {
+    let module = lower_source(
+        r#"<?php
+function cast_values(string $text, bool $flag): void {
+    echo (int) $text, (float) $text, (string) $flag, (bool) $text;
+}
+cast_values("2", true);
+"#,
+    );
+    let text = print_module(&module);
+
+    for target in ["I64", "F64", "Str"] {
+        assert!(
+            text.contains(&format!(" explicit {target}")),
+            "missing explicit {target} cast: {text}"
+        );
+    }
+    assert!(
+        text.contains("php=bool = cast") && text.matches(" explicit I64").count() >= 2,
+        "missing explicit bool cast: {text}"
+    );
 }
 
 /// Verifies scalar and container type checks share one typed EIR predicate operation.

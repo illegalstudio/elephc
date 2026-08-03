@@ -25,7 +25,9 @@ pub(super) fn try_fold_negate(expr: &Expr) -> Option<ExprKind> {
 
 /// Returns the logical negation of a scalar expression as a BoolLiteral, or `None` if the operand is not a scalar.
 pub(super) fn try_fold_not(expr: &Expr) -> Option<ExprKind> {
-    Some(ExprKind::BoolLiteral(!scalar_value(expr)?.truthy()))
+    Some(ExprKind::BoolLiteral(
+        !scalar_value(expr)?.diagnostic_free_truthiness()?,
+    ))
 }
 
 /// Returns the bitwise NOT of an integer literal, or `None` if the operand is not an integer literal.
@@ -186,10 +188,12 @@ fn try_fold_bitwise_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
 fn try_fold_logical_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
+    let left = left.diagnostic_free_truthiness()?;
+    let right = right.diagnostic_free_truthiness()?;
     let result = match op {
-        BinOp::And => left.truthy() && right.truthy(),
-        BinOp::Or => left.truthy() || right.truthy(),
-        BinOp::Xor => left.truthy() ^ right.truthy(),
+        BinOp::And => left && right,
+        BinOp::Or => left || right,
+        BinOp::Xor => left ^ right,
         _ => return None,
     };
     Some(ExprKind::BoolLiteral(result))
@@ -232,7 +236,7 @@ pub(super) fn try_fold_ternary(
     let condition = scalar_value(condition)?;
     let then_expr = scalar_value(then_expr)?;
     let else_expr = scalar_value(else_expr)?;
-    if condition.truthy() {
+    if condition.diagnostic_free_truthiness()? {
         Some(then_expr.into_expr_kind())
     } else {
         Some(else_expr.into_expr_kind())
@@ -242,7 +246,7 @@ pub(super) fn try_fold_ternary(
 /// Folds a short ternary (`?:) when the value and default are scalar literals.
 pub(super) fn try_fold_short_ternary(value: &Expr, default: &Expr) -> Option<ExprKind> {
     let value = scalar_value(value)?;
-    if value.truthy() {
+    if value.diagnostic_free_truthiness()? {
         Some(value.into_expr_kind())
     } else {
         Some(scalar_value(default)?.into_expr_kind())

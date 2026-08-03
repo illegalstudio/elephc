@@ -5,14 +5,17 @@ sidebar:
   order: 7
 ---
 
-**Source:** assembly emitter `src/codegen/`; EIR lowering `src/ir_lower/`;
-literal eval planning `src/eval_aot.rs`; IR model and validation `src/ir/`;
-shared runtime/ABI support `src/codegen_support/`; optional bridge crates under
-`crates/`.
+**Source:** native assembly emitter `src/codegen/`; WebAssembly emitter
+`src/codegen_wasm/`; EIR lowering `src/ir_lower/`; literal eval planning
+`src/eval_aot.rs`; IR model and validation `src/ir/`; shared runtime/ABI support
+`src/codegen_support/`; optional bridge crates under `crates/`.
 
-Codegen is a single EIR pipeline. The checked and optimized AST is always
-lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
-user assembly for the selected target.
+Codegen is a single EIR pipeline. The checked AST is always lowered into EIR.
+Native targets run the complete AST and EIR optimization pipelines, then use
+`src/codegen/` to emit assembly. The current `wasm32-wasi` path retains
+diagnostic-sensitive AST control flow and unoptimized EIR for its capability
+audit, then uses
+`src/codegen_wasm/` to emit a WASI WebAssembly module.
 
 ## Pipeline Position
 
@@ -26,25 +29,30 @@ PHP source
   -> NameResolver
   -> AST constant folding
   -> Type checker / warnings
-  -> AST optimizer passes
+  -> AST optimizer passes (diagnostic-eliding passes skipped for WASM)
   -> AST -> EIR lowering
   -> EIR validation
-  -> EIR optimization passes
-  -> EIR -> target assembly
-  -> runtime cache
-  -> assembler / linker
-  -> binary or cdylib
+  -> EIR optimization passes (native targets)
+  -> native: EIR -> target assembly -> runtime cache -> assembler / linker
+  -> WASM:   EIR -> WAT -> WASM encoding
+  -> executable, cdylib, WebAssembly module, or NPM package
 ```
 
-`--emit-ir` stops after lowering and IR optimization, printing the textual EIR.
-Normal builds continue through `codegen::generate_user_asm_from_ir_with_options`
+`--emit-ir` stops after lowering and any target-enabled IR optimization,
+printing the textual EIR.
+Native builds continue through `codegen::generate_user_asm_from_ir_with_options`
 and link the resulting user object against the cached runtime object.
+`wasm32-wasi` builds instead call `codegen_wasm::generate`, retain the readable
+`.wat`, encode it to `.wasm`, and skip the native runtime object and linker.
+`--emit npm` then writes the binary with the Node.js WASI loader and package
+metadata from `src/codegen_wasm/npm.rs`.
 
 ## Module Layout
 
 | Path | Responsibility |
 |---|---|
 | `src/codegen/mod.rs` | Public codegen facade, EIR backend entry points, runtime metadata finalization |
+| `src/codegen_wasm/` | EIR-to-WAT lowering and the self-contained WASI runtime |
 | `src/codegen/block_emit.rs` | Function/block traversal, prologues, top-level entry and deferred EIR wrappers |
 | `src/codegen/lower_inst.rs`, `src/codegen/lower_inst/` | Instruction lowering, including typed runtime-target dispatch with no PHP-name lookup |
 | `src/codegen/lower_inst/runtime_calls.rs`, `runtime_functions/` | Validates and lowers typed `RuntimeCallTarget` / `RuntimeFnId` operations into target-aware backend implementations |
@@ -70,7 +78,7 @@ ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
 ## Runtime Split
 
-Codegen always produces two compiler-owned artifacts:
+Native codegen produces two compiler-owned artifacts:
 
 1. **User assembly** from `src/codegen/`, containing lowered PHP functions,
    methods, top-level entry code, user metadata, and literal data.
@@ -85,6 +93,10 @@ than emitted by the assembly backend.
 Runtime feature selection is derived from the EIR module plus CLI-owned modes
 such as `--web`. This keeps ordinary binaries from carrying unused helper
 families while preserving deterministic linking.
+
+The WebAssembly backend has its own linear-memory runtime emitted into the WAT
+module. It therefore bypasses the native runtime cache, assembler, linker, and
+bridge-staticlib flow.
 
 ## Builtin Boundary
 
@@ -124,6 +136,10 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
 symbols for embedding hosts. On Linux cdylib output also hides internal runtime
 symbols so separate loaded elephc modules do not preempt each other's state.
+For `wasm32-wasi`, `--emit npm` wraps the generated module in an ESM package
+that runs it through Node's WASI preview1 API. The loader requires Node.js 20+,
+can run directly, and exports an asynchronous `run()` function. WASM reactor
+output is not implemented, so `--emit cdylib` is rejected for this target.
 
 ## Key Mechanisms
 

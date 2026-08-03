@@ -68,18 +68,26 @@ pub(in crate::optimize::control::dce) fn strict_scalar_guard(condition: &Expr) -
     }
 }
 
-/// Evaluates the truthiness of a `GuardLiteral` value.
+/// Evaluates the diagnostic-free truthiness of a `GuardLiteral` value.
 ///
-/// Returns `true` for truthy values (non-zero int/float, non-empty non-"0" string, true),
-/// `false` for falsy values (null, zero, empty string, "0", false).
-pub(in crate::optimize::control::dce) fn guard_literal_truthy(value: &GuardLiteral) -> bool {
-    match value {
+/// Returns `None` for `NAN`, whose PHP 8.5 bool coercion emits an observable
+/// warning, so DCE callers keep the original comparison or control flow.
+pub(in crate::optimize::control::dce) fn guard_literal_truthy(
+    value: &GuardLiteral,
+) -> Option<bool> {
+    Some(match value {
         GuardLiteral::Bool(value) => *value,
         GuardLiteral::Null => false,
         GuardLiteral::Int(value) => *value != 0,
-        GuardLiteral::Float(bits) => f64::from_bits(*bits) != 0.0,
+        GuardLiteral::Float(bits) => {
+            let value = f64::from_bits(*bits);
+            if value.is_nan() {
+                return None;
+            }
+            value != 0.0
+        }
         GuardLiteral::String(value) => !value.is_empty() && value != "0",
-    }
+    })
 }
 
 /// Looks up a variable's known exact value from `exact_guards`.
@@ -192,7 +200,7 @@ pub(in crate::optimize::control::dce) fn known_condition_value_base(
 
     if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
         if let Some(value) = known_exact_guard(guards, name) {
-            return Some(guard_literal_truthy(value) == truthy_if_true);
+            return guard_literal_truthy(value).map(|value| value == truthy_if_true);
         }
         if guards.bool_true_vars.iter().any(|known| known == name)
             || guards.truthy_vars.iter().any(|known| known == name)

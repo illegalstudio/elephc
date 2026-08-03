@@ -103,6 +103,20 @@ pub enum UnaryStringRuntime {
 }
 
 impl UnaryStringRuntime {
+    /// Every `UnaryStringRuntime` variant in enum-declaration order, so the WASM
+    /// capability inventory can enumerate the current revision without re-deriving
+    /// the list. Keep in sync with the enum above; the exhaustive `as_eir` match
+    /// forces a revisit whenever a variant is added.
+    pub fn all() -> &'static [UnaryStringRuntime] {
+        use UnaryStringRuntime::*;
+        &[
+            UnaryStringRuntime::AddSlashes, Base64Decode, Base64Encode, BinToHex, HexToBin,
+            UnaryStringRuntime::HtmlEntityDecode, NlToBr, RawUrlDecode, RawUrlEncode,
+            UnaryStringRuntime::StripSlashes, StrReverse, StrToLower, StrToUpper,
+            UnaryStringRuntime::UrlDecode, UrlEncode,
+        ]
+    }
+
     /// Returns the stable backend-neutral spelling used by textual EIR and diagnostics.
     pub fn as_eir(self) -> &'static str {
         match self {

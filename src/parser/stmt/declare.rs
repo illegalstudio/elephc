@@ -6,8 +6,10 @@
 //! - `crate::parser::stmt::parse_stmt()` when the current token is `declare`.
 //!
 //! Key details:
-//! - Directives are compile-time syntax only because elephc always uses strict typing.
+//! - `strict_types=1` is recorded for the checker; the other directives are syntax only.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
+//! - PHP scopes `strict_types` per file, but the recorded flag is per compilation, so a
+//!   program mixing strict and coercive files is checked as if every file were strict.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -48,6 +50,12 @@ pub(super) fn parse_declare(
         Some(Token::Semicolon)
     ) {
         *pos += 1;
+        if has_strict_types {
+            // Recorded rather than discarded: the checker consults it to refuse the
+            // scalar coercions PHP only performs in coercive mode. Never cleared
+            // here, so parsing an included file cannot switch the program back.
+            crate::codegen_support::set_strict_types(true);
+        }
         return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
     }
 

@@ -13,6 +13,7 @@ mod builtins;
 mod cli;
 mod codegen;
 mod codegen_support;
+mod codegen_wasm;
 mod conditional;
 mod errors;
 mod eval_aot;

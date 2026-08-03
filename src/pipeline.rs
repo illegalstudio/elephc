@@ -23,17 +23,18 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
+    autoload, codegen, codegen_wasm, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
     linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
     resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
-/// Holds the paths for all compilation output files (assembly, object, binary, source map).
+/// Holds the paths for compilation outputs and an optional generated package directory.
 struct OutputPaths {
     asm: PathBuf,
     obj: PathBuf,
     bin: PathBuf,
     source_map: PathBuf,
+    package_dir: Option<PathBuf>,
 }
 
 /// Runs the full compilation pipeline from PHP source to native binary.
@@ -75,6 +76,9 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    // Clear the typing mode before parsing: the parser only ever sets it, so without
+    // this a strict compilation would leak into the next one on the same thread.
+    crate::codegen_support::set_strict_types(false);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
@@ -448,17 +452,34 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = optimize::prune_constant_control_flow(ast);
+    // WASM capability validation must observe every PHP coercion and diagnostic
+    // boundary; target-agnostic pruning has no profile-aware proof for all of them.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::prune_constant_control_flow(ast)
+    };
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = optimize::normalize_control_flow(ast);
+    // Empty control-flow bodies can still observe PHP diagnostics while their
+    // conditions are evaluated (notably PHP 8.5 NAN-to-bool warnings).
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::normalize_control_flow(ast)
+    };
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = optimize::eliminate_dead_code(ast);
+    // Keep unused diagnostic-producing expressions until the WASM static gate.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::eliminate_dead_code(ast)
+    };
     timings.record_since("dce", phase_started);
 
     if emit_ir {
@@ -482,7 +503,9 @@ pub(crate) fn compile(config: CliConfig) {
 
         crate::progress::phase("ir-opt");
         let phase_started = Instant::now();
-        if ir_opt {
+        // The WASM capability pass currently runs after IR optimization, so keep
+        // every transfer/coercion visible until that validation boundary.
+        if ir_opt && !target.is_wasm() {
             ir_passes::optimize_module(&mut module);
         }
         timings.record_since("ir-opt", phase_started);
@@ -517,10 +540,25 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
-    if ir_opt {
+    // See the emit-IR path above: WASM must audit the unelided EIR graph.
+    if ir_opt && !target.is_wasm() {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
+
+    // WebAssembly target: lower EIR to a `.wat` module and emit `.wat`/`.wasm`.
+    // This bypasses the native runtime object, assembler, and linker entirely.
+    if target.is_wasm() {
+        emit_wasm_artifacts(
+            &ir_module,
+            emit,
+            emit_asm,
+            filename,
+            &output_paths,
+            &mut timings,
+        );
+        return;
+    }
 
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -751,6 +789,91 @@ pub(crate) fn compile(config: CliConfig) {
     );
 }
 
+/// Lowers an EIR module to WebAssembly, validates the assembled bytes, and only
+/// then publishes the target artifacts (requirement WASM-ART-001).
+///
+/// The WAT is generated in memory, assembled to a `.wasm` binary with the
+/// pure-Rust `wat` crate, and type-validated with `wasmparser` before any file
+/// is written. `--emit-asm` performs the same assembly and validation even when
+/// only `.wat` is requested. The `.wat`, `.wasm`, and npm package are written
+/// through staged writes and renames, so backend, assembly, and validation
+/// failures publish nothing and write failures never expose partial destinations.
+/// Cleanup failures after publication are emitted as non-fatal warnings because
+/// every requested destination has already committed. The native runtime object,
+/// assembler, and linker are never involved. Exits the process with a diagnostic
+/// on any backend, validation, or pre-commit publication error.
+fn emit_wasm_artifacts(
+    module: &ir::Module,
+    emit: Emit,
+    emit_asm: bool,
+    filename: &str,
+    output_paths: &OutputPaths,
+    timings: &mut CompileTimings,
+) {
+    let phase_started = Instant::now();
+    let wat = match codegen_wasm::generate(module, emit) {
+        Ok(wat) => wat,
+        Err(err) => {
+            eprintln!("WebAssembly backend error: {}", err);
+            process::exit(1);
+        }
+    };
+    timings.record_since("codegen-wasm", phase_started);
+
+    let source_stem = Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("output");
+
+    // Assemble, type-validate, and publish in one step: nothing is written until
+    // the bytes validate (`--emit-asm` included), and every artifact is written
+    // through staged writes so a failure never exposes a partial destination.
+    let phase_started = Instant::now();
+    match codegen_wasm::publish_wasm_artifacts(
+        &wat,
+        emit,
+        emit_asm,
+        source_stem,
+        &output_paths.asm,
+        &output_paths.bin,
+        output_paths.package_dir.as_deref(),
+    ) {
+        Ok(outcome) => {
+            if !outcome.is_clean() {
+                for warning in outcome.cleanup_warnings() {
+                    eprintln!("warning: {warning}");
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", err);
+            process::exit(1);
+        }
+    }
+    timings.record_since("publish-wasm", phase_started);
+
+    timings.report();
+    if emit_asm {
+        println!(
+            "Emitted WebAssembly text '{}' -> '{}'",
+            filename,
+            output_paths.asm.display()
+        );
+    } else if matches!(emit, Emit::NpmPackage) {
+        let package_dir = output_paths
+            .package_dir
+            .as_deref()
+            .expect("NPM output has a package directory");
+        println!(
+            "Compiled '{}' -> NPM package '{}'",
+            filename,
+            package_dir.display()
+        );
+    } else {
+        println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
+    }
+}
+
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files
 /// derived from the input filename.
 ///
@@ -761,8 +884,31 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let parent = path.parent().unwrap_or(Path::new("."));
+
+    // The WebAssembly target emits a `.wat` text module (the readable form, the
+    // analogue of `.s`) and a `.wasm` binary (the artifact). It never produces a
+    // `.o` object or runs the native linker. NPM packaging writes into a
+    // `<stem>-npm/` directory to avoid colliding with the ordinary binary path.
+    if target.is_wasm() {
+        let package_dir = matches!(emit, Emit::NpmPackage)
+            .then(|| parent.join(format!("{}-npm", stem)));
+        let bin = package_dir
+            .as_ref()
+            .map(|dir| dir.join("module.wasm"))
+            .unwrap_or_else(|| parent.join(format!("{}.wasm", stem)));
+        return OutputPaths {
+            asm: parent.join(format!("{}.wat", stem)),
+            obj: parent.join(format!("{}.o", stem)),
+            bin,
+            source_map: parent.join(format!("{}.map", stem)),
+            package_dir,
+        };
+    }
+
     let bin_name = match emit {
-        Emit::Executable => stem.to_string(),
+        // NpmPackage is wasm-only; for any native build it never occurs, but keep
+        // the match exhaustive by treating it like an executable.
+        Emit::Executable | Emit::NpmPackage => stem.to_string(),
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),
@@ -774,5 +920,43 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
+        package_dir: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit tests for target-specific compilation output path selection.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - These tests only calculate paths and never write compilation artifacts.
+
+    use super::output_paths;
+    use crate::codegen::platform::Target;
+    use crate::codegen::Emit;
+    use std::path::Path;
+
+    /// Verifies ordinary WASM output remains adjacent to the PHP source.
+    #[test]
+    fn wasm_executable_uses_wat_and_wasm_paths() {
+        let paths = output_paths("examples/hello.php", Target::wasm(), Emit::Executable);
+        assert_eq!(paths.asm, Path::new("examples/hello.wat"));
+        assert_eq!(paths.bin, Path::new("examples/hello.wasm"));
+        assert_eq!(paths.package_dir, None);
+    }
+
+    /// Verifies NPM output uses an isolated directory containing `module.wasm`.
+    #[test]
+    fn wasm_npm_uses_isolated_package_directory() {
+        let paths = output_paths("examples/hello.php", Target::wasm(), Emit::NpmPackage);
+        assert_eq!(
+            paths.package_dir.as_deref(),
+            Some(Path::new("examples/hello-npm"))
+        );
+        assert_eq!(paths.bin, Path::new("examples/hello-npm/module.wasm"));
     }
 }

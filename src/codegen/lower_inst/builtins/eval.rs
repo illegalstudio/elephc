@@ -460,7 +460,10 @@ fn eval_scope_read_param_sources(
             }
             if ctx.function.locals.iter().any(|local| {
                 local.name.as_deref() == Some(name.as_str())
-                    && local.kind == LocalKind::PhpLocal
+                    && matches!(
+                        local.kind,
+                        LocalKind::PhpLocal | LocalKind::ClosureCapture
+                    )
                     && !local_uses_eval_global_sync(ctx, local.name.as_deref())
                     && local.php_type.codegen_repr() == PhpType::Void
             }) {
@@ -5910,7 +5913,12 @@ fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
     ctx.function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| {
+            matches!(
+                local.kind,
+                LocalKind::PhpLocal | LocalKind::ClosureCapture
+            )
+        })
         .filter(|local| !local_uses_eval_global_sync(ctx, local.name.as_deref()))
         .filter_map(|local| {
             let name = local.name.clone()?;

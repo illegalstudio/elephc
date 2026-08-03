@@ -201,7 +201,8 @@ pub(super) fn check_types_impl(
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
-    let interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    interface_names.sort();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -217,7 +218,8 @@ pub(super) fn check_types_impl(
 
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    let mut class_names: Vec<String> = class_map.keys().cloned().collect();
+    class_names.sort();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,

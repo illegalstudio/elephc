@@ -165,4 +165,34 @@ enum EnumMetaTarget {
             )]
         );
     }
+
+    /// Verifies repeated checker runs assign identical class and interface IDs.
+    #[test]
+    fn test_schema_ids_are_deterministic_across_checker_runs() {
+        let program = parse_program("<?php echo \"stable\";");
+        let target = Target::wasm();
+
+        let snapshot = || {
+            let result =
+                check_with_target(&program, target).expect("wasm type check should succeed");
+            let mut class_ids = result
+                .classes
+                .iter()
+                .map(|(name, info)| (name.clone(), info.class_id))
+                .collect::<Vec<_>>();
+            let mut interface_ids = result
+                .interfaces
+                .iter()
+                .map(|(name, info)| (name.clone(), info.interface_id))
+                .collect::<Vec<_>>();
+            class_ids.sort();
+            interface_ids.sort();
+            (class_ids, interface_ids)
+        };
+
+        let expected = snapshot();
+        for _ in 0..8 {
+            assert_eq!(snapshot(), expected);
+        }
+    }
 }

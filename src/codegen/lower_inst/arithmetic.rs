@@ -86,27 +86,42 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_integer_operand(ctx, lhs, result_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
     let zero_label = ctx.next_label("mod_zero");
+    let minus_one_label = ctx.next_label("mod_minus_one");
     let done_label = ctx.next_label("mod_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to zero-divisor guard when modulo divisor is zero
+            // `PHP_INT_MIN % -1` is 0 in PHP, and dividing to get there is what OVERFLOWS: x86's
+            // `idiv` raises #DE for it. Answering directly is both correct and trap-free.
+            ctx.emitter.instruction(&format!("cmn {}, #1", rhs_reg));           // is the divisor -1?
+            ctx.emitter.instruction(&format!("b.eq {}", minus_one_label));
             ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); // compute signed quotient for the modulo operation
             ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the modulo zero fallback after a normal remainder
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the zero-divisor raise after a normal remainder
+            ctx.emitter.label(&minus_one_label);
+            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // every integer divides evenly by -1
+            ctx.emitter.instruction(&format!("b {}", done_label));
             ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero
+            super::exceptions::emit_division_by_zero_error(ctx, "Modulo by zero"); // PHP raises; it does not answer zero
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the modulo divisor is zero
             ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to zero-divisor guard when modulo divisor is zero
+            // `PHP_INT_MIN % -1` is 0 in PHP, and dividing to get there OVERFLOWS: `idiv` raises
+            // #DE for it, which would kill the process. Answering directly avoids the trap.
+            ctx.emitter.instruction(&format!("cmp {}, -1", rhs_reg));           // is the divisor -1?
+            ctx.emitter.instruction(&format!("je {}", minus_one_label));
             ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
             ctx.emitter.instruction(&format!("idiv {}", rhs_reg));              // divide signed integers with quotient in rax and remainder in rdx
             ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the signed remainder into the integer result register
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the modulo zero fallback after a normal remainder
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the zero-divisor raise after a normal remainder
+            ctx.emitter.label(&minus_one_label);
+            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // every integer divides evenly by -1
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
             ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // return zero for modulo by zero
+            super::exceptions::emit_division_by_zero_error(ctx, "Modulo by zero"); // PHP raises; it does not answer zero
             ctx.emitter.label(&done_label);
         }
     }
@@ -124,6 +139,21 @@ pub(super) fn lower_int_div_to_float(
     let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, lhs_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    // PHP's `/` raises for a zero divisor whatever the operand types. Promoting to float first
+    // would answer INF or NAN instead, so the guard runs on the INTEGER divisor, before it is
+    // converted — the promoted value has a signed zero and would need the sign masked off.
+    let ok_label = ctx.next_label("div_nonzero");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", rhs_reg, ok_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg));
+            ctx.emitter.instruction(&format!("jnz {}", ok_label));
+        }
+    }
+    super::exceptions::emit_division_by_zero_error(ctx, "Division by zero");
+    ctx.emitter.label(&ok_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("scvtf d0, {}", lhs_reg));         // promote the integer dividend into the float result register
@@ -173,13 +203,50 @@ pub(super) fn lower_int_shift(
     let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, result_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    // PHP's shift is NOT the hardware's. A negative count raises, and a count of 64 or more
+    // saturates instead of wrapping: both architectures mask the count to six bits, which would
+    // make `1 << 64` answer 1 and `-8 >> 64` answer -8 where PHP answers 0 and -1.
+    let left = aarch64_mnemonic == "lsl";
+    let negative_label = ctx.next_label("shift_negative");
+    let saturate_label = ctx.next_label("shift_saturate");
+    let done_label = ctx.next_label("shift_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", rhs_reg));           // is the shift count negative?
+            ctx.emitter.instruction(&format!("b.lt {}", negative_label));       // PHP raises rather than masking
+            ctx.emitter.instruction(&format!("cmp {}, #64", rhs_reg));          // is the count past the word width?
+            ctx.emitter.instruction(&format!("b.ge {}", saturate_label));       // PHP saturates rather than wrapping
             ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // shift the integer operand by the EIR count operand
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&saturate_label);
+            if left {
+                ctx.emitter.instruction(&format!("mov {}, #0", result_reg));    // every bit shifted out on the left
+            } else {
+                ctx.emitter.instruction(&format!("asr {}, {}, #63", result_reg, result_reg)); // sign fill: 0, or -1 when negative
+            }
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&negative_label);
+            super::exceptions::emit_arithmetic_error(ctx, "Bit shift by negative number");
+            ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 0", rhs_reg));            // is the shift count negative?
+            ctx.emitter.instruction(&format!("jl {}", negative_label));         // PHP raises rather than masking
+            ctx.emitter.instruction(&format!("cmp {}, 64", rhs_reg));           // is the count past the word width?
+            ctx.emitter.instruction(&format!("jge {}", saturate_label));        // PHP saturates rather than wrapping
             ctx.emitter.instruction(&format!("mov rcx, {}", rhs_reg));          // move the variable shift count into x86_64's required cl register
             ctx.emitter.instruction(&format!("{} {}, cl", x86_64_mnemonic, result_reg)); // shift the integer operand by the low count byte
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&saturate_label);
+            if left {
+                ctx.emitter.instruction(&format!("mov {}, 0", result_reg));     // every bit shifted out on the left
+            } else {
+                ctx.emitter.instruction(&format!("sar {}, 63", result_reg));    // sign fill: 0, or -1 when negative
+            }
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&negative_label);
+            super::exceptions::emit_arithmetic_error(ctx, "Bit shift by negative number");
+            ctx.emitter.label(&done_label);
         }
     }
     store_if_result(ctx, inst)

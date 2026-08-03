@@ -89,7 +89,9 @@ fn truncate_float_to_i64(value: f64) -> Option<i64> {
         return None;
     }
     let truncated = value.trunc();
-    if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+    // `i64::MAX as f64` rounds up to 2^63, so it is the exclusive upper
+    // boundary rather than a representable in-range integer.
+    if truncated < i64::MIN as f64 || truncated >= i64::MAX as f64 {
         return None;
     }
     Some(truncated as i64)

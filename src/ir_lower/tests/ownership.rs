@@ -74,6 +74,96 @@ fn nested_array_literal_releases_pushed_hash_temporary() {
     assert!(release > 0, "expected release after array_push in {text}");
 }
 
+/// Verifies `match` releases each owning condition before branching and releases
+/// its owning subject only after the selected arm result has been materialized.
+#[test]
+fn match_releases_owned_subject_and_conditions_on_each_normal_edge() {
+    let module = super::lower_source(
+        r#"<?php
+function owned_string(string $value): string {
+    return $value . "";
+}
+$result = match (owned_string("subject")) {
+    owned_string("miss") => owned_string("bad"),
+    default => owned_string("ok"),
+};
+echo $result;
+"#,
+    );
+    let text = print_module(&module);
+    let main = main_function_text(&text);
+    let strict = main
+        .find("strict_eq")
+        .unwrap_or_else(|| panic!("expected strict match comparison in {main}"));
+    let comparison_tail = &main[strict..];
+    let condition_release = comparison_tail
+        .find("release")
+        .expect("expected owning condition release");
+    let condition_branch = comparison_tail
+        .find("cond_br")
+        .expect("expected match condition branch");
+    assert!(
+        condition_release < condition_branch,
+        "expected condition release before match branch in {main}"
+    );
+
+    let result_block = main
+        .find("match.result")
+        .expect("expected match result block");
+    let result_tail = &main[result_block..];
+    let result_concat = result_tail
+        .find("call")
+        .expect("expected selected arm result materialization");
+    let result_subject_release = result_tail
+        .find("release")
+        .expect("expected subject release on matched edge");
+    assert!(
+        result_concat < result_subject_release,
+        "expected subject release after matched result evaluation in {main}"
+    );
+
+    assert!(
+        comparison_tail.matches("release").count() >= 3,
+        "expected condition release plus subject releases on matched/default edges in {main}"
+    );
+}
+
+/// Verifies object temporaries used by `match` receive the same per-condition
+/// and per-selected-edge cleanup as refcounted string temporaries.
+#[test]
+fn match_releases_owned_object_subject_and_condition() {
+    let module = super::lower_source(
+        r#"<?php
+class MatchValue {}
+$result = match (new MatchValue()) {
+    new MatchValue() => 1,
+    default => 2,
+};
+echo $result;
+"#,
+    );
+    let text = print_module(&module);
+    let main = main_function_text(&text);
+    let strict = main
+        .find("strict_eq")
+        .unwrap_or_else(|| panic!("expected strict object match comparison in {main}"));
+    let comparison_tail = &main[strict..];
+    let condition_release = comparison_tail
+        .find("release")
+        .expect("expected object condition release");
+    let condition_branch = comparison_tail
+        .find("cond_br")
+        .expect("expected object match condition branch");
+    assert!(
+        condition_release < condition_branch,
+        "expected object condition release before branch in {main}"
+    );
+    assert!(
+        comparison_tail.matches("release").count() >= 3,
+        "expected condition release plus object subject releases on both normal edges in {main}"
+    );
+}
+
 /// Verifies property array rewrites acquire the container before in-place mutation.
 #[test]
 fn property_array_push_acquires_container_before_rewrite_release() {
@@ -274,6 +364,42 @@ echo $value;
         function.value(result).expect("call result metadata").ownership,
         Ownership::Owned,
         "borrowed call results must not publish an owning EIR contract"
+    );
+}
+
+/// Verifies a ref-cell payload returned by value is acquired before the owning
+/// cell is released by the function epilogue.
+#[test]
+fn returned_ref_cell_payload_is_promoted_to_an_owned_return() {
+    let module = super::lower_source(
+        r#"<?php
+class RefReturnValue {}
+function make_ref_return(): RefReturnValue {
+    $value = new RefReturnValue();
+    $alias =& $value;
+    return $value;
+}
+$result = make_ref_return();
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "make_ref_return")
+        .expect("expected make_ref_return EIR function");
+    let ref_payload = function
+        .instructions
+        .iter()
+        .find(|instruction| instruction.op == Op::LoadRefCell)
+        .and_then(|instruction| instruction.result)
+        .expect("expected ref-cell payload load");
+    assert!(
+        function.instructions.iter().any(|instruction| {
+            instruction.op == Op::Acquire
+                && instruction.operands.first().copied() == Some(ref_payload)
+        }),
+        "a ref-cell payload must be acquired before returning: {}",
+        print_module(&module)
     );
 }
 

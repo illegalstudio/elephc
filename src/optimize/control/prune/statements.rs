@@ -96,8 +96,10 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::While { condition, body } => {
             let condition = prune_expr(condition);
-            match scalar_value(&condition) {
-                Some(value) if !value.truthy() => Vec::new(),
+            match scalar_value(&condition)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(false) => Vec::new(),
                 _ => vec![Stmt {
                     kind: StmtKind::While {
                         condition,
@@ -112,8 +114,10 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::DoWhile { body, condition } => {
             let condition = prune_expr(condition);
             let body = prune_block(body);
-            match scalar_value(&condition) {
-                Some(value) if !value.truthy() && !block_contains_loop_exit(&body) => body,
+            match scalar_value(&condition)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(false) if !block_contains_loop_exit(&body) => body,
                 _ => vec![Stmt {
                     kind: StmtKind::DoWhile {
                         body,
@@ -134,8 +138,12 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let init = prune_for_clause(init);
             let condition = condition.map(prune_expr);
             let update = prune_for_clause(update);
-            match condition.as_ref().and_then(scalar_value) {
-                Some(value) if !value.truthy() => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
+            match condition
+                .as_ref()
+                .and_then(scalar_value)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(false) => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
                 _ => vec![Stmt {
                     kind: StmtKind::For {
                         init,

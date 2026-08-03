@@ -4919,7 +4919,11 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "may_fatal",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

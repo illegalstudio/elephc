@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::codegen_support::platform::Target;
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -98,6 +99,7 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
+    pub target: Target,
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
@@ -199,12 +201,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         in_main: bool,
         all_global_var_names: HashSet<String>,
         source_path: Option<String>,
+        target: Target,
         web: bool,
     ) -> Self {
         let return_type = return_ir_type(&return_php_type);
         Self {
             builder,
             data,
+            target,
             local_slots: HashMap::new(),
             local_kinds: HashMap::new(),
             local_types: env,
@@ -558,7 +562,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .get(name)
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
-                (kind == LocalKind::PhpLocal).then_some((name.clone(), *slot))
+                matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                    .then_some((name.clone(), *slot))
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
@@ -572,7 +577,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&name)
                 .copied()
                 .unwrap_or(LocalKind::PhpLocal);
-            if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) {
+            if matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                && eval_barrier_can_widen(&ty)
+            {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
@@ -629,7 +636,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let widen_names = write_names
             .iter()
             .filter(|name| {
-                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                self.local_kinds
+                    .get(*name)
+                    .copied()
+                    .is_some_and(|kind| {
+                        matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                    })
                     && self
                         .local_slots
                         .get(*name)
@@ -1081,6 +1093,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
         let store_retains_value = uses_global
             || previous_kind == LocalKind::PhpLocal
+            || previous_kind == LocalKind::ClosureCapture
             || static_local_store_needs_string_retain;
         // Retain before cleanup because a borrowed result can alias the old slot.
         let value = if store_retains_value
@@ -1184,6 +1197,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !ref_cell_narrowed_mixed_to_int
         {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        // This was the FIRST reassignment of a by-value closure capture: the slot's
+        // descriptor borrow was intentionally not released, and the slot now owns the
+        // value just stored. Demote it to `PhpLocal` so subsequent writes release the
+        // prior owned value, and record it so every function exit releases the final
+        // owned value (the epilogue otherwise excludes capture-param-named slots).
+        if previous_kind == LocalKind::ClosureCapture && !uses_global && !is_ref_bound {
+            self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
+            self.builder.set_local_kind(slot, LocalKind::PhpLocal);
+            self.builder.mark_reassigned_capture_slot(slot);
         }
         value
     }
@@ -1920,7 +1943,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op != Op::Cast || inst.immediate != Some(Immediate::CastTarget(IrType::Str)) {
+        if inst.op != Op::Cast
+            || !matches!(
+                inst.immediate,
+                Some(
+                    Immediate::CastTarget(IrType::Str)
+                        | Immediate::ExplicitCastTarget(IrType::Str)
+                )
+            )
+        {
             return false;
         }
         let Some(source) = inst.operands.first().copied() else {
@@ -2313,6 +2344,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
+        let ownership = Ownership::for_php_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op, operands, immediate, ir_type, php_type, ownership, effects, span,
+            )
+            .expect("value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
+    /// Emits a value with an explicit EIR storage type while preserving richer
+    /// PHP metadata.
+    ///
+    /// This is reserved for representations such as `container|null`, where a
+    /// concrete nullable pointer is more precise than the default boxed-Union
+    /// storage selected by `value_ir_type`.
+    pub(crate) fn emit_value_with_ir_type(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        ir_type: IrType,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
         let ownership = Ownership::for_php_type(&php_type);
         let value = self
             .builder

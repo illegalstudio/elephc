@@ -3,7 +3,7 @@
 //! ownership, and effect invariants.
 //!
 //! Called from:
-//! - Phase 02 tests, future `--emit-ir`, and future IR pass/codegen gates.
+//! - `crate::ir_lower`, EIR optimization debug checks, and validator tests.
 //!
 //! Key details:
 //! - The validator is conservative: uncertain or malformed IR fails early so
@@ -56,6 +56,11 @@ pub enum ValidationError {
     MissingImmediate {
         inst: InstId,
         expected: &'static str,
+    },
+    CastTargetTypeMismatch {
+        inst: InstId,
+        target: IrType,
+        result: IrType,
     },
     UnexpectedImmediate(InstId),
     UnknownRuntimeCallSignature(InstId),
@@ -326,11 +331,18 @@ fn validate_instruction_immediate(
         ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
+        StrictEq | StrictNotEq => {
+            if inst.immediate.is_some() {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            } else {
+                Ok(())
+            }
+        }
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_))
+            matches!(imm, Imm::CastTarget(_) | Imm::ExplicitCastTarget(_))
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -427,6 +439,7 @@ fn validate_opcode_rules(
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FCmp => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        StrictEq | StrictNotEq => validate_strict_compare(inst_id, inst),
         IToF => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         IToStr => check_unary_any(
             function,
@@ -437,6 +450,7 @@ fn validate_opcode_rules(
         ),
         ResourceToStr => check_unary(function, inst_id, inst, IrType::I64, "I64 resource"),
         FToI | FToStr => check_unary(function, inst_id, inst, IrType::F64, "F64"),
+        Cast => validate_cast(inst_id, inst),
         BoolToStr => check_unary(function, inst_id, inst, IrType::I64, "I64 bool"),
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
@@ -539,6 +553,24 @@ fn validate_opcode_rules(
         }
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
+    }
+}
+
+/// Validates the unary shape and target/result agreement of an EIR cast.
+fn validate_cast(inst_id: InstId, inst: &Instruction) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    let target = match inst.immediate.as_ref() {
+        Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) => *target,
+        _ => return Ok(()),
+    };
+    if target == inst.result_type {
+        Ok(())
+    } else {
+        Err(ValidationError::CastTargetTypeMismatch {
+            inst: inst_id,
+            target,
+            result: inst.result_type,
+        })
     }
 }
 
@@ -662,6 +694,27 @@ fn check_hash_array_union(
         IrType::Heap(IrHeapKind::Array),
         "Heap(Array)",
     )
+}
+
+/// Validates strict-comparison arity and its exact boolean result contract.
+fn validate_strict_compare(
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 2, "2")?;
+    let result = inst
+        .result
+        .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+    if inst.result_type != IrType::I64 {
+        return Err(ValidationError::ResultTypeMismatch(result));
+    }
+    if inst.result_php_type != PhpType::Bool {
+        return Err(ValidationError::PhpTypeMismatch(result));
+    }
+    if inst.result_ownership != Ownership::NonHeap {
+        return Err(ValidationError::OwnershipTypeMismatch(result));
+    }
+    Ok(())
 }
 
 /// Validates one exact operand count.
@@ -1300,9 +1353,42 @@ fn successors(term: &Terminator) -> Vec<BlockId> {
 
 /// Returns true when PHP type metadata can use the given EIR storage type.
 fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
+    if exact_nullable_container_storage(ir_type, php_type) {
+        return true;
+    }
     let php_type = php_type.codegen_repr();
     IrType::from_php(&php_type) == ir_type
-        || matches!((ir_type, php_type), (IrType::I64, PhpType::Void))
+        || (ir_type == IrType::I64 && matches!(&php_type, PhpType::Void))
+}
+
+/// Returns whether an exact container pointer stores a two-member
+/// `container|null` PHP union without boxing.
+fn exact_nullable_container_storage(ir_type: IrType, php_type: &PhpType) -> bool {
+    let PhpType::Union(members) = php_type else {
+        return false;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return false;
+    }
+    let Some(container) = members
+        .iter()
+        .find(|member| !matches!(member, PhpType::Void | PhpType::Never))
+    else {
+        return false;
+    };
+    matches!(
+        (ir_type, container.codegen_repr()),
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(_))
+            | (
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray { .. }
+            )
+            | (IrType::Heap(IrHeapKind::Object), PhpType::Object(_))
+    )
 }
 
 /// Returns true when ownership is coherent with storage and PHP type metadata.

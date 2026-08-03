@@ -8,7 +8,7 @@
 //! Key details:
 //! - Simple scalar operations lower to concrete EIR arithmetic/string opcodes.
 //! - Complex PHP runtime behavior lowers to high-level EIR opcodes with
-//!   conservative effects until Phase 04 gives them target-specific meaning.
+//!   conservative effects consumed by the native and WASM backends.
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
@@ -2267,7 +2267,12 @@ fn eval_literal_scope_read_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -2293,7 +2298,12 @@ fn eval_literal_scope_read_array_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -2319,7 +2329,12 @@ fn eval_literal_scope_read_assoc_array_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -2345,7 +2360,12 @@ fn eval_literal_scope_read_float_predicate_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -7872,10 +7892,16 @@ pub(super) fn array_access_expr_value_type_for_ir(
     .codegen_repr();
     match array_ty {
         PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
+            Some(array_access_element_result_type(
+                ctx,
+                normalize_value_php_type(*elem_ty).codegen_repr(),
+            ))
         }
         PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
+            Some(array_access_element_result_type(
+                ctx,
+                normalize_value_php_type(*value).codegen_repr(),
+            ))
         }
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
@@ -7979,6 +8005,7 @@ fn lower_match(
                 Op::StrictEq.default_effects(),
                 Some(expr.span),
             );
+            release_binary_operand_temporary(ctx, condition, expr.span);
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
                 then_target: result_block,
@@ -7991,6 +8018,7 @@ fn lower_match(
         }
         ctx.builder.position_at_end(result_block);
         store_expr_into_temp(ctx, &temp_name, result_type.clone(), result, expr.span);
+        release_binary_operand_temporary(ctx, subject, expr.span);
         branch_to(ctx, merge);
         if let Some(fallthrough) = fallthrough {
             ctx.builder.position_at_end(fallthrough);
@@ -7998,8 +8026,10 @@ fn lower_match(
     }
     if let Some(default) = default {
         store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+        release_binary_operand_temporary(ctx, subject, expr.span);
         branch_to(ctx, merge);
     } else if !ctx.builder.insertion_block_is_terminated() {
+        release_binary_operand_temporary(ctx, subject, expr.span);
         let message = ctx.intern_string("Fatal error: unhandled match case\n");
         ctx.builder.terminate(Terminator::Fatal { message });
     }
@@ -8059,7 +8089,26 @@ fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    let index_value = lower_expr(ctx, index);
+    lower_array_access_from_values(
+        ctx,
+        array_value,
+        index_value,
+        index,
+        expr,
+        warn_on_missing,
+    )
+}
+
+/// Lowers array access once both receiver and index have been evaluated in PHP order.
+fn lower_array_access_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    mut index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = index_expr_key_type(ctx, index);
@@ -8103,14 +8152,37 @@ fn lower_array_access_from_value(
         let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
         operands.push(warning_flag.value);
     }
-    let result = ctx.emit_value(
-        op,
-        operands,
-        None,
-        result_type,
-        op.default_effects(),
-        Some(expr.span),
-    );
+    let result = if matches!(op, Op::HashGet | Op::HashGetSilent) {
+        if let Some(ir_type) = nullable_hash_container_ir_type(&result_type) {
+            ctx.emit_value_with_ir_type(
+                op,
+                operands,
+                None,
+                ir_type,
+                result_type,
+                op.default_effects(),
+                Some(expr.span),
+            )
+        } else {
+            ctx.emit_value(
+                op,
+                operands,
+                None,
+                result_type,
+                op.default_effects(),
+                Some(expr.span),
+            )
+        }
+    } else {
+        ctx.emit_value(
+            op,
+            operands,
+            None,
+            result_type,
+            op.default_effects(),
+            Some(expr.span),
+        )
+    };
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
     // the key, and the result is freshly allocated storage that never aliases
@@ -8125,7 +8197,7 @@ fn lower_array_access_from_value(
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
 }
 
-/// Lowers nullable receiver indexing without evaluating the index on a null receiver.
+/// Lowers nullable indexing while preserving PHP's eager index evaluation and diagnostics.
 fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -8133,6 +8205,7 @@ fn lower_nullable_array_access(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    let index_value = lower_expr(ctx, index);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![array_value.value],
@@ -8161,12 +8234,32 @@ fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
+    if warn_on_missing {
+        let warning = ctx.intern_string(
+            crate::codegen_support::runtime::array_offset_on_null_warning(),
+        );
+        ctx.emit_void(
+            Op::Warn,
+            Vec::new(),
+            Some(Immediate::Data(warning)),
+            Op::Warn.default_effects(),
+            Some(expr.span),
+        );
+    }
+    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing);
+    let read_value = lower_array_access_from_values(
+        ctx,
+        array_value,
+        index_value,
+        index,
+        expr,
+        warn_on_missing,
+    );
     store_value_into_temp(ctx, &temp_name, result_type, read_value, expr.span);
     branch_to(ctx, merge);
 
@@ -8206,18 +8299,42 @@ fn array_access_result_type(
 ) -> PhpType {
     match op {
         Op::StrCharAt => PhpType::Str,
-        Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Array(elem_ty) => {
-                array_access_element_result_type(normalize_value_php_type(*elem_ty))
+        Op::ArrayGet | Op::ArrayGetSilent => {
+            let source_type = ctx.builder.value_php_type(array);
+            match &source_type {
+                PhpType::Array(elem_ty) => {
+                    array_access_element_result_type(
+                        ctx,
+                        normalize_value_php_type((**elem_ty).clone()),
+                    )
+                }
+                PhpType::Union(_) => match nullable_container_member(&source_type) {
+                    Some(PhpType::Array(elem_ty)) => {
+                        array_access_element_result_type(ctx, normalize_value_php_type(*elem_ty))
+                    }
+                    _ => fallback_expr_type(expr),
+                },
+                _ => fallback_expr_type(expr),
             }
-            _ => fallback_expr_type(expr),
-        },
-        Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::AssocArray { value, .. } => {
-                array_access_element_result_type(normalize_value_php_type(*value))
+        }
+        Op::HashGet | Op::HashGetSilent => {
+            let source_type = ctx.builder.value_php_type(array);
+            match &source_type {
+                PhpType::AssocArray { value, .. } => {
+                    hash_access_element_result_type(
+                        ctx,
+                        normalize_value_php_type((**value).clone()),
+                    )
+                }
+                PhpType::Union(_) => match nullable_container_member(&source_type) {
+                    Some(PhpType::AssocArray { value, .. }) => {
+                        hash_access_element_result_type(ctx, normalize_value_php_type(*value))
+                    }
+                    _ => fallback_expr_type(expr),
+                },
+                _ => fallback_expr_type(expr),
             }
-            _ => fallback_expr_type(expr),
-        },
+        }
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
             _ => fallback_expr_type(expr),
@@ -8231,13 +8348,72 @@ fn array_access_result_type(
     }
 }
 
-/// Returns the materialized result type for a PHP array read, including miss-capable int reads.
-pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
-        PhpType::TaggedScalar
+/// Returns the materialized result type for a PHP array read, preserving null on a miss.
+pub(crate) fn array_access_element_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    element_ty: PhpType,
+) -> PhpType {
+    if crate::codegen::sentinels::null_repr_is_tagged() {
+        match element_ty {
+            PhpType::Int => PhpType::TaggedScalar,
+            PhpType::Bool | PhpType::Str if ctx.target.is_wasm() => PhpType::Mixed,
+            other => other,
+        }
     } else {
         element_ty
     }
+}
+
+/// Returns a null-capable result type for associative-array reads.
+///
+/// WASM gives concrete containers a `T|null` PHP type while retaining their
+/// exact EIR pointer storage, so misses remain null and hits can still feed
+/// typed chained consumers. Integer reads use the allocation-free tagged scalar
+/// pair; other values use Mixed.
+fn hash_access_element_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    element_ty: PhpType,
+) -> PhpType {
+    if ctx.target.is_wasm() {
+        match element_ty {
+            PhpType::Int => PhpType::TaggedScalar,
+            ty @ (PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)) => PhpType::Union(vec![ty, PhpType::Void]),
+            _ => PhpType::Mixed,
+        }
+    } else {
+        array_access_element_result_type(ctx, element_ty)
+    }
+}
+
+/// Returns the concrete EIR pointer storage for a nullable hash-container
+/// result, or `None` for boxed/scalar result types.
+fn nullable_hash_container_ir_type(php_type: &PhpType) -> Option<IrType> {
+    nullable_container_member(php_type).map(|container| IrType::from_php(&container))
+}
+
+/// Returns the single concrete member from an exact two-member
+/// `container|null` union.
+fn nullable_container_member(php_type: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = php_type else {
+        return None;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return None;
+    }
+    let container = members
+        .iter()
+        .find(|member| !matches!(member, PhpType::Void | PhpType::Never))?;
+    matches!(
+        container,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    )
+    .then(|| container.clone())
 }
 
 /// Returns the EIR result type for object indexing routed through `ArrayAccess::offsetGet`.
@@ -8477,7 +8653,7 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     let result = ctx.emit_value(
         Op::Cast,
         vec![value.value],
-        Some(Immediate::CastTarget(value_ir_type(&php_type))),
+        Some(Immediate::ExplicitCastTarget(value_ir_type(&php_type))),
         php_type,
         Op::Cast.default_effects(),
         Some(expr.span),
@@ -8667,6 +8843,19 @@ fn lower_closure_with_context(
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if by_ref
+                && matches!(
+                    ctx.local_type(capture).codegen_repr(),
+                    PhpType::Int | PhpType::Float
+                )
+                && body_promotes_variable(body, capture)
+            {
+                // Checked arithmetic through the shared cell can promote an integer to a
+                // float — `$n += 1` on `PHP_INT_MAX` — and an `Int` payload silently
+                // discarded that. Widen only when the body actually performs such
+                // arithmetic: an alias merely reassigned keeps its narrow, cheaper cell.
+                ctx.set_local_type(capture, PhpType::Mixed);
+                Some(PhpType::Mixed)
             } else {
                 None
             };
@@ -8739,6 +8928,78 @@ fn lower_closure_with_context(
         ctx.set_local_logical_type(capture, PhpType::Callable);
     }
     closure
+}
+
+/// Returns true when `body` performs arithmetic on `$name` that PHP can promote to float.
+///
+/// `+`, `-`, and `*` on integers overflow into a float, so a cell holding `$name` must be
+/// able to carry either. `++`/`--` and the compound assignments both reach here, the
+/// latter as an ordinary `Assign` whose value is a `BinaryOp` reading the same variable.
+/// Comparisons, concatenation, and plain reassignment cannot promote and are ignored, so
+/// a capture only widens when it must.
+fn body_promotes_variable(body: &[Stmt], name: &str) -> bool {
+    body.iter().any(|stmt| stmt_promotes_variable(stmt, name))
+}
+
+/// Returns true when one statement, or any body it owns, promotes `$name`.
+fn stmt_promotes_variable(stmt: &Stmt, name: &str) -> bool {
+    let promoting_value = |target: &str, value: &Expr| {
+        target == name && expr_promotes_variable(value, name)
+    };
+    match &stmt.kind {
+        StmtKind::Assign { name: target, value, .. } => promoting_value(target, value),
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Return(Some(expr)) => {
+            expr_promotes_variable(expr, name)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_promotes_variable(condition, name)
+                || body_promotes_variable(then_body, name)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+                })
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_promotes_variable(body, name))
+        }
+        StmtKind::While { condition, body } => {
+            expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+        }
+        StmtKind::DoWhile { body, condition } => {
+            expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+        }
+        StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
+            body_promotes_variable(body, name)
+        }
+        StmtKind::Synthetic(body) => body_promotes_variable(body, name),
+        _ => false,
+    }
+}
+
+/// Returns true when an expression promotes `$name` through arithmetic or a step operator.
+fn expr_promotes_variable(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::PreIncrement(target)
+        | ExprKind::PostIncrement(target)
+        | ExprKind::PreDecrement(target)
+        | ExprKind::PostDecrement(target) => target == name,
+        ExprKind::BinaryOp { left, op, right } => {
+            (matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && (reads_variable(left, name) || reads_variable(right, name)))
+                || expr_promotes_variable(left, name)
+                || expr_promotes_variable(right, name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when an expression reads `$name` directly.
+fn reads_variable(expr: &Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Variable(target) if target == name)
 }
 
 /// Returns true when a statement body contains an `eval(...)` call.

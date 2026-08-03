@@ -497,7 +497,7 @@ preserves PHP exponentiation result rules.
 | `StrEq`, `StrCmp`, `StrLooseEq` | `Str`, `Str` | `I64` or compare int | `reads_heap` only if non-static bytes require helper reads |
 | `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted |
 | `LooseEq`, `LooseNotEq`, `Spaceship` | typed values | `I64` or compare int | may coerce, `reads_heap`, `may_warn`, `may_deopt` |
-| `IsNull`, `IsTruthy`, `IsEmpty` | typed value | `I64` bool | pure for scalars, `reads_heap` for mixed/containers |
+| `IsNull`, `IsTruthy`, `IsEmpty` | typed value | `I64` bool | `IsTruthy` may warn for PHP 8.5 `NAN`; otherwise pure for scalars and `reads_heap` for mixed/containers |
 | `InstanceOf` | value, target metadata | `I64` bool | `reads_heap`, `reads_global`, maybe `may_deopt` |
 
 ### Conversions and Boxing
@@ -505,11 +505,12 @@ preserves PHP exponentiation result rules.
 | Op | From | To | Effects |
 |---|---|---|---|
 | `IToF` | `I64` | `F64` | pure |
-| `FToI` | `F64` | `I64` | pure PHP truncation |
+| `FToI` | `F64` | `I64` | `may_warn`, `may_fatal` at maintained PHP-profile boundaries |
 | `IToStr`, `FToStr`, `BoolToStr` | scalar | `Str` | `alloc_concat` or static string |
 | `StrToI`, `StrToF`, `StrToNumber` | `Str` | scalar or mixed numeric | reads bytes, maybe `may_warn` |
 | `ResourceToStr` | `I64` resource | `Str` | may allocate, may warn |
-| `Cast(to_php_type)` | typed value | matching IR type | PHP cast effects |
+| `Cast(CastTarget(to_ir_type))` | typed value | matching IR type | internal representation cast or implicit PHP coercion effects |
+| `Cast(ExplicitCastTarget(to_ir_type))` | typed value | matching IR type | source-level PHP cast effects; syntax eliminated as an identity need not survive lowering |
 | `MixedBox` | non-mixed value | `Heap(Mixed)` | `alloc_heap`, maybe `refcount_op` |
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |

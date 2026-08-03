@@ -1,0 +1,49 @@
+{
+  "$schema": "elephc.wasm-php-oracle-matrix.v1",
+  "id": "object_identity_match",
+  "shard": 3,
+  "description": "Object identity plus match and strict equality over owned temporaries.",
+  "logical_args": [
+    "objects",
+    "match"
+  ],
+  "stdin_base64": "",
+  "preamble": "final class OracleIdentityValue {}\nfunction oracle_make_identity_value(): OracleIdentityValue {\n    return new OracleIdentityValue();\n}\nfunction oracle_identity_string(string $value): string {\n    return $value;\n}\n$oracleObject = oracle_make_identity_value();\n$oracleAlias = $oracleObject;\n$oracleOther = oracle_make_identity_value();",
+  "cases": [
+    {
+      "id": "object_alias_identity",
+      "type": "bool",
+      "expression": "$oracleObject === $oracleAlias"
+    },
+    {
+      "id": "object_distinct_identity",
+      "type": "bool",
+      "expression": "$oracleObject !== $oracleOther"
+    },
+    {
+      "id": "object_null_cross_type",
+      "type": "bool",
+      "expression": "$oracleObject !== null"
+    },
+    {
+      "id": "object_match_alias",
+      "type": "bool",
+      "expression": "match ($oracleObject) { $oracleAlias => true, default => false }"
+    },
+    {
+      "id": "object_match_owning_temporaries",
+      "type": "bool",
+      "expression": "match (oracle_make_identity_value()) { oracle_make_identity_value() => true, default => false }"
+    },
+    {
+      "id": "string_match_owning_temporaries",
+      "type": "bool",
+      "expression": "match (\"need\" . oracle_identity_string(\"le\")) { \"needle\" . oracle_identity_string(\"\") => true, default => false }"
+    },
+    {
+      "id": "string_strict_owning_temporaries",
+      "type": "bool",
+      "expression": "(\"prefix\" . oracle_identity_string(\"-value\")) === (\"prefix-\" . oracle_identity_string(\"value\"))"
+    }
+  ]
+}

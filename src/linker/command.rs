@@ -116,7 +116,7 @@ fn render_macos_command(
 ) -> RenderedCommand {
     let mut args = vec![OsString::from("-arch"), OsString::from(target.darwin_arch_name())];
     match emit {
-        Emit::Executable => {
+        Emit::Executable | Emit::NpmPackage => {
             args.extend([OsString::from("-e"), OsString::from("_main")]);
             args.push(OsString::from("-dead_strip"));
         }
@@ -173,7 +173,7 @@ fn render_linux_command(
 ) -> RenderedCommand {
     let mut args = Vec::new();
     match emit {
-        Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
+        Emit::Executable | Emit::NpmPackage => args.push(OsString::from("-Wl,--gc-sections")),
         Emit::Cdylib => args.push(OsString::from("-shared")),
     }
     args.extend([
@@ -182,7 +182,9 @@ fn render_linux_command(
         paths.object.as_os_str().to_owned(),
         paths.runtime.as_os_str().to_owned(),
     ]);
-    if matches!(emit, Emit::Executable) && matches!(plan.linux_mode(), LinuxLinkMode::Static) {
+    if matches!(emit, Emit::Executable | Emit::NpmPackage)
+        && matches!(plan.linux_mode(), LinuxLinkMode::Static)
+    {
         args.push(OsString::from("-static"));
     }
     let has_link_inputs = has_link_inputs(plan);

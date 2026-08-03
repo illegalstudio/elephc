@@ -26,6 +26,7 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+pub(crate) use literal_defaults::{literal_default_value, LiteralDefaultValue};
 mod local_analysis;
 pub(crate) mod lower_inst;
 mod lower_term;
@@ -82,10 +83,17 @@ use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 ///
 /// `Executable` produces a standalone native binary with a process entry point.
 /// `Cdylib` produces a position-independent shared library with exported lifecycle hooks.
+///
+/// `NpmPackage` is only valid with the `wasm32-wasi` target: it produces a
+/// directory containing the compiled `.wasm` module, an ESM loader that runs it
+/// under `node:wasi`, a `package.json`, and a README. For all native codegen and
+/// linking decisions it behaves exactly like `Executable` (a command module with
+/// a `_start` entry); the difference is purely in how the artifact is packaged.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
+    NpmPackage,
 }
 
 /// Error returned by the Phase 04 IR backend while a required lowering path is missing.
@@ -174,7 +182,9 @@ pub fn generate_user_asm_from_ir_with_options(
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
-        Emit::Executable => Emitter::new(module.target),
+        // NpmPackage is wasm-only and never reaches this native backend, but it
+        // behaves like Executable for codegen; keep the match exhaustive.
+        Emit::Executable | Emit::NpmPackage => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();

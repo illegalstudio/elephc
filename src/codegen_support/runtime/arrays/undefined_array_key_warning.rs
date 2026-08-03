@@ -12,11 +12,23 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::web_prelude::PhpVersion;
 
 const UNDEFINED_ARRAY_KEY_PREFIX_LEN: usize = "Warning: Undefined array key ".len();
 const UNDEFINED_ARRAY_KEY_QUOTE_LEN: usize = "\"".len();
 const UNDEFINED_ARRAY_KEY_SUFFIX_LEN: usize = "\n".len();
-const ARRAY_OFFSET_ON_NULL_LEN: usize = "Warning: Trying to access array offset on null\n".len();
+
+/// Returns the exact offset-on-null warning for the active PHP compatibility profile.
+pub(crate) fn array_offset_on_null_warning() -> &'static str {
+    if matches!(
+        crate::codegen_support::compile_php_version(),
+        PhpVersion::Php82
+    ) {
+        crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82
+    } else {
+        crate::ir::ARRAY_OFFSET_ON_NULL_WARNING
+    }
+}
 
 /// Emits `__rt_warn_undefined_array_key_int` for the active target.
 pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
@@ -69,13 +81,14 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
 
 /// Emits the fixed PHP warning used when an array-offset receiver is null on AArch64.
 fn emit_array_offset_on_null_warning_aarch64(emitter: &mut Emitter) {
+    let message_len = array_offset_on_null_warning().len();
     emitter.blank();
     emitter.comment("--- runtime: array_offset_on_null_warning ---");
     emitter.label_global("__rt_warn_array_offset_on_null");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve frame linkage across the diagnostic call
     emitter.instruction("mov x29, sp");                                         // establish a stable warning helper frame
     abi::emit_symbol_address(emitter, "x1", "_diag_array_offset_on_null");
-    emitter.instruction(&format!("mov x2, #{}", ARRAY_OFFSET_ON_NULL_LEN));     // pass the complete array-offset-on-null warning length
+    emitter.instruction(&format!("mov x2, #{}", message_len));                  // pass the profile-specific warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                       // emit or suppress the PHP warning
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame linkage
     emitter.instruction("ret");                                                 // return to the null-receiver fallback
@@ -83,13 +96,14 @@ fn emit_array_offset_on_null_warning_aarch64(emitter: &mut Emitter) {
 
 /// Emits the fixed PHP warning used when an array-offset receiver is null on x86_64.
 fn emit_array_offset_on_null_warning_x86_64(emitter: &mut Emitter) {
+    let message_len = array_offset_on_null_warning().len();
     emitter.blank();
     emitter.comment("--- runtime: array_offset_on_null_warning ---");
     emitter.label_global("__rt_warn_array_offset_on_null");
     emitter.instruction("push rbp");                                            // preserve the caller frame and align the diagnostic call
     emitter.instruction("mov rbp, rsp");                                        // establish a stable warning helper frame
     abi::emit_symbol_address(emitter, "rdi", "_diag_array_offset_on_null");
-    emitter.instruction(&format!("mov esi, {}", ARRAY_OFFSET_ON_NULL_LEN));     // pass the complete array-offset-on-null warning length
+    emitter.instruction(&format!("mov esi, {}", message_len));                  // pass the profile-specific warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                       // emit or suppress the PHP warning
     emitter.instruction("mov rsp, rbp");                                        // release the warning helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

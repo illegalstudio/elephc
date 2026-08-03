@@ -1,0 +1,59 @@
+{
+  "$schema": "elephc.wasm-php-oracle-matrix.v1",
+  "id": "scalar_strict",
+  "shard": 0,
+  "description": "Strict integer, boolean, null, and cross-type identity observations.",
+  "logical_args": [
+    "scalar",
+    ""
+  ],
+  "stdin_base64": "",
+  "preamble": "$oracleScalarSeed = 40;",
+  "cases": [
+    {
+      "id": "scalar_int_value",
+      "type": "int",
+      "expression": "$oracleScalarSeed + 2"
+    },
+    {
+      "id": "scalar_bool_true",
+      "type": "bool",
+      "expression": "true === true"
+    },
+    {
+      "id": "scalar_bool_false",
+      "type": "bool",
+      "expression": "true === false"
+    },
+    {
+      "id": "scalar_null_value",
+      "type": "null",
+      "expression": "null"
+    },
+    {
+      "id": "scalar_null_identity",
+      "type": "bool",
+      "expression": "null === null"
+    },
+    {
+      "id": "scalar_int_bool_cross",
+      "type": "bool",
+      "expression": "1 !== true"
+    },
+    {
+      "id": "scalar_zero_false_cross",
+      "type": "bool",
+      "expression": "0 !== false"
+    },
+    {
+      "id": "scalar_null_false_cross",
+      "type": "bool",
+      "expression": "null !== false"
+    },
+    {
+      "id": "scalar_string_int_cross",
+      "type": "bool",
+      "expression": "\"1\" !== 1"
+    }
+  ]
+}

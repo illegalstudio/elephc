@@ -237,7 +237,7 @@ fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool>
             ScalarValue::Float(value) => GuardLiteral::Float(value.to_bits()),
             ScalarValue::String(value) => GuardLiteral::String(value),
         };
-        return Some(guard_literal_truthy(&guard_literal));
+        return guard_literal_truthy(&guard_literal);
     }
 
     let ExprKind::Variable(name) = &subject.kind else {

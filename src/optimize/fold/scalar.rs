@@ -57,7 +57,7 @@ pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarVa
         }
         ExprKind::ShortTernary { value, default } => {
             let value = assigned_scalar_value(value)?;
-            if value.truthy() {
+            if value.diagnostic_free_truthiness()? {
                 Some(value)
             } else {
                 assigned_scalar_value(default)
@@ -117,8 +117,12 @@ pub(in crate::optimize) fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
     match (&left, &right) {
-        (ScalarValue::Bool(left), right) => Some(*left == right.truthy()),
-        (left, ScalarValue::Bool(right)) => Some(left.truthy() == *right),
+        (ScalarValue::Bool(left), right) => {
+            Some(*left == right.diagnostic_free_truthiness()?)
+        }
+        (left, ScalarValue::Bool(right)) => {
+            Some(left.diagnostic_free_truthiness()? == *right)
+        }
         (ScalarValue::Null, ScalarValue::Null) => Some(true),
         (ScalarValue::Null, ScalarValue::String(right)) => Some(right.is_empty()),
         (ScalarValue::String(left), ScalarValue::Null) => Some(left.is_empty()),
@@ -257,6 +261,14 @@ impl ScalarValue {
             ScalarValue::Float(value) => *value != 0.0,
             ScalarValue::String(value) => !value.is_empty() && value != "0",
         }
+    }
+
+    /// Returns PHP truthiness only when folding cannot suppress a diagnostic.
+    ///
+    /// PHP 8.5 reports every NAN-to-bool coercion. Optimizer callers use this
+    /// gate before replacing control flow or logical expressions with literals.
+    pub(in crate::optimize) fn diagnostic_free_truthiness(&self) -> Option<bool> {
+        (!self.is_nan_float()).then(|| self.truthy())
     }
 
     /// Returns whether this scalar value is a floating-point NAN.

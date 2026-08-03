@@ -78,6 +78,31 @@ thread_local! {
     /// set it to behave correctly.
     static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
         const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+    /// Whether the file under compilation opened with `declare(strict_types=1)`.
+    ///
+    /// PHP requires that directive to be the very first statement, so the parser
+    /// knows the answer before any type check runs and records it here. It rides
+    /// the same thread-local channel as [`COMPILE_PROFILE`] for the same reason:
+    /// the consumer is `require_compatible_arg_type`, buried under every call
+    /// site in the checker, and `Program` is a bare `Vec<Stmt>` with nowhere to
+    /// put it. The default is coercive typing, which is what a file without the
+    /// directive — and every unit test — must observe.
+    static STRICT_TYPES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Records whether the file under compilation declared `strict_types=1`.
+///
+/// Called by the parser when it accepts the directive, before type checking.
+pub fn set_strict_types(strict: bool) {
+    STRICT_TYPES.with(|strict_types| strict_types.set(strict));
+}
+
+/// Returns whether the current compilation uses PHP's strict typing mode.
+///
+/// Under strict typing PHP performs no scalar coercion at a typed parameter, with
+/// the single documented exception of widening `int` to `float`.
+pub(crate) fn strict_types() -> bool {
+    STRICT_TYPES.with(|strict_types| strict_types.get())
 }
 
 /// Records the PHP language profile and SAPI mode of the current compilation.

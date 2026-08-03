@@ -411,3 +411,50 @@ fn test_ref_alias_array_element_nonzero_index() {
     );
     assert_eq!(out, "99");
 }
+
+/// A by-reference closure capture keeps PHP's integer-overflow promotion.
+///
+/// `$n += 3` on `PHP_INT_MAX` produces a float in PHP. The captured cell used to carry a
+/// narrow `Int` payload, so the promoted `Mixed` was silently narrowed back and the result
+/// saturated at `PHP_INT_MAX` instead of becoming a double. The same arithmetic outside a
+/// closure was always correct, which is what made the cell the culprit.
+#[test]
+fn test_by_ref_capture_preserves_integer_overflow_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(): callable {
+            $n = PHP_INT_MAX;
+            return function() use (&$n) { $n += 3; return $n; };
+        }
+        $f = make();
+        $r = $f();
+        echo $r, "|", gettype($r);"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}
+
+/// The same arithmetic without a closure capture: the control that proved the promotion
+/// itself was never broken, only its round trip through the reference cell.
+#[test]
+fn test_integer_overflow_promotion_without_capture() {
+    let out = compile_and_run(
+        r#"<?php $n = PHP_INT_MAX; $n += 3; echo $n, "|", gettype($n);"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}
+
+/// A by-reference capture that never overflows keeps its ordinary integer result.
+#[test]
+fn test_by_ref_capture_without_overflow_stays_integer() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(): callable {
+            $n = 20;
+            return function() use (&$n) { $n += 3; return $n; };
+        }
+        $f = make();
+        $r = $f();
+        echo $r, "|", gettype($r);"#,
+    );
+    assert_eq!(out, "23|integer");
+}

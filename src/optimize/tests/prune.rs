@@ -67,6 +67,52 @@ fn test_prune_while_false_and_do_while_false() {
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(2))]);
 }
 
+/// Verifies NAN conditions remain explicit so PHP 8.5 bool-coercion warnings are observable.
+#[test]
+fn test_prune_preserves_nan_control_flow_diagnostics() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: Expr::float_lit(f64::NAN),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::While {
+                condition: Expr::float_lit(f64::NAN),
+                body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert!(matches!(
+        &pruned[0].kind,
+        StmtKind::If {
+            condition: Expr {
+                kind: ExprKind::FloatLiteral(value),
+                ..
+            },
+            ..
+        } if value.is_nan()
+    ));
+    assert!(matches!(
+        &pruned[1].kind,
+        StmtKind::While {
+            condition: Expr {
+                kind: ExprKind::FloatLiteral(value),
+                ..
+            },
+            ..
+        } if value.is_nan()
+    ));
+}
+
 /// Verifies that for loop with false condition keeps only the init statement.
 /// The condition is false so body and update are pruned; init still runs.
 #[test]

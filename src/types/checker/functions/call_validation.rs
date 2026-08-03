@@ -217,6 +217,25 @@ impl Checker {
         }
     }
 
+    /// Returns whether `declare(strict_types=1)` forbids a coercion `types_compatible`
+    /// would otherwise allow at a typed parameter.
+    ///
+    /// PHP performs no scalar coercion under strict typing, with one documented
+    /// exception: an `int` argument still widens to a `float` parameter. Without the
+    /// directive every pair below is a legal coercive conversion, so this returns
+    /// false and the ordinary compatibility rules apply.
+    fn strict_typing_refuses_coercion(expected: &PhpType, actual: &PhpType) -> bool {
+        if !crate::codegen_support::strict_types() {
+            return false;
+        }
+        matches!(
+            (expected, actual),
+            (PhpType::Int, PhpType::Bool | PhpType::False)
+                | (PhpType::Float, PhpType::Bool | PhpType::False)
+                | (PhpType::Bool, PhpType::Int)
+        )
+    }
+
     /// Returns `Ok(())` if `actual` is compatible with `expected` (via `types_compatible` or
     /// `type_accepts`), otherwise returns a `CompileError` describing the type mismatch.
     pub(crate) fn require_compatible_arg_type(
@@ -226,6 +245,15 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        if Self::strict_typing_refuses_coercion(expected, actual) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {:?}, got {:?} (strict_types=1 performs no coercion)",
+                    context, expected, actual
+                ),
+            ));
+        }
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {

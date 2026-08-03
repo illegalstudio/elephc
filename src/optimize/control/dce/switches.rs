@@ -95,8 +95,10 @@ fn classify_switch_patterns_with_guards(
             }
 
             if let Some(pattern_value) = scalar_guard_value(pattern) {
-                if guard_literal_truthy(&pattern_value) != subject_truthy {
-                    continue;
+                if let Some(pattern_truthy) = guard_literal_truthy(&pattern_value) {
+                    if pattern_truthy != subject_truthy {
+                        continue;
+                    }
                 }
             }
         }

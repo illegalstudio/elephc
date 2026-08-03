@@ -18,6 +18,8 @@ pub mod codegen;
 /// Shared target/runtime support used by the EIR backend.
 #[doc(hidden)]
 pub mod codegen_support;
+/// EIR-consuming WebAssembly (`wasm32-wasi`) backend track.
+pub mod codegen_wasm;
 /// Conditional compilation directives.
 pub mod conditional;
 /// Error and warning reporting.

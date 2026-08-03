@@ -69,7 +69,7 @@ fn lower(
     Ok(ctx.emit_value(
         Op::Cast,
         vec![call.operand(0)?],
-        Some(Immediate::CastTarget(IrType::I64)),
+        Some(Immediate::ExplicitCastTarget(IrType::I64)),
         call.result_type.clone(),
         Op::Cast.default_effects(),
         Some(call.span),

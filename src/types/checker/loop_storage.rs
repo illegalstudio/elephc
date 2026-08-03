@@ -81,6 +81,16 @@ pub fn loop_carried_storage_types(
     let mut contracts = entry
         .iter()
         .filter_map(|(name, entry_ty)| {
+            // A SCALAR carried around the back edge widens too — `$i = 0; while (...) { $i = $i +
+            // 1; }` types the addition Mixed — and reporting it here DOES fix the reads in the
+            // loop header, which otherwise claim an `int` and narrow a genuine overflow back.
+            // Measured: both backends then print PHP's `9.2233720368548E+18`.
+            //
+            // It is NOT reported, because boxing the local at loop entry regresses two native
+            // tests that this analysis feeds — a `try`/`catch` accumulating in a `while`, and the
+            // issue-534 loop ref promotion heap-cleanliness guard. Trading a leak for an
+            // overflow corner case is the wrong way round; the promotion machinery has to handle
+            // a boxed scalar first.
             if !is_array_like(entry_ty) {
                 return None;
             }

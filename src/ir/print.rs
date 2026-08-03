@@ -2,11 +2,10 @@
 //! Prints deterministic textual EIR for modules and functions.
 //!
 //! Called from:
-//! - Phase 02 tests and future `--emit-ir` diagnostics.
+//! - `crate::pipeline` for `--emit-ir` and EIR printer tests.
 //!
 //! Key details:
-//! - Printer output is intentionally one-way; there is no textual IR parser in
-//!   the v0.24.x implementation track.
+//! - Printer output is intentionally one-way; there is no textual EIR parser.
 
 use std::fmt::Write;
 
@@ -249,6 +248,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::CastTarget(target) => {
             let _ = write!(out, " {}", target.as_eir());
+        }
+        Immediate::ExplicitCastTarget(target) => {
+            let _ = write!(out, " explicit {}", target.as_eir());
         }
         Immediate::TypeName(id) => {
             let _ = write!(out, " type_name[{}]", id.as_raw());

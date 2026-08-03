@@ -36,19 +36,69 @@ fn combined_effects_compose() {
     assert_eq!(effects.names(), vec!["reads_heap", "may_fatal"]);
 }
 
-/// Typed array reads distinguish warning-capable access from silent probing.
+/// Nullable indexed and associative reads retain possible boxing/copy allocation
+/// while distinguishing warning-producing access from silent probing.
 #[test]
 fn array_read_opcodes_have_precise_warning_contracts() {
     assert_eq!(
         Op::ArrayGet.default_effects(),
-        Effects::READS_HEAP | Effects::MAY_WARN
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_WARN
     );
-    assert_eq!(Op::ArrayGetSilent.default_effects(), Effects::READS_HEAP);
+    assert_eq!(
+        Op::ArrayGetSilent.default_effects(),
+        Effects::READS_HEAP | Effects::ALLOC_HEAP
+    );
     assert_eq!(
         Op::HashGet.default_effects(),
-        Effects::READS_HEAP | Effects::MAY_WARN
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_WARN | Effects::MAY_FATAL
     );
-    assert_eq!(Op::HashGetSilent.default_effects(), Effects::READS_HEAP);
+    assert_eq!(
+        Op::HashGetSilent.default_effects(),
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_WARN | Effects::MAY_FATAL
+    );
+}
+
+/// Associative-key probes and writes remain observable because invalid or
+/// lossy PHP keys can warn, deprecate, or terminate even in silent reads.
+#[test]
+fn associative_key_operations_preserve_diagnostic_effects() {
+    for op in [
+        Op::HashGet,
+        Op::HashGetSilent,
+        Op::HashIsset,
+        Op::HashSet,
+        Op::HashUnset,
+        Op::HashAppend,
+        Op::ArrayKeyExists,
+    ] {
+        let effects = op.default_effects();
+        assert!(effects.contains(Effects::MAY_WARN), "{op:?}");
+        assert!(effects.contains(Effects::MAY_FATAL), "{op:?}");
+        assert!(effects.is_observable(), "{op:?}");
+    }
+    let runtime_effects = RuntimeFnId::ArrayKeyExists.effects();
+    assert!(runtime_effects.contains(Effects::MAY_WARN));
+    assert!(runtime_effects.contains(Effects::MAY_FATAL));
+    assert!(runtime_effects.is_observable());
+}
+
+/// Float-to-int conversion remains observable because PHP can emit a
+/// precision-loss warning or reject a non-representable value.
+#[test]
+fn float_to_int_conversion_preserves_diagnostic_effects() {
+    let effects = Op::FToI.default_effects();
+    assert!(effects.contains(Effects::MAY_WARN));
+    assert!(effects.contains(Effects::MAY_FATAL));
+    assert!(effects.is_observable());
+}
+
+/// Float and Mixed truthiness retain the PHP 8.5 NAN warning boundary.
+#[test]
+fn truthiness_preserves_diagnostic_effects() {
+    let effects = Op::IsTruthy.default_effects();
+    assert!(effects.contains(Effects::MAY_WARN));
+    assert!(effects.contains(Effects::MAY_FATAL));
+    assert!(effects.is_observable());
 }
 
 /// Dynamic instance calls retain a catchable-error bit until target refinement proves otherwise.

@@ -1,6 +1,6 @@
 ---
 title: "Output formats and diagnostics"
-description: "Choosing what the compiler produces (executable, cdylib, assembly, IR) and the flags that inspect or instrument a compile."
+description: "Choosing what the compiler produces (executable, cdylib, WebAssembly/NPM, assembly, IR) and the flags that inspect or instrument a compile."
 sidebar:
   order: 6
 ---
@@ -18,22 +18,29 @@ Selects the kind of artifact to produce.
 ```bash
 elephc --emit executable app.php   # default: a native binary
 elephc --emit cdylib lib.php       # a C-ABI shared library
+elephc --target wasm32-wasi --emit npm app.php  # app-npm/ Node.js package
 ```
 
 Accepted values and aliases:
 
 | Value | Aliases | Produces |
 |---|---|---|
-| `executable` | `exe`, `bin` | A standalone native binary. |
+| `executable` | `exe`, `bin` | A standalone native binary, or a WASI `.wasm` command for `wasm32-wasi`. |
 | `cdylib` | `dylib`, `shared` | A C-ABI shared library (`.dylib`/`.so`). |
+| `npm` | `npm-package` | A Node.js 20+ ESM/WASI package in `<stem>-npm/`; requires `--target wasm32-wasi`. |
 
 The inline form `--emit=cdylib` also works. For exporting C-ABI functions from a
 `cdylib`, see [Shared Libraries (cdylib)](../beyond-php/cdylib.md).
+WASM cdylib/reactor output is not implemented. A generated NPM package contains
+`module.wasm`, `index.mjs`, `index.d.ts`, `package.json`, and `README.md`; run it
+with `node <stem>-npm/index.mjs` or import its asynchronous `run()` function.
 
 ### `--emit-asm`
 
-Writes the generated assembly next to the source instead of assembling and
-linking a binary. Useful for inspecting exactly what the backend produced.
+Writes the generated native assembly next to the source instead of assembling
+and linking a binary. For `wasm32-wasi`, it writes the readable `.wat` module
+instead of encoding `.wasm`. Useful for inspecting exactly what the backend
+produced.
 
 ```bash
 elephc --emit-asm hello.php
@@ -73,6 +80,8 @@ to PHP source positions. The sidecar is a versioned JSON document with function
 ranges, assembly labels, opcode-tagged line mappings, and a PHP-line inverse
 index — see [Source maps](source-maps.md) for the schema contract.
 
+This is currently a native-only output; `wasm32-wasi` rejects the option.
+
 ```bash
 elephc --emit-asm --source-map hello.php
 ```
@@ -92,6 +101,7 @@ lldb ./hello   # breakpoints and backtraces resolve to hello.php lines
 
 `--debug-info` and `--source-map` compose: the first serves standard DWARF
 consumers, the second serves tools that want the richer JSON schema.
+Both options are currently native-only.
 
 ## Compile-time diagnostics
 
@@ -130,6 +140,8 @@ Compiler timings
 ## Runtime diagnostics
 
 These flags instrument the **compiled program**, not the compiler.
+They are currently implemented by the native runtime and are rejected for
+`wasm32-wasi`.
 
 ### `--gc-stats`
 

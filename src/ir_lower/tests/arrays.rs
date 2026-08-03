@@ -34,3 +34,25 @@ echo $floats[$argc];
         "missing float array_get metadata in {text}"
     );
 }
+
+/// Verifies an associative local append is represented by the typed
+/// `HashAppend` opcode instead of an unclassified `RuntimeCall`, allowing every
+/// backend to enforce the same hash-specific ownership and failure semantics.
+#[test]
+fn associative_array_append_uses_typed_hash_append() {
+    let module = super::lower_source(
+        r#"<?php
+$items = [PHP_INT_MAX => 1];
+$items[] = 2;
+"#,
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("hash_append"),
+        "missing typed hash_append in {text}"
+    );
+    assert!(
+        !text.contains("runtime_call"),
+        "associative append retained an unclassified runtime_call in {text}"
+    );
+}

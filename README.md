@@ -181,7 +181,8 @@ xattr -cr elephc
 ## Usage
 
 > **Important:** elephc lowers every build through the EIR pipeline and the
-> target-aware assembly emitter.
+> selected target backend. Native targets emit assembly; the experimental
+> `wasm32-wasi` target emits an exactly planned and validated WebAssembly module.
 
 ```bash
 # Compile tagged PHP or tagless LFC source to a native binary
@@ -235,9 +236,17 @@ elephc regex.php
 elephc native install --locked
 
 # Explicit target selection
-# Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
+# First-class native targets: macos-aarch64, linux-aarch64, linux-x86_64
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
+
+# Experimental WASI Preview 1 command module
+elephc --target wasm32-wasi hello.php
+wasmer run hello.wasm
+
+# Experimental Node.js package for the same WASI command
+elephc --target wasm32-wasi --emit npm hello.php
+node hello-npm/index.mjs
 
 # Compile a standalone prefork HTTP server binary
 elephc --web app.php
@@ -592,6 +601,7 @@ src/
 ├── ir/                  # EIR data model, builder, validator, and printer
 ├── ir_lower/            # Active AST → EIR lowering
 ├── codegen/             # Active EIR → target assembly backend
+├── codegen_wasm/        # Experimental EIR → validated WASI WebAssembly backend
 ├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
 │   ├── mod.rs           # Shared metadata registries and support re-exports
 │   ├── driver_support.rs # Runtime object, deferred callable, boxing, and hash-key helpers
@@ -646,7 +656,10 @@ crates/
 
 ## Tests
 
-3000+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+3000+ tests across lexer, parser, codegen, and error reporting. Native codegen
+tests compile inline PHP to a binary and assert its behavior; WASM tests also
+cover capability rejection, WAT/WASM validation, artifact publication, and
+execution under the pinned WASI hosts.
 
 ```bash
 cargo test                      # all tests

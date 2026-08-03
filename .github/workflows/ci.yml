@@ -220,8 +220,26 @@ jobs:
     needs: build-archive-macos-aarch64
     runs-on: macos-14
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: 5d6b3ecc2d54568f34e150ea94997b5ac8901ea72ed9e1533b6c2bf7f69d6722
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install checksum-pinned Wasmer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-darwin-arm64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -249,6 +267,9 @@ jobs:
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: c46d6ff34a12b40d2e57bfc2ccbb8b9e209b0987ab305233619798b264a6bae5
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -256,6 +277,21 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install checksum-pinned Wasmer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-linux-amd64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -277,6 +313,9 @@ jobs:
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: 5a434db36f96d483e9967aa1b3ffd129f5b8781ea58faf1b80aeee6f5fb91f63
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -284,6 +323,21 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install checksum-pinned Wasmer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-linux-aarch64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -299,6 +353,156 @@ jobs:
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+  wasm-host-portability:
+    name: WASM Host Portability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: c46d6ff34a12b40d2e57bfc2ccbb8b9e209b0987ab305233619798b264a6bae5
+      WASMTIME_VERSION: 47.0.2
+      WASMTIME_SHA256: 9ec85751649139711b6a5061c4f48a41412bf9b1ab98a08b9924ca73f22ca575
+      WASM_TOOLS_VERSION: 1.254.0
+      WASM_TOOLS_SHA256: d0efb16c9c859137b7ab3e99151c299cd47caee106ed4594561002f7a04945bd
+      NODE_VERSION: 26.3.0
+      TYPESCRIPT_VERSION: 6.0.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --no-self-update
+          rustup default 1.95.0
+          test "$(rustc --version | cut -d' ' -f2)" = "1.95.0"
+
+      - name: Install native compiler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpcre2-dev libssl-dev pkg-config
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-wasm-host-portability-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-wasm-host-portability-
+
+      - name: Install pinned Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26.3.0
+
+      - name: Install pinned TypeScript
+        shell: bash
+        run: |
+          npm install --global --ignore-scripts "typescript@${TYPESCRIPT_VERSION}"
+          test "$(node --version)" = "v${NODE_VERSION}"
+          test "$(tsc --version)" = "Version ${TYPESCRIPT_VERSION}"
+
+      - name: Install checksum-pinned WASM tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "$RUNNER_TEMP/wasmer" \
+            "$RUNNER_TEMP/wasmtime" \
+            "$RUNNER_TEMP/wasm-tools"
+
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-linux-amd64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz" \
+            -o "$RUNNER_TEMP/wasmtime.tar.xz"
+          printf '%s  %s\n' "$WASMTIME_SHA256" "$RUNNER_TEMP/wasmtime.tar.xz" |
+            sha256sum --check
+          tar -xJf "$RUNNER_TEMP/wasmtime.tar.xz" \
+            --strip-components=1 -C "$RUNNER_TEMP/wasmtime"
+
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz" \
+            -o "$RUNNER_TEMP/wasm-tools.tar.gz"
+          printf '%s  %s\n' "$WASM_TOOLS_SHA256" "$RUNNER_TEMP/wasm-tools.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasm-tools.tar.gz" \
+            --strip-components=1 -C "$RUNNER_TEMP/wasm-tools"
+
+          {
+            echo "$RUNNER_TEMP/wasmer/bin"
+            echo "$RUNNER_TEMP/wasmtime"
+            echo "$RUNNER_TEMP/wasm-tools"
+          } >> "$GITHUB_PATH"
+
+      - name: Verify pinned WASM tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          wasmer_output="$(wasmer --version)"
+          wasmtime_output="$(wasmtime --version)"
+          wasm_tools_output="$(wasm-tools --version)"
+          printf '%s\n%s\n%s\n' \
+            "$wasmer_output" "$wasmtime_output" "$wasm_tools_output"
+          test "$(printf '%s\n' "$wasmer_output" | cut -d' ' -f2)" = \
+            "${WASMER_VERSION}"
+          test "$(printf '%s\n' "$wasmtime_output" | cut -d' ' -f2)" = \
+            "${WASMTIME_VERSION}"
+          test "$(printf '%s\n' "$wasm_tools_output" | cut -d' ' -f2)" = \
+            "${WASM_TOOLS_VERSION}"
+
+      - name: Build WASM compiler
+        run: cargo build --locked --bin elephc
+
+      - name: Verify WASM capability inventory is in sync
+        # W0 (`WASM-COVERAGE-001`): the committed `docs/specs/wasm-inventory.json`
+        # must be regenerated from the current EIR identities so the
+        # baseline never drifts. The exact-revision report and generated summary
+        # are retained separately below.
+        run: |
+          set -euo pipefail
+          inventory_dir="$RUNNER_TEMP/wasm-inventory"
+          mkdir -p "$inventory_dir"
+          cargo run --quiet --locked --example gen_wasm_inventory \
+            > "$inventory_dir/baseline.json"
+          if ! diff -q docs/specs/wasm-inventory.json "$inventory_dir/baseline.json" >/dev/null; then
+            echo "::error::WASM capability inventory is out of sync with the current EIR identities."
+            echo "Run: cargo run --quiet --example gen_wasm_inventory > docs/specs/wasm-inventory.json"
+            diff docs/specs/wasm-inventory.json "$inventory_dir/baseline.json" | head -80
+            exit 1
+          fi
+          cargo run --quiet --locked --example gen_wasm_inventory -- --with-revision \
+            > "$inventory_dir/exact-revision.json"
+          cargo run --quiet --locked --example gen_wasm_inventory -- \
+            --with-revision --summary > "$inventory_dir/summary.txt"
+          jq -e --arg commit "$GITHUB_SHA" \
+            '.metadata.commit == $commit and .metadata.dirty == false' \
+            "$inventory_dir/exact-revision.json" >/dev/null
+          cat "$inventory_dir/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain exact-revision WASM capability inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-capability-inventory-${{ github.sha }}
+          path: ${{ runner.temp }}/wasm-inventory
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Execute strict PHP equality through the public WASM frontend
+        run: |
+          CARGO_INCREMENTAL=0 cargo test --locked --test codegen_tests \
+            test_cli_wasm_strict_equality_executes_supported_profiles
+
+      - name: Validate WASM hosts and NPM package
+        run: scripts/test-wasm-hosts.sh
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
@@ -802,6 +1006,7 @@ jobs:
       - codegen-tests-macos-aarch64
       - codegen-tests-linux-x86_64
       - codegen-tests-linux-aarch64
+      - wasm-host-portability
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
@@ -821,6 +1026,7 @@ jobs:
           test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.wasm-host-portability.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"

@@ -1310,6 +1310,8 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
     let value = lower_expr(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
+    } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
+        Op::HashAppend
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
         Op::MixedArrayAppend
     } else {
@@ -1736,6 +1738,11 @@ fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
+            // A nested array or hash binds at its own type, exactly as an object element does.
+            // Falling back to Mixed here boxed every row of `[[1,2],[3,4]]`, so `count($row)`
+            // inside the body then had to answer for a cell rather than an array — and a row of
+            // `[["a" => 1]]` reached a dynamic offset-get instead of a typed hash read.
+            inner @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => inner,
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
             _ => PhpType::Mixed,
         },
@@ -2471,7 +2478,10 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
-            lower_expr(ctx, value_expr);
+            let value = lower_expr(ctx, value_expr);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -2543,12 +2553,23 @@ fn persist_scratch_return_string(
     )
 }
 
-/// Acquires return values read from heap containers before local cleanup runs.
+/// Acquires return values borrowed from heap containers, ref-cells, static
+/// storage, or closure captures before the owning storage can be cleaned up.
 ///
 /// Function-static slots are included: the slot keeps owning its boxed value across
 /// calls, so `return $static_local` must hand the caller an extra reference — the
 /// caller releases call results after consuming them, and without the retain that
 /// release frees the box the slot still points to.
+///
+/// Also acquires a captured refcounted value returned by reference from a closure body
+/// (`return $captured`): such a value is a `LoadLocal` of a trailing closure-capture
+/// parameter slot, which the descriptor still owns. The closure descriptor holds exactly
+/// one ref per refcounted capture (stamped at create), the body borrows it (no incref on
+/// the native/WASM unbox path), and the caller hands the result to a local whose cleanup
+/// releases it. Without an extra reference here, that release drops the descriptor's only
+/// ref to zero and frees a value the descriptor still points at — a use-after-free when the
+/// descriptor's release walk later decrefs the freed slot. Incrementing the refcount here
+/// promotes the borrow to an owned return ref and balances the caller's release.
 fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -2561,6 +2582,9 @@ fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    if returns_borrowed_closure_capture(ctx, value) {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if !matches!(
         ctx.builder.value_defining_op(value.value),
         Some(
@@ -2571,11 +2595,36 @@ fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadRefCell
         )
     ) {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+}
+
+/// Returns true when `value` is a `LoadLocal` of a read-only closure-capture parameter slot.
+///
+/// A returned captured value is loaded straight from its capture-parameter slot, so its
+/// defining op is `Op::LoadLocal` carrying an `Immediate::LocalSlot` that
+/// `slot_is_closure_capture` recognizes as a trailing capture parameter. The
+/// `slot_is_closure_capture` check is backed by a read-only guard: a capture that was
+/// reassigned inside the body (`$cap = newValue(); return $cap;`) is no longer borrowed from
+/// the descriptor and must NOT receive the extra acquire (the reassignment already balanced
+/// the refcount via `store_local`'s `acquire_if_refcounted`). Owned locals, hidden temps
+/// (ternary/match merges), and container reads are not capture parameters and do not match,
+/// so the borrow-promoting acquire stays scoped to direct, unmodified capture returns.
+fn returns_borrowed_closure_capture(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
+        return false;
+    };
+    if inst.op != Op::LoadLocal {
+        return false;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return false;
+    };
+    ctx.builder.slot_is_closure_capture(slot)
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.
@@ -2827,9 +2876,9 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 /// a non-null integer instead of null for missing keys (#337).
 fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
-        PhpType::Array(elem_ty) => array_access_element_result_type(elem_ty.codegen_repr()),
+        PhpType::Array(elem_ty) => array_access_element_result_type(ctx, elem_ty.codegen_repr()),
         PhpType::AssocArray { value, .. } => {
-            array_access_element_result_type(value.codegen_repr())
+            array_access_element_result_type(ctx, value.codegen_repr())
         }
         _ => PhpType::Mixed,
     };

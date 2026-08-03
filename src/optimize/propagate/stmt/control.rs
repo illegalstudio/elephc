@@ -52,9 +52,12 @@ pub(super) fn propagate_while_stmt(
     let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
     let condition = propagate_expr(condition, &loop_env);
     let (body, _) = propagate_block(body, loop_env.clone());
-    let next_env = match scalar_value(&condition) {
-        Some(value) if !value.truthy() => env,
-        Some(_) => merge_loop_exit_paths(simulate_loop_block_constant_paths(&body, loop_env.clone())),
+    let next_env =
+        match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+        Some(false) => env,
+        Some(true) => {
+            merge_loop_exit_paths(simulate_loop_block_constant_paths(&body, loop_env.clone()))
+        }
         None => loop_env,
     };
     (
@@ -74,11 +77,12 @@ pub(super) fn propagate_do_while_stmt(
     let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
     let (body, _) = propagate_block(body, loop_env.clone());
     let condition = propagate_expr(condition, &loop_env);
-    let next_env = match scalar_value(&condition) {
-        Some(value) if value.truthy() => {
+    let next_env =
+        match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+        Some(true) => {
             merge_loop_exit_paths(simulate_loop_block_constant_paths(&body, loop_env.clone()))
         }
-        Some(_) => merge_do_while_false_exit_paths(simulate_loop_block_constant_paths(
+        Some(false) => merge_do_while_false_exit_paths(simulate_loop_block_constant_paths(
             &body,
             loop_env.clone(),
         )),
@@ -114,9 +118,13 @@ pub(super) fn propagate_for_stmt(
     let condition = condition.map(|expr| propagate_expr(expr, &loop_env));
     let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, loop_env.clone()).0));
     let (body, _) = propagate_block(body, loop_env.clone());
-    let next_env = match condition.as_ref().and_then(scalar_value) {
-        Some(value) if !value.truthy() => init_env,
-        Some(_) | None if condition.is_none() => {
+    let next_env = match condition
+        .as_ref()
+        .and_then(scalar_value)
+        .and_then(|value| value.diagnostic_free_truthiness())
+    {
+        Some(false) => init_env,
+        Some(true) | None if condition.is_none() => {
             merge_loop_exit_paths(simulate_loop_block_constant_paths(&body, loop_env.clone()))
         }
         _ => loop_env,
@@ -309,9 +317,10 @@ pub(super) fn propagate_if_stmt(
         None => (None, Some(base_env.clone())),
     };
 
-    let next_env = match scalar_value(&condition) {
-        Some(value) if value.truthy() => then_env,
-        Some(_) => else_env.unwrap_or_default(),
+    let next_env =
+        match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+        Some(true) => then_env,
+        Some(false) => else_env.unwrap_or_default(),
         None => {
             let mut paths = Vec::new();
             if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {

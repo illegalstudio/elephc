@@ -223,3 +223,62 @@ fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
     assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(8))]);
     assert!(default.is_none());
 }
+
+/// Verifies a NAN switch label remains observable when a surrounding guard proves
+/// the variable subject is falsy, because PHP 8.5 warns while coercing NAN to bool.
+#[test]
+fn test_eliminate_dead_code_preserves_nan_switch_label_diagnostic() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(Expr::var("flag"))),
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("flag"),
+                            cases: vec![(
+                                vec![Expr::float_lit(f64::NAN)],
+                                vec![Stmt::echo(Expr::int_lit(1))],
+                            )],
+                            default: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected outer if");
+    };
+    let StmtKind::Switch { cases, default, .. } = &then_body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(cases.len(), 1);
+    assert!(matches!(
+        &cases[0].0[0].kind,
+        ExprKind::FloatLiteral(value) if value.is_nan()
+    ));
+    assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(2))]));
+}

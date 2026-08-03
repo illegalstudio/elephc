@@ -7,6 +7,13 @@ sidebar:
 
 ## Compilation pipeline
 
+The diagram shows the complete native path. `wasm32-wasi` still runs constant
+folding and propagation, but temporarily skips constant-control pruning,
+normalization, AST DCE, and EIR optimization so the capability audit sees every
+diagnostic-sensitive coercion. After validated EIR lowering it branches to
+`src/codegen_wasm/`, which exactly plans, assembles, validates, and publishes
+WebAssembly artifacts without the native runtime cache, assembler, or linker.
+
 ```
 PHP source (.php)
     │
@@ -119,13 +126,13 @@ PHP source (.php)
       ▼
 ┌─────────────┐
 │ EIR Lowerer │  src/ir_lower/ + src/ir/
-│             │  Lowers the checked optimized AST into validated EIR.
+│             │  Lowers the checked target-prepared AST into validated EIR.
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
-│             │  Module-level fixed-point pipeline: a cross-function
+│             │  Native module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, constant
 │             │  folding, common-subexpression elimination, loop-invariant
@@ -137,8 +144,8 @@ PHP source (.php)
        │
        ▼
 ┌─────────────┐
-│ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
-│             │  Emits target assembly text from EIR.
+│ EIR Codegen │  src/codegen/ or src/codegen_wasm/
+│             │  Emits target assembly or an exactly planned WASM module.
 └──────┬──────┘
      │
      ▼
@@ -172,6 +179,8 @@ The compiler now distinguishes the operating-system side of a target from the in
 - `Target` combines both and is threaded from the CLI into codegen and the test harness.
 
 AArch64 remains the most established and best-documented backend (macOS and Linux), and the explicit `Target` model now also covers Linux `x86_64` with its own ABI/runtime slices. The `Target` split lets each ISA live alongside the others without reintroducing the old assumption that `Linux` automatically means ARM64.
+
+A third axis, `TargetKind` (`Native` vs `Wasm`), marks whether a target emits native assembly or a WebAssembly module. The non-native `wasm32-wasi` target is selected through `Target::is_wasm()`, which carries placeholder native `Platform`/`Arch` fields the WebAssembly path never consults and bypasses native assembly emission plus the `as`/`ld` tail in favor of the `src/codegen_wasm/` backend.
 
 ## Module map
 
@@ -216,6 +225,7 @@ src/
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
+├── codegen_wasm/              EIR to WebAssembly (.wat/.wasm) backend for the non-native wasm32-wasi target (TargetKind::Wasm / is_wasm())
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── debug_info.rs              DWARF debug-info injection for `--debug-info` (lldb/gdb source mapping)

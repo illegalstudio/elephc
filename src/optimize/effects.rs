@@ -228,7 +228,18 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
-        ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::BinaryOp { left, right, op } => {
+            let operands = expr_effect(left).combine(expr_effect(right));
+            // Four operators RAISE in reference PHP rather than answering: `/` and `%` on a zero
+            // divisor, and either shift on a negative count. Treating them as pure let dead-code
+            // elimination drop a `try` whose body could only throw through one of them, so the
+            // handler was gone by the time codegen emitted the raise and a `catch` never ran.
+            if matches!(op, BinOp::Div | BinOp::Mod | BinOp::ShiftLeft | BinOp::ShiftRight) {
+                operands.with_may_throw()
+            } else {
+                operands
+            }
+        }
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))
         }

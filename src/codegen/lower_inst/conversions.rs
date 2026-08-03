@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers scalar EIR conversion opcodes, including explicit PHP casts.
+//! Lowers scalar EIR conversion opcodes, including internal and explicit PHP casts.
 //! Bridges direct coercion opcodes and `Cast` immediates to existing runtime helpers.
 //!
 //! Called from:
@@ -54,7 +54,7 @@ pub(super) fn lower_str_to_float(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
-/// Lowers explicit scalar casts based on the target storage immediate and result PHP type.
+/// Lowers scalar casts based on the target storage immediate and result PHP type.
 pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     match expect_cast_target(inst)? {
         IrType::I64 if inst.result_php_type == PhpType::Bool => predicates::lower_is_truthy(ctx, inst),
@@ -68,7 +68,7 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     }
 }
 
-/// Lowers an explicit cast to PHP int for concrete scalar operands.
+/// Lowers a cast to PHP int for concrete scalar operands.
 fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
@@ -480,7 +480,7 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 /// Returns the cast target immediate attached to a `Cast` instruction.
 fn expect_cast_target(inst: &Instruction) -> Result<IrType> {
     match inst.immediate {
-        Some(Immediate::CastTarget(target)) => Ok(target),
+        Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) => Ok(target),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing cast target immediate",
             inst.op.name()

@@ -37,8 +37,9 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PhpTypePredicate,
-    RuntimeId, PassOrigin,
+    BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PassOrigin,
+    PhpTypePredicate, RuntimeId, ARRAY_OFFSET_ON_NULL_WARNING,
+    ARRAY_OFFSET_ON_NULL_WARNING_PHP82,
 };
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,

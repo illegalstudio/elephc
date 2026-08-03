@@ -161,6 +161,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
+        Op::HashAppend => hashes::lower_hash_append(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),
@@ -240,6 +241,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
+        Op::Warn => lower_warn(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
         Op::ThrowError => lower_throw_error(ctx, &inst),
         Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
@@ -3004,6 +3006,30 @@ fn cast_loaded_mixed_pointer_to_result(
 fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     super::lower_term::lower_throw_value(ctx, value)
+}
+
+/// Lowers the exact static offset-on-null warning currently emitted by EIR.
+fn lower_warn(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects no operands",
+            inst.op.name()
+        )));
+    }
+    let data = expect_data(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+    if message != crate::codegen_support::runtime::array_offset_on_null_warning() {
+        return Err(CodegenIrError::unsupported(format!(
+            "static warning {message:?}"
+        )));
+    }
+    arrays::emit_array_offset_on_null_warning(ctx);
+    Ok(())
 }
 
 /// Lowers a static-message catchable PHP `Error` without evaluating later operands.

@@ -61,7 +61,8 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
 ///
 /// Clears all existing guards for the name, then adds the exact value to `exact_guards`,
 /// records the variable as bool-true/false if the value is boolean, and calls
-/// `record_truthy_guard` with the literal's truthiness.
+/// records a truthiness guard only when PHP can coerce the literal without a
+/// diagnostic.
 fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
     clear_guards_for_name(guards, name);
     if let GuardLiteral::Bool(value) = &value {
@@ -75,7 +76,9 @@ fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardL
         name: name.to_string(),
         value: value.clone(),
     });
-    record_truthy_guard(guards, name, guard_literal_truthy(&value));
+    if let Some(truthy) = guard_literal_truthy(&value) {
+        record_truthy_guard(guards, name, truthy);
+    }
 }
 
 /// Extracts the variable name and value from a strict-equality guard when the branch is taken.
