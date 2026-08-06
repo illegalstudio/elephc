@@ -35,7 +35,9 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     let mut command = request.toolchain.command(Path::new("/bin/sh"));
     command.current_dir(&build).arg(&configure).arg("--static");
     if request.target != Target::detect_host() {
-        command.env("CHOST", &request.toolchain.target_tuple);
+        // See the pcre2 recipe: CHOST reaches config.sub the same way --host
+        // does, so it takes the normalized `abi` rather than the clang triple.
+        command.env("CHOST", &request.toolchain.abi);
     }
     run_checked(&mut command, "configure trusted zlib recipe")?;
 

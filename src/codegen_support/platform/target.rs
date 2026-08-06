@@ -31,11 +31,41 @@ pub enum Arch {
     X86_64,
 }
 
+/// Deployment floor recorded for iOS builds.
+///
+/// One constant on purpose: the assembler stamps it into each object's
+/// `LC_BUILD_VERSION` and the linker stamps it into the image's
+/// `-platform_version`. If those disagree the link fails, so they must read the
+/// same value. iOS SDK versions run far ahead of any sensible floor, which is
+/// why this is not derived from the SDK the way macOS derives its own.
+pub const APPLE_IOS_MIN_OS: &str = "13.0";
+
+/// Which Apple platform a Darwin target is built for.
+///
+/// iOS is deliberately *not* a `Platform`. Every syscall number, struct offset,
+/// errno, open flag and Mach-O convention is identical between macOS and iOS on
+/// arm64 — they share XNU — so a fourth `Platform` would grow ~181 match arms
+/// across 54 files that all return the value macOS already returns. What
+/// genuinely differs is narrow: which SDK `xcrun` resolves, which
+/// `-platform_version` ld64 records, which compiler triple native dependencies
+/// validate against, and which builtins the sandbox forbids.
+///
+/// Meaningful only when `Target::platform` is `Platform::MacOS`; other platforms
+/// carry `MacOS` here and ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppleVariant {
+    MacOS,
+    IOS,
+    IOSSimulator,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Target representation.
 pub struct Target {
     pub platform: Platform,
     pub arch: Arch,
+    /// Apple platform selector; see [`AppleVariant`]. Ignored off Darwin.
+    pub apple_variant: AppleVariant,
 }
 
 impl Platform {
@@ -541,9 +571,88 @@ impl Arch {
 
 impl Target {
     /// Constructs a `Target` from a `Platform` and `Arch`.
+    ///
+    /// Darwin targets built this way mean macOS; use [`Target::new_apple`] to
+    /// select iOS or the iOS Simulator.
     pub const fn new(platform: Platform, arch: Arch) -> Self {
-        Self { platform, arch }
+        Self {
+            platform,
+            arch,
+            apple_variant: AppleVariant::MacOS,
+        }
     }
+
+    /// Constructs a Darwin `Target` for a specific Apple platform.
+    pub const fn new_apple(arch: Arch, apple_variant: AppleVariant) -> Self {
+        Self {
+            platform: Platform::MacOS,
+            arch,
+            apple_variant,
+        }
+    }
+
+    /// Returns the `xcrun --sdk` name for this Darwin target.
+    ///
+    /// Note that `macosx` is passed explicitly rather than relying on `xcrun`'s
+    /// default: the default follows the selected developer directory, which
+    /// would silently resolve the wrong SDK once a non-macOS variant is in play.
+    pub fn apple_sdk_name(&self) -> &'static str {
+        match self.apple_variant {
+            AppleVariant::MacOS => "macosx",
+            AppleVariant::IOS => "iphoneos",
+            AppleVariant::IOSSimulator => "iphonesimulator",
+        }
+    }
+
+    /// Returns the ld64 `-platform_version` platform token for this target.
+    pub fn apple_platform_name(&self) -> &'static str {
+        match self.apple_variant {
+            AppleVariant::MacOS => "macos",
+            AppleVariant::IOS => "ios",
+            AppleVariant::IOSSimulator => "ios-simulator",
+        }
+    }
+
+    /// Returns the `clang -target` triple for a Darwin target.
+    ///
+    /// Used for assembling, because a Mach-O object records the platform it was
+    /// built for and `ld` refuses to link a macOS-tagged object into an iOS
+    /// image. `as` has no way to express "iOS", so the triple is what carries it.
+    pub fn apple_clang_triple(&self) -> String {
+        let arch = self.darwin_arch_name();
+        match self.apple_variant {
+            AppleVariant::MacOS => format!("{arch}-apple-macos"),
+            AppleVariant::IOS => format!("{arch}-apple-ios{APPLE_IOS_MIN_OS}"),
+            AppleVariant::IOSSimulator => {
+                format!("{arch}-apple-ios{APPLE_IOS_MIN_OS}-simulator")
+            }
+        }
+    }
+
+    /// Returns whether this target's sandbox forbids `fork`, which makes every
+    /// process-spawning builtin unusable.
+    ///
+    /// iOS apps run sandboxed with no ability to spawn a child process at all —
+    /// `system`, `popen` and friends exist as symbols in libSystem but always
+    /// fail. Compiling a call to one is therefore a mistake worth reporting at
+    /// build time rather than shipping as a runtime surprise.
+    pub fn forbids_process_spawn(&self) -> bool {
+        matches!(
+            self.apple_variant,
+            AppleVariant::IOS | AppleVariant::IOSSimulator
+        )
+    }
+
+    /// Returns the OS component of the Apple compiler triple, as reported by
+    /// `clang -dumpmachine` — `arm64-apple-darwin` versus `arm64-apple-ios`.
+    /// Native-dependency toolchain validation compares against this.
+    pub fn apple_triple_os(&self) -> &'static str {
+        match self.apple_variant {
+            AppleVariant::MacOS => "darwin",
+            AppleVariant::IOS | AppleVariant::IOSSimulator => "ios",
+        }
+    }
+
 
     /// Detects the host platform and architecture from the Rust compile-time target.
     ///
@@ -555,8 +664,10 @@ impl Target {
     /// Parses a target string into a `Target`.
     ///
     /// Supported values: `macos-aarch64`, `macos-arm64`, `aarch64-apple-darwin`,
-    /// `macos-x86_64`, `x86_64-apple-darwin`, `linux-aarch64`, `linux-arm64`,
-    /// `aarch64-unknown-linux-gnu`, `linux-x86_64`, `x86_64-unknown-linux-gnu`.
+    /// `macos-x86_64`, `x86_64-apple-darwin`, `ios-arm64`, `aarch64-apple-ios`,
+    /// `ios-sim-arm64`, `aarch64-apple-ios-simulator`, `linux-aarch64`,
+    /// `linux-arm64`, `aarch64-unknown-linux-gnu`, `linux-x86_64`,
+    /// `x86_64-unknown-linux-gnu`, `windows-x86_64`.
     /// Returns an error for any unrecognized string.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
@@ -565,6 +676,15 @@ impl Target {
             }
             "macos-x86_64" | "x86_64-apple-darwin" => {
                 Ok(Self::new(Platform::MacOS, Arch::X86_64))
+            }
+            "ios-arm64" | "ios-aarch64" | "aarch64-apple-ios" => {
+                Ok(Self::new_apple(Arch::AArch64, AppleVariant::IOS))
+            }
+            "ios-sim-arm64" | "ios-simulator-arm64" | "aarch64-apple-ios-simulator" => {
+                Ok(Self::new_apple(Arch::AArch64, AppleVariant::IOSSimulator))
+            }
+            "ios-sim-x86_64" | "x86_64-apple-ios-simulator" => {
+                Ok(Self::new_apple(Arch::X86_64, AppleVariant::IOSSimulator))
             }
             "linux-aarch64" | "linux-arm64" | "aarch64-unknown-linux-gnu" => {
                 Ok(Self::new(Platform::Linux, Arch::AArch64))
@@ -576,7 +696,7 @@ impl Target {
                 Ok(Self::new(Platform::Windows, Arch::X86_64))
             }
             _ => Err(format!(
-                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64, windows-x86_64",
+                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, ios-arm64, ios-sim-arm64, linux-aarch64, linux-x86_64, windows-x86_64",
                 value
             )),
         }
@@ -584,15 +704,29 @@ impl Target {
 
     /// Returns the canonical string representation of this target.
     ///
-    /// Returns one of: `"macos-aarch64"`, `"macos-x86_64"`, `"linux-aarch64"`, `"linux-x86_64"`.
+    /// The Apple variant is part of the string, not decoration: three persisted
+    /// keys are derived from it — the runtime object's cache filename, the
+    /// native-dependency `ArtifactReceipt` JSON, and the per-package
+    /// `supported_targets` catalog. A macOS and an iOS build sharing a string
+    /// would collide on all three and silently reuse each other's artifacts.
     pub fn as_str(&self) -> &'static str {
-        match (self.platform, self.arch) {
-            (Platform::MacOS, Arch::AArch64) => "macos-aarch64",
-            (Platform::MacOS, Arch::X86_64) => "macos-x86_64",
-            (Platform::Linux, Arch::AArch64) => "linux-aarch64",
-            (Platform::Linux, Arch::X86_64) => "linux-x86_64",
-            (Platform::Windows, Arch::AArch64) => "windows-aarch64",
-            (Platform::Windows, Arch::X86_64) => "windows-x86_64",
+        match self.platform {
+            Platform::MacOS => match (self.apple_variant, self.arch) {
+                (AppleVariant::MacOS, Arch::AArch64) => "macos-aarch64",
+                (AppleVariant::MacOS, Arch::X86_64) => "macos-x86_64",
+                (AppleVariant::IOS, Arch::AArch64) => "ios-arm64",
+                (AppleVariant::IOS, Arch::X86_64) => "ios-x86_64",
+                (AppleVariant::IOSSimulator, Arch::AArch64) => "ios-sim-arm64",
+                (AppleVariant::IOSSimulator, Arch::X86_64) => "ios-sim-x86_64",
+            },
+            Platform::Linux => match self.arch {
+                Arch::AArch64 => "linux-aarch64",
+                Arch::X86_64 => "linux-x86_64",
+            },
+            Platform::Windows => match self.arch {
+                Arch::AArch64 => "windows-aarch64",
+                Arch::X86_64 => "windows-x86_64",
+            },
         }
     }
 

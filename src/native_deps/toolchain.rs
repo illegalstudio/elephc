@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::codegen_support::platform::{Arch, Platform, Target};
+use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
 
 use super::error::{NativeError, NativeErrorKind};
 use super::receipt::ToolIdentity;
@@ -116,8 +116,11 @@ pub fn resolve_toolchain(target: Target) -> Result<NativeToolchain, NativeError>
     let cc_version = normalized_output(run_output(Command::new(&cc).arg("--version"), "query target C compiler version")?);
     let ar_version = version_output(&ar, "archiver")?;
     let ranlib_version = version_output(&ranlib, "ranlib")?;
+    // The SDK version is a fingerprint input, so it must be the SDK the target
+    // actually builds against. Hardcoding `macosx` recorded the host SDK for an
+    // iOS build, which meant bumping the iOS SDK never invalidated the cache.
     let sdk = if target.platform == Platform::MacOS {
-        normalized_output(run_output(Command::new("xcrun").args(["--sdk", "macosx", "--show-sdk-version"]), "query selected macOS SDK")?)
+        normalized_output(run_output(Command::new("xcrun").args(["--sdk", target.apple_sdk_name(), "--show-sdk-version"]), "query selected Apple SDK")?)
     } else {
         String::new()
     };
@@ -187,7 +190,19 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
         Arch::X86_64 => lower.starts_with("x86_64-"),
     };
     let os_ok = match target.platform {
-        Platform::MacOS => lower.contains("apple") && lower.contains("darwin"),
+        // An iOS cross compiler reports `arm64-apple-ios13.0`, never `darwin`,
+        // so matching on a fixed "darwin" here rejected every iOS toolchain.
+        //
+        // Device and simulator both carry `ios`, and differ only by a trailing
+        // `-simulator`. Checking the substring alone would accept a simulator
+        // compiler for a device build: same triple prefix, incompatible objects.
+        Platform::MacOS => {
+            let compiler_targets_simulator = lower.contains("-simulator");
+            let want_simulator = matches!(target.apple_variant, AppleVariant::IOSSimulator);
+            lower.contains("apple")
+                && lower.contains(target.apple_triple_os())
+                && compiler_targets_simulator == want_simulator
+        }
         Platform::Linux => lower.contains("linux"),
         Platform::Windows => false,
     };
@@ -196,7 +211,7 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
     }
     let arch = match target.arch { Arch::AArch64 => "aarch64", Arch::X86_64 => "x86_64" };
     match target.platform {
-        Platform::MacOS => Ok(format!("{arch}-apple-darwin")),
+        Platform::MacOS => Ok(format!("{arch}-apple-{}", target.apple_triple_os())),
         Platform::Linux => {
             let environment = if lower.contains("musl") {
                 "musl"
@@ -291,6 +306,56 @@ mod tests {
         assert_eq!(validate_tuple(target, "x86_64-linux-musl", false).unwrap(), "x86_64-unknown-linux-musl");
         assert!(validate_tuple(target, "aarch64-linux-gnu", false).is_err());
         assert!(validate_tuple(target, "x86_64-linux", false).is_err());
+    }
+
+    /// Verifies an iOS compiler tuple is accepted where a fixed "darwin" match
+    /// used to reject it, and that macOS still demands a darwin tuple.
+    ///
+    /// The accepted spellings are measured, not assumed: `clang -dumpmachine`
+    /// reports `arm64-apple-ios13.0` under `-target arm64-apple-ios13.0`, and
+    /// `arm64-apple-darwin25.5.0` with no target flag.
+    #[test]
+    fn validates_ios_compiler_tuples() {
+        let device = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        assert_eq!(
+            validate_tuple(device, "arm64-apple-ios13.0", false).unwrap(),
+            "aarch64-apple-ios"
+        );
+        assert!(
+            validate_tuple(device, "arm64-apple-darwin25.5.0", false).is_err(),
+            "a host macOS compiler must not satisfy an iOS target"
+        );
+
+        let macos = Target::new(Platform::MacOS, Arch::AArch64);
+        assert_eq!(
+            validate_tuple(macos, "arm64-apple-darwin25.5.0", true).unwrap(),
+            "aarch64-apple-darwin"
+        );
+        assert!(
+            validate_tuple(macos, "arm64-apple-ios13.0", false).is_err(),
+            "an iOS compiler must not satisfy a macOS target"
+        );
+    }
+
+    /// Device and simulator triples differ only by a trailing `-simulator`, so a
+    /// plain substring match would accept either for either: same prefix,
+    /// incompatible objects. Each must reject the other's compiler.
+    #[test]
+    fn ios_device_and_simulator_toolchains_are_not_interchangeable() {
+        let device = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        let simulator = Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator);
+
+        assert!(validate_tuple(device, "arm64-apple-ios13.0", false).is_ok());
+        assert!(validate_tuple(simulator, "arm64-apple-ios13.0-simulator", false).is_ok());
+
+        assert!(
+            validate_tuple(device, "arm64-apple-ios13.0-simulator", false).is_err(),
+            "a simulator compiler must not build for a device"
+        );
+        assert!(
+            validate_tuple(simulator, "arm64-apple-ios13.0", false).is_err(),
+            "a device compiler must not build for the simulator"
+        );
     }
 
     /// Verifies recipe environment excludes inherited compiler and linker flags.

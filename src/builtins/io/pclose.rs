@@ -27,6 +27,7 @@ builtin! {
 
 /// Validates the handle argument is a stream resource and returns `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::builtins::spec::reject_if_process_spawn_forbidden(cx)?;
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
         cx.name,

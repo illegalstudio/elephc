@@ -2482,10 +2482,36 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
         emit_null_value(ctx, Some(span))
     };
     let value = coerce_to_return_type(ctx, value, Some(span));
-    let value = acquire_borrowed_return_value(ctx, value, span);
+    // An `#[Export]`ed function hands its string result to a C caller that takes
+    // ownership and releases it through `elephc_free`, so the result must be
+    // exactly one owned heap block. Persisting therefore *replaces* the borrow
+    // acquire instead of stacking on top of it: `Str` is lifetime-tracked
+    // (`Ownership::php_type_needs_lifetime_tracking`), so acquiring and then
+    // copying would leave the acquired reference behind as a leak.
+    let exported_string_return = value.ir_type == IrType::Str && function_is_exported(ctx);
+    let value = if exported_string_return {
+        value
+    } else {
+        acquire_borrowed_return_value(ctx, value, span)
+    };
     let value = acquire_returned_this(ctx, value_expr, value, span);
-    let value = persist_scratch_return_string(ctx, value, span);
+    let value = persist_scratch_return_string(ctx, value, span, exported_string_return);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Returns whether the function currently being lowered carries `#[Export]`.
+///
+/// Matches on the last namespace segment so both the bare `#[Export]` and the
+/// fully-qualified `#[\Elephc\Export]` spellings are recognised — the same rule
+/// `crate::exports::has_export_attribute` applies when collecting exports, kept
+/// in step deliberately: a name accepted there but rejected here would emit a
+/// trampoline whose ownership contract the body does not honour.
+fn function_is_exported(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.builder
+        .function()
+        .attribute_names
+        .iter()
+        .any(|name| name.rsplit('\\').next() == Some("Export"))
 }
 
 /// Lowers a return expression with contextual array-literal element storage when available.
@@ -2519,19 +2545,28 @@ fn acquire_returned_this(
 }
 
 /// Copies scratch-backed string results before they cross a function boundary.
+///
+/// `force` persists unconditionally, for `#[Export]`ed functions whose result
+/// crosses into C: there the host owns the pointer, so `return $param;` and
+/// `return "literal";` must hand back an owned heap block rather than a borrow
+/// into the caller's buffer or into `.rodata`, neither of which `elephc_free`
+/// could legitimately release.
 fn persist_scratch_return_string(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
+    force: bool,
 ) -> LoweredValue {
     if value.ir_type != IrType::Str {
         return value;
     }
-    let Some(op) = ctx.builder.value_defining_op(value.value) else {
-        return value;
-    };
-    if !string_op_uses_scratch_storage(op) {
-        return value;
+    if !force {
+        let Some(op) = ctx.builder.value_defining_op(value.value) else {
+            return value;
+        };
+        if !string_op_uses_scratch_storage(op) {
+            return value;
+        }
     }
     ctx.emit_value(
         Op::StrPersist,

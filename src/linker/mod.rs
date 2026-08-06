@@ -18,7 +18,7 @@ mod sdk;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::{AppleVariant, Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkPlan};
 
@@ -69,14 +69,60 @@ pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
     bridges::php_extension_for_lib(lib_name)
 }
 
-/// Invokes the target assembler for one generated assembly source file.
-pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+/// Builds the assembler invocation for a target, minus the input and output.
+///
+/// A Mach-O object records the platform it was built for, and `ld` refuses to
+/// link a macOS-tagged object into an iOS image — the failure reads
+/// *"building for 'iOS-simulator', but linking in object file built for
+/// 'macOS'"*. Plain `as` has no way to say "iOS", so non-macOS Apple targets
+/// assemble through `clang`, which stamps the platform from `-target` and needs
+/// the matching SDK to resolve it.
+///
+/// Shared by the user object and the cached runtime object. Both must carry the
+/// same platform or the link fails on whichever one disagrees, and they used to
+/// build this command separately.
+pub(crate) fn assembler_command(target: Target) -> Command {
+    if target.platform == Platform::MacOS && target.apple_variant != AppleVariant::MacOS {
+        let sdk_path = sdk::macos_sdk_path(target.apple_sdk_name());
+        let mut assembler = Command::new("clang");
+        assembler
+            .arg("-c")
+            .args(["-target", &target.apple_clang_triple()])
+            .args(["-isysroot", &sdk_path]);
+        return assembler;
+    }
     let mut assembler = Command::new(target.assembler_cmd());
     if target.platform == Platform::MacOS {
         assembler.args(["-arch", target.darwin_arch_name()]);
     }
+    assembler
+}
+
+/// Invokes the target assembler for one generated assembly source file.
+pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+    let mut assembler = assembler_command(target);
     assembler.arg("-o").arg(obj_path).arg(asm_path);
     command::run_tool("Assembler", &mut assembler);
+}
+
+/// Packs the compiled objects into a static library with `ar`.
+///
+/// This deliberately does not go through the link plan. An archive is not a
+/// link: bridge staticlibs and managed native packages stay separate `.a` files
+/// for the consuming project to link alongside this one, exactly as a C library
+/// would leave its own dependencies to its consumer. Rolling them in would
+/// duplicate every symbol the host also links directly.
+///
+/// `rcs` replaces the archive, creates it when absent, and writes the symbol
+/// index in one step -- no separate `ranlib` pass is needed on either platform.
+pub(crate) fn archive(archive_path: &Path, object: &Path, runtime_object: &Path) {
+    // A stale archive would otherwise keep members from the previous build,
+    // because `r` replaces matching names but never removes vanished ones.
+    let _ = std::fs::remove_file(archive_path);
+
+    let mut ar = Command::new("ar");
+    ar.arg("rcs").arg(archive_path).arg(object).arg(runtime_object);
+    command::run_tool("ar", &mut ar);
 }
 
 /// Bakes macOS debug maps into a dSYM before temporary objects are removed.
@@ -146,8 +192,12 @@ pub(crate) fn link_with_plan(
         .map(|prepared| &prepared.plan)
         .unwrap_or(&resolved.plan);
 
-    let sdk_path = (target.platform == Platform::MacOS).then(sdk::macos_sdk_path);
-    let sdk_version = (target.platform == Platform::MacOS).then(sdk::macos_sdk_version);
+    // The SDK is selected by the target's Apple variant, not by the host: an
+    // iOS build resolves the iOS SDK even though it runs on macOS.
+    let apple_sdk = target.apple_sdk_name();
+    let sdk_path = (target.platform == Platform::MacOS).then(|| sdk::macos_sdk_path(apple_sdk));
+    let sdk_version =
+        (target.platform == Platform::MacOS).then(|| sdk::macos_sdk_version(apple_sdk));
     let mac_sdk = sdk_path
         .as_deref()
         .zip(sdk_version.as_deref())

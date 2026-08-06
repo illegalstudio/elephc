@@ -41,7 +41,21 @@ pub struct PackageSpec {
     pub versions: &'static [PackageVersion],
 }
 
-const TARGETS: &[&str] = &["macos-aarch64", "linux-aarch64", "linux-x86_64"];
+/// Targets both catalogued packages build for.
+///
+/// pcre2 and zlib are plain autoconf/make projects with no host assumptions
+/// beyond a working C compiler, so the iOS entries carry no per-package caveat.
+/// They do require an SDK-aware compiler: `resolve_toolchain` already refuses
+/// any cross target without explicit `ELEPHC_NATIVE_CC`/`AR`/`RANLIB`, and for
+/// iOS those must carry `-target` and `-isysroot` or configure will silently
+/// probe the host instead.
+const TARGETS: &[&str] = &[
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+];
 const PCRE2_ARCHIVES: &[&str] = &[
     "lib/libelephc_pcre2_shim.a",
     "lib/libpcre2-posix.a",
@@ -167,6 +181,31 @@ mod tests {
         assert_eq!(version.ordered_link_outputs, ZLIB_ARCHIVES);
         assert_eq!(version.retained_headers, ZLIB_HEADERS);
         assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies both catalogued packages accept the iOS targets, and that the
+    /// device and simulator entries are separate — they resolve to different
+    /// artifact directories, so one must not stand in for the other.
+    #[test]
+    fn catalog_accepts_ios_targets() {
+        use crate::codegen_support::platform::{AppleVariant, Arch};
+
+        for name in ["pcre2", "zlib"] {
+            let entry = version(name, None).expect("catalogue entry");
+            for target in [
+                Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+                Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            ] {
+                ensure_target(entry, target).unwrap_or_else(|error| {
+                    panic!("{name} must support {}: {error}", target.as_str())
+                });
+            }
+            assert!(
+                entry.supported_targets.contains(&"ios-arm64")
+                    && entry.supported_targets.contains(&"ios-sim-arm64"),
+                "{name} must list both iOS targets distinctly"
+            );
+        }
     }
 
     /// Verifies unknown package and version inputs fail closed.

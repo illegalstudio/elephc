@@ -12,7 +12,7 @@ mod linux_transform;
 mod target;
 mod toolchain;
 
-pub use target::{Arch, Platform, Target};
+pub use target::{AppleVariant, Arch, Platform, Target, APPLE_IOS_MIN_OS};
 
 #[cfg(test)]
 mod tests {
@@ -36,6 +36,115 @@ mod tests {
         assert_eq!(
             Target::parse("aarch64-apple-darwin").unwrap(),
             Target::new(Platform::MacOS, Arch::AArch64)
+        );
+    }
+
+    /// Both spellings of each iOS target resolve to the same Darwin target with
+    /// the right Apple variant — the platform stays `MacOS` because the ABI is.
+    #[test]
+    fn test_target_parse_ios_variants() {
+        for spelling in ["ios-arm64", "ios-aarch64", "aarch64-apple-ios"] {
+            let target = Target::parse(spelling).unwrap_or_else(|e| panic!("{spelling}: {e}"));
+            assert_eq!(target, Target::new_apple(Arch::AArch64, AppleVariant::IOS));
+            assert_eq!(target.platform, Platform::MacOS, "{spelling} shares the Darwin ABI");
+        }
+        for spelling in [
+            "ios-sim-arm64",
+            "ios-simulator-arm64",
+            "aarch64-apple-ios-simulator",
+        ] {
+            let target = Target::parse(spelling).unwrap_or_else(|e| panic!("{spelling}: {e}"));
+            assert_eq!(
+                target,
+                Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator)
+            );
+        }
+    }
+
+    /// Three persisted keys derive from `as_str()` — the runtime object cache
+    /// filename, the native-dependency receipt JSON and the package catalog — so
+    /// two targets sharing a string silently reuse each other's artifacts.
+    /// Device, simulator and macOS must stay distinguishable on the same arch.
+    #[test]
+    fn test_apple_variants_do_not_collide_in_the_canonical_string() {
+        let macos = Target::new(Platform::MacOS, Arch::AArch64);
+        let device = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        let simulator = Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator);
+
+        let names = [macos.as_str(), device.as_str(), simulator.as_str()];
+        let mut unique = names.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "collision among {names:?}");
+
+        // And each canonical string must round-trip back to the same target.
+        for target in [macos, device, simulator] {
+            assert_eq!(Target::parse(target.as_str()).unwrap(), target);
+        }
+    }
+
+    /// The Apple variant drives SDK selection, the ld64 platform token and the
+    /// compiler triple. These three strings are what actually differ between
+    /// macOS and iOS; everything else about the target is shared.
+    #[test]
+    fn test_apple_variant_drives_sdk_platform_and_triple() {
+        let macos = Target::new(Platform::MacOS, Arch::AArch64);
+        assert_eq!(macos.apple_sdk_name(), "macosx");
+        assert_eq!(macos.apple_platform_name(), "macos");
+        assert_eq!(macos.apple_triple_os(), "darwin");
+
+        let device = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        assert_eq!(device.apple_sdk_name(), "iphoneos");
+        assert_eq!(device.apple_platform_name(), "ios");
+        assert_eq!(device.apple_triple_os(), "ios");
+
+        let simulator = Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator);
+        assert_eq!(simulator.apple_sdk_name(), "iphonesimulator");
+        assert_eq!(simulator.apple_platform_name(), "ios-simulator");
+        assert_eq!(simulator.apple_triple_os(), "ios");
+    }
+
+    /// A Mach-O object records the platform it was assembled for, and `ld`
+    /// refuses to link a macOS-tagged object into an iOS image. `as` cannot
+    /// express "iOS", so non-macOS Apple targets assemble through `clang` and
+    /// this triple is what carries the platform.
+    ///
+    /// The deployment floor must be the same value the linker records in
+    /// `-platform_version`; a mismatch between an object's `LC_BUILD_VERSION`
+    /// and the image's is itself a link error, which is why both read
+    /// `APPLE_IOS_MIN_OS`.
+    #[test]
+    fn test_apple_clang_triple_carries_the_platform() {
+        assert_eq!(
+            Target::new(Platform::MacOS, Arch::AArch64).apple_clang_triple(),
+            "arm64-apple-macos"
+        );
+        assert_eq!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS).apple_clang_triple(),
+            format!("arm64-apple-ios{APPLE_IOS_MIN_OS}")
+        );
+        assert_eq!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator).apple_clang_triple(),
+            format!("arm64-apple-ios{APPLE_IOS_MIN_OS}-simulator")
+        );
+
+        // Device and simulator must not share a triple: clang stamps a distinct
+        // Mach-O platform from each, and ld rejects the wrong one.
+        assert_ne!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS).apple_clang_triple(),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator).apple_clang_triple()
+        );
+    }
+
+    /// The arm64 Darwin backend serves iOS unchanged, so the central gate must
+    /// already accept it — that equivalence is the whole reason iOS is a variant
+    /// rather than a fourth `Platform`.
+    #[test]
+    fn test_ios_reuses_the_existing_aarch64_darwin_backend() {
+        assert!(Target::new_apple(Arch::AArch64, AppleVariant::IOS).supports_current_backend());
+        assert!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator)
+                .supports_current_backend()
         );
     }
 

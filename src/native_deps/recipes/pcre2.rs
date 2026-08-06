@@ -42,7 +42,11 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         "--disable-jit",
     ]);
     if request.target != Target::detect_host() {
-        command.arg(format!("--host={}", request.toolchain.target_tuple));
+        // `abi`, not `target_tuple`: autoconf feeds --host through config.sub,
+        // which rejects the clang triple an Apple cross compiler reports
+        // ("Kernel `ios13.0' not known to work with OS `simulator'"). `abi` is
+        // our normalized identity and parses on every target.
+        command.arg(format!("--host={}", request.toolchain.abi));
     }
     run_checked(&mut command, "configure trusted PCRE2 recipe")?;
 

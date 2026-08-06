@@ -129,6 +129,288 @@ int main(int argc, char **argv) {
 }
 "#;
 
+const STRING_RETURN_PHP: &str = r#"<?php
+#[Export]
+function greet(string $name): string {
+    return "Hello, " . $name;
+}
+
+#[Export]
+function echo_back(string $s): string {
+    return $s;
+}
+
+#[Export]
+function fixed_label(): string {
+    return "fixed";
+}
+"#;
+
+const STRING_RETURN_HOST_C: &str = r#"
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+#include <string.h>
+
+typedef struct { const char *ptr; size_t len; } elephc_str;
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
+    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 2; }
+    int32_t (*init)(void) = (int32_t (*)(void))dlsym(lib, "elephc_init");
+    void (*shutdown)(void) = (void (*)(void))dlsym(lib, "elephc_shutdown");
+    void (*efree)(void *) = (void (*)(void *))dlsym(lib, "elephc_free");
+    elephc_str (*greet)(const char *, size_t) =
+        (elephc_str (*)(const char *, size_t))dlsym(lib, "greet");
+    elephc_str (*echo_back)(const char *, size_t) =
+        (elephc_str (*)(const char *, size_t))dlsym(lib, "echo_back");
+    elephc_str (*fixed_label)(void) = (elephc_str (*)(void))dlsym(lib, "fixed_label");
+    if (!init || !shutdown || !efree || !greet || !echo_back || !fixed_label) {
+        fprintf(stderr, "dlsym failed\n"); return 3;
+    }
+    if (init() != 0) return 4;
+
+    /* Buffer owned by the host: the string it returns must NOT come back as the
+       same pointer, or `elephc_free` below would be freeing host memory. */
+    char mine[] = "world";
+
+    elephc_str g = greet(mine, 5);
+    elephc_str e = echo_back(mine, 5);
+    elephc_str f = fixed_label();
+
+    printf("%.*s %zu %.*s %zu %.*s %zu %d\n",
+           (int)g.len, g.ptr, g.len,
+           (int)e.len, e.ptr, e.len,
+           (int)f.len, f.ptr, f.len,
+           (e.ptr == mine) ? 1 : 0);
+
+    efree((void *)g.ptr);
+    efree((void *)e.ptr);
+    efree((void *)f.ptr);
+    efree(NULL);
+    shutdown();
+    return 0;
+}
+"#;
+
+const STATICLIB_HOST_C: &str = r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+
+typedef struct { const char *ptr; size_t len; } elephc_str;
+
+extern int32_t elephc_init(void);
+extern void elephc_shutdown(void);
+extern void elephc_free(void *);
+extern elephc_str greet(const char *, size_t);
+extern elephc_str fixed_label(void);
+
+int main(void) {
+    if (elephc_init() != 0) return 1;
+    elephc_str g = greet("static", 6);
+    elephc_str f = fixed_label();
+    printf("%.*s %zu %.*s %zu\n", (int)g.len, g.ptr, g.len, (int)f.len, f.ptr, f.len);
+    elephc_free((void *)g.ptr);
+    elephc_free((void *)f.ptr);
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
+/// Verifies that every process-spawning builtin is refused at compile time for
+/// an iOS target, and still accepted for macOS.
+///
+/// These functions exist as libSystem symbols on iOS and link happily, then fail
+/// at run time inside the sandbox, which forbids `fork`. Catching that at build
+/// time is the whole point, so the test asserts on the diagnostic rather than on
+/// the exit status alone: it must name the builtin, name the target, and carry a
+/// source position.
+///
+/// `proc_open` and its family are absent from this list because they do not
+/// exist in the compiler at all. Whenever they are added they must adopt the
+/// same guard.
+#[test]
+fn test_process_spawning_builtins_are_refused_for_ios_targets() {
+    let dir = make_test_dir("elephc_ios_capability");
+
+    for (builtin, source) in [
+        ("system", r#"<?php system("ls");"#),
+        ("passthru", r#"<?php passthru("ls");"#),
+        ("exec", r#"<?php exec("ls");"#),
+        ("shell_exec", r#"<?php shell_exec("ls");"#),
+        ("popen", r#"<?php popen("ls", "r");"#),
+        ("pclose", r#"<?php pclose(popen("ls", "r"));"#),
+    ] {
+        let php = dir.join("spawn.php");
+        fs::write(&php, source).unwrap();
+
+        let refused = elephc_command(&dir)
+            .args(["--target", "ios-arm64", "--emit", "staticlib", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            !refused.status.success(),
+            "{builtin} must not compile for iOS"
+        );
+        let message = String::from_utf8_lossy(&refused.stderr);
+        // `pclose` wraps `popen`, whose argument is evaluated first, so the
+        // reported builtin is the inner one -- either name proves the gate ran.
+        assert!(
+            message.contains(&format!("{builtin}()")) || message.contains("popen()"),
+            "{builtin}: diagnostic must name the builtin, got: {message}"
+        );
+        assert!(
+            message.contains("ios-arm64"),
+            "{builtin}: diagnostic must name the target, got: {message}"
+        );
+        assert!(
+            message.contains("error["),
+            "{builtin}: diagnostic must carry a source position, got: {message}"
+        );
+
+        // The same source stays valid for the host target: this is a target
+        // capability gate, not a removal of the builtin.
+        let accepted = elephc_command(&dir)
+            .args(["--emit", "staticlib", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            accepted.status.success(),
+            "{builtin} must still compile for the host:\n{}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+    }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Verifies `--emit staticlib`: the archive links directly into a host binary,
+/// with no `dlopen` and no runtime symbol resolution involved.
+///
+/// This is the delivery form an Xcode project consumes, and it exercises the
+/// *non-PIC* codegen path — a staticlib takes `Emitter::new`, not
+/// `Emitter::new_pic`, because GOT indirection exists for `dlopen`-time
+/// resolution rather than for position independence. The host executable is PIE
+/// regardless, so a link succeeding here is what proves that distinction holds.
+#[test]
+fn test_staticlib_links_directly_into_a_host_binary() {
+    let dir = make_test_dir("elephc_staticlib");
+    fs::write(dir.join("strret.php"), STRING_RETURN_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "strret.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let archive = dir.join("libstrret.a");
+    assert!(archive.exists(), "expected an archive at {:?}", archive);
+
+    // `ar rcs` must have written a symbol index, or the link below cannot
+    // resolve anything out of the archive.
+    let listing = Command::new("ar")
+        .arg("t")
+        .arg(&archive)
+        .output()
+        .expect("failed to run ar");
+    let members = String::from_utf8_lossy(&listing.stdout);
+    assert!(
+        members.contains("strret.o"),
+        "the user object must be a member: {members}"
+    );
+    assert!(
+        members.contains("runtime-"),
+        "the runtime object must be a member: {members}"
+    );
+
+    let c_path = dir.join("host.c");
+    fs::write(&c_path, STATICLIB_HOST_C).unwrap();
+    let host = dir.join("statichost");
+    let compile = Command::new("cc")
+        .arg("-o")
+        .arg(&host)
+        .arg(&c_path)
+        .arg(&archive)
+        .output()
+        .expect("failed to spawn the system C compiler");
+    assert!(
+        compile.status.success(),
+        "linking against the archive failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&host).output().expect("failed to run the host");
+    assert!(
+        run.status.success(),
+        "host run failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Hello, static 13 fixed 5\n"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Verifies the string-return half of the export ABI end to end.
+///
+/// Covers the three provenances that reach a `return` differently, because each
+/// exercises a different part of the contract:
+/// - `greet` concatenates, so lowering already treats the result as scratch and
+///   persists it — the ordinary path;
+/// - `fixed_label` returns a literal, which lives in `.rodata` and would be
+///   illegal to `elephc_free` unless the export forces a persist;
+/// - `echo_back` returns its parameter, the dangerous case: without the forced
+///   persist the host would get back *its own* pointer and then free it.
+///
+/// The host asserts that last point directly (`e.ptr == mine` must be 0), which
+/// is what makes this a test of ownership rather than of string contents. It
+/// also frees every returned pointer plus a `NULL`, so a mis-wired
+/// `elephc_free` shows up as a crash rather than passing quietly.
+#[test]
+fn test_cdylib_string_returns_transfer_ownership_to_the_host() {
+    let dir = make_test_dir("elephc_cdylib_strret");
+    fs::write(dir.join("strret.php"), STRING_RETURN_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "strret.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lib_path = dir.join(shared_lib_name("strret"));
+    let host = compile_c_host(&dir, STRING_RETURN_HOST_C, "strhost");
+    let run = Command::new(&host)
+        .arg(&lib_path)
+        .output()
+        .expect("failed to run the C host");
+    assert!(
+        run.status.success(),
+        "C host run failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Hello, world 12 world 5 fixed 5 0\n"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies the full cdylib path on the host target: `--emit cdylib` produces
 /// a conventionally named shared library, a C host can dlopen it, resolve the
 /// lifecycle entry points plus both `#[Export]` trampolines, and the exported

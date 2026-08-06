@@ -11,11 +11,10 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codegen;
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 
 /// Runtime cache hit/miss status.
@@ -92,10 +91,9 @@ pub fn prepare_runtime_object(
         )
     })?;
 
-    let mut assembler = Command::new(target.assembler_cmd());
-    if target.platform == Platform::MacOS {
-        assembler.args(["-arch", target.darwin_arch_name()]);
-    }
+    // Shared with the user object's assembly: both must carry the same Mach-O
+    // platform, or ld rejects whichever one disagrees.
+    let mut assembler = crate::linker::assembler_command(target);
     assembler.arg("-o").arg(&temp_obj_path).arg(&temp_asm_path);
     let assembler_status = assembler.status().map_err(|err| {
         format!(

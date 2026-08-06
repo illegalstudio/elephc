@@ -747,7 +747,11 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("link");
     let phase_started = Instant::now();
-    if let Err(error) = linker::link_with_plan(
+    if matches!(emit, Emit::Staticlib) {
+        // No linker runs: the consuming project links this archive, and resolves
+        // bridges and managed native packages itself.
+        linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
+    } else if let Err(error) = linker::link_with_plan(
         target,
         emit,
         &output_paths.bin,
@@ -811,6 +815,9 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
             Platform::Linux => format!("lib{}.so", stem),
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
+        // `.a` everywhere: the archive format is not platform-specific, and the
+        // `lib` prefix is what a consuming linker's `-l` flag expects.
+        Emit::Staticlib => format!("lib{}.a", stem),
     };
     OutputPaths {
         asm: parent.join(format!("{}.s", stem)),

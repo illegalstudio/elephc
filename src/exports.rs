@@ -100,10 +100,10 @@ fn has_export_attribute(stmt: &Stmt) -> bool {
 }
 
 /// Validates that every parameter type and the return type fall within the v1
-/// scalar marshaling set. Strings are accepted as inputs (passed as a
-/// `const char* ptr, size_t len` pair on the C side) but not as return values
-/// in v1 — string-out arrives in a later iteration once the host can free
-/// elephc-allocated strings through `elephc_free`.
+/// scalar marshaling set. Strings cross the boundary in both directions: as
+/// inputs they arrive as a borrowed `const char* ptr, size_t len` pair the host
+/// keeps owning, and as returns they leave as a `(ptr, len)` pair the host takes
+/// ownership of and must release through `elephc_free`.
 fn validate_scalar_signature(
     name: &str,
     sig: &FunctionSig,
@@ -143,7 +143,7 @@ fn validate_scalar_signature(
         return Err(CompileError::new(
             span,
             &format!(
-                "exported function '{}' return type is unsupported for --emit cdylib v1; supported: int, float, bool, void",
+                "exported function '{}' return type is unsupported for --emit cdylib v1; supported: int, float, bool, string, void",
                 name
             ),
         ));
@@ -160,9 +160,14 @@ fn is_v1_param_type(ty: &PhpType) -> bool {
 }
 
 /// Returns whether `ty` can be marshaled as a v1 C-ABI export return value.
+///
+/// `Str` returns hand the host a `(ptr, len)` pair the host owns and must
+/// release through `elephc_free`; see `codegen_support::cdylib` for the
+/// marshaling and `is_exported_function` in `ir_lower::function` for the
+/// unconditional persist that makes that ownership claim true.
 fn is_v1_return_type(ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Str
     )
 }

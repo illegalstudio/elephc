@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
@@ -68,9 +68,9 @@ mod top_level;
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
 pub(super) fn check_types_impl(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> Result<(Checker, TypeEnv), CompileError> {
-    let mut checker = Checker::new(target_platform);
+    let mut checker = Checker::new(target);
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));

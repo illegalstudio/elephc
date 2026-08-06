@@ -113,6 +113,34 @@ pub struct BuiltinCheckCtx<'a> {
     pub env: &'a crate::types::TypeEnv,
 }
 
+/// Rejects a process-spawning builtin on a target whose sandbox forbids `fork`.
+///
+/// On iOS every one of these exists as a libSystem symbol and links happily,
+/// then fails at run time on a device — the worst place to discover it. The call
+/// is refused here instead, at the exact source position, so the mistake is a
+/// compile error rather than a support ticket.
+///
+/// Call this first from the `check:` hook of any builtin that spawns a process.
+/// The set is `system`, `passthru`, `exec`, `shell_exec`, `popen` and `pclose`;
+/// `proc_open` and its family do not exist in the compiler yet, and must adopt
+/// this guard on the day they do.
+pub fn reject_if_process_spawn_forbidden(
+    cx: &BuiltinCheckCtx<'_>,
+) -> Result<(), crate::errors::CompileError> {
+    if !cx.checker.target.forbids_process_spawn() {
+        return Ok(());
+    }
+    Err(crate::errors::CompileError::new(
+        cx.span,
+        &format!(
+            "{}() cannot be compiled for {}: that sandbox forbids spawning a process, \
+             so the call would always fail at run time",
+            cx.name,
+            cx.checker.target.as_str()
+        ),
+    ))
+}
+
 /// A type-checking hook for a builtin that needs logic beyond the static parameter list.
 ///
 /// The hook receives a mutable `BuiltinCheckCtx` and returns the refined return

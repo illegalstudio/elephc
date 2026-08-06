@@ -33,6 +33,7 @@ builtin! {
 /// The arguments are command and mode strings, not stream resources; no resource
 /// validation is performed here. The common registry path pre-infers the arguments.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    crate::builtins::spec::reject_if_process_spawn_forbidden(cx)?;
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
         PhpType::Bool,

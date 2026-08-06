@@ -34,7 +34,7 @@ pub(crate) mod yield_validation;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::parser::ast::{
     CallableTarget, Expr, Program, TypeExpr,
@@ -58,7 +58,10 @@ use schema::propagate_abstract_return_types;
 /// during type checking.
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
-    pub target_platform: Platform,
+    /// Full compilation target. `platform` drives OS constants; `apple_variant`
+    /// distinguishes iOS from macOS, which share every one of those constants but
+    /// not their sandbox rules.
+    pub target: Target,
     /// User-defined function declarations, keyed by canonical name.
     pub fn_decls: HashMap<String, FnDecl>,
     /// Groups of function variant names that share the same logical function
@@ -225,9 +228,9 @@ pub(crate) struct FnDecl {
 /// return types are propagated from concrete implementations before returning.
 pub fn check_types(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> Result<CheckResult, CompileError> {
-    let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
+    let (mut checker, global_env) = driver::check_types_impl(program, target)?;
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);

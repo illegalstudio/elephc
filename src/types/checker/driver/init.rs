@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::platform::Platform;
+use crate::codegen::platform::Target;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
@@ -39,7 +39,7 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target_platform: Platform) -> Self {
+    pub(super) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
@@ -115,7 +115,7 @@ impl Checker {
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
-            target_platform,
+            target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),

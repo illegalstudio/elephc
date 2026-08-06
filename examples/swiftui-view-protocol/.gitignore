@@ -1,0 +1,10 @@
+*.s
+*.o
+*.a
+*.so
+*.dylib
+ViewProtocol
+ViewProtocolIOS
+ViewProtocol.app/
+ViewProtocolIOS.app/
+simulator.png

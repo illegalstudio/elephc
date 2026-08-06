@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::Target;
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;
 use crate::span::Span;
@@ -95,19 +95,20 @@ pub struct CheckResult {
 /// metadata, warnings, and any required native libraries for linking.
 #[allow(dead_code)]
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, Platform::detect_host())
+    checker::check_types(program, Target::detect_host())
 }
 
 /// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
 /// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
 /// The target affects FFI metadata, required library resolution, and platform-specific type behavior.
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
-    checker::check_types(program, target.platform)
+    checker::check_types(program, target)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::Platform;
     use crate::codegen::platform::{Arch, Target};
 
     /// Parses PHP source text into an AST for use in tests.

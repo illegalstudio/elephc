@@ -164,14 +164,31 @@ mod tests {
         ManifestDocument::parse("[native]\nschema = 1\n[native.dependencies]\npcre2 = \"10.47\"\n").unwrap()
     }
 
-    /// Verifies lock rendering is stable and carries all three ordered target plans.
+    /// Verifies lock rendering is stable and carries one ordered plan per
+    /// catalogued target.
+    ///
+    /// The expected count is read from the catalog rather than hardcoded: a
+    /// literal here silently becomes a chore every time a target is added, and
+    /// says nothing about which targets were meant.
     #[test]
     fn lock_rendering_is_deterministic() {
         let lock = NativeLock::from_manifest(&manifest()).unwrap();
         let first = lock.render().unwrap();
         let second = NativeLock::parse(&first).unwrap().render().unwrap();
         assert_eq!(first, second);
-        assert_eq!(lock.package[0].target.len(), 3);
+
+        let catalogued = super::super::catalog::version("pcre2", None)
+            .expect("catalogue entry")
+            .supported_targets;
+        assert_eq!(lock.package[0].target.len(), catalogued.len());
+        let planned: Vec<&str> = lock.package[0]
+            .target
+            .iter()
+            .map(|target| target.name.as_str())
+            .collect();
+        for expected in catalogued {
+            assert!(planned.contains(expected), "missing plan for {expected}: {planned:?}");
+        }
         assert_eq!(lock.package[0].target[0].archives[0], "lib/libelephc_pcre2_shim.a");
     }
 

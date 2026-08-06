@@ -48,7 +48,7 @@ impl Checker {
     /// No-op on non-macOS targets. Used for libraries that live in libc on
     /// Linux (glibc/musl) but need explicit linkage on macOS — e.g. `iconv`.
     pub(crate) fn require_macos_builtin_library(&mut self, library: &str) {
-        if self.target_platform == crate::codegen::platform::Platform::MacOS
+        if self.target.platform == crate::codegen::platform::Platform::MacOS
             && !self.required_libraries.iter().any(|lib| lib == library)
         {
             self.required_libraries.push(library.to_string());

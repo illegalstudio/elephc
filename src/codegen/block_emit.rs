@@ -94,7 +94,7 @@ pub(super) fn emit_module(
     // method or closure may call, so they must exist in every emit kind — including
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
-    if matches!(emit, Emit::Cdylib) {
+    if emit.is_library() {
         return Ok(());
     }
     let main = module

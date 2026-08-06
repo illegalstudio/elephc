@@ -1,0 +1,9 @@
+*.a
+*.o
+*.s
+.cache/
+ElephcProbe
+ElephcProbe-*.app/
+probehost
+.entitlements.plist
+.profile.plist

@@ -32,6 +32,16 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Borrows the function being built.
+    ///
+    /// Lowering reads `attribute_names` through this to recognise an
+    /// `#[Export]`ed function and switch its string-return ownership contract.
+    /// The scoping is exact for free: a closure is lowered into its own
+    /// `Function`, which never carries the enclosing function's attributes.
+    pub fn function(&self) -> &Function {
+        self.func
+    }
+
     /// Sets the function entry block.
     pub fn set_entry(&mut self, block: BlockId) {
         self.assert_block_exists(block);
