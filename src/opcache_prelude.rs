@@ -5,8 +5,8 @@
 //! `opcache_reset()` (returns the compile-time cache-enabled boolean), and
 //! `opcache_get_status()` (returns `false` when the cache is disabled, or the runtime
 //! status array when enabled). All are baked from the version-keyed matrix in
-//! `crate::opcache`, rendered to PHP source and substituted into tiny per-function
-//! templates.
+//! `crate::opcache` into declarations built by `build`, whose shapes those baked values are
+//! spliced into as typed AST rather than as text.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` via `inject_if_used`, after include/PDO/tz/list-id
@@ -15,17 +15,16 @@
 //!   pipeline (function declaration + literal) with no dedicated codegen or runtime
 //!   helper.
 //! - `crate::pipeline::compile()` again via `bake_manifest`, immediately AFTER
-//!   `autoload::run`, which re-renders the three manifest-dependent functions against the
+//!   `autoload::run`, which REBUILDS the manifest-dependent functions against the
 //!   COMPLETE script manifest. Injection and manifest baking are split because the
 //!   autoloaded file set does not exist until after name resolution, while the
 //!   declarations must exist BEFORE it — see `bake_manifest` for the full argument.
 //!
 //! Key details:
-//! - Modeled on `list_id_prelude`/`tz_prelude`: the compiler bakes a
-//!   `__OPCACHE_CONFIGURATION__` array literal from `opcache_directives(version_id)`
-//!   and a `__OPCACHE_RESET_ENABLED__` boolean from `opcache_cache_enabled(...)`,
-//!   substitutes them, and lets the ordinary literal lowering do the rest — no new
-//!   `RuntimeFnId`. Neither function is a checker catalog builtin: registering one
+//! - Modeled on `list_id_prelude`/`tz_prelude`: the compiler bakes a configuration array
+//!   literal from `opcache_directives(version_id)` and a cache-enabled boolean from
+//!   `opcache_cache_enabled(...)`, passes them to the matching `build::*_decl`, and lets the
+//!   ordinary literal lowering do the rest — no new `RuntimeFnId`. Neither function is a checker catalog builtin: registering one
 //!   would trip the "Cannot redeclare built-in function" guard against this prelude
 //!   declaration. Being a real declared function is exactly what makes
 //!   `function_exists('opcache_reset')` report `true` (see
@@ -44,7 +43,7 @@
 //! - `opcache_get_status()['opcache_statistics']['start_time']` is MEMOIZED in a function
 //!   `static`, not re-read per call: reference PHP reports the moment the cache started, a fixed
 //!   point identical on every call for the life of the process (VERIFIED on 8.5.6 with two calls
-//!   two seconds apart). See `GET_STATUS_TEMPLATE`.
+//!   two seconds apart). See `get_status_declaration`.
 //! - `opcache_get_status()['jit']` reports the FULL reference `opcache.jit` mapping for
 //!   `kind`/`opt_level`/`opt_flags` (parsed by `crate::opcache::directives`) under one
 //!   explicit clamp — `enabled`/`on` false and both buffer figures 0, always — because an
@@ -59,7 +58,7 @@
 //!   decision could depend on. See `restrict_api_denies` for the verified matching rule and
 //!   `RESTRICT_API_WARNING_TEXT` for the verbatim message.
 //! - RUNTIME `ELEPHC_INI_*` OVERRIDES are the one part of the INI surface that is NOT frozen at
-//!   compile time. `ENV_OVERRIDE_HELPERS` bakes a small PHP block that reads
+//!   compile time. `env_override_declarations` bakes a small PHP block that reads
 //!   `ELEPHC_INI_opcache__<directive>` (and the dotted `ELEPHC_INI_opcache.<directive>` as a
 //!   fallback) through the ordinary `getenv` builtin, normalizes it with the PHP mirror of
 //!   `ini_scanner_value` + `parse_ini_override` (`__elephc_ini_scan` then the per-type
@@ -72,7 +71,7 @@
 //!   deliberately NARROWER than `--ini`: only directives elephc merely REPORTS are overridable at
 //!   runtime, because every directive it DERIVES compiled-in behavior from would otherwise make
 //!   the binary contradict itself. See `crate::opcache::directives::directive_runtime_overridable`
-//!   for the excluded set and the argument, and `render_opcache_env_helpers` for the injection
+//!   for the excluded set and the argument, and `env_override_declarations` for the injection
 //!   rules.
 //! - `opcache.preload` is likewise resolved AT COMPILE TIME. Reference PHP preloads during
 //!   startup, BEFORE the script runs, and a preload failure is a startup FATAL — so the AOT
@@ -88,7 +87,10 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::names::{canonical_name_for_decl, Name};
-use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, Program, Stmt, StmtKind};
+use crate::synthetic_class::{
+    e_array, e_array_assoc, e_binop, e_bool, e_call, e_float, e_int, e_str, e_var,
+};
 use crate::web_prelude::PhpVersion;
 
 use crate::opcache::directives::{
@@ -104,9 +106,11 @@ use crate::opcache::state::opcache_cache_enabled_with_overrides;
 /// gating; duplicating the exhaustive AST traversal would be a second thing to keep correct.
 pub(crate) mod detect;
 
+/// The declaration SHAPES, built as AST. The modules below decide WHAT a binary needs and
+/// compute the values baked into it; `build` spells out the bodies those values go into.
+pub(crate) mod build;
 
 mod manifest;
-mod templates;
 mod state_restriction;
 mod preload;
 mod restricted_status;
@@ -121,8 +125,6 @@ mod tests;
 
 #[allow(unused_imports)]
 use manifest::*;
-#[allow(unused_imports)]
-use templates::*;
 #[allow(unused_imports)]
 use state_restriction::*;
 #[allow(unused_imports)]
@@ -142,6 +144,7 @@ use injection::*;
 #[allow(unused_imports)]
 use manifest_bake::*;
 
+pub use injection::inject_if_used;
 pub use manifest::{collect_manifest, ScriptEntry};
 pub use manifest_bake::{bake_manifest, ManifestBakeSites};
 #[allow(unused_imports)]
@@ -150,6 +153,5 @@ pub use preload::{
     PreloadSymbols, PreloadVerdict,
 };
 pub use state_restriction::canonical_entry_path;
-pub use injection::inject_if_used;
-pub(crate) use cli_ini::render_ini_module_known;
-pub(crate) use env_ini::{render_opcache_env_helpers, render_opcache_ini_helpers};
+pub(crate) use cli_ini::ini_module_known_declaration;
+pub(crate) use env_ini::{env_override_declarations, ini_helper_declarations};

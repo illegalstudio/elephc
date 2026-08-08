@@ -293,7 +293,7 @@ pub(super) fn renders_preload_statistics_in_reference_key_order() {
         .expect("statistics");
 
         let body =
-            render_get_status_function(PhpVersion::Php85, true, &manifest, &[], false, Some(&stats));
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, Some(&stats)));
 
         assert!(body.contains("$status['preload_statistics'] = ["), "{body}");
         assert!(body.contains("'memory_consumption' => 13023,"), "{body}");
@@ -301,7 +301,7 @@ pub(super) fn renders_preload_statistics_in_reference_key_order() {
         assert!(body.contains("'classes' => ['App\\\\Widget'],"), "{body}");
         assert!(
             body.contains(
-                "'scripts' => ['/srv/app/index.php', '/srv/app/vendor/autoload_files/helpers.php'],"
+                "'scripts' => ['/srv/app/index.php', '/srv/app/vendor/autoload_files/helpers.php']"
             ),
             "{body}"
         );
@@ -343,7 +343,7 @@ pub(super) fn renders_preload_statistics_omitting_empty_symbol_lists() {
         )
         .expect("statistics");
 
-        let rendered = render_preload_statistics_stmt(&stats);
+        let rendered = rendered_expr(&preload_statistics_expr(&stats));
         assert!(rendered.contains("'memory_consumption' => 13023,"), "{rendered}");
         assert!(rendered.contains("'scripts' => ["), "{rendered}");
         assert!(
@@ -366,7 +366,7 @@ pub(super) fn renders_preload_statistics_omitting_empty_symbol_lists() {
             &fns_only,
         )
         .expect("statistics");
-        let rendered = render_preload_statistics_stmt(&stats);
+        let rendered = rendered_expr(&preload_statistics_expr(&stats));
         assert!(rendered.contains("'functions' => ['f'],"), "{rendered}");
         assert!(!rendered.contains("'classes'"), "{rendered}");
     }
@@ -379,17 +379,13 @@ pub(super) fn renders_preload_statistics_omitting_empty_symbol_lists() {
 pub(super) fn absent_preload_renders_byte_identical_status_body() {
         let manifest = sample_manifest();
         let body =
-            render_get_status_function(PhpVersion::Php85, true, &manifest, &[], false, None);
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None));
         assert!(
             !body.contains("preload_statistics"),
             "no preload key may appear on the default path: {body}"
         );
-        assert!(
-            !body.contains("__PRELOAD_STATISTICS__"),
-            "the placeholder must be removed, not left in: {body}"
-        );
-        // The line between the status literal and the `if ($include_scripts)` insert must close
-        // up completely — no blank line left behind.
-        assert!(body.contains("    ];\n    if ($include_scripts) {"), "{body}");
+        // The statement right after the status literal is the `$include_scripts` guard:
+        // nothing sits between them.
+        assert!(body.contains("];\n    if ($include_scripts) {"), "{body}");
         let _ = parse(&format!("<?php {body}"));
     }

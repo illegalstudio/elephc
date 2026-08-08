@@ -31,6 +31,7 @@ fn dummy() -> crate::span::Span {
 
 use super::InterfaceDeclInfo;
 
+mod gate;
 mod injection;
 mod ast_literals;
 mod basic_methods;
@@ -90,5 +91,6 @@ use signature_patch_members::*;
 #[allow(unused_imports)]
 use signature_patch_types::*;
 
+pub(crate) use gate::program_may_reference_reflection;
 pub(crate) use injection::inject_builtin_reflection;
 pub(crate) use signature_patches::patch_builtin_reflection_signatures;

@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     name: "ptr_read_string",
     area: Pointers,
-    params: [pointer: Mixed, length: Mixed],
+    params: [pointer: Ptr, length: Mixed],
     returns: Str,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

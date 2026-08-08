@@ -71,7 +71,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_callable_ptr",
@@ -1239,7 +1239,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "callable",
       "variadic": null
     },
     "slug": "__elephc_normalize_callable",
@@ -1664,7 +1664,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_pdo_adapter_addr",
@@ -3609,7 +3609,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "return_type": "bool",
@@ -3708,7 +3708,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -3814,7 +3814,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -39457,7 +39457,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr",
@@ -39787,7 +39787,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_null",
@@ -39915,7 +39915,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_offset",

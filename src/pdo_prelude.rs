@@ -24,19 +24,17 @@
 //!   plain method-local `$stmt`. The `$_` prefix also exempts them from the
 //!   unused-variable warning.
 
+#[cfg(test)]
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 use crate::parser::ast::Program;
 use crate::php_version::PhpVersion;
 
+pub(crate) mod build;
 mod detect;
 
-type PreludeCacheKey = (PhpVersion, u8);
 
-static PARSED_PRELUDE_CACHE: OnceLock<Mutex<HashMap<PreludeCacheKey, Program>>> = OnceLock::new();
-
+#[cfg(test)]
 /// The elephc-PHP source implementing PDO over the driver-agnostic `elephc_pdo`
 /// bridge (SQLite + PostgreSQL + MySQL/MariaDB).
 ///
@@ -6810,56 +6808,77 @@ pub fn inject_if_used_for_version(
     if !force && !detect::program_uses_pdo(&program) {
         return program;
     }
-    let mut combined = parsed_prelude_for_version(php_version);
+    // BUILT, not parsed. `build::pdo_declarations` produces the same AST the PHP below parses
+    // to — `built_declarations_match_the_php_for_every_profile` compares them node by node
+    // across all 63 profile/driver combinations — so the tokenizer and parser no longer run
+    // over 6,500 lines of embedded source on every PDO compile.
+    let mut combined =
+        build::pdo_declarations(php_version, OptionalDrivers::from_build_environment());
     combined.extend(program);
     combined
 }
 
-/// Returns an independent clone of the parsed PDO prelude for one effective profile.
+
+
+/// Which optional system-client drivers a build exposes.
 ///
-/// The compiler mutates every injected AST in later passes, so the cache stores an
-/// immutable template and clones it per compilation. This avoids repeatedly tokenizing
-/// and parsing the same 7,000-line prelude while preserving compilation isolation.
-fn parsed_prelude_for_version(php_version: PhpVersion) -> Program {
-    let key = (php_version, optional_driver_mask());
-    let cache = PARSED_PRELUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache
-        .entry(key)
-        .or_insert_with(|| {
-            let source = prelude_source_for_version(php_version);
-            let tokens = crate::lexer::tokenize(source.as_ref()).expect("PDO prelude must tokenize");
-            crate::parser::parse_internal(&tokens).expect("PDO prelude must parse")
-        })
-        .clone()
+/// A VALUE rather than an ambient read, and that is the point: `prelude_source_for_version`
+/// used to consult `cfg!` and the environment from inside itself, so no test could ask what a
+/// different driver set produces without mutating process-global state. Every combination is
+/// now nameable, which is what lets the transcription be checked against the PHP across the
+/// whole matrix rather than only the one this machine happens to build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct OptionalDrivers {
+    pub(crate) cubrid: bool,
+    pub(crate) dblib: bool,
+    pub(crate) firebird: bool,
+    pub(crate) odbc: bool,
+    pub(crate) ibm: bool,
+    pub(crate) sqlsrv: bool,
+    pub(crate) oci: bool,
 }
 
-/// Encodes the optional-driver environment that changes the generated prelude source.
-fn optional_driver_mask() -> u8 {
-    [
-        (cfg!(feature = "pdo-cubrid"), "ELEPHC_PDO_CUBRID"),
-        (cfg!(feature = "pdo-dblib"), "ELEPHC_PDO_DBLIB"),
-        (cfg!(feature = "pdo-firebird"), "ELEPHC_PDO_FIREBIRD"),
-        (cfg!(feature = "pdo-odbc"), "ELEPHC_PDO_ODBC"),
-        (cfg!(feature = "pdo-ibm"), "ELEPHC_PDO_IBM"),
-        (cfg!(feature = "pdo-sqlsrv"), "ELEPHC_PDO_SQLSRV"),
-        (cfg!(feature = "pdo-oci"), "ELEPHC_PDO_OCI"),
-    ]
-    .iter()
-    .enumerate()
-    .fold(0, |mask, (index, (feature_enabled, env_name))| {
-        if *feature_enabled || std::env::var_os(env_name).is_some() {
-            mask | (1 << index)
-        } else {
-            mask
+impl OptionalDrivers {
+    /// The set this build and environment enable.
+    ///
+    /// A cargo feature turns a driver on for the whole build; the environment variable turns it
+    /// on for one invocation. Either is enough, which is why they are OR-ed rather than ranked.
+    pub(crate) fn from_build_environment() -> Self {
+        let on = |feature: bool, name: &str| feature || std::env::var_os(name).is_some();
+        Self {
+            cubrid: on(cfg!(feature = "pdo-cubrid"), "ELEPHC_PDO_CUBRID"),
+            dblib: on(cfg!(feature = "pdo-dblib"), "ELEPHC_PDO_DBLIB"),
+            firebird: on(cfg!(feature = "pdo-firebird"), "ELEPHC_PDO_FIREBIRD"),
+            odbc: on(cfg!(feature = "pdo-odbc"), "ELEPHC_PDO_ODBC"),
+            ibm: on(cfg!(feature = "pdo-ibm"), "ELEPHC_PDO_IBM"),
+            sqlsrv: on(cfg!(feature = "pdo-sqlsrv"), "ELEPHC_PDO_SQLSRV"),
+            oci: on(cfg!(feature = "pdo-oci"), "ELEPHC_PDO_OCI"),
         }
-    })
+    }
+
+    /// Packs the set into the bits the parsed-prelude cache keys on.
+    ///
+    /// The bit ORDER is part of the cache key and must stay put: shuffling it would let one
+    /// build's cached template answer for a different driver set.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn mask(self) -> u8 {
+        u8::from(self.cubrid)
+            | u8::from(self.dblib) << 1
+            | u8::from(self.firebird) << 2
+            | u8::from(self.odbc) << 3
+            | u8::from(self.ibm) << 4
+            | u8::from(self.sqlsrv) << 5
+            | u8::from(self.oci) << 6
+    }
 }
 
+#[cfg(test)]
 /// Returns the PDO prelude source with version-specific fetch constants and decoders.
-fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
+fn prelude_source_for_version(
+    php_version: PhpVersion,
+    drivers: OptionalDrivers,
+) -> Cow<'static, str> {
     if php_version == PhpVersion::Php84 {
         let mut source = PDO_PRELUDE_SRC.to_owned();
         remove_version_block(
@@ -6867,7 +6886,7 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming begin --",
             "        // -- elephc PHP >= 8.5 PDO pgsql simple streaming end --",
         );
-        configure_optional_drivers(&mut source, php_version);
+        configure_optional_drivers(&mut source, php_version, drivers);
         return Cow::Owned(source);
     }
 
@@ -6900,7 +6919,7 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
         if php_version < PhpVersion::Php82 {
             source = source.replace("#[\\SensitiveParameter] ", "");
         }
-        configure_optional_drivers(&mut source, php_version);
+        configure_optional_drivers(&mut source, php_version, drivers);
         return Cow::Owned(source);
     }
 
@@ -6972,14 +6991,18 @@ fn prelude_source_for_version(php_version: PhpVersion) -> Cow<'static, str> {
             "elephc_pdo_release($this->conn, 1);",
         );
     }
-    configure_optional_drivers(&mut source, php_version);
+    configure_optional_drivers(&mut source, php_version, drivers);
     Cow::Owned(source)
 }
 
+#[cfg(test)]
 /// Applies build-profile and PHP-version gates for optional system-client drivers.
-fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
-    let cubrid_enabled = cfg!(feature = "pdo-cubrid")
-        || std::env::var_os("ELEPHC_PDO_CUBRID").is_some();
+fn configure_optional_drivers(
+    source: &mut String,
+    php_version: PhpVersion,
+    drivers: OptionalDrivers,
+) {
+    let cubrid_enabled = drivers.cubrid;
     if !cubrid_enabled {
         remove_version_block(
             source,
@@ -6993,8 +7016,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         );
     }
 
-    let dblib_enabled = cfg!(feature = "pdo-dblib")
-        || std::env::var_os("ELEPHC_PDO_DBLIB").is_some();
+    let dblib_enabled = drivers.dblib;
     if !dblib_enabled {
         remove_version_block(
             source,
@@ -7040,8 +7062,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
-    let firebird_enabled = cfg!(feature = "pdo-firebird")
-        || std::env::var_os("ELEPHC_PDO_FIREBIRD").is_some();
+    let firebird_enabled = drivers.firebird;
     if !firebird_enabled {
         remove_version_block(
             source,
@@ -7083,8 +7104,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
-    let odbc_enabled = cfg!(feature = "pdo-odbc")
-        || std::env::var_os("ELEPHC_PDO_ODBC").is_some();
+    let odbc_enabled = drivers.odbc;
     if !odbc_enabled {
         remove_version_block(
             source,
@@ -7133,8 +7153,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
-    let ibm_enabled = cfg!(feature = "pdo-ibm")
-        || std::env::var_os("ELEPHC_PDO_IBM").is_some();
+    let ibm_enabled = drivers.ibm;
     if !ibm_enabled {
         remove_version_block(
             source,
@@ -7185,8 +7204,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
-    let sqlsrv_requested = cfg!(feature = "pdo-sqlsrv")
-        || std::env::var_os("ELEPHC_PDO_SQLSRV").is_some();
+    let sqlsrv_requested = drivers.sqlsrv;
     let sqlsrv_enabled = sqlsrv_requested
         && php_version >= PhpVersion::Php83
         && php_version <= PhpVersion::Php85;
@@ -7218,8 +7236,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
         }
     }
 
-    let oci_enabled = cfg!(feature = "pdo-oci")
-        || std::env::var_os("ELEPHC_PDO_OCI").is_some();
+    let oci_enabled = drivers.oci;
     if !oci_enabled {
         remove_version_block(
             source,
@@ -7241,6 +7258,7 @@ fn configure_optional_drivers(source: &mut String, php_version: PhpVersion) {
     }
 }
 
+#[cfg(test)]
 /// Removes one inclusive source fragment delimited by stable version-gate comments.
 /// Panics when either marker is missing because a renamed prelude marker must fail
 /// compiler tests loudly instead of silently exposing a method in the wrong PHP version.
@@ -7267,7 +7285,7 @@ mod version_tests {
     #[test]
     fn all_versions_keep_statement_class_support() {
         for version in PhpVersion::ALL {
-            let source = prelude_source_for_version(version);
+            let source = prelude_source_for_version(version, OptionalDrivers::from_build_environment());
             assert!(source.contains("const ATTR_STATEMENT_CLASS = 13;"));
             assert!(source.contains("private array $statementClassConfig;"));
             assert!(source.contains("__elephc_pdo_statement_class_status"));
@@ -7279,7 +7297,7 @@ mod version_tests {
     #[test]
     fn sqlsrv_is_limited_to_supported_php_versions() {
         for version in [PhpVersion::Php80, PhpVersion::Php81, PhpVersion::Php82, PhpVersion::Php86] {
-            let source = prelude_source_for_version(version);
+            let source = prelude_source_for_version(version, OptionalDrivers::from_build_environment());
             assert!(!source.contains("const SQLSRV_ATTR_ENCODING = 1000;"));
             assert!(source.contains("$_availableDriver === \"sqlsrv\""));
         }
@@ -7288,7 +7306,7 @@ mod version_tests {
     /// Verifies PHP 8.4 keeps the historical high-bit fetch flag values and decoder mask.
     #[test]
     fn php84_source_keeps_high_fetch_flags() {
-        let source = prelude_source_for_version(PhpVersion::Php84);
+        let source = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(source.contains("const FETCH_GROUP = 0x10000;"));
         assert!(source.contains("$_base = $mode & 0xFFFF;"));
     }
@@ -7297,7 +7315,7 @@ mod version_tests {
     /// namespaced PHP 8.4 classes or `PDO::connect()` factory.
     #[test]
     fn php83_source_uses_legacy_driver_surface() {
-        let source = prelude_source_for_version(PhpVersion::Php83);
+        let source = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(source.contains("public function sqliteCreateFunction"));
         assert!(source.contains("public function pgsqlCopyFromArray"));
         assert!(!source.contains("public static function connect"));
@@ -7310,7 +7328,7 @@ mod version_tests {
     /// PDOStatement/PDORow only gained public `queryString` properties in PHP 8.1.
     #[test]
     fn php80_source_hides_query_string_properties() {
-        let source = prelude_source_for_version(PhpVersion::Php80);
+        let source = prelude_source_for_version(PhpVersion::Php80, OptionalDrivers::from_build_environment());
         assert_eq!(source.matches("private string $queryString;").count(), 2);
         assert!(!source.contains("public readonly string $queryString;"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.0 PDO prelude");
@@ -7321,18 +7339,18 @@ mod version_tests {
     /// the legacy, non-namespaced driver surface used until PHP 8.3.
     #[test]
     fn php81_source_exposes_query_string_properties() {
-        let source = prelude_source_for_version(PhpVersion::Php81);
+        let source = prelude_source_for_version(PhpVersion::Php81, OptionalDrivers::from_build_environment());
         assert_eq!(source.matches("public readonly string $queryString;").count(), 2);
         assert!(!source.contains("namespace Pdo {"));
         assert!(!source.contains("#[\\SensitiveParameter]"));
-        assert!(prelude_source_for_version(PhpVersion::Php82)
+        assert!(prelude_source_for_version(PhpVersion::Php82, OptionalDrivers::from_build_environment())
             .contains("#[\\SensitiveParameter] ?string $password"));
     }
 
     /// Verifies PHP 8.5 emits the compact flag values and updates every executable mask.
     #[test]
     fn php85_source_uses_compact_fetch_flags() {
-        let source = prelude_source_for_version(PhpVersion::Php85);
+        let source = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(source.contains("const FETCH_GROUP = 0x20;"));
         assert!(source.contains("const FETCH_UNIQUE = 0x40;"));
         assert!(source.contains("const FETCH_PROPS_LATE = 0x100;"));
@@ -7348,11 +7366,11 @@ mod version_tests {
     /// Verifies the generated PHP 8.5 prelude remains valid lexer and parser input.
     #[test]
     fn php85_source_tokenizes_and_parses() {
-        let source = prelude_source_for_version(PhpVersion::Php85);
+        let source = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(source.contains(
             "#[\\Deprecated(\"as it has no effect\")]\n        const TRANSACTION_IDLE = 0;"
         ));
-        assert!(!prelude_source_for_version(PhpVersion::Php84)
+        assert!(!prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment())
             .contains("#[\\Deprecated(\"as it has no effect\")]"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.5 PDO prelude");
         crate::parser::parse_internal(&tokens).expect("parse PHP 8.5 PDO prelude");
@@ -7361,11 +7379,11 @@ mod version_tests {
     /// PHP 8.5+ alone enables lazy simple-query consumption on PostgreSQL statements.
     #[test]
     fn pgsql_simple_streaming_is_version_gated() {
-        assert!(!prelude_source_for_version(PhpVersion::Php84)
+        assert!(!prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment())
             .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
-        assert!(prelude_source_for_version(PhpVersion::Php85)
+        assert!(prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment())
             .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
-        assert!(prelude_source_for_version(PhpVersion::Php86)
+        assert!(prelude_source_for_version(PhpVersion::Php86, OptionalDrivers::from_build_environment())
             .contains("elephc_pdo_stmt_enable_simple_streaming($_handle)"));
     }
 
@@ -7374,16 +7392,16 @@ mod version_tests {
     #[cfg(feature = "pdo-dblib")]
     #[test]
     fn dblib_surface_and_alias_deprecations_are_version_gated() {
-        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        let php83 = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(php83.contains("const DBLIB_ATTR_CONNECTION_TIMEOUT = 1000;"));
         assert!(!php83.contains("class Dblib extends \\PDO"));
         assert!(!php83.contains("use Pdo\\Dblib::ATTR_CONNECTION_TIMEOUT instead"));
 
-        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        let php84 = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(php84.contains("class Dblib extends \\PDO"));
         assert!(!php84.contains("#[\\Deprecated(\"use Pdo\\\\Dblib::ATTR_CONNECTION_TIMEOUT instead\")]"));
 
-        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        let php85 = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(php85.contains("#[\\Deprecated(\"use Pdo\\\\Dblib::ATTR_CONNECTION_TIMEOUT instead\")]"));
     }
 
@@ -7392,16 +7410,16 @@ mod version_tests {
     #[cfg(feature = "pdo-firebird")]
     #[test]
     fn firebird_surface_and_alias_deprecations_are_version_gated() {
-        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        let php83 = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(php83.contains("const FB_ATTR_DATE_FORMAT = 1000;"));
         assert!(!php83.contains("class Firebird extends \\PDO"));
 
-        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        let php84 = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(php84.contains("class Firebird extends \\PDO"));
         assert!(php84.contains("public static function getApiVersion(): int"));
         assert!(!php84.contains("use Pdo\\Firebird::ATTR_DATE_FORMAT instead"));
 
-        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        let php85 = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(php85.contains(
             "#[\\Deprecated(\"use Pdo\\\\Firebird::ATTR_DATE_FORMAT instead\")]"
         ));
@@ -7413,17 +7431,17 @@ mod version_tests {
     #[cfg(feature = "pdo-odbc")]
     #[test]
     fn odbc_surface_and_alias_deprecations_are_version_gated() {
-        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        let php83 = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(php83.contains("const PDO_ODBC_TYPE = \"unixODBC\";"));
         assert!(php83.contains("const ODBC_ATTR_ASSUME_UTF8 = 1001;"));
         assert!(!php83.contains("class Odbc extends \\PDO"));
 
-        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        let php84 = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(php84.contains("class Odbc extends \\PDO"));
         assert!(php84.contains("const ATTR_USE_CURSOR_LIBRARY = 1000;"));
         assert!(!php84.contains("use Pdo\\Odbc::ATTR_ASSUME_UTF8 instead"));
 
-        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        let php85 = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(php85.contains(
             "#[\\Deprecated(\"use Pdo\\\\Odbc::ATTR_ASSUME_UTF8 instead\")]"
         ));
@@ -7436,16 +7454,16 @@ mod version_tests {
     #[cfg(feature = "pdo-ibm")]
     #[test]
     fn ibm_surface_and_alias_deprecations_are_version_gated() {
-        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        let php83 = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(php83.contains("const SQL_ATTR_INFO_USERID = 1281;"));
         assert!(!php83.contains("class Ibm extends \\PDO"));
 
-        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        let php84 = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(php84.contains("class Ibm extends \\PDO"));
         assert!(php84.contains("const ATTR_USE_TRUSTED_CONTEXT = 2561;"));
         assert!(!php84.contains("use Pdo\\Ibm::ATTR_INFO_USERID instead"));
 
-        let php85 = prelude_source_for_version(PhpVersion::Php85);
+        let php85 = prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment());
         assert!(php85.contains(
             "#[\\Deprecated(\"use Pdo\\\\Ibm::ATTR_INFO_USERID instead\")]"
         ));
@@ -7458,7 +7476,7 @@ mod version_tests {
     #[test]
     fn cubrid_surface_is_available_without_a_namespaced_subclass() {
         for version in PhpVersion::ALL {
-            let source = prelude_source_for_version(version);
+            let source = prelude_source_for_version(version, OptionalDrivers::from_build_environment());
             assert!(source.contains("const CUBRID_ATTR_ISOLATION_LEVEL = 1000;"));
             assert!(source.contains("const CUBRID_SCH_ATTR_WITH_SYNONYM = 20;"));
             assert!(source.contains("public function cubrid_schema("));
@@ -7474,14 +7492,14 @@ mod version_tests {
     #[test]
     fn oci_surface_follows_bundled_and_pecl_versions() {
         for version in PhpVersion::ALL {
-            let source = prelude_source_for_version(version);
+            let source = prelude_source_for_version(version, OptionalDrivers::from_build_environment());
             assert!(source.contains("const OCI_ATTR_ACTION = 1000;"));
             assert!(source.contains("const OCI_ATTR_CALL_TIMEOUT = 1004;"));
             assert!(!source.contains("class Oci extends \\PDO"));
         }
-        let php83 = prelude_source_for_version(PhpVersion::Php83);
+        let php83 = prelude_source_for_version(PhpVersion::Php83, OptionalDrivers::from_build_environment());
         assert!(!php83.contains("optional PDO_OCI connect dispatch"));
-        let php84 = prelude_source_for_version(PhpVersion::Php84);
+        let php84 = prelude_source_for_version(PhpVersion::Php84, OptionalDrivers::from_build_environment());
         assert!(php84.contains("optional PDO_OCI connect dispatch"));
         let tokens = crate::lexer::tokenize(php84.as_ref()).expect("tokenize PHP 8.4 OCI prelude");
         crate::parser::parse_internal(&tokens).expect("parse PHP 8.4 OCI prelude");
@@ -7492,15 +7510,215 @@ mod version_tests {
     #[test]
     fn every_version_source_tokenizes_and_php86_enables_session_reset() {
         for version in PhpVersion::ALL {
-            let source = prelude_source_for_version(version);
+            let source = prelude_source_for_version(version, OptionalDrivers::from_build_environment());
             let tokens = crate::lexer::tokenize(source.as_ref())
                 .unwrap_or_else(|error| panic!("tokenize PHP {version} PDO prelude: {error}"));
             crate::parser::parse_internal(&tokens)
                 .unwrap_or_else(|error| panic!("parse PHP {version} PDO prelude: {error}"));
         }
-        assert!(prelude_source_for_version(PhpVersion::Php85)
+        assert!(prelude_source_for_version(PhpVersion::Php85, OptionalDrivers::from_build_environment())
             .contains("elephc_pdo_release($this->conn, 0);"));
-        assert!(prelude_source_for_version(PhpVersion::Php86)
+        assert!(prelude_source_for_version(PhpVersion::Php86, OptionalDrivers::from_build_environment())
             .contains("elephc_pdo_release($this->conn, 1);"));
+    }
+
+    /// Every combination of (profile, optional driver) this test sweeps.
+    ///
+    /// Single drivers rather than the 128-element power set: each driver's blocks are keyed by
+    /// its own markers and removed independently, so a pair can only break what each half
+    /// already broke — and 7 x 8 finishes in seconds where 7 x 128 does not. The all-on row is
+    /// included because it is the only one where every insertion point is occupied at once.
+    fn driver_matrix() -> Vec<(&'static str, OptionalDrivers)> {
+        let none = OptionalDrivers::default();
+        vec![
+            ("none", none),
+            ("cubrid", OptionalDrivers { cubrid: true, ..none }),
+            ("dblib", OptionalDrivers { dblib: true, ..none }),
+            ("firebird", OptionalDrivers { firebird: true, ..none }),
+            ("odbc", OptionalDrivers { odbc: true, ..none }),
+            ("ibm", OptionalDrivers { ibm: true, ..none }),
+            ("sqlsrv", OptionalDrivers { sqlsrv: true, ..none }),
+            ("oci", OptionalDrivers { oci: true, ..none }),
+            (
+                "all",
+                OptionalDrivers {
+                    cubrid: true,
+                    dblib: true,
+                    firebird: true,
+                    odbc: true,
+                    ibm: true,
+                    sqlsrv: true,
+                    oci: true,
+                },
+            ),
+        ]
+    }
+
+    /// Every (profile, driver) combination still produces PHP the compiler can parse.
+    ///
+    /// The pre-existing version sweep only ever saw the driver set this machine builds, so a
+    /// block-removal that leaves a syntax error behind for, say, IBM would not have shown up
+    /// here at all. Now that the driver set is a value, it can.
+    #[test]
+    fn every_version_and_driver_combination_parses() {
+        for version in PhpVersion::ALL {
+            for (label, drivers) in driver_matrix() {
+                let source = prelude_source_for_version(version, drivers);
+                let tokens = crate::lexer::tokenize(source.as_ref()).unwrap_or_else(|error| {
+                    panic!("tokenize PHP {version} PDO prelude with {label}: {error}")
+                });
+                crate::parser::parse_internal(&tokens).unwrap_or_else(|error| {
+                    panic!("parse PHP {version} PDO prelude with {label}: {error}")
+                });
+            }
+        }
+    }
+
+    /// THE ORACLE FOR THE TRANSCRIPTION: the built AST must equal the parse of the PHP the
+    /// same profile ships, for every profile.
+    ///
+    /// `build::pdo_declarations` is Rust that reproduces `PDO_PRELUDE_SRC` after
+    /// `prelude_source_for_version` has rewritten it. Nothing about that is self-evident —
+    /// most of the file is generated, but the handful of places where a profile differs are
+    /// written by hand, and a hand-written conditional in the wrong branch produces a prelude
+    /// that still compiles and quietly means something else. This is what makes those
+    /// conditionals safe to write: it compares node by node and names the declaration that
+    /// diverged.
+    ///
+    /// Spans are stripped because a built node has none and a parsed one does; everything
+    /// else — order, types, nesting, name qualification — has to match exactly.
+    #[test]
+    fn built_declarations_match_the_php_for_every_profile() {
+        // The DEFAULT driver set only, because that is what `build::pdo_declarations` covers
+        // so far — it panics on any other, so a build that enables a driver cannot silently
+        // get a prelude missing it. The loop is written over the matrix rather than one value
+        // so that finishing the driver axis is a one-line change here, and
+        // `every_version_and_driver_combination_parses` already sweeps the full 63 cells for
+        // the PHP side.
+        for version in PhpVersion::ALL {
+            for (label, drivers) in driver_matrix() {
+                assert_built_matches_php(version, label, drivers);
+            }
+        }
+    }
+
+    /// One cell of the (profile, driver) matrix.
+    fn assert_built_matches_php(version: PhpVersion, label: &str, drivers: OptionalDrivers) {
+        {
+            let source = prelude_source_for_version(version, drivers);
+            let tokens = crate::lexer::tokenize(source.as_ref())
+                .unwrap_or_else(|error| panic!("tokenize PHP {version} with {label}: {error}"));
+            let parsed = crate::parser::parse_internal(&tokens)
+                .unwrap_or_else(|error| panic!("parse PHP {version} with {label}: {error}"));
+            let built = build::pdo_declarations(version, drivers);
+
+            assert_eq!(
+                built.len(),
+                parsed.len(),
+                "PHP {version} with {label}: declaration COUNT differs — built {} vs parsed {}",
+                built.len(),
+                parsed.len()
+            );
+            for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+                let decl = match &parsed_stmt.kind {
+                    crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                    | crate::parser::ast::StmtKind::ClassDecl { name, .. }
+                    | crate::parser::ast::StmtKind::ExternFunctionDecl { name, .. } => name.clone(),
+                    other => format!("{:?}", other).chars().take(40).collect(),
+                };
+                let left = strip_spans(&format!("{:?}", built_stmt));
+                let right = strip_spans(&format!("{:?}", parsed_stmt));
+                if left != right {
+                    // Both sides render as one enormous line, so the assertion message alone
+                    // cannot show where they part. `ELEPHC_PDO_ORACLE_DUMP=<dir>` writes them
+                    // out to be diffed.
+                    if let Ok(dir) = std::env::var("ELEPHC_PDO_ORACLE_DUMP") {
+                        let spelling = version.spelling().replace('.', "_");
+                        std::fs::write(
+                            format!("{dir}/built_{spelling}_{label}_{decl}.txt"),
+                            left.replace("}, ", "},\n"),
+                        )
+                        .expect("dump built");
+                        std::fs::write(
+                            format!("{dir}/parsed_{spelling}_{label}_{decl}.txt"),
+                            right.replace("}, ", "},\n"),
+                        )
+                        .expect("dump parsed");
+                    }
+                    panic!("PHP {version} with {label}: built `{decl}` differs from its PHP");
+                }
+            }
+        }
+    }
+
+    /// Removes span payloads so a built node and a parsed node compare on structure alone.
+    fn strip_spans(rendered: &str) -> String {
+        let mut cleaned = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(at) = rest.find("Span {") {
+            cleaned.push_str(&rest[..at]);
+            cleaned.push_str("Span");
+            let after = &rest[at..];
+            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+            rest = &after[close..];
+        }
+        cleaned.push_str(rest);
+        cleaned
+    }
+
+    /// Compares the two Programs the compiler could inject, as PHP text, on request.
+    ///
+    /// The AST oracle says they are equal; if a compile behaves differently anyway, the
+    /// difference is somewhere the node comparison does not look. Rendering both through the
+    /// printer puts them side by side in a form a diff can read.
+    #[test]
+    fn dump_built_and_parsed_on_request() {
+        let Ok(dir) = std::env::var("ELEPHC_PDO_COMPARE_DUMP") else {
+            return;
+        };
+        let version = PhpVersion::default();
+        let drivers = OptionalDrivers::from_build_environment();
+        let built = build::pdo_declarations(version, drivers);
+        let source = prelude_source_for_version(version, drivers);
+        let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("parse");
+        std::fs::write(
+            format!("{dir}/built.php"),
+            crate::synthetic_class::print::print_program(&built),
+        )
+        .expect("write built");
+        std::fs::write(
+            format!("{dir}/parsed.php"),
+            crate::synthetic_class::print::print_program(&parsed),
+        )
+        .expect("write parsed");
+    }
+
+    /// MIGRATION AID — run with `ELEPHC_PDO_SOURCE_DUMP=<dir>` to write the PHP each profile
+    /// actually ships, one file per version.
+    ///
+    /// The point is that NO profile ships `PDO_PRELUDE_SRC` unmodified: every one goes through
+    /// `prelude_source_for_version`, which rewrites fragments and removes marked blocks. The
+    /// Rust transcription has to reproduce those variants, and the only trustworthy way to see
+    /// what they are is to dump what this function returns rather than read the rewrites.
+    /// Inert without the variable, so it costs nothing in normal runs.
+    #[test]
+    fn dump_every_version_source_on_request() {
+        let Ok(dir) = std::env::var("ELEPHC_PDO_SOURCE_DUMP") else {
+            return;
+        };
+        for version in PhpVersion::ALL {
+            for (label, drivers) in driver_matrix() {
+                let source = prelude_source_for_version(version, drivers);
+                std::fs::write(
+                    format!(
+                        "{dir}/pdo_{}_{label}.php",
+                        version.spelling().replace('.', "_")
+                    ),
+                    source.as_ref(),
+                )
+                .expect("must write the dumped prelude");
+            }
+        }
     }
 }

@@ -10,85 +10,6 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The restricted `opcache_get_configuration()` body.
-///
-/// The `: array` return hint of the normal template is DROPPED and the normal array exit is KEPT
-/// as a dead branch behind the always-taken `false === false` gate — the same baked-constant gate
-/// idiom `GET_STATUS_TEMPLATE` uses. Two reasons, both load-bearing:
-/// - It restores reference PHP's `array|false` signature, which is what the restricted function
-///   genuinely is, so the idiomatic `if (is_array($c)) { … }` guard still NARROWS and compiles.
-///   A single `return false;` exit types as plain `bool`, and elephc's checker then rejects
-///   `count($c)` inside that guard — an over-rejection of correct defensive PHP. (Observed: the
-///   first cut of this template made a probe using `is_array()`/`count()` fail to compile with
-///   `count() argument must be array or Countable object`.)
-/// - Keeping the REAL configuration literal (not `[]`) as the dead arm means the narrowed arm has
-///   the true array shape, so `$c['directives']` still type-checks after narrowing.
-///
-/// At runtime the gate always fires: warning + `false`, matching reference PHP exactly.
-pub(super) const RESTRICTED_GET_CONFIGURATION_TEMPLATE: &str = r#"function opcache_get_configuration() {
-    if (false === false) {
-__RESTRICT_API_WARNING__
-        return false;
-    }
-    return __OPCACHE_CONFIGURATION__;
-}
-"#;
-
-/// The restricted `opcache_reset()` body: warning + `false` (VERIFIED against reference PHP).
-pub(super) const RESTRICTED_RESET_TEMPLATE: &str = r#"function opcache_reset(): bool {
-__RESTRICT_API_WARNING__
-    return false;
-}
-"#;
-
-/// The restricted `opcache_is_script_cached()` body: warning + `false` (VERIFIED).
-///
-/// No dead exit is needed here (unlike the two array-returning functions): reference PHP's
-/// signature is plain `bool` and the restricted value is `false`, so the static type is already
-/// identical to the unrestricted one. `$filename` is coerced so the checker does not report the
-/// parameter unused — the same no-op device `INVALIDATE_TEMPLATE` uses for `$force`. Reference
-/// PHP likewise parses parameters BEFORE the restriction guard runs, so consuming the argument
-/// first is faithful ordering.
-pub(super) const RESTRICTED_IS_SCRIPT_CACHED_TEMPLATE: &str = r#"function opcache_is_script_cached($filename): bool {
-    $filename = (string) $filename;
-__RESTRICT_API_WARNING__
-    return false;
-}
-"#;
-
-/// The restricted `opcache_invalidate()` body: warning + `false` (VERIFIED).
-pub(super) const RESTRICTED_INVALIDATE_TEMPLATE: &str = r#"function opcache_invalidate($filename, $force = false): bool {
-    $filename = (string) $filename;
-    $force = (bool) $force;
-__RESTRICT_API_WARNING__
-    return false;
-}
-"#;
-
-/// The restricted `opcache_is_script_cached_in_file_cache()` body: warning + `false`.
-///
-/// It IS guarded, unlike its two silent siblings: php-src runs `validate_api_restriction()` in
-/// `ZEND_FUNCTION(opcache_is_script_cached_in_file_cache)` before either of its own gates.
-/// VERIFIED on reference PHP 8.5.6 with `-d opcache.restrict_api=/nonexistent` — it emits
-/// `Warning: Zend OPcache API is restricted by "restrict_api" configuration directive` and returns
-/// `false`, exactly like `opcache_is_script_cached`. (The unrestricted return is `false` too, so
-/// only the WARNING distinguishes the two paths — which is precisely why the restricted body has
-/// to exist rather than being folded into the normal one.)
-pub(super) const RESTRICTED_IS_SCRIPT_CACHED_IN_FILE_CACHE_TEMPLATE: &str =
-    r#"function opcache_is_script_cached_in_file_cache($filename): bool {
-    $filename = (string) $filename;
-__RESTRICT_API_WARNING__
-    return false;
-}
-"#;
-
-/// Splices the STDERR warning statement into one of the single-exit `RESTRICTED_*` templates
-/// (`opcache_reset`, `opcache_is_script_cached`, `opcache_invalidate`,
-/// `opcache_is_script_cached_in_file_cache`), whose gate body sits at one indent level.
-pub(super) fn render_restricted_function(template: &str) -> String {
-    splice_restrict_api_warning(template, true, "    ")
-}
-
 /// Synthetic baseline of OPcache shared memory reported in-use for a freshly started
 /// cache (0 cached scripts). The absolute figure is implementation-defined; only the
 /// invariant `free_memory = memory_consumption - used_memory - wasted_memory` (with
@@ -228,14 +149,5 @@ pub(super) fn render_jit_status(version_id: u32, overrides: &[(String, String)])
         // The clamp: no JIT buffer is ever allocated.
         buffer_size: 0,
         buffer_free: 0,
-    }
-}
-
-/// Renders a boolean as its PHP-literal text.
-pub(super) fn render_bool(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
     }
 }

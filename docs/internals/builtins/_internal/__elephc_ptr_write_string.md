@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_ptr_write_string(mixed $pointer, mixed $string): int
+function __elephc_ptr_write_string(pointer $pointer, mixed $string): int
 ```
 
 ## What the type checker enforces

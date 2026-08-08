@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_pdo_adapter_addr(int $kind): mixed
+function __elephc_pdo_adapter_addr(int $kind): pointer
 ```
 
 ## What the type checker enforces

@@ -22,7 +22,7 @@ builtin! {
     name: "__elephc_normalize_callable",
     area: Pointers,
     params: [value: Mixed],
-    returns: Mixed,
+    returns: Callable,
     check: check,
     semantics: internal_eir_semantics(
         lower,

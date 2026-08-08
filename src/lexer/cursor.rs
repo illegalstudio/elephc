@@ -13,6 +13,11 @@ use crate::span::Span;
 /// Lexer cursor for source tracking.
 pub struct Cursor<'a> {
     bytes: &'a [u8],
+    /// The same source as `&str`, retained so `remaining()` can slice it in O(1).
+    ///
+    /// `None` only for the test-only byte constructor, whose input may be malformed. See
+    /// `remaining` for why holding this matters.
+    text: Option<&'a str>,
     pos: usize,
     line: usize,
     col: usize,
@@ -25,6 +30,7 @@ impl<'a> Cursor<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
             bytes: source.as_bytes(),
+            text: Some(source),
             pos: 0,
             line: 1,
             col: 1,
@@ -40,6 +46,7 @@ impl<'a> Cursor<'a> {
     fn from_bytes(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
+            text: std::str::from_utf8(bytes).ok(),
             pos: 0,
             line: 1,
             col: 1,
@@ -119,9 +126,22 @@ impl<'a> Cursor<'a> {
 
     /// Returns the slice of source from the current position to the end, as a `&str`.
     ///
-    /// The slice is guaranteed to be valid UTF-8 (panics if byte range is malformed).
+    /// THIS MUST STAY O(1). `scan` calls it several times per token — to test for `<?php`,
+    /// `//`, `/*`, `#[`, `?->`, `??`, a heredoc opener and so on — so any cost proportional to
+    /// the REMAINING source makes tokenizing quadratic in file size. It used to re-run
+    /// `str::from_utf8` over the whole tail on every call, which validates every byte: a 555 KB
+    /// file spent 7.6 s in the tokenizer, and doubling the input quadrupled the time. Slicing a
+    /// `&str` that was validated once instead makes it a pointer adjustment.
+    ///
+    /// The public constructor takes `&str`, so the source is valid UTF-8 by construction and
+    /// `pos` always lands on a character boundary — `advance` consumes whole codepoints. The
+    /// boundary test guards the test-only byte constructor, which may hold malformed input;
+    /// that path keeps the previous validating behaviour, including its empty-string fallback.
     pub fn remaining(&self) -> &'a str {
-        std::str::from_utf8(&self.bytes[self.pos..]).unwrap_or("")
+        match self.text {
+            Some(text) if text.is_char_boundary(self.pos) => &text[self.pos..],
+            _ => std::str::from_utf8(&self.bytes[self.pos..]).unwrap_or(""),
+        }
     }
 }
 

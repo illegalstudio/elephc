@@ -62,13 +62,18 @@ fn stabilize_loop_storage(
                     | ExprKind::ClosureCall { .. }
                     | ExprKind::ExprCall { .. }
             );
-            if is_call {
+            // The memo is keyed by span, so it may only answer for a span that names one call.
+            // Under `Span::dummy()` every method / static / closure call in a prelude loop body
+            // shared a single entry and the FIRST call's inferred type was handed to all of
+            // them — 42 times while checking one `new PDO("sqlite::memory:")` program.
+            let memoizable = is_call && expr.span.identifies_a_node();
+            if memoizable {
                 if let Some(cached) = call_types.get(&expr.span) {
                     return Some(cached.clone());
                 }
             }
             let inferred = checker.infer_type(expr, analysis_env).ok()?;
-            if is_call {
+            if memoizable {
                 call_types.insert(expr.span, inferred.clone());
             }
             Some(inferred)

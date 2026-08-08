@@ -378,7 +378,8 @@ impl Checker {
                         // compile-time rejection. Record the throw site so EIR lowering
                         // emits the throw sequence, and continue with the declared return
                         // type so later passes stay type-consistent.
-                        self.throw_access_sites.insert(
+                        crate::types::checker::record_throw_access_site(
+                            &mut self.throw_access_sites,
                             expr.span,
                             crate::types::ThrowAccessInfo {
                                 span: expr.span,

@@ -17,7 +17,7 @@
 builtin! {
     name: "__elephc_ptr_read_string",
     area: Pointers,
-    params: [pointer: Mixed, length: Mixed],
+    params: [pointer: Ptr, length: Mixed],
     returns: Str,
     check: crate::builtins::pointers::ptr_read_string::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

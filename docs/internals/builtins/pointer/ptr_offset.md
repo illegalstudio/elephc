@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ptr_offset(pointer $pointer, int $offset): mixed
+function ptr_offset(pointer $pointer, int $offset): pointer
 ```
 
 ## What the type checker enforces

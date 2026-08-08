@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_callable_ptr(mixed $value): mixed
+function __elephc_callable_ptr(mixed $value): pointer
 ```
 
 ## What the type checker enforces

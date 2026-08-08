@@ -57,7 +57,10 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 /// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// Does nothing for classes that do not declare these methods.
 pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
-pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_signatures};
+pub(crate) use reflection::{
+    inject_builtin_reflection, patch_builtin_reflection_signatures,
+    program_may_reference_reflection,
+};
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
 pub(crate) use datetime::inject_builtin_datetime;

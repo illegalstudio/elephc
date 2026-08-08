@@ -15,8 +15,8 @@ use crate::types::PhpType;
 builtin! {
     name: "ptr_offset",
     area: Pointers,
-    params: [pointer: Mixed, offset: Mixed],
-    returns: Mixed,
+    params: [pointer: Ptr, offset: Mixed],
+    returns: Ptr,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrOffset,

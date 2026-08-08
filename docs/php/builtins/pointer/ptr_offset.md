@@ -8,7 +8,7 @@ sidebar:
 ## ptr_offset()
 
 ```php
-function ptr_offset(pointer $pointer, int $offset): mixed
+function ptr_offset(pointer $pointer, int $offset): pointer
 ```
 
 Returns a new pointer offset from the given pointer by the given byte count.
@@ -17,7 +17,7 @@ Returns a new pointer offset from the given pointer by the given byte count.
 - `$pointer` (`pointer`)
 - `$offset` (`int`)
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 ## Availability
 

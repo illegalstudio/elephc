@@ -474,6 +474,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
+    // sentinel, which no correct build should reach — see that helper for why it aborts there
+    // instead of answering "no match".
+    out.push_str(&format!(
+        ".globl {symbol}\n{symbol}:\n    .ascii {message:?}\n",
+        symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
+        message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
+    ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");

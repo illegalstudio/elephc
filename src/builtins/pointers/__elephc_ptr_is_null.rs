@@ -17,7 +17,7 @@
 builtin! {
     name: "__elephc_ptr_is_null",
     area: Pointers,
-    params: [pointer: Mixed],
+    params: [pointer: Ptr],
     returns: Bool,
     check: crate::builtins::pointers::ptr_is_null::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

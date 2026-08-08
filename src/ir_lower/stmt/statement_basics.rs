@@ -21,8 +21,12 @@ pub(super) fn release_expr_statement_result(
 }
 
 /// Emits the statement-boundary concat-buffer reset expected by the ASM backend.
+///
+/// Skipped for compiler-generated statements — which is every statement in an injected prelude,
+/// whether it carries `dummy()` or a synthetic span. Testing `line == 0` here would have started
+/// emitting resets for prelude loops the moment they were given distinct spans.
 pub(super) fn lower_statement_concat_reset(ctx: &mut LoweringContext<'_, '_>, span: Span) {
-    if span.line == 0 {
+    if !span.is_from_source() {
         return;
     }
     ctx.emit_void(

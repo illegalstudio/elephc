@@ -347,15 +347,36 @@ pub(crate) fn emit_runtime_data_user(
         json_exception_class_id,
     ));
 
+    // TWO SENTINELS, BECAUSE THEY MEAN OPPOSITE THINGS. `__rt_exception_matches` walks this table
+    // from the thrown class upwards, and a slot that is not a parent id ends the walk. Until this
+    // distinction existed, one value ended it three ways: a class with no parent (a genuine root,
+    // where stopping is the right answer), a hole in the id space, and a class whose PARENT was
+    // never emitted. The last two are broken chains, and collapsing them onto the first is how a
+    // `catch (Exception $e)` silently fails to match a thrown JsonException — the walk reaches
+    // for an ancestor that is not there and reports, in good faith, no match.
+    //
+    // `-1` still means "root, stop and report no match". `-2` means "the metadata this walk needs
+    // was never emitted", and the helper aborts on it. Nothing should ever produce a `-2` walk
+    // today: `crate::codegen_support::emitted_classes` seeds the whole throwable hierarchy for
+    // exactly this reason. The sentinel is what lets a future gate there fail loudly instead of
+    // quietly, which is the precondition for narrowing that seeding at all.
+    const CLASS_PARENT_ROOT: i64 = -1;
+    const CLASS_PARENT_ABSENT: i64 = -2;
     out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
-            let parent_id = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.parent.as_ref())
-                .and_then(|parent_name| class_id_by_name.get(parent_name))
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "-1".to_string());
+            let parent_id = match class_info_by_id.get(&class_id) {
+                // A hole in the id space: nothing was emitted under this id at all.
+                None => CLASS_PARENT_ABSENT.to_string(),
+                Some(class_info) => match class_info.parent.as_ref() {
+                    None => CLASS_PARENT_ROOT.to_string(),
+                    Some(parent_name) => match class_id_by_name.get(parent_name) {
+                        Some(id) => id.to_string(),
+                        // The chain is broken: this class has a parent, but it was not emitted.
+                        None => CLASS_PARENT_ABSENT.to_string(),
+                    },
+                },
+            };
             out.push_str(&format!("    .quad {}\n", parent_id));
         }
     }
@@ -2944,6 +2965,12 @@ mod tests {
     }
 
     /// Verifies that emit runtime data user keeps dense class tables when ids start at one.
+    ///
+    /// The fixture declares ids 1..3 and leaves 0 empty, so it also pins the two parent-id
+    /// sentinels apart: slot 0 is a HOLE and gets `-2` ("no metadata was emitted here", which
+    /// makes `__rt_exception_matches` abort), while 1..3 are genuine roots and get `-1` ("stop
+    /// walking and report no match"). Before they were distinguished, all four read `-1` and a
+    /// broken ancestor chain was indistinguishable from a class that simply had no parent.
     #[test]
     fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
         let mut classes = HashMap::new();
@@ -2973,7 +3000,7 @@ mod tests {
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
-        assert!(asm.contains("_class_parent_ids:\n    .quad -1\n    .quad -1\n    .quad -1\n    .quad -1\n"));
+        assert!(asm.contains("_class_parent_ids:\n    .quad -2\n    .quad -1\n    .quad -1\n    .quad -1\n"));
         assert!(asm.contains("_class_vtable_ptrs:\n    .quad _class_vtable_missing\n    .quad _class_vtable_1\n    .quad _class_vtable_2\n    .quad _class_vtable_3\n"));
         assert!(asm.contains("_class_static_vtable_ptrs:\n    .quad _class_static_vtable_missing\n    .quad _class_static_vtable_1\n    .quad _class_static_vtable_2\n    .quad _class_static_vtable_3\n"));
     }

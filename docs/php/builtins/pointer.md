@@ -9,11 +9,11 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`ptr()`](./pointer/ptr.md) | `(mixed $value): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr()`](./pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_get()`](./pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_is_null()`](./pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` | ✓ | ✓ |
-| [`ptr_null()`](./pointer/ptr_null.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`ptr_offset()`](./pointer/ptr_offset.md) | `(pointer $pointer, int $offset): mixed` | `mixed` | ✓ | ✓ |
+| [`ptr_null()`](./pointer/ptr_null.md) | `(): pointer` | `pointer` | ✓ | ✓ |
+| [`ptr_offset()`](./pointer/ptr_offset.md) | `(pointer $pointer, int $offset): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_read16()`](./pointer/ptr_read16.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read32()`](./pointer/ptr_read32.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read8()`](./pointer/ptr_read8.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
