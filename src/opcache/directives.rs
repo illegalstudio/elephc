@@ -289,7 +289,7 @@ fn latest_override<'a>(overrides: &'a [(String, String)], name: &str) -> Option<
 /// `--ini opcache.max_wasted_percentage=off` fall back to the compiled default (`""` → `atoi`
 /// `0` → out of range → the store is refused; VERIFIED `ini_get()` = `'5'`).
 ///
-/// MIRRORED IN PHP by `__elephc_ini_scan` in `crate::opcache_prelude`'s `ENV_OVERRIDE_HELPERS`,
+/// MIRRORED IN PHP by `__elephc_ini_scan` in `crate::opcache_prelude::build`'s environment
 /// which the runtime `ELEPHC_INI_*` path applies at exactly the same point.
 #[allow(dead_code)]
 pub fn ini_scanner_value(raw: &str) -> &str {

@@ -31,7 +31,7 @@ builtin! {
     name: "__elephc_pdo_adapter_addr",
     area: Pointers,
     params: [kind: Int],
-    returns: Mixed,
+    returns: Ptr,
     check: check,
     semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
     summary: "Returns the address of the shared __rt_pdo_* callback adapter for a kind.",

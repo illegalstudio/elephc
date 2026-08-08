@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_ptr_is_null(mixed $pointer): bool
+function __elephc_ptr_is_null(pointer $pointer): bool
 ```
 
 ## What the type checker enforces

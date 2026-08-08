@@ -24,7 +24,7 @@ pub(super) fn declarations_of(program: &Program, name: &str) -> usize {
     /// the lookup, the per-type normalizers, and both consumer surfaces.
     #[test]
 pub(super) fn renders_parsable_env_override_helpers() {
-        let helpers = render_opcache_env_helpers();
+        let helpers = rendered_block(env_override_declarations());
         // The lookup consults the `__` spelling first and the dotted one only as a fallback.
         assert!(helpers.contains("function __elephc_opcache_env(string $u, string $d): string"));
         assert!(helpers.contains("$v = (string) getenv($u);"));
@@ -74,16 +74,16 @@ pub(super) fn directive_value_expr_honors_the_override_scope() {
             ("opcache.jit", DirectiveValue::Str("disable"), "'disable'"),
             ("opcache.preload", DirectiveValue::Str(""), "''"),
         ] {
-            assert_eq!(render_directive_value_expr(name, &value), expected);
+            assert_eq!(rendered_expr(&directive_runtime_value_expr(name, &value)), expected);
         }
         // Reporting-only — the literal becomes the call's default argument.
         assert_eq!(
-            render_directive_value_expr("opcache.save_comments", &DirectiveValue::Bool(true)),
+            rendered_expr(&directive_runtime_value_expr("opcache.save_comments", &DirectiveValue::Bool(true))),
             "__elephc_opcache_env_bool('ELEPHC_INI_opcache__save_comments', \
              'ELEPHC_INI_opcache.save_comments', true)"
         );
         assert_eq!(
-            render_directive_value_expr("opcache.lockfile_path", &DirectiveValue::Str("/tmp")),
+            rendered_expr(&directive_runtime_value_expr("opcache.lockfile_path", &DirectiveValue::Str("/tmp"))),
             "__elephc_opcache_env_str('ELEPHC_INI_opcache__lockfile_path', \
              'ELEPHC_INI_opcache.lockfile_path', '/tmp')"
         );
@@ -244,15 +244,15 @@ pub(super) fn default_restrict_api_renders_byte_identical_bodies() {
                 80500,
                 &overrides
             ));
-            let status = render_get_status_function(PhpVersion::Php85, true, &manifest, &overrides, false, None);
+            let status = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &overrides, false, None));
             // No placeholder survives and no warning leaks into the default body.
             assert!(!status.contains("__RESTRICT_API_WARNING__"));
             assert!(!status.contains("restricted by"));
-            // The gate line is followed IMMEDIATELY by `return false;` — no blank line, which is
-            // what makes the removal byte-identical rather than merely whitespace-equivalent.
+            // The gate's body is EXACTLY the early return: the warning is not merely silent,
+            // it is not in the declaration at all.
             assert!(
-                status.contains("=== false) {\n        return false;\n    }"),
-                "default status gate must render exactly as before: {status}"
+                status.contains("if (true === false) { return false; }"),
+                "default status gate must carry nothing but the early return: {status}"
             );
             let _ = parse(&format!("<?php {status}"));
         }
@@ -274,12 +274,12 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
              opcache_compile_file(__FILE__);",
         );
         let injected = inject_if_used(program, PhpVersion::Php85, false, entry, &[], &overrides, None, false).0;
-        let rendered = format!("{injected:?}");
+        let debug = format!("{injected:?}");
 
         // The warning text appears once per restricted function, and never a sixth time.
         // Counted on a QUOTE-FREE slice of the message: the AST's `Debug` rendering escapes the
         // embedded `"restrict_api"` quotes, so the full const would never match here.
-        let hits = rendered.matches("API is restricted by").count();
+        let hits = debug.matches("API is restricted by").count();
         assert_eq!(
             hits, 5,
             "exactly the five restricted functions carry the warning (compile_file must not)"
@@ -287,7 +287,7 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
 
         // The two array-returning functions keep their dead array exit, so `array|false`
         // narrowing still works for callers.
-        let status = render_get_status_function(PhpVersion::Php85, true, &[], &overrides, true, None);
+        let status = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &overrides, true, None));
         assert!(
             status.contains("if (false === false)"),
             "restricted status forces the always-taken gate regardless of SAPI"
@@ -299,24 +299,22 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
         assert!(status.contains(RESTRICT_API_WARNING_TEXT));
         let _ = parse(&format!("<?php {status}"));
 
-        let config =
-            splice_restrict_api_warning(RESTRICTED_GET_CONFIGURATION_TEMPLATE, true, "        ")
-                .replace(
-                    "__OPCACHE_CONFIGURATION__",
-                    &render_configuration_literal(PhpVersion::Php85, &overrides),
-                );
+        let config = rendered(build::restricted_get_configuration_decl(
+            configuration_expr(PhpVersion::Php85, &overrides),
+            restrict_api_warning(true).unwrap(),
+        ));
         assert!(config.contains("function opcache_get_configuration() {"));
         assert!(config.contains("if (false === false)"));
         assert!(config.contains("'opcache_product_name' => 'Zend OPcache'"));
         let _ = parse(&format!("<?php {config}"));
 
         // The three bool-returning functions are single-exit: reference type is already `bool`.
-        for template in [
-            RESTRICTED_RESET_TEMPLATE,
-            RESTRICTED_IS_SCRIPT_CACHED_TEMPLATE,
-            RESTRICTED_INVALIDATE_TEMPLATE,
+        for declaration in [
+            build::restricted_reset_decl(restrict_api_warning(true).unwrap()),
+            build::restricted_is_script_cached_decl(restrict_api_warning(true).unwrap()),
+            build::restricted_invalidate_decl(restrict_api_warning(true).unwrap()),
         ] {
-            let body = render_restricted_function(template);
+            let body = rendered(declaration);
             assert!(body.contains("): bool {"));
             assert!(body.contains(RESTRICT_API_WARNING_TEXT));
             assert!(body.contains("return false;"));
@@ -324,20 +322,24 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
         }
     }
 
-    /// The rendered warning statement is the verbatim reference text with PHP's `Warning: `
+    /// The warning statement is the verbatim reference text with PHP's `Warning: `
     /// prefix — byte-identical to what the `--web` prelude's `trigger_error(..., E_WARNING)`
     /// would write, so one form serves both SAPIs.
     #[test]
 pub(super) fn restrict_api_warning_statement_is_verbatim() {
-        let expected = format!(
-            "    fwrite(STDERR, 'Warning: {RESTRICT_API_WARNING_TEXT}' . \"\\n\");"
+        let warning = crate::synthetic_class::print::print_program(&vec![restrict_api_warning(
+            true,
+        )
+        .expect("a restricted binary always carries the warning")]);
+        assert_eq!(
+            warning.trim_end(),
+            format!("fwrite(STDERR, 'Warning: {RESTRICT_API_WARNING_TEXT}' . \"\\n\");")
         );
-        assert_eq!(render_restrict_api_warning_stmt("    "), expected);
         // Pin the message itself, so a typo in the const cannot pass by matching itself.
         assert_eq!(
             RESTRICT_API_WARNING_TEXT,
             "Zend OPcache API is restricted by \"restrict_api\" configuration directive"
         );
         // Double quotes around restrict_api survive single-quoting unescaped.
-        assert!(render_restrict_api_warning_stmt("").contains("\"restrict_api\""));
+        assert!(warning.contains("\"restrict_api\""));
     }

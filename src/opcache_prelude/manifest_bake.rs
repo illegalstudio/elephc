@@ -100,53 +100,56 @@ pub fn bake_manifest(
     }
 
     let mut baked: Vec<(&str, Stmt)> = Vec::new();
-    if sites.get_status {
-        baked.push((
-            GET_STATUS_FN,
-            parse_baked_function(&render_get_status_function(
-                php_version,
-                web,
-                manifest,
-                overrides,
-                sites.restricted,
-                preload,
-            )),
-        ));
-    }
-    if sites.is_script_cached {
-        baked.push((
-            IS_SCRIPT_CACHED_FN,
-            parse_baked_function(&render_is_script_cached_function(
-                php_version,
-                web,
-                manifest,
-                overrides,
-            )),
-        ));
-    }
-    if sites.compile_file {
-        baked.push((
-            COMPILE_FILE_FN,
-            parse_baked_function(&render_compile_file_function(
-                php_version,
-                web,
-                manifest,
-                overrides,
-            )),
-        ));
-    }
-    if sites.invalidate {
-        baked.push((
-            INVALIDATE_FN,
-            parse_baked_function(&render_invalidate_function(
-                php_version,
-                web,
-                manifest,
-                overrides,
-                strict,
-            )),
-        ));
-    }
+    crate::synthetic_class::internal_declarations(|| {
+        if sites.get_status {
+            baked.push((
+                GET_STATUS_FN,
+                resolve_baked_function(get_status_declaration(
+                    php_version,
+                    web,
+                    manifest,
+                    overrides,
+                    sites.restricted,
+                    preload,
+                )),
+            ));
+        }
+        if sites.is_script_cached {
+            baked.push((
+                IS_SCRIPT_CACHED_FN,
+                resolve_baked_function(is_script_cached_declaration(
+                    php_version,
+                    web,
+                    manifest,
+                    overrides,
+                )),
+            ));
+        }
+        if sites.compile_file {
+            baked.push((
+                COMPILE_FILE_FN,
+                resolve_baked_function(compile_file_declaration(
+                    php_version,
+                    web,
+                    manifest,
+                    overrides,
+                )),
+            ));
+        }
+        if sites.invalidate {
+            baked.push((
+                INVALIDATE_FN,
+                resolve_baked_function(invalidate_declaration(
+                    php_version,
+                    web,
+                    manifest,
+                    overrides,
+                    strict,
+                )),
+            ));
+        }
+        Vec::new()
+    });
 
     let mut program = program;
     for stmt in program.iter_mut() {
@@ -169,17 +172,20 @@ pub fn bake_manifest(
     program
 }
 
-/// Parses one rendered OPcache function declaration and name-resolves it in isolation,
-/// returning the single top-level `FunctionDecl` statement [`bake_manifest`] substitutes.
+/// Name-resolves one freshly built OPcache function declaration in isolation, returning the
+/// single top-level `FunctionDecl` statement [`bake_manifest`] substitutes.
 ///
-/// The rendered source is static compiler data, so a tokenize/parse/resolve failure is a
-/// compiler bug and panics rather than degrading silently — matching `inject_if_used`.
-pub(super) fn parse_baked_function(body: &str) -> Stmt {
-    let src = format!("<?php\n{body}");
-    let tokens = crate::lexer::tokenize(&src).expect("opcache prelude must tokenize");
-    let parsed = crate::parser::parse_internal(&tokens).expect("opcache prelude must parse");
-    let mut resolved =
-        crate::name_resolver::resolve(parsed).expect("opcache prelude must name-resolve");
+/// Resolving in isolation is the same device `autoload::load_autoloaded_file` uses to splice a
+/// file produced after the main name-resolution pass, and it is exact here for a stronger reason:
+/// these bodies live in the GLOBAL namespace with no `use` imports, so every name in them
+/// (`realpath`, `in_array`, `date`, `fwrite`, `STDERR`) resolves identically whether it is
+/// resolved with the whole program's symbol table or with its own.
+///
+/// The declaration is compiler-built data, so a resolve failure is a compiler bug and panics
+/// rather than degrading silently — matching `inject_if_used`.
+pub(super) fn resolve_baked_function(declaration: Stmt) -> Stmt {
+    let mut resolved = crate::name_resolver::resolve(vec![declaration])
+        .expect("opcache prelude must name-resolve");
     assert_eq!(
         resolved.len(),
         1,

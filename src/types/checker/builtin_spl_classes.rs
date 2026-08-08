@@ -36,14 +36,27 @@ mod recursive_iterator_iterator;
 mod recursive_iterator_iterator_traversal;
 mod regex;
 mod registry;
+
+pub(crate) use registry::program_may_reference_spl;
 mod storage;
 
 /// Injects builtin SPL classes into the compiler metadata registry.
+///
+/// `register` is the pay-for-use decision (see `program_may_reference_spl`). The redeclaration
+/// CHECK runs either way and is deliberately outside it: it is a statement about the USER's
+/// declarations, not about ours. A program declaring `class SplFileInfo {}` must be told it
+/// cannot, whether or not it goes on to reference the builtin — gating the check behind the
+/// reference scan let that program compile silently, shadowing a builtin, which is exactly the
+/// quiet failure this gate is supposed to be free of. `error_tests::spl_builtins` caught it.
 pub(crate) fn inject_builtin_spl_classes(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    register: bool,
 ) -> Result<(), CompileError> {
     registry::ensure_no_redeclarations(interface_map, class_map)?;
+    if !register {
+        return Ok(());
+    }
 
     containers::insert_classes(class_map);
     storage::insert_classes(class_map);

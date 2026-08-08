@@ -17,7 +17,7 @@
 builtin! {
     name: "__elephc_ptr_write_string",
     area: Pointers,
-    params: [pointer: Mixed, string: Mixed],
+    params: [pointer: Ptr, string: Mixed],
     returns: Int,
     check: crate::builtins::pointers::ptr_write_string::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

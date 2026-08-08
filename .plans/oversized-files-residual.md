@@ -23,14 +23,19 @@ Every production Rust entry below was checked against its module preamble and to
 
 ### Embedded surfaces and canonical inventories
 
-Large mostly because source literals, version tables, exhaustive walkers, or typed registries are the contract. Splitting would separate ordering/data from the single consumer that validates it.
+Large mostly because AST BUILDERS for an injected surface, version tables, exhaustive walkers, or typed registries are the contract. Splitting would separate ordering/data from the single consumer that validates it. The prelude entries were PHP source literals until `feat/rust-synthetic-classes`; each is now one `build.rs` leaf whose declaration order IS the injected surface, which is precisely the cohesion this classification describes.
 
-- `src/image_prelude.rs` — 6003 LoC
+- `src/image_prelude.rs` — 14382 LoC
+- `src/web_prelude/build.rs` — 5314 LoC
 - `src/opcache/directives.rs` — 2957 LoC
-- `src/web_prelude.rs` — 2362 LoC
+- `src/synthetic_class.rs` — 2495 LoC
+- `src/opcache_prelude/build.rs` — 1650 LoC
 - `src/ir/runtime_fn.rs` — 1565 LoC
 - `src/codegen_support/runtime_features.rs` — 1196 LoC
+- `src/synthetic_class/transcribe.rs` — 1131 LoC
+- `src/pdo_prelude.rs` — 1042 LoC
 - `src/opcache_prelude/detect.rs` — 1033 LoC
+- `src/synthetic_class/print.rs` — 921 LoC
 - `src/builtins/registry.rs` — 852 LoC
 - `src/codegen/literal_defaults.rs` — 825 LoC
 - `src/codegen_support/platform/target.rs` — 784 LoC
@@ -43,7 +48,7 @@ Large mostly because source literals, version tables, exhaustive walkers, or typ
 - `src/termination.rs` — 649 LoC
 - `src/codegen/enum_singletons.rs` — 643 LoC
 - `src/pdo_prelude/detect.rs` — 636 LoC
-- `src/pdo_prelude.rs` — 600 LoC
+- `src/web_prelude.rs` — 593 LoC
 - `src/intrinsics.rs` — 532 LoC
 - `src/codegen_support/runtime/resource_ids.rs` — 523 LoC
 - `src/builtins/semantics.rs` — 521 LoC

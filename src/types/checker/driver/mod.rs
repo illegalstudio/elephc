@@ -18,6 +18,7 @@ use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
+    program_may_reference_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -177,7 +178,13 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map) {
+    // Pay-for-use, because the checker's walk over these 41 classes is 27 ms — 54% of the
+    // type-check phase of a trivial program. See `program_may_reference_spl` for the measurement
+    // and for why under-detecting here is a readable compile error rather than a miscompile.
+    // The redeclaration check inside runs regardless of the decision.
+    let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
+    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map, register_spl)
+    {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
@@ -186,8 +193,17 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_user_filter(&mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
-    {
+    // Pay-for-use, on the same reasoning and with the same loud failure mode as the SPL gate
+    // above: a program that never names a Reflection type should not pay for the checker to
+    // flatten, patch and validate fourteen of them. `program_may_reference_reflection` carries
+    // the measurement. The redeclaration check inside runs regardless of the decision.
+    let register_reflection = program_may_reference_reflection(program);
+    if let Err(error) = inject_builtin_reflection(
+        &interface_map,
+        &mut class_map,
+        &declared_traits,
+        register_reflection,
+    ) {
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();

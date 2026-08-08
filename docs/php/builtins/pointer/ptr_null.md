@@ -8,14 +8,14 @@ sidebar:
 ## ptr_null()
 
 ```php
-function ptr_null(): mixed
+function ptr_null(): pointer
 ```
 
 Returns a null raw pointer.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `pointer`
 
 ## Availability
 

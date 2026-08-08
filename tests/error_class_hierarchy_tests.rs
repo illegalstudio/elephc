@@ -663,3 +663,44 @@ fn catch_clause_compiles_while_static_arity_check_still_rejects() {
         "the catch clause itself must no longer be an undefined-class error, got: {diagnostics:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 8 — the classes are no longer seeded into every program
+// ---------------------------------------------------------------------------
+
+/// ArgumentCountError, AssertionError and UnhandledMatchError must survive being reached
+/// through a name the compiler can only read at RUNTIME.
+///
+/// These three used to be written into every program's class metadata unconditionally, on the
+/// theory that a runtime helper might materialize one with no EIR class reference to hang the
+/// id off. None can: the authority is the class-id symbol table in
+/// `codegen_support::runtime::data::user`, a helper stamps `[obj+0]` from a `_*_class_id`
+/// symbol, and none of the three has one — elephc rejects a bad builtin arity at compile time,
+/// `assert()` is unimplemented, and an unmatched `match` ends in a fatal terminator rather than
+/// a throw. So the seeding went, and the classes now ride in only when something names them.
+///
+/// WHICH MAKES `new $cls` THE INTERESTING ROW, and the reason this test exists rather than
+/// leaning on the by-name coverage above. The same shape is what the Reflection gate got wrong
+/// once already: a class reached through a name that is a VALUE is invisible to a scan looking
+/// for the name as syntax. `new $cls` is covered by a different mechanism
+/// (`referenced_dynamic_object_new_class_names`), and this pins that it still is.
+///
+/// A miss is not silent — the catch walk meets a `-2` parent id and aborts — but it aborts in
+/// whatever program tripped it, which is a worse place to find out than here.
+#[test]
+fn deseeded_error_classes_survive_construction_through_a_runtime_name() {
+    let dir = make_test_dir("error_hierarchy_deseeded");
+    let src = "<?php \
+        foreach (['ArgumentCountError', 'AssertionError', 'UnhandledMatchError'] as $cls) { \
+            $e = new $cls('dyn'); \
+            echo get_class($e), '|', get_parent_class($e), \"\\n\"; \
+        }";
+    let out = run_binary(&compile(&dir, src, "app"));
+    assert_eq!(
+        out,
+        "ArgumentCountError|TypeError\n\
+         AssertionError|Error\n\
+         UnhandledMatchError|Error\n",
+        "a de-seeded builtin Error class must still be constructible through a runtime name"
+    );
+}

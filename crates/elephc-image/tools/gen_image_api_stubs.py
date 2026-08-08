@@ -2,6 +2,10 @@
 """Generate throwing-stub declarations + a coverage test for the PHP image OOP
 API surface (Imagick / Gmagick families).
 
+The prelude these stubs go into is `synthetic_class` builder calls, so that is what is emitted:
+`.method(method("x").param(...).body(vec![s_throw(...)]))`, not PHP text. The transcription rules
+below are unchanged — they decide the SIGNATURE, and are independent of how it is rendered.
+
 Reads the compact method spec `crates/elephc-image/tools/api_spec.json` (one
 entry per class: name / static / params / return, extracted from the php.net
 manual — see `crates/elephc-image/tools/README.md` for provenance and
@@ -228,64 +232,129 @@ def map_return(ret, cls):
 
 
 def implemented_methods_per_class(prelude_src):
-    """Return {class_name: set(lowercased method names)} declared in the prelude."""
+    """Return {class_name: set(lowercased method names)} declared in the prelude.
+
+    The prelude is Rust builder calls, not PHP: a class is `class("Imagick")` inside a
+    `fn decl_class_imagick()`, and its methods are `method("name")`. The auto-generated region is
+    excluded via the marker comments so a re-run does not mistake its own stubs for
+    implementations and skip re-emitting them.
+    """
     classes = {}
-    # match `class ClassName ... {` blocks at column 0
-    for m in re.finditer(r"^class (\w+)[^\n]*\{", prelude_src, re.M):
-        cls = m.group(1)
+    for m in re.finditer(r'^fn (decl_class_\w+)\(\) -> Stmt \{', prelude_src, re.M):
         start = m.end()
-        # find the matching closing brace at column 0
-        end = prelude_src.find("\n}\n", start)
+        end = prelude_src.find("\nfn ", start)
         if end == -1:
             end = len(prelude_src)
         body = prelude_src[start:end]
-        # exclude any previously-spliced auto-generated stub region so the
-        # implemented set reflects only hand-written methods, not generated stubs
-        # (otherwise re-runs would treat stubs as implemented and skip them).
-        body = re.sub(
-            re.escape(MARK_BEGIN) + r".*?" + re.escape(MARK_END),
-            "",
-            body,
-            flags=re.S,
-        )
-        names = set()
-        for fm in re.finditer(r"public\s+static\s+function\s+(\w+)|public\s+function\s+(\w+)", body):
-            names.add((fm.group(1) or fm.group(2)).lower())
-        classes[cls] = names
+        name = re.search(r'class\("(\w+)"\)', body)
+        if not name:
+            continue
+        body = re.sub(re.escape(MARK_BEGIN) + r".*?" + re.escape(MARK_END), "", body, flags=re.S)
+        classes[name.group(1)] = {
+            mm.group(1).lower() for mm in re.finditer(r'method\("([^"]+)"\)', body)
+        }
     return classes
 
 
+def rust_type(php_type):
+    """One PHP type as the `synthetic_class` expression that builds it."""
+    if not php_type:
+        return None
+    if php_type.startswith("?"):
+        return "t_nullable(%s)" % rust_type(php_type[1:])
+    if "|" in php_type:
+        members = ", ".join(rust_type(part) for part in php_type.split("|"))
+        return "t_union(vec![%s])" % members
+    simple = {
+        "int": "TypeExpr::Int",
+        "float": "TypeExpr::Float",
+        "string": "TypeExpr::Str",
+        "bool": "TypeExpr::Bool",
+        "void": "TypeExpr::Void",
+        "mixed": "t_mixed()",
+        "array": "t_array()",
+    }
+    return simple.get(php_type, 't_class("%s")' % php_type)
+
+
+def rust_default(php_default):
+    """One PHP default literal as the expression that builds it.
+
+    Recognised by SHAPE rather than from a fixed table: the spec carries whatever php.net
+    documents, so a table is a list of the defaults that happened to exist when it was written.
+    Anything genuinely unrecognised still stops the generator instead of being guessed at.
+    """
+    fixed = {
+        "false": "e_bool(false)",
+        "true": "e_bool(true)",
+        "[]": "e_array(vec![])",
+        "null": "e_null()",
+    }
+    if php_default in fixed:
+        return fixed[php_default]
+    if re.fullmatch(r'"[^"]*"', php_default):
+        return "e_str(%s)" % php_default
+    if re.fullmatch(r"-?\d+", php_default):
+        value = int(php_default)
+        # A negative literal is `Negate(IntLiteral)` in the AST, not a negative IntLiteral.
+        return "e_neg(e_int(%d))" % -value if value < 0 else "e_int(%d)" % value
+    if re.fullmatch(r"-?\d+\.\d+", php_default):
+        value = float(php_default)
+        return "e_neg(e_float(%r))" % -value if value < 0 else "e_float(%r)" % value
+    raise SystemExit("unmodelled stub default: %r" % php_default)
+
+
 def emit_stub(method, cls, exc):
+    """One throwing stub, as the builder calls that construct it.
+
+    The signature comes from the same `map_param_type` / `map_default` / `map_return` rules the
+    PHP emitter used; only the rendering differs. The unused-parameter assignments are kept
+    because the checker warns on an unread parameter and a stub reads none of them.
+
+    The indentation reproduces the hand-written methods around it — the block is spliced into a
+    live builder chain, so anything else would make the generated region visibly foreign.
+    """
     name = method["name"]
-    sig_parts = []
+    out = ['            method("%s")' % name]
+    if method["static"]:
+        out.append("                .static_()")
+
+    body = []
     for p in method["params"]:
         ptype = map_param_type(p["type"], cls)
-        # lowercase only a leading uppercase char ($Imagick -> $imagick); leave
-        # the rest of the name intact so camelCase names stay PHP-idiomatic.
         raw = p["name"]
         pname = raw[0].lower() + raw[1:] if raw and raw[0].isupper() else raw
-        tok = ""
-        if ptype:
-            tok += ptype + " "
-        if p["byref"]:
-            tok += "&"
-        tok += "$" + pname
         d = map_default(p["default"], ptype, p["byref"])
-        if d is not None:
-            tok += " = " + d
-        sig_parts.append(tok)
-    ret = map_return(method["ret"], cls)
-    ret_str = ": " + ret if ret else ""
-    static = "static " if method["static"] else ""
-    lines = []
-    lines.append("    public " + static + "function " + name + "(" + ", ".join(sig_parts) + ")" + ret_str + " {")
-    for p in method["params"]:
-        raw = p["name"]
-        pname = raw[0].lower() + raw[1:] if raw and raw[0].isupper() else raw
-        lines.append('        $_u_' + pname + " = $" + pname + ";")
-    lines.append('        throw new ' + exc + '("' + cls + "::" + name + '() is not supported in elephc");')
-    lines.append("    }")
-    return "\n".join(lines)
+        rt = rust_type(ptype)
+
+        if p["byref"]:
+            hint = "Some(%s)" % rt if rt else "None"
+            if d is None:
+                out.append('                .param_by_ref("%s", %s)' % (pname, hint))
+            else:
+                out.append('                .param_by_ref_default("%s", %s, %s)'
+                           % (pname, hint, rust_default(d)))
+        elif rt is None:
+            if d is None:
+                out.append('                .param_untyped("%s")' % pname)
+            else:
+                out.append('                .param_untyped_default("%s", %s)' % (pname, rust_default(d)))
+        elif d is None:
+            out.append('                .param("%s", %s)' % (pname, rt))
+        else:
+            out.append('                .param_default("%s", %s, %s)' % (pname, rt, rust_default(d)))
+        body.append('                    s_assign("_u_%s", e_var("%s")),' % (pname, pname))
+
+    ret = rust_type(map_return(method["ret"], cls))
+    if ret:
+        out.append("                .returns(%s)" % ret)
+
+    body.append('                    s_throw(e_new("%s", vec![e_str("%s::%s() is not supported in elephc")])),'
+                % (exc, cls, name))
+    out.append("                .body(vec![")
+    out.extend(body)
+    out.append("                ]),")
+    return "        .method(\n" + "\n".join(out) + "\n        )"
 
 
 # coverage-test arg for a required (no-default) param of a given mapped type
@@ -410,11 +479,11 @@ def splice_into_prelude(src, stub_blocks):
         stubs = stub_blocks.get(cls, [])
         if not stubs:
             continue
-        # Canonical block content, no leading/trailing newline: it sits between
-        # the last hand-written method's `}\n` and the class's closing `\n}`.
-        block = "    " + MARK_BEGIN + "\n" + "\n".join(stubs) + "\n    " + MARK_END
-        # locate the class declaration line
-        m = re.search(r"^class " + cls + r"\b[^\n]*\{\n", src, re.M)
+        # Canonical block content, no leading/trailing newline: it sits among the chain's
+        # other `.method(...)` calls, between the last hand-written one and `.build()`.
+        block = "        " + MARK_BEGIN + "\n" + "\n".join(stubs) + "\n        " + MARK_END
+        # locate the class builder
+        m = re.search(r'\bclass\("' + cls + r'"\)', src)
         if not m:
             print("  WARN: class %s not found in prelude; skipping" % cls, file=sys.stderr)
             continue
@@ -427,15 +496,19 @@ def splice_into_prelude(src, stub_blocks):
         close_abs = body_start + close.start()
         body = src[body_start:close_abs]
         if MARK_BEGIN in body:
-            # already spliced: swap the marker-bounded region in place. The
-            # pattern matches only `    MARK_BEGIN ...    MARK_END` and leaves
-            # the surrounding newlines untouched, so re-running is a no-op on
-            # whitespace (idempotent).
-            pat = re.compile(re.escape("    " + MARK_BEGIN) + r".*?" + re.escape("    " + MARK_END), re.S)
+            # already spliced: swap the marker-bounded region in place. The pattern
+            # matches the markers at the chain's own indentation and leaves the surrounding
+            # newlines untouched, so re-running is a no-op on whitespace (idempotent).
+            pat = re.compile(re.escape("        " + MARK_BEGIN) + r".*?" + re.escape("        " + MARK_END), re.S)
             new_body = pat.sub(block, body, count=1)
         else:
-            # first splice: append on its own line after the last method.
-            new_body = body + "\n" + block
+            # first splice: the chain's terminating `.build()` closes the class, so the
+            # block goes just above it — after `body` would be past the expression entirely.
+            anchor = body.rfind("\n        .build()")
+            if anchor == -1:
+                print("  WARN: no .build() terminator for %s; skipping" % cls, file=sys.stderr)
+                continue
+            new_body = body[:anchor] + "\n" + block + body[anchor:]
         src = src[:body_start] + new_body + src[close_abs:]
         changed = True
     return src if changed else None

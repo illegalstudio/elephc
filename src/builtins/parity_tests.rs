@@ -42,37 +42,90 @@ const EXPECTED_EXTENSION_BUILTINS: &[&str] = &[
     "zval_unpack",
 ];
 
-/// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
-///
-/// `--strict-php` hides extension builtins at the catalog level with no notion
-/// of code origin, so a prelude calling one (instead of its `internal: true`
-/// `__elephc_*` alias) would break strict-mode compiles of programs that
-/// trigger that prelude's injection. Scans every prelude PHP source for
-/// `<name>(` call sites; bare mentions inside comments are tolerated.
-#[test]
-fn preludes_never_call_php_visible_extension_builtins() {
-    let mut extension_names: Vec<String> = vec!["buffer_new".to_string()];
+/// Returns the PHP-visible extension builtins a prelude must never call directly.
+fn php_visible_extension_builtins() -> Vec<String> {
+    let mut names: Vec<String> = vec!["buffer_new".to_string()];
     for name in registry::names() {
         let def = registry::lookup(name).expect("names() yields registered builtins");
         if def.spec.extension && !def.spec.internal {
-            extension_names.push(def.name.to_string());
+            names.push(def.name.to_string());
         }
     }
+    names
+}
 
-    let prelude_sources: &[(&str, &str)] = &[
-        ("pdo_prelude", crate::pdo_prelude::PDO_PRELUDE_SRC),
-        ("tz_prelude", crate::tz_prelude::TZ_PRELUDE_SRC),
-        ("list_id_prelude", crate::list_id_prelude::LIST_ID_PRELUDE_TEMPLATE),
-        ("var_export_prelude", crate::var_export_prelude::VAR_EXPORT_PRELUDE_SRC),
-        ("image_prelude", crate::image_prelude::IMAGE_PRELUDE_SRC),
-        ("web_prelude", crate::web_prelude::WEB_PRELUDE_SRC),
-        ("web_prelude(wrap)", crate::web_prelude::WEB_WRAP_SRC),
+/// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
+///
+/// `--strict-php` hides extension builtins at the catalog level with no notion of code origin,
+/// so a prelude calling one (instead of its `internal: true` `__elephc_*` alias) would break
+/// strict-mode compiles of programs that trigger that prelude's injection.
+///
+/// THIS USED TO BE HALF A GATE. Every prelude was PHP text, and the audit was a `grep` for
+/// `name(` that tolerated bare mentions in comments and had to reason about the character before
+/// the match to tell a call from `elephc_pdo_column_data_ptr(` or `->ptr(`. Now that every
+/// prelude builds its declarations in Rust, the audit just reads the call sites off the AST —
+/// and `called_function_names` panics on any node it does not model, so a prelude that grows a
+/// construct this audit cannot see fails loudly instead of silently leaving the net.
+#[test]
+fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
+    let extension_names = php_visible_extension_builtins();
+
+    let built: &[(&str, crate::parser::ast::Program)] = &[
+        ("hash_prelude", crate::hash_prelude::hash_declarations()),
+        ("tz_prelude", crate::tz_prelude::tz_declarations()),
+        (
+            "var_export_prelude",
+            crate::var_export_prelude::var_export_declarations(),
+        ),
+        (
+            "list_id_prelude",
+            crate::list_id_prelude::list_id_declarations(),
+        ),
+        (
+            "pdo_prelude",
+            crate::pdo_prelude::build::pdo_declarations(
+                crate::php_version::PhpVersion::default(),
+                crate::pdo_prelude::OptionalDrivers::from_build_environment(),
+            ),
+        ),
+        ("image_prelude", crate::image_prelude::image_declarations()),
+        (
+            "version_prelude",
+            crate::version_prelude::version_declarations(
+                &["zend_version", "php_sapi_name", "ini_restore"],
+                crate::web_prelude::PhpVersion::Php85,
+            ),
+        ),
+        (
+            "opcache_prelude(env)",
+            crate::opcache_prelude::env_override_declarations(),
+        ),
+        (
+            "opcache_prelude(ini)",
+            crate::opcache_prelude::ini_helper_declarations(
+                crate::web_prelude::PhpVersion::Php85,
+                &[],
+            ),
+        ),
+        (
+            "opcache_prelude(state)",
+            crate::opcache_prelude::build::state_helper_decls(),
+        ),
+        (
+            "web_prelude",
+            crate::web_prelude::build::web_declarations(
+                crate::web_prelude::PhpVersion::Php85,
+                &[],
+            ),
+        ),
+        ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
     ];
 
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, source) in prelude_sources {
+    for (prelude, program) in built {
+        let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
-            if source_calls_function(source, name) {
+            if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {
                 violations.push(format!("{prelude} calls {name}()"));
             }
         }
@@ -82,24 +135,6 @@ fn preludes_never_call_php_visible_extension_builtins() {
         "preludes must call `__elephc_*` internal aliases, not PHP-visible extension builtins:\n{}",
         violations.join("\n"),
     );
-}
-
-/// Returns true when `source` contains a plain function-call site `name(`.
-///
-/// A match is a call site only when the preceding character is not part of a
-/// longer identifier (`elephc_pdo_column_data_ptr(`), a variable (`$ptr(`), or
-/// a method/static access (`->ptr(`, `::ptr(`), so extern helpers whose names
-/// merely end with a builtin name do not count.
-fn source_calls_function(source: &str, name: &str) -> bool {
-    let needle = format!("{name}(");
-    source.match_indices(&needle).any(|(index, _)| {
-        match source[..index].chars().next_back() {
-            None => true,
-            Some(prev) => {
-                !prev.is_ascii_alphanumeric() && !matches!(prev, '_' | '$' | '>' | ':')
-            }
-        }
-    })
 }
 
 /// Verifies the registry's PHP-visible `extension: true` set matches the pinned

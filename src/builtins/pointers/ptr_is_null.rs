@@ -14,7 +14,7 @@ use crate::types::PhpType;
 builtin! {
     name: "ptr_is_null",
     area: Pointers,
-    params: [pointer: Mixed],
+    params: [pointer: Ptr],
     returns: Bool,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

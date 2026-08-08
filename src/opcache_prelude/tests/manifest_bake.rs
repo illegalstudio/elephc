@@ -140,13 +140,15 @@ pub(super) fn collect_manifest_orders_entry_then_includes_then_autoloaded() {
 pub(super) fn substitutes_a_name_resolution_identical_body() {
         let manifest = sample_manifest();
         let bodies = [
-            render_get_status_function(PhpVersion::Php85, true, &manifest, &[], false, None),
-            render_is_script_cached_function(PhpVersion::Php85, true, &manifest, &[]),
-            render_compile_file_function(PhpVersion::Php85, true, &manifest, &[]),
+            rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None)),
+            rendered(is_script_cached_declaration(PhpVersion::Php85, true, &manifest, &[])),
+            rendered(compile_file_declaration(PhpVersion::Php85, true, &manifest, &[])),
         ];
         for body in &bodies {
             // Isolated: exactly what `bake_manifest` substitutes.
-            let isolated = parse_baked_function(body);
+            let mut parsed = parse_internal(&format!("<?php\n{body}\n"));
+            assert_eq!(parsed.len(), 1, "one declaration per body");
+            let isolated = resolve_baked_function(parsed.remove(0));
             // In-program: the same declaration name-resolved alongside a namespaced caller,
             // which is the situation the declaration must survive at the injection point.
             let mut program = parse_internal(&format!("<?php\n{body}\n"));

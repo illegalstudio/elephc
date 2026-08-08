@@ -9,13 +9,23 @@
 
 use super::*;
 
-/// Injects the built-in reflection types into `class_map` after verifying
-/// none are already declared. Each type is a dummy shell; runtime population
-/// happens in codegen. Returns an error if any reflection name is already in use.
+/// Injects the built-in reflection types into `class_map` after verifying none are already
+/// declared. Each type is a dummy shell; runtime population happens in codegen. Returns an error
+/// if any reflection name is already in use.
+///
+/// `register` is `program_may_reference_reflection`'s answer, and it governs the INSERTS ONLY.
+/// The redeclaration loop below runs either way, because it is a statement about the USER's
+/// declarations rather than about ours: `class ReflectionClass {}` is an error in a program that
+/// never uses reflection just as much as in one that does. Gating the check alongside the
+/// registration is precisely the bug the SPL gate shipped and had to fix — declaring a name is
+/// not REFERENCING it, so the predicate says "no reflection here", nothing is registered, and
+/// nothing is left to collide with. It failed silently, which is the worst way for a check to
+/// fail.
 pub(crate) fn inject_builtin_reflection(
     interface_map: &HashMap<String, super::InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
     trait_names: &HashSet<String>,
+    register: bool,
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "ReflectionAttribute",
@@ -48,6 +58,10 @@ pub(crate) fn inject_builtin_reflection(
                 ),
             ));
         }
+    }
+
+    if !register {
+        return Ok(());
     }
 
     class_map.insert(

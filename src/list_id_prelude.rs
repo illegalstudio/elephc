@@ -22,54 +22,143 @@
 //!   observes the default. PER_COUNTRY with an empty country throws `ValueError`
 //!   with PHP's exact message, matching the interpreter.
 
-use crate::parser::ast::Program;
+use crate::parser::ast::{BinOp, CastType, Program};
+use crate::synthetic_class::{
+    e_array, e_binop, e_call, e_cast, e_index, e_int, e_new, e_str, e_var, function,
+    internal_declarations, s_array_push, s_assign, s_foreach, s_if, s_return, s_throw,
+};
 
 mod detect;
 mod table;
 
-/// The `__elephc_list_identifiers` source, with `__ELEPHC_TZ_GROUPS_TABLE__` as a
-/// placeholder spliced with the baked table at injection time. `replace` is used
-/// rather than `format!` so the PHP body's `{`/`}` need no escaping.
-pub(crate) const LIST_ID_PRELUDE_TEMPLATE: &str = r#"<?php
-function __elephc_list_identifiers($timezoneGroup = 2047, $countryCode = "") {
-    $table = "__ELEPHC_TZ_GROUPS_TABLE__";
-    $rows = explode(";", $table);
-    $result = [];
-    $perCountry = (($timezoneGroup & 4096) != 0);
-    if ($perCountry && $countryCode === "") {
-        throw new ValueError('DateTimeZone::listIdentifiers(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY');
-    }
-    foreach ($rows as $row) {
-        $f = explode(",", $row);
-        $name = $f[0];
-        if ($perCountry) {
-            if ($f[2] === $countryCode) {
-                $result[] = $name;
-            }
-        } else {
-            $mask = (int) $f[1];
-            if (($mask & $timezoneGroup) != 0) {
-                $result[] = $name;
-            }
-        }
-    }
-    return $result;
+/// The `ValueError` message PHP raises when `PER_COUNTRY` is requested without a country.
+/// Reproduced verbatim, including the argument numbering, because the interpreter's exact
+/// text is what programs match on.
+const PER_COUNTRY_WITHOUT_COUNTRY: &str = "DateTimeZone::listIdentifiers(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY";
+
+/// Builds `__elephc_list_identifiers`, which filters the baked timezone table by group mask
+/// or by country.
+///
+/// The parameters are UNTYPED, as in the PHP form: the internal `$countryCode` default is
+/// `""` rather than `null` because `=== null` on a null-defaulted parameter miscompiles, and
+/// the function is internal so no user observes the default.
+///
+/// The table used to be spliced into the source text through a `__ELEPHC_TZ_GROUPS_TABLE__`
+/// placeholder. It is now simply the string literal the body reads, so there is no
+/// placeholder to collide with table content and no escaping question.
+pub(crate) fn list_id_declarations() -> Program {
+    internal_declarations(|| {
+        vec![function("__elephc_list_identifiers")
+            .param_untyped_default("timezoneGroup", e_int(2047))
+            .param_untyped_default("countryCode", e_str(""))
+            .body(vec![
+                s_assign("table", e_str(table::TIMEZONE_GROUPS_TABLE)),
+                s_assign(
+                    "rows",
+                    e_call("explode", vec![e_str(";"), e_var("table")]),
+                ),
+                s_assign("result", e_array(vec![])),
+                s_assign(
+                    "perCountry",
+                    e_binop(
+                        e_binop(e_var("timezoneGroup"), BinOp::BitAnd, e_int(4096)),
+                        BinOp::NotEq,
+                        e_int(0),
+                    ),
+                ),
+                s_if(
+                    e_binop(
+                        e_var("perCountry"),
+                        BinOp::And,
+                        e_binop(e_var("countryCode"), BinOp::StrictEq, e_str("")),
+                    ),
+                    vec![s_throw(e_new(
+                        "ValueError",
+                        vec![e_str(PER_COUNTRY_WITHOUT_COUNTRY)],
+                    ))],
+                    vec![],
+                    None,
+                ),
+                s_foreach(
+                    e_var("rows"),
+                    None,
+                    "row",
+                    vec![
+                        s_assign("f", e_call("explode", vec![e_str(","), e_var("row")])),
+                        s_assign("name", e_index(e_var("f"), e_int(0))),
+                        s_if(
+                            e_var("perCountry"),
+                            vec![s_if(
+                                e_binop(
+                                    e_index(e_var("f"), e_int(2)),
+                                    BinOp::StrictEq,
+                                    e_var("countryCode"),
+                                ),
+                                vec![s_array_push("result", e_var("name"))],
+                                vec![],
+                                None,
+                            )],
+                            vec![],
+                            Some(vec![
+                                s_assign(
+                                    "mask",
+                                    e_cast(CastType::Int, e_index(e_var("f"), e_int(1))),
+                                ),
+                                s_if(
+                                    e_binop(
+                                        e_binop(
+                                            e_var("mask"),
+                                            BinOp::BitAnd,
+                                            e_var("timezoneGroup"),
+                                        ),
+                                        BinOp::NotEq,
+                                        e_int(0),
+                                    ),
+                                    vec![s_array_push("result", e_var("name"))],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                        ),
+                    ],
+                ),
+                s_return(e_var("result")),
+            ])
+            .build()]
+    })
 }
-"#;
 
 /// Prepends the `__elephc_list_identifiers` function when the program references
 /// `DateTimeZone::listIdentifiers` or `timezone_identifiers_list`; otherwise
 /// returns the program unchanged so unrelated binaries pay nothing. The prelude is
 /// hoisted function declarations only, so prepending does not change top-level
-/// execution order. Tokenize/parse failure is a compiler bug and panics rather
-/// than degrading silently.
+/// execution order.
 pub fn inject_if_used(program: Program) -> Program {
     if !detect::program_uses_list_identifiers(&program) {
         return program;
     }
-    let src = LIST_ID_PRELUDE_TEMPLATE.replace("__ELEPHC_TZ_GROUPS_TABLE__", table::TIMEZONE_GROUPS_TABLE);
-    let tokens = crate::lexer::tokenize(&src).expect("list-id prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("list-id prelude must parse");
+    let mut combined = list_id_declarations();
     combined.extend(program);
     combined
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::StmtKind;
+
+    /// Both parameters stay UNTYPED. A hint here would change how the checker infers the
+    /// callers' argument types, which is a signature change rather than a transcription.
+    #[test]
+    fn both_parameters_stay_untyped() {
+        let decl = list_id_declarations()
+            .into_iter()
+            .next()
+            .expect("one declaration");
+        let StmtKind::FunctionDecl { params, .. } = &decl.kind else {
+            panic!("expected a function declaration");
+        };
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|(_, ty, _, _)| ty.is_none()));
+    }
 }

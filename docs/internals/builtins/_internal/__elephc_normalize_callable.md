@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_normalize_callable(mixed $value): mixed
+function __elephc_normalize_callable(mixed $value): callable
 ```
 
 ## What the type checker enforces

@@ -8,12 +8,14 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
+6. No override table in ``registry.py`` declares the same builtin twice.
 
 Exits 0 on success, 1 on any failure.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -26,6 +28,15 @@ REGISTRY = REPO / "scripts" / "docs" / "builtin_registry.json"
 USER_DIR = REPO / "docs" / "php" / "builtins"
 MASTER_INDEX = REPO / "docs" / "php" / "builtins.md"
 INTERNALS_DIR = REPO / "docs" / "internals" / "builtins"
+OVERRIDE_TABLES = REPO / "scripts" / "docs" / "elephc_builtins" / "registry.py"
+# The hand-curated dicts in `registry.py` that refine what the Rust registry declares.
+OVERRIDE_TABLE_NAMES = (
+    "PARAM_TYPES",
+    "RETURN_TYPE_OVERRIDES",
+    "DESCRIPTION_OVERRIDES",
+    "RUNTIME_HELPER_OVERRIDES",
+    "REGISTRY_AREA_OVERRIDES",
+)
 
 # Link target patterns we recognise:
 #   [text](path.md)         — Markdown link to another local .md file
@@ -42,6 +53,43 @@ def area_dir(base: Path, name: str, area: str) -> Path:
     if name.startswith("__elephc_"):
         return base / "_internal" / f"{slug(name)}.md"
     return base / area.lower() / f"{slug(name)}.md"
+
+
+def _check_override_tables_have_no_duplicate_keys(errors: list[str]) -> int:
+    """Fail when a hand-curated override table declares one builtin twice.
+
+    Python keeps the last binding and drops the earlier line without a word, so a duplicate is
+    not clutter: editing the dead one is a no-op that reads exactly like a fix. `PARAM_TYPES` had
+    reached 188 duplicated keys out of 788, seven of them stating a value nobody had applied in a
+    long time. Checked mechanically because the two copies of a key sit hundreds of lines apart.
+    """
+    tree = ast.parse(OVERRIDE_TABLES.read_text(encoding="utf-8"))
+    checked = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        name = getattr(targets[0], "id", None)
+        if name not in OVERRIDE_TABLE_NAMES or not isinstance(node.value, ast.Dict):
+            continue
+        checked += 1
+        keys = [k.value for k in node.value.keys if isinstance(k, ast.Constant)]
+        for key, count in Counter(keys).items():
+            if count == 1:
+                continue
+            at = [
+                k.lineno
+                for k in node.value.keys
+                if isinstance(k, ast.Constant) and k.value == key
+            ]
+            errors.append(
+                f"{name} declares {key!r} {count} times (lines {at}); "
+                "only the last one is live — merge them into a single entry"
+            )
+    return checked
 
 
 def _check_links(path: Path, errors: list[str]) -> None:
@@ -134,6 +182,8 @@ def main() -> int:
         if path.is_file() and path.suffix == ".md" and path.name not in expected_top:
             errors.append(f"stray top-level file: {path.relative_to(REPO)}")
 
+    stats["override_tables"] = _check_override_tables_have_no_duplicate_keys(errors)
+
     # Summary
     print("=== Audit summary ===")
     print(f"Total builtins in catalog:   {len(builtins)}")
@@ -141,6 +191,7 @@ def main() -> int:
     print(f"Internals pages found:       {stats['internals_pages']}")
     print(f"Master index found:          {stats['master_index']}")
     print(f"Area index checks:           {stats['area_index_checks']}")
+    print(f"Override tables checked:     {stats['override_tables']}")
     print(f"Errors:                      {len(errors)}")
     if errors:
         print()

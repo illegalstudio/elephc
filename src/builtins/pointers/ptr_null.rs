@@ -16,7 +16,7 @@ builtin! {
     area: Pointers,
     params: [],
     arity_error: "ptr_null() takes 0 arguments",
-    returns: Mixed,
+    returns: Ptr,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrNull,

@@ -27,12 +27,15 @@ CRATE_SRC = os.path.join(ROOT, "crates", "elephc-image", "src", "**", "*.rs")
 
 
 def declared_externs():
-    """Names declared as `function elephc_*(...)` in the prelude's extern block."""
+    """Names the prelude declares as bridge entry points.
+
+    The prelude is `synthetic_class` builder calls, not PHP text: one
+    `extern_fn("elephc_x", "elephc_image")` per entry point, where the PHP form had a
+    `function elephc_x(...)` inside an `extern "elephc_image" {}` block. The ABI it names is
+    part of the pattern, so a declaration bound to some other library is not counted here.
+    """
     src = open(PRELUDE, encoding="utf-8").read()
-    start = src.index('extern "elephc_image" {')
-    end = src.index("\n}", start)  # the block's closing brace at column 0
-    block = src[start:end]
-    return set(re.findall(r"\bfunction (elephc_\w+)\s*\(", block))
+    return set(re.findall(r'extern_fn\("(elephc_\w+)", "elephc_image"\)', src))
 
 
 def exported_symbols():
