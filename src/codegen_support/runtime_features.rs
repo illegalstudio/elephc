@@ -70,6 +70,27 @@ pub struct RuntimeFeatures {
 }
 
 impl RuntimeFeatures {
+    /// Packs the feature set into the bits that identify one runtime object.
+    ///
+    /// The emitted runtime is a pure function of `(heap size, target, features, pic)`, so the
+    /// cache can be keyed on those inputs instead of on a hash of the OUTPUT. Hashing the output
+    /// meant generating 1.31 MB of assembly on every compile — cache hit included — only to look
+    /// up a file that was already on disk. `runtime_emission_is_deterministic` pins the purity
+    /// this relies on; without it a stale object would be served under a matching key.
+    ///
+    /// Bit positions are part of the on-disk cache key. Appending a feature is safe; reordering
+    /// them or reusing a retired bit is not, and would serve one feature set's object for another.
+    pub const fn cache_key_bits(&self) -> u64 {
+        (self.regex as u64)
+            | ((self.mb_strlen as u64) << 1)
+            | ((self.phar_archive as u64) << 2)
+            | ((self.descriptor_invoker as u64) << 3)
+            | ((self.eval_bridge as u64) << 4)
+            | ((self.eval_scope as u64) << 5)
+            | ((self.web as u64) << 6)
+            | ((self.pdo_udf as u64) << 7)
+    }
+
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {

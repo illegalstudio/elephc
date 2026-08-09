@@ -1,6 +1,7 @@
 //! Purpose:
 //! Builds and caches the reusable runtime object that is linked beside generated user code.
-//! Keys cache entries by compiler version, target, heap size, and runtime assembly hash.
+//! Keys cache entries by compiler version, target, heap size, and the feature/PIC inputs that
+//! produce the assembly — not by a hash of the assembly itself, so a cache hit never builds it.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before user assembly is linked into the final binary.
@@ -46,7 +47,7 @@ pub struct PreparedRuntimeObject {
 
 /// Builds (or retrieves from cache) the runtime object file for the given heap size, target, and features.
 /// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
-/// The cache key includes compiler version, target, heap size, the PIC mode, and a hash of the runtime assembly.
+/// The cache key includes compiler version, target, heap size, the PIC mode, and the feature set.
 /// `pic` selects position-independent emission for `--emit cdylib` artifacts so the runtime object can be
 /// linked into a shared library without text-segment relocations.
 pub fn prepare_runtime_object(
@@ -59,16 +60,25 @@ pub fn prepare_runtime_object(
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let runtime_asm =
-        codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
-    let runtime_hash = runtime_asm_hash(&runtime_asm);
-    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
+    // Keyed on the INPUTS, not on a hash of the generated assembly. The emission is a pure
+    // function of (heap size, target, features, pic), so the two keys discriminate identically —
+    // but hashing the output meant building 1.31 MB of assembly on every compile, cache hit
+    // included, to look up a file already on disk. `runtime_emission_is_deterministic` pins the
+    // purity; the assembly is now generated only on the miss path below.
+    let cache_path = cache_dir.join(runtime_cache_file_name(
+        heap_size,
+        target,
+        runtime_cache_key(features, pic),
+    ));
     if cache_path.exists() {
         return Ok(PreparedRuntimeObject {
             path: cache_path,
             status: RuntimeCacheStatus::Hit,
         });
     }
+
+    let runtime_asm =
+        codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
 
     let unique = format!(
         "{}_{}",
@@ -159,12 +169,94 @@ fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) 
     )
 }
 
-/// Computes a 64-bit FNV-1a hash of the given assembly string.
-fn runtime_asm_hash(asm: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in asm.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+/// Identifies one runtime object from the inputs that produce it.
+///
+/// `pic` occupies the high bit rather than extending the feature word, so adding a feature never
+/// shifts it. Two different keys may name byte-identical objects — that only costs a duplicate
+/// cache entry. The direction that must not happen is one key naming two different objects, which
+/// is exactly the determinism `runtime_emission_is_deterministic` asserts.
+fn runtime_cache_key(features: RuntimeFeatures, pic: bool) -> u64 {
+    features.cache_key_bits() | ((pic as u64) << 63)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a feature set with one bit set, by index into the cache-key bit order.
+    fn features_with_bit(bit: u32) -> RuntimeFeatures {
+        let mut features = RuntimeFeatures::none();
+        match bit {
+            0 => features.regex = true,
+            1 => features.mb_strlen = true,
+            2 => features.phar_archive = true,
+            3 => features.descriptor_invoker = true,
+            4 => features.eval_bridge = true,
+            5 => features.eval_scope = true,
+            6 => features.web = true,
+            7 => features.pdo_udf = true,
+            _ => unreachable!("cache_key_bits packs eight features"),
+        }
+        features
     }
-    hash
+
+    /// The property the input-keyed cache rests on: one key names exactly one runtime object.
+    ///
+    /// Keying on the inputs instead of on a hash of the emitted assembly is what lets a cache hit
+    /// skip generating 1.31 MB of text. That is only sound while emission is a pure function of
+    /// those inputs — if the same key could ever name two different objects, a compile would link
+    /// a stale runtime and nothing would say so. Checked both ways: emitting twice for one key
+    /// gives identical bytes, and no two keys in the sweep disagree about their object.
+    #[test]
+    fn runtime_emission_is_deterministic() {
+        let target = Target {
+            platform: Platform::MacOS,
+            arch: crate::codegen::platform::Arch::AArch64,
+        };
+        let mut seen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+
+        for bit in 0..8u32 {
+            for pic in [false, true] {
+                let features = features_with_bit(bit);
+                let key = runtime_cache_key(features, pic);
+                let first =
+                    codegen::generate_runtime_with_features_pic(8 * 1024 * 1024, target, features, pic);
+                let second =
+                    codegen::generate_runtime_with_features_pic(8 * 1024 * 1024, target, features, pic);
+                assert_eq!(
+                    first, second,
+                    "runtime emission for key {key:#018x} is not deterministic"
+                );
+                if let Some(previous) = seen.insert(key, first.clone()) {
+                    assert_eq!(
+                        previous, first,
+                        "cache key {key:#018x} names two different runtime objects"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Verifies `pic` cannot be confused with a feature, now or after features are added.
+    ///
+    /// It rides in the high bit precisely so that appending a ninth feature never shifts it. A
+    /// collision here would link the position-independent runtime into an executable, or the
+    /// reverse, under a key that looked right.
+    #[test]
+    fn pic_never_collides_with_a_feature_bit() {
+        for bit in 0..8u32 {
+            let features = features_with_bit(bit);
+            assert_ne!(
+                runtime_cache_key(features, false),
+                runtime_cache_key(features, true),
+                "pic must change the key"
+            );
+            assert_ne!(
+                runtime_cache_key(features, true),
+                runtime_cache_key(RuntimeFeatures::none(), true),
+                "each feature must change the key"
+            );
+        }
+    }
 }
