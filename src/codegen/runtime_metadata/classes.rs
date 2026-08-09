@@ -114,9 +114,9 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "ArithmeticError",     // _spl_arithmetic_error_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id
         "JsonException",       // _json_exception_class_id
-        // Exception has no id symbol of its own, but `JsonException extends
-        // RuntimeException extends Exception` puts it back through the ancestor expansion
-        // regardless; naming it here only states the dependency the walk relies on.
+        // `JsonException extends Exception` DIRECTLY, as in reference PHP, so the ancestor
+        // expansion brings Exception back regardless; naming it here only states the dependency
+        // the catch-time walk relies on. (It also has `_exception_class_id` of its own.)
         "Exception",
     ] {
         if module.class_infos.contains_key(class_name) {
@@ -150,9 +150,11 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     // only the other: 7,990 lines before, 7,990 after.
     //
     // The condition matches that one exactly: these five are thrown by id from SPL container
-    // helpers only, and RuntimeException returns through the ancestor expansion anyway because
-    // `JsonException extends RuntimeException`. See `emitted_classes` for the full reasoning and
-    // for why getting it wrong is now loud rather than silent.
+    // helpers only. RuntimeException is one of them and has no other producer — it used to come
+    // back through the ancestor expansion because `JsonException extends RuntimeException`, which
+    // was elephc's own invention; reference PHP puts JsonException directly under Exception. See
+    // `emitted_classes` for the full reasoning and for why getting it wrong is loud rather than
+    // silent.
     if ["SplDoublyLinkedList", "SplFixedArray", "IteratorIterator"]
         .iter()
         .any(|name| module.class_infos.contains_key(*name))

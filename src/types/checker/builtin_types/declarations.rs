@@ -221,12 +221,16 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
+    // `JsonException extends Exception`, DIRECTLY — verified against reference PHP 8.5.6 with
+    // `php -n -r 'var_dump(class_parents("JsonException"));'`, which answers `["Exception"]`.
+    // elephc used to put it under RuntimeException, which made
+    // `catch (RuntimeException $e)` swallow a JSON error that PHP lets escape.
     class_map.insert(
         "JsonException".to_string(),
         FlattenedClass {
             name: "JsonException".to_string(),
             span: crate::span::Span::dummy(),
-            extends: Some("RuntimeException".to_string()),
+            extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,
             is_final: false,

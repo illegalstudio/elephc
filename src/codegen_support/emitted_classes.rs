@@ -84,9 +84,10 @@ pub(super) fn collect_emitted_class_names(
     // `_spl_*_class_id` symbols — so a program with no SPL surface has no unreferenced
     // path to them. Any other route already covers itself: user code that names one is
     // in `collect_required_class_names`, and `expand_emitted_class_dependencies` pulls
-    // every ancestor to a fixed point, which is why RuntimeException survives this gate
-    // regardless — `JsonException extends RuntimeException`, and JsonException is seeded
-    // unconditionally just above.
+    // every ancestor to a fixed point. RuntimeException used to survive this gate regardless
+    // because `JsonException extends RuntimeException` — elephc's own invention, since reference
+    // PHP puts JsonException directly under Exception. With that corrected it survives only when
+    // the SPL surface is present, which is exactly when a helper can throw it.
     //
     // Getting this wrong is no longer silent: the walk meets `-2` and aborts.
     if spl_surface_is_present(classes) {

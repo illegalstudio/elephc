@@ -173,17 +173,17 @@ try {
     );
 }
 
-/// Tests that a JsonException raised for malformed UTF-8 is caught by a
-/// RuntimeException catch clause (JsonException extends RuntimeException).
+/// Tests that a JsonException raised for malformed UTF-8 is caught by an `Exception` clause and
+/// NOT by a `RuntimeException` one — `JsonException extends Exception` directly in reference PHP.
 #[test]
-fn test_json_encode_malformed_caught_as_runtime_exception() {
-    // JsonException extends RuntimeException, so a RuntimeException catch
-    // clause must catch the malformed-UTF-8 throw too.
+fn test_json_encode_malformed_caught_as_exception_not_runtime_exception() {
     let out = compile_and_run(
         r#"<?php
 try {
     json_encode("oops" . chr(0xC0), JSON_THROW_ON_ERROR);
 } catch (RuntimeException $e) {
+    echo "rte";
+} catch (Exception $e) {
     echo $e->getMessage();
 }
 "#,
