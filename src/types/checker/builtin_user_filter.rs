@@ -19,8 +19,13 @@ use crate::types::traits::FlattenedClass;
 
 /// Injects the PHP `php_user_filter` builtin so user filter classes can extend
 /// it and read the runtime-seeded public `$params` property.
+///
+/// `register` is `builtin_class_gate::program_may_reference_user_filter`. The REDECLARATION CHECK
+/// RUNS REGARDLESS, so `class php_user_filter {}` in user code is rejected exactly as before
+/// whether or not the gate wanted ours.
 pub(crate) fn inject_builtin_user_filter(
     class_map: &mut HashMap<String, FlattenedClass>,
+    register: bool,
 ) -> Result<(), CompileError> {
     let builtin_key = php_symbol_key("php_user_filter");
     if class_map
@@ -31,6 +36,9 @@ pub(crate) fn inject_builtin_user_filter(
             Span::dummy(),
             "Cannot redeclare built-in class: php_user_filter",
         ));
+    }
+    if !register {
+        return Ok(());
     }
 
     class_map.insert(

@@ -66,6 +66,9 @@ pub(crate) struct Usage {
     /// call). Its failure mode is LOUD — an undefined function at the call site — so the pruner
     /// answers it by widening the roots to the names the program does mention.
     pub(crate) dynamic_function_call: bool,
+    /// The program contains a `yield` or `yield from`, which makes its enclosing function a
+    /// generator and materializes a `Generator` object no source line names.
+    pub(crate) uses_yield: bool,
     /// A `new $c` whose class name this walk cannot resolve to a literal.
     ///
     /// `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names` lists the
@@ -91,6 +94,7 @@ impl Usage {
         self.literals.extend(other.literals);
         self.dynamic_function_call |= other.dynamic_function_call;
         self.constructs_dynamic_class |= other.constructs_dynamic_class;
+        self.uses_yield |= other.uses_yield;
         self.introspects |= other.introspects;
     }
 
@@ -708,8 +712,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::YieldFrom(inner) => scan_expr(inner, usage),
+        | ExprKind::PtrCast { expr: inner, .. } => scan_expr(inner, usage),
+        ExprKind::YieldFrom(inner) => {
+            usage.uses_yield = true;
+            scan_expr(inner, usage);
+        }
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default }
         | ExprKind::Pipe {
@@ -862,6 +869,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::BufferNew { len, .. } => scan_expr(len, usage),
         ExprKind::Yield { key, value } => {
+            usage.uses_yield = true;
             if let Some(key) = key {
                 scan_expr(key, usage);
             }

@@ -16,7 +16,10 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{traits::flatten_classes, TypeEnv};
 
-use super::builtin_throwable_gate::throwables_to_register;
+use super::builtin_class_gate::{
+    program_may_reference_fiber, program_may_reference_generator, program_may_reference_user_filter,
+    throwables_to_register,
+};
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
     program_may_reference_datetime, program_may_reference_reflection,
@@ -162,8 +165,13 @@ pub(super) fn check_types_impl(
     // computed here and reused at their own injection sites below.
     let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
     let register_reflection = program_may_reference_reflection(program);
-    let wanted_throwables =
-        throwables_to_register(program, register_spl, register_reflection);
+    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
+    // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
+    if program_may_reference_fiber(program) {
+        wanted_throwables.insert("Fiber".to_string());
+        wanted_throwables.insert("FiberError".to_string());
+    }
     if let Err(error) =
         inject_builtin_throwables(&mut interface_map, &mut class_map, &wanted_throwables)
     {
@@ -201,7 +209,13 @@ pub(super) fn check_types_impl(
     {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
+    // A `yield` materializes a Generator no source line names; that, and spelling the type, are
+    // the only two routes to it. See `program_may_reference_generator`.
+    if let Err(error) = inject_builtin_iterators(
+        &mut interface_map,
+        &mut class_map,
+        program_may_reference_generator(program),
+    ) {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
@@ -219,7 +233,11 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_user_filter(&mut class_map) {
+    // PHP's only way to write a stream filter is a class extending this one, which spells the
+    // name; `stream_filter_register` is consulted as well.
+    if let Err(error) =
+        inject_builtin_user_filter(&mut class_map, program_may_reference_user_filter(program))
+    {
         errors.extend(error.flatten());
     }
     // Pay-for-use, on the same reasoning and with the same loud failure mode as the SPL gate

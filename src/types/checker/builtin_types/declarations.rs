@@ -445,12 +445,18 @@ pub(crate) fn inject_builtin_throwables(
     // was unconditional only while `JsonException` was wrongly declared to extend it. When a
     // program does reach it, `inject_builtin_spl_exceptions` puts it back — that injection owns
     // the whole SPL hierarchy and runs after this one.
+    // `Fiber` and `FiberError` join the list on the same terms: nothing raises a FiberError
+    // without a Fiber, and a program that never names either cannot make one. When absent,
+    // `_fiber_class_id` and `_fiber_error_class_id` are emitted as `u64::MAX`, which no object
+    // header carries, so the runtime comparisons never match.
     for builtin_name in [
         "ArgumentCountError",
         "AssertionError",
         "UnhandledMatchError",
         "ReflectionException",
         "RuntimeException",
+        "Fiber",
+        "FiberError",
     ] {
         if !wanted.contains(builtin_name) {
             class_map.remove(builtin_name);

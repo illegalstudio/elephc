@@ -1,9 +1,9 @@
 //! Purpose:
-//! Decides which builtin throwable classes a program can reach, so the rest are never registered.
+//! Decides which builtin classes a program can reach, so the rest are never registered.
 //!
 //! Called from:
-//! - `crate::types::checker::driver`, which passes the answers to `inject_builtin_throwables`
-//!   and `inject_builtin_spl_exceptions`.
+//! - `crate::types::checker::driver`, which passes the answers to `inject_builtin_throwables`,
+//!   `inject_builtin_spl_exceptions`, `inject_builtin_iterators` and `inject_builtin_user_filter`.
 //!
 //! Key details:
 //! - Narrows REGISTRATION only; what gets emitted is already gated in `codegen::runtime_metadata`.
@@ -179,6 +179,53 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
     usage.classes.contains(&key) || usage.literals.contains(&key)
 }
 
+/// Returns whether `program` can reach the builtin `Generator` class.
+///
+/// A `yield` or `yield from` makes its enclosing function a generator and materializes a
+/// `Generator` object that no source line names — that is the case worth detecting, and the only
+/// other route is spelling the type (`function f(): Generator`, `$g instanceof Generator`), which
+/// the name scan covers. `new Generator` is not a route: PHP forbids constructing one directly,
+/// and `Generator` is absent from `dynamic_new::supported_dynamic_new_builtin_class_names`, so
+/// `new $c` cannot conjure one either.
+///
+/// A declared `Generator` RETURN TYPE also makes a function a generator in elephc
+/// (`ir_lower::function::is_generator_return_type`); that spells the class, so it is covered.
+///
+/// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
+/// so the runtime comparisons simply never match.
+pub(crate) fn program_may_reference_generator(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects || usage.uses_yield || program_names(&usage, "Generator")
+}
+
+/// Returns whether `program` can reach the builtin `Fiber` and `FiberError` classes.
+///
+/// Both are in `dynamic_new::supported_dynamic_new_builtin_class_names`, so a `new $c` with a
+/// computed name has to widen here exactly as it does for the throwables.
+///
+/// `FiberError` follows `Fiber` rather than being asked about separately: the fiber runtime
+/// raises it, and `codegen_support::emitted_classes` already seeds it on the same condition.
+pub(crate) fn program_may_reference_fiber(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects
+        || usage.constructs_dynamic_class
+        || program_names(&usage, "Fiber")
+        || program_names(&usage, "FiberError")
+}
+
+/// Returns whether `program` can reach the builtin `php_user_filter` class.
+///
+/// PHP's only way to write a stream filter is a class that `extends php_user_filter`, which
+/// spells the name. `stream_filter_register` is consulted as well because it is what makes such a
+/// class reachable, and a program that calls it without extending the base is already broken in a
+/// way this gate should not be the first to report.
+pub(crate) fn program_may_reference_user_filter(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects
+        || program_names(&usage, "php_user_filter")
+        || usage.references("stream_filter_register")
+}
+
 /// Adds `name` and every ancestor of it, so `catch (BadMethodCallException $e)` does not leave
 /// `BadFunctionCallException` and `LogicException` missing from the chain the checker flattens.
 fn insert_with_ancestors(name: &str, wanted: &mut HashSet<String>) {
@@ -340,6 +387,79 @@ mod tests {
                 "{name} is seeded unconditionally by codegen and must always be registered"
             );
         }
+    }
+
+    /// A `yield` is the case worth detecting: it materializes a Generator no source line names.
+    #[test]
+    fn a_yield_registers_generator() {
+        for source in [
+            "<?php function g() { yield 1; } foreach (g() as $v) { echo $v; }",
+            "<?php function g() { yield from [1, 2]; } foreach (g() as $v) { echo $v; }",
+            "<?php $f = function () { yield 1; };",
+            "<?php class C { public function m() { yield 1; } }",
+        ] {
+            assert!(
+                program_may_reference_generator(&parse(source)),
+                "should register: {source}"
+            );
+        }
+    }
+
+    /// Spelling the type is the other route, and a declared `Generator` return type is what makes
+    /// a body a generator in elephc even before its `yield` is reached.
+    #[test]
+    fn naming_generator_registers_it() {
+        assert!(program_may_reference_generator(&parse(
+            "<?php function f(): Generator { return g(); }"
+        )));
+        assert!(program_may_reference_generator(&parse(
+            "<?php if ($x instanceof Generator) { echo 1; }"
+        )));
+        assert!(program_may_reference_generator(&parse(
+            "<?php eval('function g() { yield 1; }');"
+        )));
+    }
+
+    /// The case the gate exists for: no yield anywhere, no mention of the class.
+    #[test]
+    fn a_program_without_yield_does_not_register_generator() {
+        assert!(!program_may_reference_generator(&parse("<?php echo 1;")));
+        assert!(!program_may_reference_generator(&parse(
+            "<?php function f(array $a): int { return count($a); } echo f([1]);"
+        )));
+    }
+
+    /// Fiber and FiberError are both in the dynamic-new list, so `new $c` widens here too.
+    #[test]
+    fn fiber_registers_on_a_name_or_a_dynamic_new() {
+        for source in [
+            "<?php $f = new Fiber(function () { Fiber::suspend(1); });",
+            "<?php function h(Fiber $f) {}",
+            "<?php try { f(); } catch (FiberError $e) { echo 1; }",
+            "<?php $c = $argv[1]; $o = new $c();",
+            "<?php eval('$f = new Fiber(fn () => 1);');",
+        ] {
+            assert!(
+                program_may_reference_fiber(&parse(source)),
+                "should register: {source}"
+            );
+        }
+        assert!(!program_may_reference_fiber(&parse("<?php echo 1;")));
+    }
+
+    /// A stream filter is written as a class extending php_user_filter, which spells the name.
+    #[test]
+    fn a_user_filter_registers_on_the_base_class_or_the_registrar() {
+        assert!(program_may_reference_user_filter(&parse(
+            "<?php class Up extends php_user_filter { public function filter($in, $out, &$c, $end) { return PSFS_PASS_ON; } }"
+        )));
+        assert!(program_may_reference_user_filter(&parse(
+            "<?php stream_filter_register('up', 'Up');"
+        )));
+        assert!(!program_may_reference_user_filter(&parse("<?php echo 1;")));
+        assert!(!program_may_reference_user_filter(&parse(
+            "<?php $h = fopen('php://memory', 'r+'); fwrite($h, 'x');"
+        )));
     }
 
     /// The parent edges here and the injection table in `builtin_spl_exceptions` are two copies
