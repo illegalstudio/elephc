@@ -440,11 +440,17 @@ pub(crate) fn inject_builtin_throwables(
     // `builtin_throwable_gate` carries the reasoning for why these four and no others: three have
     // no producer anywhere in elephc, and `ReflectionException` has one only inside the Reflection
     // surface that its own gate decides.
+    // `RuntimeException` is in this list because nothing raises it outside the SPL surface:
+    // `_spl_runtime_exception_class_id` is read only by `runtime/spl/doubly_linked_list.rs`. It
+    // was unconditional only while `JsonException` was wrongly declared to extend it. When a
+    // program does reach it, `inject_builtin_spl_exceptions` puts it back — that injection owns
+    // the whole SPL hierarchy and runs after this one.
     for builtin_name in [
         "ArgumentCountError",
         "AssertionError",
         "UnhandledMatchError",
         "ReflectionException",
+        "RuntimeException",
     ] {
         if !wanted.contains(builtin_name) {
             class_map.remove(builtin_name);

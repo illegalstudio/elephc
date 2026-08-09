@@ -22,11 +22,17 @@ use std::collections::HashSet;
 /// off — `1/$x` raises `DivisionByZeroError` from a codegen guard, `json_encode` raises
 /// `JsonException` through `JSON_THROW_ON_ERROR`, and neither names a class in the source.
 ///
-/// `Exception` and `RuntimeException` are here for a different reason: `JsonException extends
-/// RuntimeException extends Exception`, so the catch-time walk up `_class_parent_ids` needs both
-/// present even for a program that only ever catches the wide type.
+/// `Exception` is here for a second reason as well: `JsonException extends Exception`, so the
+/// catch-time walk up `_class_parent_ids` needs it present even for a program that only ever
+/// catches the wide type.
 ///
-/// `throwable_gate_matches_the_codegen_seed_list` pins the two together.
+/// `RuntimeException` IS NOT HERE, and used to be. Its only claim to being unconditional was
+/// that `JsonException extends RuntimeException` — which was elephc's own invention, corrected
+/// to match reference PHP. Its one producer, `_spl_runtime_exception_class_id`, is read solely by
+/// `runtime/spl/doubly_linked_list.rs`, so it now arrives with the SPL surface like the rest of
+/// that hierarchy.
+///
+/// `throwable_gate_matches_the_codegen_seed_list` pins this list against the codegen seeder.
 pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "Throwable",
     "Error",
@@ -35,7 +41,6 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "ArithmeticError",
     "DivisionByZeroError",
     "Exception",
-    "RuntimeException",
     "JsonException",
 ];
 
@@ -209,9 +214,24 @@ mod tests {
         for name in ALWAYS_REGISTERED_THROWABLES {
             assert!(wanted.contains(*name), "{name} must always be registered");
         }
-        for name in ["DomainException", "AssertionError", "ReflectionException"] {
+        for name in [
+            "DomainException",
+            "AssertionError",
+            "ReflectionException",
+            "RuntimeException",
+        ] {
             assert!(!wanted.contains(name), "{name} should have been gated out");
         }
+    }
+
+    /// Naming `RuntimeException` alone must register it without dragging in the SPL surface.
+    /// It sits in the SPL hierarchy table but is a perfectly ordinary class to catch.
+    #[test]
+    fn naming_runtime_exception_registers_it_alone() {
+        let wanted = registered("<?php try { f(); } catch (RuntimeException $e) { echo 1; }");
+        assert!(wanted.contains("RuntimeException"));
+        assert!(wanted.contains("Exception"), "its parent");
+        assert!(!wanted.contains("OutOfBoundsException"), "unrelated child");
     }
 
     /// Naming one SPL exception must bring its whole ancestor chain, because the checker flattens
