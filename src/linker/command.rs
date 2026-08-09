@@ -150,6 +150,12 @@ fn render_macos_command(
                 OsString::from("-dylib"),
                 OsString::from("-install_name"),
                 OsString::from(install_name),
+                // Collectable for the same reason as the Linux shared library: every symbol
+                // outside the export allowlist is `.private_extern`, so it is no longer an export
+                // and no longer a root. Mach-O needed the marking more than ELF did — there every
+                // `.globl` is an export by definition, so an unmarked dylib has no dead code at
+                // all from the linker's point of view.
+                OsString::from("-dead_strip"),
             ]);
         }
     }

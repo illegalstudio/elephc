@@ -86,7 +86,7 @@ pub fn generate_runtime_with_features_pic(
     // whole unreferenced `__rt_*` helpers as single atoms. cdylibs (pic) never
     // strip, and Linux uses per-section `--gc-sections` instead, so both keep
     // the monolithic object.
-    let dead_strip = !pic && target.platform == crate::codegen_support::platform::Platform::MacOS;
+    let dead_strip = target.platform == crate::codegen_support::platform::Platform::MacOS;
     let mut emitter = if pic {
         Emitter::new_pic(target)
     } else {
@@ -109,10 +109,11 @@ pub fn generate_runtime_with_features_pic(
     // runtime global must bind locally: hidden visibility prevents dynamic
     // preemption (two loaded elephc modules aliasing one runtime state) and
     // keeps the .so's dynamic symbol table down to the public ABI.
-    if pic && target.platform == crate::codegen_support::platform::Platform::Linux {
+    if pic {
         output = crate::codegen_support::visibility::append_hidden_directives(
             &output,
             &std::collections::HashSet::new(),
+            target.platform,
         );
     }
     // Footer that enables atom subdivision for `-dead_strip`. Emitted last so it

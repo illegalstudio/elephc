@@ -16,16 +16,26 @@
 //!   pre-sweep direct PC-relative references would be rejected by the linker.
 //! - Only the export allowlist (lifecycle entry points plus `#[Export]`
 //!   trampolines) keeps default visibility — those are the cdylib's public ABI.
-//! - ELF-only: Mach-O uses two-level namespace binding, so same-image
-//!   references can never be preempted there and no directive is required.
+//! - The ELF directive is `.hidden`, the Mach-O one `.private_extern`. Mach-O never needed one
+//!   for CORRECTNESS — two-level namespace binding means a same-image reference cannot be
+//!   preempted — but it needs one for SIZE: every `.globl` in a Mach-O image is an export, hence
+//!   a `-dead_strip` root, so without marking, dead stripping a dylib collects nothing.
 
 use std::collections::HashSet;
 
 /// Scans `asm` for `.globl`/`.comm` symbol declarations and returns the same
-/// assembly with a trailing block of `.hidden` directives covering every
+/// assembly with a trailing block of visibility directives covering every
 /// declared global except the names in `exported`. Symbol order follows the
-/// first declaration so output stays deterministic for the runtime cache hash.
-pub(crate) fn append_hidden_directives(asm: &str, exported: &HashSet<String>) -> String {
+/// first declaration so output stays deterministic.
+pub(crate) fn append_hidden_directives(
+    asm: &str,
+    exported: &HashSet<String>,
+    platform: crate::codegen_support::platform::Platform,
+) -> String {
+    let directive = match platform {
+        crate::codegen_support::platform::Platform::MacOS => ".private_extern ",
+        _ => ".hidden ",
+    };
     let mut seen: HashSet<&str> = HashSet::new();
     let mut hidden: Vec<&str> = Vec::new();
     for line in asm.lines() {
@@ -52,7 +62,7 @@ pub(crate) fn append_hidden_directives(asm: &str, exported: &HashSet<String>) ->
     }
     out.push_str("\n// -- internal symbols are hidden so the cdylib exports only its public ABI --\n");
     for symbol in hidden {
-        out.push_str(".hidden ");
+        out.push_str(directive);
         out.push_str(symbol);
         out.push('\n');
     }
@@ -62,6 +72,7 @@ pub(crate) fn append_hidden_directives(asm: &str, exported: &HashSet<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::Platform;
 
     /// Verifies that `.globl` and `.comm` declarations gain `.hidden`
     /// directives while exported names keep default visibility.
@@ -69,7 +80,7 @@ mod tests {
     fn hides_internal_globals_but_not_exports() {
         let asm = ".globl elephc_init\nelephc_init:\n.globl _fn_add\n_fn_add:\n.comm _concat_buf, 65536, 3\n";
         let exported: HashSet<String> = ["elephc_init".to_string()].into_iter().collect();
-        let out = append_hidden_directives(asm, &exported);
+        let out = append_hidden_directives(asm, &exported, Platform::Linux);
         assert!(out.contains(".hidden _fn_add\n"));
         assert!(out.contains(".hidden _concat_buf\n"));
         assert!(!out.contains(".hidden elephc_init"));
@@ -80,7 +91,7 @@ mod tests {
     #[test]
     fn deduplicates_and_preserves_declaration_order() {
         let asm = ".globl _b\n_b:\n.globl _a\n_a:\n.globl _b\n";
-        let out = append_hidden_directives(asm, &HashSet::new());
+        let out = append_hidden_directives(asm, &HashSet::new(), Platform::Linux);
         let b = out.find(".hidden _b").expect("hidden _b present");
         let a = out.find(".hidden _a").expect("hidden _a present");
         assert!(b < a, "first-declared symbol must be hidden first");
@@ -92,6 +103,6 @@ mod tests {
     #[test]
     fn leaves_asm_without_globals_untouched() {
         let asm = "    mov x0, #0\n    ret\n";
-        assert_eq!(append_hidden_directives(asm, &HashSet::new()), asm);
+        assert_eq!(append_hidden_directives(asm, &HashSet::new(), Platform::Linux), asm);
     }
 }

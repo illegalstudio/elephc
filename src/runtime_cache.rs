@@ -161,12 +161,40 @@ fn runtime_cache_dir() -> PathBuf {
 /// Builds the cache file name for a runtime object.
 fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
     format!(
-        "runtime-v{}-{}-rt{:016x}-heap{}.o",
+        "runtime-v{}-{}-b{:016x}-rt{:016x}-heap{}.o",
         env!("CARGO_PKG_VERSION"),
         target.as_str(),
+        compiler_build_id(),
         runtime_hash,
         heap_size
     )
+}
+
+/// Identifies the compiler build that would emit this runtime.
+///
+/// Keying on inputs rather than on a hash of the output removed something the old key gave for
+/// free: when the emitter itself changed, the output hash changed and the cache invalidated. The
+/// inputs do not, so without this a rebuilt compiler serves the PREVIOUS build's object under a
+/// matching key — silently. That is not hypothetical; it happened while developing this change,
+/// and the symptom was an optimisation that appeared to do nothing.
+///
+/// The version alone is not enough because it only moves at release time, which is precisely when
+/// the emitter is NOT changing. The executable's size and modification time move on every rebuild
+/// and cost one `stat`. A compiler that cannot inspect itself falls back to a constant: the cache
+/// then behaves as it did before this was added, which is a stale-object risk, not a wrong answer.
+fn compiler_build_id() -> u64 {
+    fn identity() -> Option<u64> {
+        let exe = std::env::current_exe().ok()?;
+        let meta = fs::metadata(exe).ok()?;
+        let modified = meta
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        Some(modified ^ (meta.len().rotate_left(32)))
+    }
+    identity().unwrap_or(0)
 }
 
 /// Identifies one runtime object from the inputs that produce it.

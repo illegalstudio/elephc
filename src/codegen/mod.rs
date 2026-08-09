@@ -74,7 +74,7 @@ use std::fmt;
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::platform::Arch;
 use crate::exports::ExportedFunction;
 use crate::ir::Module;
 use crate::types::PhpType;
@@ -303,7 +303,7 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
-    if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
+    if matches!(emit, Emit::Cdylib) {
         let mut exported: HashSet<String> = exported_functions
             .values()
             .map(|export| module.target.extern_symbol(&export.name))
@@ -316,7 +316,11 @@ fn finalize_user_asm(
         ] {
             exported.insert(module.target.extern_symbol(lifecycle));
         }
-        return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
+        return crate::codegen::visibility::append_hidden_directives(
+            &user_asm,
+            &exported,
+            module.target.platform,
+        );
     }
     user_asm
 }
