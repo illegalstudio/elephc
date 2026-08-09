@@ -91,3 +91,33 @@ fn test_dynamic_path_keeps_the_url_reader() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies an executable exports its entry point and nothing else.
+///
+/// Every other global is `.globl` only so the user and runtime objects can find each other. On
+/// Mach-O a `.globl` is an export, and an export is a dead-strip root, so leaving them unmarked
+/// put the whole per-class machinery in the export trie. Marking them costs nothing at run time —
+/// intra-image references are unaffected — and the regression is invisible without this check:
+/// the program still runs, the binary is just larger.
+#[test]
+fn test_executable_marks_its_internal_symbols() {
+    let dir = make_cli_test_dir("elephc_executable_visibility");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options("<?php echo 1;", &dir, 8_388_608, false, false);
+
+    let directive = if cfg!(target_os = "macos") {
+        ".private_extern "
+    } else {
+        ".hidden "
+    };
+    assert!(
+        user_asm.contains(directive),
+        "an executable should mark its internal globals as non-exported"
+    );
+    assert!(
+        !user_asm.contains(&format!("{directive}_main\n")),
+        "the entry point must stay exported"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -303,24 +303,31 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
-    if matches!(emit, Emit::Cdylib) {
-        let mut exported: HashSet<String> = exported_functions
-            .values()
-            .map(|export| module.target.extern_symbol(&export.name))
-            .collect();
-        for lifecycle in [
-            "elephc_init",
-            "elephc_shutdown",
-            "elephc_last_error",
-            "elephc_free",
-        ] {
-            exported.insert(module.target.extern_symbol(lifecycle));
+    let mut exported: HashSet<String> = exported_functions
+        .values()
+        .map(|export| module.target.extern_symbol(&export.name))
+        .collect();
+    match emit {
+        Emit::Cdylib => {
+            for lifecycle in [
+                "elephc_init",
+                "elephc_shutdown",
+                "elephc_last_error",
+                "elephc_free",
+            ] {
+                exported.insert(module.target.extern_symbol(lifecycle));
+            }
         }
-        return crate::codegen::visibility::append_hidden_directives(
-            &user_asm,
-            &exported,
-            module.target.platform,
-        );
+        // An executable exports only its entry point. Everything else is `.globl` purely so the
+        // two objects can find each other, and a `.globl` is an export — hence a dead-strip root,
+        // which is why unreferenced per-class machinery survived stripping.
+        Emit::Executable => {
+            exported.insert(module.target.extern_symbol("main"));
+        }
     }
-    user_asm
+    crate::codegen::visibility::append_hidden_directives(
+        &user_asm,
+        &exported,
+        module.target.platform,
+    )
 }
