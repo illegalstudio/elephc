@@ -28,6 +28,7 @@ mod ast;
 mod basics;
 mod create_from_format;
 mod factories;
+mod gate;
 mod injection;
 mod interface;
 mod interval_constructor;
@@ -81,4 +82,5 @@ use sun_sources::*;
 #[allow(unused_imports)]
 use timezone::*;
 
+pub(crate) use gate::program_may_reference_datetime;
 pub(crate) use injection::inject_builtin_datetime;

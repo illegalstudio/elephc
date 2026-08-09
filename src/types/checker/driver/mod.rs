@@ -18,7 +18,7 @@ use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
-    program_may_reference_reflection,
+    program_may_reference_datetime, program_may_reference_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -163,12 +163,25 @@ pub(super) fn check_types_impl(
     // three `DateTimeZone` introspection methods, which reference the elephc_tz
     // bridge and must not be added — and linked — for every DateTimeZone program.
     let uses_tz_introspection = checker.has_function_decl_folded("timezone_location_get");
-    inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
+    // Pay-for-use, on the same reasoning and with the same loud failure mode as the SPL and
+    // Reflection gates below: fifteen classes and an interface that the checker flattens,
+    // patches and validates for a program that never writes a date type, each class also
+    // claiming a slot in every dense `_class_*` metadata table — 76% of the type-check phase of
+    // a trivial program. `program_may_reference_datetime` carries the measurement.
+    // Gated at the call site rather than inside, because this injection has no redeclaration
+    // check to keep running — it inserts only names the program has not already declared.
+    let register_datetime = program_may_reference_datetime(program);
+    if register_datetime {
+        inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
+    }
     if let Err(error) = inject_builtin_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
-    // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval.
-    inject_builtin_date_period(&mut class_map);
+    // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval,
+    // so it can only be registered when they are.
+    if register_datetime {
+        inject_builtin_date_period(&mut class_map);
+    }
     if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
@@ -227,6 +240,8 @@ pub(super) fn check_types_impl(
     // process. Interface ids are handed out in this order and are baked into the
     // generated assembly, so an unsorted walk makes two compilations of the SAME
     // source produce different output — which defeats any content-addressed cache.
+    // Nothing below depends on the order: `build_interface_info_recursive` pulls its own
+    // parents, so the walk decides numbering and nothing else.
     let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
     interface_names.sort();
     for interface_name in interface_names {
@@ -246,7 +261,8 @@ pub(super) fn check_types_impl(
     let mut building = HashSet::new();
     // Sorted for the same reason as `interface_names` above: class ids are assigned in
     // this walk order and end up as immediates and `.quad` values in the emitted
-    // assembly, so a HashMap-ordered walk is a reproducibility hole.
+    // assembly, so a HashMap-ordered walk is a reproducibility hole. They also reach the
+    // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
     for class_name in class_names {
@@ -303,6 +319,7 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
         &flattened_classes,
@@ -362,4 +379,73 @@ pub(super) fn check_types_impl(
     }
 
     Ok((checker, final_global_env))
+}
+
+/// Prints every class the checker registered, with its id, when `ELEPHC_CLASS_INVENTORY=1`.
+///
+/// The dense `_class_*` metadata tables are `max_class_id + 1` entries wide, and every id no
+/// emitted class claims costs an 8-byte `-2` sentinel in each of roughly twenty-five tables.
+/// Counting those slots in the emitted assembly says HOW MANY are wasted; only this says WHICH
+/// classes hold them, which is what decides whether a registration is worth gating.
+fn report_class_id_inventory(checker: &Checker) {
+    if std::env::var("ELEPHC_CLASS_INVENTORY").as_deref() != Ok("1") {
+        return;
+    }
+    let mut rows: Vec<(u64, &str)> = checker
+        .classes
+        .iter()
+        .map(|(name, class_info)| (class_info.class_id, name.as_str()))
+        .collect();
+    rows.sort();
+    eprintln!("class inventory: {} registered", rows.len());
+    for (class_id, name) in rows {
+        eprintln!("  {class_id:>3}  {name}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Class ids must not depend on HashMap iteration order.
+    ///
+    /// THIS TEST CANNOT BE WRITTEN AS "check the same source twice and compare". Rust seeds its
+    /// hasher once per PROCESS, so two checks inside one test observe the same iteration order
+    /// and agree whether or not the driver sorts — the bug this guards was only visible by
+    /// running the compiler binary twice. So it asserts the property directly instead: classes
+    /// with no inheritance between them take ids in sorted name order. Eight of them make an
+    /// accidental pass a 1-in-40320 event.
+    ///
+    /// Declared in reverse so that "ids follow declaration order" fails it too.
+    #[test]
+    fn unrelated_classes_take_ids_in_a_stable_order() {
+        let source = "<?php class Hotel {} class Golf {} class Foxtrot {} class Echo_ {} \
+                      class Delta {} class Charlie {} class Bravo {} class Alpha {}";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let checked = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Platform::MacOS,
+        )
+        .expect("check");
+
+        let mut declared: Vec<(u64, &str)> = [
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo_", "Foxtrot", "Golf", "Hotel",
+        ]
+        .iter()
+        .map(|name| {
+            let class_info = checked
+                .classes
+                .get(*name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            (class_info.class_id, *name)
+        })
+        .collect();
+        declared.sort();
+
+        let by_id: Vec<&str> = declared.iter().map(|(_, name)| *name).collect();
+        assert_eq!(
+            by_id,
+            vec!["Alpha", "Bravo", "Charlie", "Delta", "Echo_", "Foxtrot", "Golf", "Hotel"],
+            "class ids should follow sorted names, not hash or declaration order"
+        );
+    }
 }
