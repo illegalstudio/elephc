@@ -181,6 +181,41 @@ mechanism:
 Shared libraries (`--emit cdylib`) keep the full runtime, since any exported
 symbol may be reached by a host the linker cannot see.
 
+## Symbol stripping
+
+Dead stripping removes unreachable *code*. Stripping removes the *names* of the
+code that stays. The two are independent: the first changes what runs, the
+second changes only what the file says about itself.
+
+A linked **executable** is stripped of its symbol table. Nothing in a compiled
+program reads those names — `Throwable::getTrace()` and `getTraceAsString()` are
+not implemented, and the uncaught-exception report prints no stack trace — so
+they are dead weight at run time, and they are roughly a quarter of the file:
+
+| program | linked | stripped |
+|---|--:|--:|
+| `<?php echo 1;` | 182 680 B | 132 760 B (−27%) |
+| a realistic program | 213 528 B | 152 152 B (−29%) |
+
+The share grows with the program rather than shrinking, because the symbol table
+scales with the number of declarations while the text section does not.
+
+Two flags keep the names, for the two reasons to want them:
+
+- `--debug-info` already means "I am going to debug this". Stripping runs after
+  `dsymutil` has baked the dSYM, never before — a stripped binary has no debug
+  map for it to read.
+- `--keep-symbols` is for profilers, which read the symbol table and have no
+  other source of names.
+
+**Shared libraries are never stripped.** Their exported symbols are their
+interface: a host resolving one with `dlsym` would get a null it may well treat
+as "feature absent" rather than as an error.
+
+If the `strip` tool is missing, or cannot read the target's object format, the
+compiler warns and keeps the larger binary. A failed build would be the worse
+outcome for what is only a size optimization.
+
 ## Binary hardening
 
 Compiled binaries are hardened by default. There is no flag: the options below

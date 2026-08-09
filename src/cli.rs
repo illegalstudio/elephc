@@ -642,6 +642,56 @@ mod tests {
         config
     }
 
+    /// Verifies the symbol table is stripped unless the invocation asks to keep it.
+    ///
+    /// The default is the load-bearing part: stripping removes about a quarter of every linked
+    /// executable, so a regression that silently flipped this back would cost that on every build
+    /// while breaking nothing a test would otherwise notice.
+    #[test]
+    fn symbols_are_stripped_unless_kept() {
+        let default = compile_config(&["elephc".to_string(), "app.php".to_string()]);
+        assert!(!default.keep_symbols, "stripping is the default");
+
+        let kept = compile_config(&[
+            "elephc".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(kept.keep_symbols, "--keep-symbols must keep the symbol table");
+    }
+
+    /// Verifies `--debug-info` and `--keep-symbols` are independent flags.
+    ///
+    /// They are consumed together at link time — either one keeps the names — but each must parse
+    /// on its own, so that reading one out of the config cannot be mistaken for the other.
+    #[test]
+    fn debug_info_and_keep_symbols_parse_independently() {
+        let debug = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(debug.emit_debug_info);
+        assert!(!debug.keep_symbols, "--debug-info is not --keep-symbols");
+
+        let both = compile_config(&[
+            "elephc".to_string(),
+            "--debug-info".to_string(),
+            "--keep-symbols".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(both.emit_debug_info && both.keep_symbols);
+    }
+
+    /// Verifies `--keep-symbols` appears in the help text.
+    ///
+    /// `docs/compiling/cli-reference.md` is authoritative and must stay in sync with this file; a
+    /// flag missing from `--help` is the first way those two drift apart.
+    #[test]
+    fn keep_symbols_is_documented_in_help() {
+        assert!(HELP.contains("--keep-symbols"));
+    }
+
     /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
     /// so the two spellings no longer behave inconsistently.
     #[test]
