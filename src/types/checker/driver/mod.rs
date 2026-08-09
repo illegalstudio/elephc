@@ -16,6 +16,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{traits::flatten_classes, TypeEnv};
 
+use super::builtin_throwable_gate::throwables_to_register;
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
     program_may_reference_datetime, program_may_reference_reflection,
@@ -155,7 +156,17 @@ pub(super) fn check_types_impl(
             );
         }
     }
-    if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
+    // Both surface gates are pure functions of the program, and the throwable gate needs their
+    // answers: SPL container helpers throw five exceptions by id and the Reflection helpers throw
+    // ReflectionException, none of them naming a class any scan of the source can see. They are
+    // computed here and reused at their own injection sites below.
+    let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
+    let register_reflection = program_may_reference_reflection(program);
+    let wanted_throwables =
+        throwables_to_register(program, register_spl, register_reflection);
+    if let Err(error) =
+        inject_builtin_throwables(&mut interface_map, &mut class_map, &wanted_throwables)
+    {
         errors.extend(error.flatten());
     }
     // The tz_prelude (injected upstream only when the program uses timezone
@@ -182,7 +193,12 @@ pub(super) fn check_types_impl(
     if register_datetime {
         inject_builtin_date_period(&mut class_map);
     }
-    if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
+    // Pay-for-use like the families around it, but per-class rather than all-or-nothing: naming
+    // one of these registers it and its ancestors, and nothing else. Eight of the thirteen have
+    // no producer anywhere in elephc, so a program that never writes the name cannot reach them.
+    if let Err(error) =
+        inject_builtin_spl_exceptions(&mut interface_map, &mut class_map, &wanted_throwables)
+    {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
@@ -194,8 +210,8 @@ pub(super) fn check_types_impl(
     // Pay-for-use, because the checker's walk over these 41 classes is 27 ms — 54% of the
     // type-check phase of a trivial program. See `program_may_reference_spl` for the measurement
     // and for why under-detecting here is a readable compile error rather than a miscompile.
-    // The redeclaration check inside runs regardless of the decision.
-    let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
+    // The redeclaration check inside runs regardless of the decision. (`register_spl` is computed
+    // above, because the throwable gate needs it too.)
     if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map, register_spl)
     {
         errors.extend(error.flatten());
@@ -210,7 +226,7 @@ pub(super) fn check_types_impl(
     // above: a program that never names a Reflection type should not pay for the checker to
     // flatten, patch and validate fourteen of them. `program_may_reference_reflection` carries
     // the measurement. The redeclaration check inside runs regardless of the decision.
-    let register_reflection = program_may_reference_reflection(program);
+    // (`register_reflection` is computed above, because the throwable gate needs it too.)
     if let Err(error) = inject_builtin_reflection(
         &interface_map,
         &mut class_map,

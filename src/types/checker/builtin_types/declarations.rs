@@ -73,6 +73,7 @@ impl Clone for InterfaceDeclInfo {
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    wanted: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "Throwable",
@@ -425,6 +426,26 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
+
+    // Drop the four the program cannot reach, AFTER the redeclaration check above has run over
+    // the whole list — so `class ArgumentCountError {}` in user code is still rejected exactly as
+    // before, whether or not the gate wanted ours. Removing here rather than gating each literal
+    // block keeps the fourteen declarations reading as one table; building four `FlattenedClass`
+    // values and dropping them costs nothing measurable next to flattening them.
+    //
+    // `builtin_throwable_gate` carries the reasoning for why these four and no others: three have
+    // no producer anywhere in elephc, and `ReflectionException` has one only inside the Reflection
+    // surface that its own gate decides.
+    for builtin_name in [
+        "ArgumentCountError",
+        "AssertionError",
+        "UnhandledMatchError",
+        "ReflectionException",
+    ] {
+        if !wanted.contains(builtin_name) {
+            class_map.remove(builtin_name);
+        }
+    }
 
     Ok(())
 }

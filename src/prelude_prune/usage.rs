@@ -66,6 +66,13 @@ pub(crate) struct Usage {
     /// call). Its failure mode is LOUD — an undefined function at the call site — so the pruner
     /// answers it by widening the roots to the names the program does mention.
     pub(crate) dynamic_function_call: bool,
+    /// A `new $c` whose class name this walk cannot resolve to a literal.
+    ///
+    /// `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names` lists the
+    /// builtin classes such a site can construct, and it includes every builtin throwable — so a
+    /// gate that decides which of them to register has to treat this as "any of them". A literal
+    /// name lands in `literals` and needs no such widening; this flag is for the rest.
+    pub(crate) constructs_dynamic_class: bool,
     /// The program asks a question this walk cannot answer and whose WRONG ANSWER IS SILENT:
     /// it enumerates the symbol table (`get_defined_functions`, `eval`), or it PROBES a computed
     /// name (`function_exists($f)`). A dynamic CALL that is wrong fails loudly at the call site;
@@ -83,6 +90,7 @@ impl Usage {
         self.methods.extend(other.methods);
         self.literals.extend(other.literals);
         self.dynamic_function_call |= other.dynamic_function_call;
+        self.constructs_dynamic_class |= other.constructs_dynamic_class;
         self.introspects |= other.introspects;
     }
 
@@ -795,6 +803,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
         }
         ExprKind::NewDynamic { name_expr, args } => {
+            usage.constructs_dynamic_class = true;
             scan_expr(name_expr, usage);
             for arg in args {
                 scan_expr(arg, usage);
@@ -803,6 +812,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::NewDynamicObject {
             class_name, args, ..
         } => {
+            usage.constructs_dynamic_class = true;
             scan_expr(class_name, usage);
             for arg in args {
                 scan_expr(arg, usage);
