@@ -195,7 +195,19 @@ fn render_linux_command(
     let mut args = Vec::new();
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
-        Emit::Cdylib => args.push(OsString::from("-shared")),
+        Emit::Cdylib => {
+            args.push(OsString::from("-shared"));
+            // A shared library collects the same unreachable helpers an executable does. The
+            // prerequisite is already in place and was the reason this was withheld: every symbol
+            // outside the export allowlist is marked `.hidden`, so it is not a dynsym root and is
+            // collectable. Without that marking `--gc-sections` would be inert here, since every
+            // `.globl __rt_*` would be an export and therefore a root.
+            //
+            // A helper reached only through a data pointer — the runtime `.data` holds vtables of
+            // `.quad __rt_*` — stays alive: that is a relocation from a retained section, which
+            // the collector follows like any other reference.
+            args.push(OsString::from("-Wl,--gc-sections"));
+        }
     }
     args.extend(LINUX_HARDENING_FLAGS.iter().copied().map(OsString::from));
     args.extend([
@@ -354,6 +366,30 @@ mod tests {
             &[],
         )
         .arguments_lossy()
+    }
+
+    /// Verifies a Linux shared library is section-collected like an executable.
+    ///
+    /// The flag is only meaningful because every symbol outside the export allowlist is already
+    /// marked `.hidden`: without that, each `.globl __rt_*` would be an export, therefore a
+    /// dynsym root, and the collector would have nothing to drop. A regression removing either
+    /// half leaves a shared library carrying the whole runtime while still linking and passing
+    /// its behaviour tests, which is why the flag is asserted rather than left to review.
+    #[test]
+    fn linux_shared_library_collects_unreachable_sections() {
+        let args = render_linux_cdylib(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-shared"));
+        assert!(
+            args.iter().any(|arg| arg == "-Wl,--gc-sections"),
+            "a shared library must collect unreachable sections: {args:?}"
+        );
+    }
+
+    /// Verifies the executable path did not lose its collection flag while the cdylib gained one.
+    #[test]
+    fn linux_executable_still_collects_unreachable_sections() {
+        let args = render_linux(&LinkPlan::new());
+        assert!(args.iter().any(|arg| arg == "-Wl,--gc-sections"));
     }
 
     /// Renders one macOS executable command with injected SDK and Homebrew paths.
