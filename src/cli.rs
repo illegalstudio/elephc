@@ -121,6 +121,7 @@ Diagnostics:
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
+  --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
 Other:
   -h, --help              Print this help and exit
@@ -149,6 +150,8 @@ pub(crate) struct CliConfig {
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
     pub(crate) emit_debug_info: bool,
+    /// Keep the symbol table in the linked executable; it is stripped by default.
+    pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
     pub(crate) target: Target,
@@ -233,6 +236,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_timings = false;
     let mut emit_source_map = false;
     let mut emit_debug_info = false;
+    let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
@@ -306,6 +310,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--keep-symbols" {
+            keep_symbols = true;
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
@@ -443,6 +449,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,

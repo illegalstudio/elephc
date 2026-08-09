@@ -753,6 +753,26 @@ impl Target {
         }
     }
 
+    /// Returns the symbol-stripping command for this target.
+    ///
+    /// Same cross-toolchain rule as [`Self::assembler_cmd`]: a Linux ARM64 binary produced from a
+    /// host without a native toolchain must be stripped by that toolchain's `strip`, because the
+    /// host's own `strip` does not read the foreign object format.
+    pub fn strip_cmd(&self) -> &'static str {
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "strip",
+            (Platform::Linux, Arch::AArch64) => {
+                if host_has_native_aarch64_toolchain() {
+                    "strip"
+                } else {
+                    "aarch64-linux-gnu-strip"
+                }
+            }
+            (Platform::Linux, Arch::X86_64) => "strip",
+            (Platform::Windows, _) => "strip",
+        }
+    }
+
     /// Returns the linker command used to link object files into a final binary for this target.
     ///
     /// On macOS always uses `ld`. On Linux ARM64 uses `gcc` if a native toolchain
