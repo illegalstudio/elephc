@@ -24,21 +24,6 @@ pub(super) fn lower_unary_path_stat_int_or_false(
     store_if_result(ctx, inst)
 }
 
-/// Loads a path, calls a stat-array helper, boxes array success or PHP false, and stores it.
-pub(super) fn lower_unary_path_stat_array_or_false(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    box_stat_array_or_false_result(ctx);
-    store_if_result(ctx, inst)
-}
-
 /// Loads a resource or boxed resource handle into the target integer result register.
 pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result(
     ctx: &mut FunctionContext<'_>,

@@ -9,6 +9,8 @@
 
 use super::*;
 
+use super::wrapper_dispatch::{URL_STAT_FLAGS_LINK, URL_STAT_FLAGS_NOCACHE};
+
 /// Lowers `getcwd()` through the target-aware runtime helper.
 pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "getcwd", 0)?;
@@ -144,12 +146,24 @@ pub(crate) fn lower_filetype(
 
 /// Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
 pub(crate) fn lower_stat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_stat_array_or_false(ctx, inst, "stat", "__rt_stat_array")
+    super::wrapper_dispatch::lower_path_stat_with_wrapper(
+        ctx,
+        inst,
+        "stat",
+        "__rt_stat_array",
+        URL_STAT_FLAGS_NOCACHE,
+    )
 }
 
 /// Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
 pub(crate) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_stat_array_or_false(ctx, inst, "lstat", "__rt_lstat_array")
+    super::wrapper_dispatch::lower_path_stat_with_wrapper(
+        ctx,
+        inst,
+        "lstat",
+        "__rt_lstat_array",
+        URL_STAT_FLAGS_LINK,
+    )
 }
 
 /// Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result.

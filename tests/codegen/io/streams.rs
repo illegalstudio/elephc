@@ -5781,6 +5781,42 @@ echo file_exists("no_such_elephc_probe.txt") ? "Y" : "N";
     assert_eq!(out, "YNYN");
 }
 
+/// Verifies `stat()` and `lstat()` reach a registered wrapper's `url_stat()`, with the flags
+/// PHP hands them, and still fall back to the filesystem for an ordinary path.
+///
+/// `stat()` was the one member of the stat family that never consulted a wrapper — the others
+/// all probed `url_stat()` first — so `stat("scheme://x")` returned the filesystem's answer for
+/// a path that only exists inside the wrapper. The flag values are read off reference PHP with
+/// a wrapper that echoes its `$flags`, not inferred from the two documented
+/// `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit, so `stat()` arrives
+/// as 4 and `lstat()` as 4|1. A wrapper that branches on the link bit needs that exact value.
+#[test]
+fn test_stat_and_lstat_dispatch_to_wrapper_url_stat() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class StatW {
+    public function url_stat(string $path, int $flags) {
+        echo "[", $flags, "]";
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>77,'atime'=>0,'mtime'=>5,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("statw", "StatW");
+file_put_contents("statw_probe.txt", "abcd");
+$a = stat("statw://x");
+echo $a["size"], ":", $a["mtime"], "|";
+$b = lstat("statw://y");
+echo $b["size"], "|";
+$c = stat("statw_probe.txt");
+echo $c["size"];
+unlink("statw_probe.txt");
+"#,
+    );
+    assert_eq!(out, "[4]77:5|[5]77|4");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {
