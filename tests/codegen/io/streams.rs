@@ -4762,6 +4762,40 @@ echo file_exists("zz://p") ? 1 : 0;
     assert_eq!(out, "110");
 }
 
+/// Verifies which schemes `stream_wrapper_register()` accepts, and which ever dispatch.
+///
+/// Two separate rules, both read off reference PHP rather than inferred. Registration
+/// refuses a protocol holding anything outside `[A-Za-z0-9+.-]`, and refuses one that is
+/// already registered. Dispatch additionally ignores a ONE-LETTER scheme — PHP's
+/// `php_stream_locate_url_wrapper` requires `n > 1`, because `f:` is a Windows drive
+/// letter — so `f` registers successfully and still never routes anywhere.
+///
+/// Before this, every one of these was accepted: `x_y` and `x y` registered, a protocol
+/// could be registered twice, and `f://` reached the wrapper.
+#[test]
+fn test_wrapper_scheme_acceptance_matches_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public function url_stat(string $path, int $flags) {
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+foreach (["f", "fo", "x+y", "x-y", "x.y", "x_y", "x y"] as $scheme) {
+    echo @stream_wrapper_register($scheme, "W") ? "1" : "0";
+    echo @file_exists("$scheme://p") ? "1" : "0";
+    echo " ";
+}
+echo "|", @stream_wrapper_register("fo", "W") ? "1" : "0";
+"#,
+    );
+    // f registers but never dispatches; fo/x+y/x-y/x.y do both; x_y and x y do neither;
+    // re-registering fo is refused.
+    assert_eq!(out.stdout, "10 11 11 11 11 00 00 |0");
+}
+
 /// Verifies compiled PHP output for stream wrapper unregister round trip.
 #[test]
 fn test_stream_wrapper_unregister_round_trip() {
@@ -5629,8 +5663,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 echo fgetc($f) . fgetc($f);
 rewind($f);
 echo fgetc($f);
@@ -5657,8 +5691,8 @@ class W {
     public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w", "W");
-$h = fopen("w://x", "r");
+stream_wrapper_register("ww", "W");
+$h = fopen("ww://x", "r");
 echo fread($h, 100);
 fclose($h);
 "#,
@@ -5683,8 +5717,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $x = stream_get_contents($f);
 echo "[$x]";
 fclose($f);
@@ -5709,8 +5743,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $n=fpassthru($f);
 echo "|n=$n";
 fclose($f);
@@ -5735,8 +5769,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 while (($l = fgets($f)) !== false) { echo "[" . rtrim($l, "\n") . "]"; }
 fclose($f);
 echo "|t=" . gettype($f);
@@ -5760,8 +5794,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $r = fscanf($f, "%d %f %s");
 echo $r[0] . "|" . $r[1] . "|" . $r[2];
 fclose($f);
@@ -5785,8 +5819,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$src=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$src=fopen("ww://x","r");
 $dst=fopen("php://temp","r+");
 $n=stream_copy_to_stream($src,$dst);
 rewind($dst);

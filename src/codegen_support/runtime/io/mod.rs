@@ -8,6 +8,16 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+/// Shortest scheme a `scheme://` path can name, and therefore the index every
+/// wrapper-dispatch scan starts its `://` search at.
+///
+/// PHP requires `n > 1` in `php_stream_locate_url_wrapper`: a single-letter scheme
+/// is a Windows drive letter, never a wrapper. Measured against reference PHP —
+/// `stream_wrapper_register("f", "W")` returns true and `f` appears in
+/// `stream_get_wrappers()`, but `f://x` never reaches the wrapper. Starting the scan
+/// here is what enforces it: a `://` at index 0 or 1 is simply never found.
+pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
+
 mod basename;
 mod cstr;
 mod disk_space;

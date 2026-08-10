@@ -8,6 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -35,7 +36,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- recognise user-registered stream wrappers before opening a real file
     //    (Phase 10 dispatch v1: silent-false on match; the wrapper class is
     //    not yet invoked) --
-    emitter.instruction("mov x9, #0");                                          // wrapper scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // wrapper scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_fopen_uw_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the \"://\" marker
     emitter.instruction("cmp x10, x2");                                         // do enough bytes remain in the path?
@@ -266,7 +267,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved mode pair, cstring path, and cstring mode pointers
 
     // -- recognise user-registered stream wrappers before opening a real file --
-    emitter.instruction("xor r9, r9");                                          // wrapper scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // wrapper scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_fopen_uw_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the \"://\" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the path?

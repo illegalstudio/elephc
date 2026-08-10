@@ -26,6 +26,7 @@
 //!   whole URL to `StreamWrapper` path methods), plus the caller's extra int
 //!   arguments (`$mode`/`$options` for `mkdir`, `$options` for `rmdir`).
 
+use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -65,7 +66,7 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #48]");                                   // save the wrapper method's extra arg 4
 
     // -- scan the path for the "://" scheme separator (x0=ptr, x1=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwpo_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x1");                                         // do enough bytes remain in the path?
@@ -183,7 +184,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // path length → scan bound register
 
     // -- scan the path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwpo_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the path?
@@ -332,7 +333,7 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #40]");                                   // save the to-path length across the helper calls
 
     // -- scan the from-path for the "://" scheme separator (x0=ptr, x1=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwrn_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x1");                                         // do enough bytes remain in the from-path?
@@ -446,7 +447,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // from-path length → scan bound register
 
     // -- scan the from-path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwrn_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the from-path?
