@@ -118,6 +118,7 @@ mod user_filter_brigade;
 mod stash_connect_host;
 mod touch_meta_array;
 mod user_wrapper;
+mod user_wrapper_unbox;
 mod user_wrapper_cast;
 mod user_wrapper_dir;
 mod user_wrapper_path_op;
@@ -244,6 +245,7 @@ pub(crate) use user_wrapper::{
     emit_user_wrapper_fseek, emit_user_wrapper_fstat, emit_user_wrapper_ftell,
     emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite,
 };
+pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
 pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;

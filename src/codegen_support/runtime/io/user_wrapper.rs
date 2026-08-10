@@ -244,7 +244,7 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
 
     // -- call stream_write($this, $data) → returns int in x0 --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload data string ptr/len for the second argument pair
-    emitter.instruction("blr x11");                                             // invoke stream_write on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");        // invoke stream_write, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
@@ -276,7 +276,7 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // -- call stream_write($this, $data) → returns int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload data string pointer as the second arg
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload data string length as the third arg
-    emitter.instruction("call r11");                                            // invoke stream_write on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_WRITE, "fwrite");            // invoke stream_write, unboxing an undeclared return
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
@@ -308,7 +308,7 @@ pub fn emit_user_wrapper_feof(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwfeof_eof");                     // resolve obj into x0, fall through to EOF on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwfeof_eof", VTABLE_SLOT_EOF);    // resolve stream_eof method pointer into x11
 
-    emitter.instruction("blr x11");                                             // invoke stream_eof on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");            // invoke stream_eof, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
@@ -332,7 +332,7 @@ fn emit_user_wrapper_feof_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfeof_eof_x86");                     // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfeof_eof_x86", VTABLE_SLOT_EOF);    // resolve stream_eof method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_eof on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");                // invoke stream_eof, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -362,7 +362,7 @@ pub fn emit_user_wrapper_ftell(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwftell_fail");                   // resolve obj into x0, fall through to -1 on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwftell_fail", VTABLE_SLOT_TELL); // resolve stream_tell method pointer into x11
 
-    emitter.instruction("blr x11");                                             // invoke stream_tell on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_TELL, "ftell");          // invoke stream_tell, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
@@ -386,7 +386,7 @@ fn emit_user_wrapper_ftell_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwftell_fail_x86");                   // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwftell_fail_x86", VTABLE_SLOT_TELL); // resolve stream_tell method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_tell on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_TELL, "ftell");              // invoke stream_tell, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
 
@@ -416,7 +416,7 @@ pub fn emit_user_wrapper_fflush(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwfflush_ok");                    // resolve obj into x0, fall through to default-true on missing handles
     emit_aarch64_method_lookup(emitter, "__rt_uwfflush_ok", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into x11
 
-    emitter.instruction("blr x11");                                             // invoke stream_flush on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "fflush");        // invoke stream_flush, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
@@ -440,7 +440,7 @@ fn emit_user_wrapper_fflush_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfflush_ok_x86");                    // resolve obj into rdi, fall through on missing handles
     emit_x86_method_lookup(emitter, "__rt_uwfflush_ok_x86", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into r11
 
-    emitter.instruction("call r11");                                            // invoke stream_flush on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "fflush");            // invoke stream_flush, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -475,7 +475,7 @@ pub fn emit_user_wrapper_fseek(emitter: &mut Emitter) {
 
     // -- call stream_seek($this, $offset, $whence) → returns bool/int in x0 --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload offset (x1) and whence (x2)
-    emitter.instruction("blr x11");                                             // invoke stream_seek on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_SEEK, "fseek");          // invoke stream_seek, unboxing an undeclared return
     emitter.instruction("cbz x0, __rt_uwfseek_fail");                           // stream_seek returned false → PHP -1 failure sentinel
     emitter.instruction("mov x0, #0");                                          // stream_seek succeeded → PHP fseek returns 0
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -507,7 +507,7 @@ fn emit_user_wrapper_fseek_linux_x86_64(emitter: &mut Emitter) {
     // -- call stream_seek($this, $offset, $whence) → returns bool/int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload offset
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload whence selector
-    emitter.instruction("call r11");                                            // invoke stream_seek on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_SEEK, "fseek");              // invoke stream_seek, unboxing an undeclared return
     emitter.instruction("test rax, rax");                                       // did stream_seek return false?
     emitter.instruction("jz __rt_uwfseek_fail_x86");                            // stream_seek returned false → PHP -1 failure sentinel
     emitter.instruction("xor eax, eax");                                        // stream_seek succeeded → PHP fseek returns 0
@@ -545,7 +545,7 @@ pub fn emit_user_wrapper_flock(emitter: &mut Emitter) {
     emit_aarch64_method_lookup(emitter, "__rt_uwflock_false", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into x11
 
     // -- call stream_lock($this, $operation) → returns bool in x0 --
-    emitter.instruction("blr x11");                                             // invoke stream_lock on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_LOCK, "flock");          // invoke stream_lock, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
@@ -571,7 +571,7 @@ fn emit_user_wrapper_flock_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwflock_false_x86", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into r11
 
     // -- call stream_lock($this, $operation) → returns bool in rax --
-    emitter.instruction("call r11");                                            // invoke stream_lock on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_LOCK, "flock");              // invoke stream_lock, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -604,7 +604,7 @@ pub fn emit_user_wrapper_ftruncate(emitter: &mut Emitter) {
     emit_aarch64_method_lookup(emitter, "__rt_uwftrunc_false", VTABLE_SLOT_TRUNCATE); // resolve stream_truncate method pointer into x11
 
     // -- call stream_truncate($this, $new_size) → returns bool in x0 --
-    emitter.instruction("blr x11");                                             // invoke stream_truncate on the wrapper object
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_TRUNCATE, "ftruncate");  // invoke stream_truncate, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
@@ -630,7 +630,7 @@ fn emit_user_wrapper_ftruncate_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_method_lookup(emitter, "__rt_uwftrunc_false_x86", VTABLE_SLOT_TRUNCATE); // resolve stream_truncate method pointer into r11
 
     // -- call stream_truncate($this, $new_size) → returns bool in rax --
-    emitter.instruction("call r11");                                            // invoke stream_truncate on the wrapper object
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_TRUNCATE, "ftruncate");      // invoke stream_truncate, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
@@ -843,6 +843,40 @@ fn emit_aarch64_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 /// AArch64: resolve the method pointer for vtable slot `vtable_slot` of the
 /// class of the object currently held in `x0`. Leaves the method pointer in
 /// `x11`. On a missing method (`0` slot) jumps to `missing_label`.
+/// AArch64: invoke the resolved wrapper method (x11) for a slot whose helper reads
+/// a raw integer or boolean, normalizing a boxed result into that scalar.
+///
+/// A method with no declared return type has codegen representation `Mixed`, so it
+/// hands back a boxed cell where the helper reads a raw scalar — and NOT declaring
+/// a return type is how ordinary wrapper code is written, so the broken shape is the
+/// common one. The per-class mask the method lookup already left in x13 says which
+/// slots do it; x13 is consumed here, before the call, so nothing has to survive it.
+fn emit_aarch64_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &str) {
+    let boxed = format!("__rt_uw{tag}_boxed_scalar");
+    let done = format!("__rt_uw{tag}_scalar_done");
+    emitter.instruction(&format!("tbnz x13, #{}, {}", vtable_slot, boxed));      // an undeclared return type arrives boxed instead
+    emitter.instruction("blr x11");                                             // invoke the wrapper method for its raw scalar
+    emitter.instruction(&format!("b {}", done));                                // the declared shape needs no conversion
+    emitter.label(&boxed);
+    emitter.instruction("blr x11");                                             // invoke the wrapper method; x0 = owned Mixed cell
+    emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the scalar, box released
+    emitter.label(&done);
+}
+
+/// x86_64 twin of `emit_aarch64_scalar_slot_call`; the mask is in r8.
+fn emit_x86_scalar_slot_call(emitter: &mut Emitter, vtable_slot: usize, tag: &str) {
+    let boxed = format!("__rt_uw{tag}_boxed_scalar_x86");
+    let done = format!("__rt_uw{tag}_scalar_done_x86");
+    emitter.instruction(&format!("bt r8, {}", vtable_slot));                    // an undeclared return type arrives boxed instead
+    emitter.instruction(&format!("jc {}", boxed));                              // the mask bit selects the boxed path
+    emitter.instruction("call r11");                                            // invoke the wrapper method for its raw scalar
+    emitter.instruction(&format!("jmp {}", done));                              // the declared shape needs no conversion
+    emitter.label(&boxed);
+    emitter.instruction("call r11");                                            // invoke the wrapper method; rax = owned Mixed cell
+    emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the scalar, box released
+    emitter.label(&done);
+}
+
 fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");

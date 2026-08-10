@@ -5425,6 +5425,56 @@ foreach (["aa", "bb", "zz"] as $name) {
     assert_eq!(out, "XXx");
 }
 
+/// Verifies a wrapper whose scalar methods carry NO return type behaves like one that does.
+///
+/// A method with no declared return type has codegen representation `Mixed`, so it hands back
+/// a boxed cell where the helper reads a raw integer or boolean — and leaving the return type
+/// off is how ordinary wrapper code is written, so the broken shape was the common one.
+/// Measured before the fix: `ftell()` answered 4329450168, a pointer, where PHP answers 5.
+///
+/// The expectation is the output of the SAME wrapper with every return type declared, which is
+/// the property that matters: the declaration must not change the answer. `ftell()` reporting
+/// the wrapper's own position rather than PHP's write-advanced one is a separate, pre-existing
+/// divergence — it shows identically in both forms, which is how it was told apart from this.
+#[test]
+fn test_undeclared_scalar_returns_behave_like_declared_ones() {
+    let source = r#"<?php
+class S {
+    public $context;
+    private $buf = "abcdefghij";
+    private $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { $this->pos = 0; return true; }
+    public function stream_read($count): string { $c = substr($this->buf, $this->pos, $count); $this->pos += strlen($c); return $c; }
+    public function stream_write(string $data)RET_INT { $this->buf .= $data; return strlen($data); }
+    public function stream_eof()RET_BOOL { return $this->pos >= strlen($this->buf); }
+    public function stream_tell()RET_INT { return $this->pos; }
+    public function stream_seek($offset, $whence)RET_BOOL { $this->pos = $offset; return true; }
+    public function stream_flush()RET_BOOL { return true; }
+    public function stream_lock($op)RET_BOOL { return true; }
+    public function stream_truncate($size)RET_BOOL { $this->buf = substr($this->buf, 0, $size); return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("slots", "S");
+$f = fopen("slots://x", "r+");
+echo "w", fwrite($f, "XY");
+echo "s", fseek($f, 3);
+echo "t", ftell($f);
+echo "r", fread($f, 4);
+echo "f", fflush($f) ? 1 : 0;
+echo "l", flock($f, LOCK_EX) ? 1 : 0;
+echo "u", ftruncate($f, 4) ? 1 : 0;
+echo "e", feof($f) ? 1 : 0;
+fclose($f);
+"#;
+    let declared = compile_and_run(&source.replace("RET_INT", ": int").replace("RET_BOOL", ": bool"));
+    let undeclared = compile_and_run(&source.replace("RET_INT", "").replace("RET_BOOL", ""));
+    assert_eq!(
+        undeclared, declared,
+        "omitting the return type must not change what the wrapper reports"
+    );
+    assert_eq!(declared, "w2s0t3rdefgf1l1u1e1");
+}
+
 /// Verifies compiled PHP output for fopen silent fail for registered user wrapper.
 #[test]
 fn test_fopen_silent_fail_for_registered_user_wrapper() {

@@ -2270,6 +2270,16 @@ const USER_FILTER_METHOD_NAMES: [&str; 3] = [
 /// note on `USER_WRAPPER_VTABLE_SLOTS`), so a union return is the shape they want.
 const USER_WRAPPER_STRING_RESULT_SLOTS: [usize; 2] = [2, 20];
 
+/// Slots whose helper reads a raw integer or boolean out of the result register:
+/// `stream_write`, `stream_eof`, `stream_tell`, `stream_seek`, `stream_flush`,
+/// `stream_lock`, `stream_truncate`.
+///
+/// These need the same treatment as the string slots for the opposite reason: real
+/// wrapper code does NOT annotate `stream_tell(): int`, so the undeclared form —
+/// which returns a boxed cell — is the common one, and reading that register as a
+/// raw integer answered a pointer.
+const USER_WRAPPER_SCALAR_RESULT_SLOTS: [usize; 7] = [3, 4, 5, 6, 7, 11, 12];
+
 /// Returns the bitmask stored after the method pointers, where bit `i` marks a slot
 /// whose method returns a boxed Mixed although its helper expects the raw string pair.
 ///
@@ -2278,7 +2288,11 @@ const USER_WRAPPER_STRING_RESULT_SLOTS: [usize; 2] = [2, 20];
 /// is emitted, and a helper that does not care never loads it.
 fn user_wrapper_boxed_result_mask(class_info: &ClassInfo) -> u64 {
     let mut mask = 0u64;
-    for slot in USER_WRAPPER_STRING_RESULT_SLOTS {
+    let slots = USER_WRAPPER_STRING_RESULT_SLOTS
+        .iter()
+        .chain(USER_WRAPPER_SCALAR_RESULT_SLOTS.iter())
+        .copied();
+    for slot in slots {
         let method_name = USER_WRAPPER_METHOD_NAMES[slot];
         let returns_boxed = class_info
             .methods
@@ -2887,7 +2901,10 @@ mod boxed_result_mask_tests {
 
     use crate::types::{FunctionSig, PhpType};
 
-    use super::{user_wrapper_boxed_result_mask, USER_WRAPPER_STRING_RESULT_SLOTS};
+    use super::{
+        user_wrapper_boxed_result_mask, USER_WRAPPER_SCALAR_RESULT_SLOTS,
+        USER_WRAPPER_STRING_RESULT_SLOTS,
+    };
 
     /// Builds a signature carrying only the return type, which is all the mask reads.
     fn returning(return_type: PhpType) -> FunctionSig {
@@ -2962,6 +2979,47 @@ mod boxed_result_mask_tests {
             assert!(
                 matches!(super::USER_WRAPPER_METHOD_NAMES[slot], "stream_read" | "dir_readdir"),
                 "slot {slot} is not one of the string-pair methods"
+            );
+        }
+    }
+
+    /// The scalar slot numbers are anchored to method NAMES, not left as bare integers.
+    ///
+    /// They are a second authority: the runtime helpers test the mask bit for their own
+    /// `VTABLE_SLOT_*` constant, so a slot list that drifts from the vtable order would
+    /// convert one method's result on another method's bit — a silent miscompile rather
+    /// than a build failure. Anchoring to the name makes any reordering fail here.
+    #[test]
+    fn every_scalar_slot_names_the_method_whose_helper_reads_a_raw_scalar() {
+        const EXPECTED: [(usize, &str); 7] = [
+            (3, "stream_write"),
+            (4, "stream_eof"),
+            (5, "stream_tell"),
+            (6, "stream_seek"),
+            (7, "stream_flush"),
+            (11, "stream_lock"),
+            (12, "stream_truncate"),
+        ];
+        assert_eq!(
+            USER_WRAPPER_SCALAR_RESULT_SLOTS.len(),
+            EXPECTED.len(),
+            "a slot was added or removed without updating this guard"
+        );
+        for (slot, name) in EXPECTED {
+            assert!(
+                USER_WRAPPER_SCALAR_RESULT_SLOTS.contains(&slot),
+                "{name} (slot {slot}) is missing from the scalar-result mask"
+            );
+            assert_eq!(
+                super::USER_WRAPPER_METHOD_NAMES[slot],
+                name,
+                "slot {slot} no longer holds {name}: the vtable order moved under the mask"
+            );
+        }
+        for slot in USER_WRAPPER_SCALAR_RESULT_SLOTS {
+            assert!(
+                !USER_WRAPPER_STRING_RESULT_SLOTS.contains(&slot),
+                "slot {slot} cannot be both a string-pair and a scalar result"
             );
         }
     }
