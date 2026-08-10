@@ -607,7 +607,9 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS {
+    // The method pointers plus the trailing boxed-result mask, so a class with no
+    // wrapper method shares a table the helpers can read to the same extent.
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 1 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2218,6 +2220,11 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// string keys (`size`, `mode`, ...) PHP stat arrays use.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 
+/// Byte offset of the boxed-result mask that follows the method pointers in every
+/// `_user_wrapper_vtable_<class_id>`. Single authority for the layout: the emitter
+/// writes the quad at this position and the runtime helpers read it from here.
+pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8;
+
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
@@ -2247,6 +2254,42 @@ const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "oncreate",
     "onclose",
 ];
+
+/// Vtable slots whose runtime helper reads the method's result as a RAW STRING PAIR
+/// (pointer + length in the string-result registers) rather than as a boxed Mixed.
+///
+/// A wrapper method is called through its own ABI, and that ABI follows its return
+/// type: `: string` returns the pair, while the union the PHP manual declares —
+/// `stream_read(): string|false`, `dir_readdir(): string|false` — has codegen
+/// representation `Mixed` and returns a single boxed pointer instead. The helper read
+/// the pair registers either way, so the manual's signature yielded the right length
+/// and the wrong bytes, silently. `user_wrapper_boxed_result_mask` records which slots
+/// need the conversion so the helper can do it.
+///
+/// The stat slots are deliberately absent: they already expect a boxed Mixed (see the
+/// note on `USER_WRAPPER_VTABLE_SLOTS`), so a union return is the shape they want.
+const USER_WRAPPER_STRING_RESULT_SLOTS: [usize; 2] = [2, 20];
+
+/// Returns the bitmask stored after the method pointers, where bit `i` marks a slot
+/// whose method returns a boxed Mixed although its helper expects the raw string pair.
+///
+/// The mask is APPENDED to the vtable rather than kept in a table of its own: every
+/// existing slot offset stays where it is, no second dense per-class-id pointer table
+/// is emitted, and a helper that does not care never loads it.
+fn user_wrapper_boxed_result_mask(class_info: &ClassInfo) -> u64 {
+    let mut mask = 0u64;
+    for slot in USER_WRAPPER_STRING_RESULT_SLOTS {
+        let method_name = USER_WRAPPER_METHOD_NAMES[slot];
+        let returns_boxed = class_info
+            .methods
+            .get(method_name)
+            .is_some_and(|sig| matches!(sig.return_type.codegen_repr(), PhpType::Mixed));
+        if returns_boxed {
+            mask |= 1 << slot;
+        }
+    }
+    mask
+}
 
 const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
     "stream_open",
@@ -2372,6 +2415,11 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
+    // One trailing quad after the method pointers: the boxed-result mask.
+    out.push_str(&format!(
+        "    .quad {}\n",
+        user_wrapper_boxed_result_mask(class_info)
+    ));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
@@ -2834,6 +2882,92 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 }
 
 #[cfg(test)]
+mod boxed_result_mask_tests {
+    use std::collections::HashMap;
+
+    use crate::types::{FunctionSig, PhpType};
+
+    use super::{user_wrapper_boxed_result_mask, USER_WRAPPER_STRING_RESULT_SLOTS};
+
+    /// Builds a signature carrying only the return type, which is all the mask reads.
+    fn returning(return_type: PhpType) -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Builds a class info whose named methods carry the given return types.
+    fn class_with(methods: &[(&str, PhpType)]) -> crate::types::ClassInfo {
+        let mut class_info = super::tests::empty_class_info(1, "stream_open");
+        class_info.methods = HashMap::new();
+        for (name, return_type) in methods {
+            class_info
+                .methods
+                .insert((*name).to_string(), returning(return_type.clone()));
+        }
+        class_info
+    }
+
+    /// The mask marks exactly the slots whose method returns the boxed representation.
+    ///
+    /// Both directions matter and the second is the one that bites: a mask that was always
+    /// set would satisfy every union test while breaking every wrapper declared `: string`,
+    /// which is how all the older tests and examples are written.
+    #[test]
+    fn the_mask_marks_a_union_return_and_leaves_a_string_return_alone() {
+        let union = PhpType::Union(vec![PhpType::Str, PhpType::False]);
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[("stream_read", union.clone())])),
+            1 << 2,
+            "a `string|false` stream_read must select the boxed conversion"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[("dir_readdir", union.clone())])),
+            1 << 20,
+            "a `string|false` dir_readdir must select the boxed conversion"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[
+                ("stream_read", PhpType::Str),
+                ("dir_readdir", PhpType::Str),
+            ])),
+            0,
+            "`: string` methods return the raw pair and must not be converted"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[])),
+            0,
+            "a class implementing neither slot marks nothing"
+        );
+    }
+
+    /// Only slots whose helper reads a raw string pair may appear in the mask.
+    ///
+    /// The stat slots already expect a boxed Mixed and `stream_cast` normalizes both shapes
+    /// itself, so adding either here would convert a result that is already correct.
+    #[test]
+    fn only_the_string_pair_slots_are_convertible() {
+        assert_eq!(USER_WRAPPER_STRING_RESULT_SLOTS, [2, 20]);
+        for slot in USER_WRAPPER_STRING_RESULT_SLOTS {
+            assert!(
+                matches!(super::USER_WRAPPER_METHOD_NAMES[slot], "stream_read" | "dir_readdir"),
+                "slot {slot} is not one of the string-pair methods"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
 
@@ -2845,7 +2979,7 @@ mod tests {
     use super::emit_runtime_data_user;
 
     /// Provides the Empty class info helper used by the user module.
-    fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
+    pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
         let mut method_impl_classes = HashMap::new();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
 

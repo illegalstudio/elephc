@@ -7398,3 +7398,137 @@ echo strlen($a), "|", substr($a, 0, 3), "|", $b;
     assert_eq!(out, "150000|QQQ|tail");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a wrapper declaring the PHP manual's `stream_read(): string|false` returns its
+/// actual bytes.
+///
+/// A wrapper method is called through the ABI its own return type produces: `: string` hands
+/// back the raw pointer/length pair, while the manual's union has codegen representation
+/// `Mixed` and hands back a single boxed cell. The runtime helper read the pair either way, so
+/// the documented signature yielded the right LENGTH and the wrong bytes — `fread()` answered
+/// five spaces where PHP answers "hello". Every other wrapper test in this file declares
+/// `: string`, so the suite pinned the limitation and not one of them could fail on this.
+#[test]
+fn test_wrapper_stream_read_declared_string_or_false_returns_its_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionReadW {
+    public $context;
+    private $data = "hello world";
+    private $pos = 0;
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $count): string|false {
+        if ($this->pos >= strlen($this->data)) { return false; }
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos = $this->pos + strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+}
+stream_wrapper_register("unionread", "UnionReadW");
+$f = fopen("unionread://x", "r");
+echo "[", fread($f, 5), "][", fread($f, 6), "]";
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[hello][ world]");
+}
+
+/// Verifies a wrapper declaring the manual's `dir_readdir(): string|false` yields its entries
+/// and stops on `false`.
+///
+/// Same boxed-return mismatch as the read slot above, and the reason `examples/dir-wrapper`
+/// used to declare `: string` and signal the end of the directory with an empty string: that
+/// spelling is not PHP's, and reference php loops forever on it because `"" !== false`.
+#[test]
+fn test_wrapper_dir_readdir_declared_string_or_false_ends_on_false() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionDirW {
+    public $context;
+    private $entries = ["alpha.txt", "beta.md"];
+    private $pos = 0;
+    public function dir_opendir($path, $options): bool { $this->pos = 0; return true; }
+    public function dir_readdir(): string|false {
+        if ($this->pos >= count($this->entries)) { return false; }
+        $name = $this->entries[$this->pos];
+        $this->pos = $this->pos + 1;
+        return $name;
+    }
+    public function dir_rewinddir(): bool { $this->pos = 0; return true; }
+    public function dir_closedir(): bool { return true; }
+}
+stream_wrapper_register("uniondir", "UnionDirW");
+$dh = opendir("uniondir://x");
+while (($entry = readdir($dh)) !== false) { echo "[", $entry, "]"; }
+rewinddir($dh);
+echo "|", readdir($dh);
+closedir($dh);
+"#,
+    );
+    assert_eq!(out, "[alpha.txt][beta.md]|alpha.txt");
+}
+
+/// Verifies the boxed return path releases the cell without freeing the string it hands back.
+///
+/// `__rt_mixed_cast_string` routes an already-persisted payload through `__rt_str_persist`,
+/// which DUPLICATES it — but takes a concat temporary over IN PLACE and returns that same
+/// pointer. Releasing the box afterwards would then free the entry name being returned, so the
+/// box is retagged as a scalar first and only its own storage is released. A method returning a
+/// concatenation is what makes that difference observable.
+#[test]
+fn test_wrapper_boxed_return_of_a_concatenation_survives_the_box_release() {
+    let out = compile_and_run(
+        r#"<?php
+class ConcatDirW {
+    public $context;
+    private $names = ["one", "two", "three"];
+    private $pos = 0;
+    public function dir_opendir($path, $options): bool { $this->pos = 0; return true; }
+    public function dir_readdir(): string|false {
+        if ($this->pos >= count($this->names)) { return false; }
+        $name = "e-" . $this->names[$this->pos] . ".txt";
+        $this->pos = $this->pos + 1;
+        return $name;
+    }
+    public function dir_closedir(): bool { return true; }
+}
+stream_wrapper_register("concatdir", "ConcatDirW");
+$dh = opendir("concatdir://x");
+while (($entry = readdir($dh)) !== false) { echo "[", $entry, "]"; }
+closedir($dh);
+"#,
+    );
+    assert_eq!(out, "[e-one.txt][e-two.txt][e-three.txt]");
+}
+
+/// Verifies the raw-pair path still works, so the conversion is selected and not applied to
+/// everything.
+///
+/// The boxed path is chosen by a per-class mask, and a mask that was always set would pass
+/// every test above while breaking every wrapper that declares `: string` — the spelling all
+/// the other tests in this file use.
+#[test]
+fn test_wrapper_stream_read_declared_string_still_uses_the_raw_pair() {
+    let out = compile_and_run(
+        r#"<?php
+class PlainReadW {
+    public $context;
+    private $data = "abcdef";
+    private $pos = 0;
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos = $this->pos + strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+}
+stream_wrapper_register("plainread", "PlainReadW");
+$f = fopen("plainread://x", "r");
+echo "[", fread($f, 3), "][", fread($f, 3), "]";
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[abc][def]");
+}
