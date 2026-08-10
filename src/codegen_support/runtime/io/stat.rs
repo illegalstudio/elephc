@@ -214,9 +214,19 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_size from stat struct --
+    // -- extract st_size from stat struct, but only if the stat succeeded --
+    // Without this check the buffer is untouched stack on a missing path and its bytes are
+    // returned as the file size: `filesize("absent")` answered `int(4)` here where PHP
+    // answers `false`, and the number tracked whatever the caller had last left on the
+    // stack. Every x86_64 helper in this file already tests the result; these two did not.
+    emitter.instruction("cmp x0, #0");                                          // check syscall result
+    emitter.instruction("b.ne __rt_filesize_fail");                             // stat failed: the buffer holds nothing to read
     emitter.instruction(&format!("ldr x0, [sp, #{}]", size_off));               // load st_size from stat struct
+    emitter.instruction("b __rt_filesize_ret");                                 // skip the failure result
+    emitter.label("__rt_filesize_fail");
+    emitter.instruction("mov x0, #0");                                          // match the x86_64 helper's zero-on-failure result
 
+    emitter.label("__rt_filesize_ret");
     // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
@@ -241,9 +251,17 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_mtimespec.tv_sec from stat struct --
+    // -- extract st_mtimespec.tv_sec from stat struct, but only if the stat succeeded --
+    // Same unchecked read as `__rt_filesize` above: `filemtime("absent")` returned
+    // `int(8322009384)` — a stack address, not a timestamp — where PHP returns `false`.
+    emitter.instruction("cmp x0, #0");                                          // check syscall result
+    emitter.instruction("b.ne __rt_filemtime_fail");                            // stat failed: the buffer holds nothing to read
     emitter.instruction(&format!("ldr x0, [sp, #{}]", mtime_off));              // load mtime tv_sec from stat struct
+    emitter.instruction("b __rt_filemtime_ret");                                // skip the failure result
+    emitter.label("__rt_filemtime_fail");
+    emitter.instruction("mov x0, #0");                                          // match the x86_64 helper's zero-on-failure result
 
+    emitter.label("__rt_filemtime_ret");
     // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
@@ -383,4 +401,52 @@ fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the access helper call sequence
     emitter.instruction("ret");                                                 // return the readability or writability predicate to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_stat;
+
+    /// Both size and mtime helpers must test the stat result before reading their buffer, on
+    /// BOTH architectures.
+    ///
+    /// The buffer is a stack allocation the syscall fills only on success, so reading it
+    /// unconditionally returns untouched stack for a missing path — measured on AArch64 as
+    /// `filesize()` answering `int(4)` and `filemtime()` `int(8322009384)`. The x86_64 helpers
+    /// already tested `eax`, which is exactly why a behaviour test running on one host could
+    /// not see the defect: it has to be pinned on the EMITTED assembly of each target.
+    #[test]
+    fn the_stat_field_helpers_check_the_syscall_before_reading_their_buffer() {
+        for (platform, arch, failure_labels) in [
+            (
+                Platform::MacOS,
+                Arch::AArch64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+            ),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_stat(&mut emitter);
+            let asm = emitter.output();
+            for label in failure_labels {
+                assert!(
+                    asm.contains(&format!("{label}:")),
+                    "{arch:?}: {label} must exist, or the buffer is read unconditionally:\n{asm}"
+                );
+                let branch_to_failure = asm.contains(&format!("b.ne {label}"))
+                    || asm.contains(&format!("jne {label}"));
+                assert!(
+                    branch_to_failure,
+                    "{arch:?}: a failed stat must branch to {label}:\n{asm}"
+                );
+            }
+        }
+    }
 }
