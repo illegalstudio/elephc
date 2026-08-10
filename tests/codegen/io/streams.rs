@@ -384,6 +384,35 @@ unlink("data.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the PHP manual's own `fgetcsv()` read loop terminates and yields every row.
+///
+/// `while (($row = fgetcsv($h)) !== false)` ran forever: `fgetcsv()` was declared to return
+/// `array<string>` and answered an empty array at end of file, which is never `!== false`.
+/// Three things had to agree for the idiom to work — the runtime signalling EOF distinctly,
+/// the declared type carrying a `false` arm (as `False`, not `Bool`, so the guard can strip
+/// it), and the guard narrowing seeing through the assignment inside the condition. The
+/// `count($row)` in the body is the part that fails when the narrowing does not apply, and
+/// the empty third line is the part that fails if EOF is confused with an empty row.
+#[test]
+fn test_fgetcsv_manual_read_loop_terminates_and_narrows() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rows.csv", "a,b,c\n1,2,3\n\nx,y,z\n");
+$h = fopen("rows.csv", "r");
+$n = 0;
+while (($row = fgetcsv($h)) !== false) {
+    $n += 1;
+    echo "[", count($row), ":", $row[0], "]";
+}
+fclose($h);
+echo "|rows=", $n;
+unlink("rows.csv");
+"#,
+    );
+    assert_eq!(out, "[3:a][3:1][1:][3:x]|rows=4");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fputcsv() writes a valid CSV line and file_get_contents() reads it back.
 #[test]
 fn test_fputcsv() {

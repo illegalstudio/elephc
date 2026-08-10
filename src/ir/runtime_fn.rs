@@ -647,9 +647,15 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
+            // `fgetcsv()` answers `false` at end of file, so its fallback type must carry
+            // that arm too: the checker declares the union, and a builtin whose EIR and
+            // checker types disagree miscompiles rather than failing to build.
+            RuntimeFnId::Fgetcsv => PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Str)),
+                PhpType::False,
+            ]),
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
-            | RuntimeFnId::Fgetcsv
             | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir

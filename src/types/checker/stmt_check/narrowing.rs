@@ -389,6 +389,25 @@ fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
     )
 }
 
+/// Returns the place a guard narrows, seeing through an assignment made inside the guard.
+///
+/// `while (($row = fgetcsv($h)) !== false)` is the shape the PHP manual uses for every
+/// `T|false` reader, and it narrows exactly like `$row !== false` would: the assignment
+/// completes before the comparison, so the compared value IS the variable's new value.
+/// Without this the union survives into the loop body and `count($row)` stops compiling —
+/// which is what made converting those builtins to a union look like a bad trade.
+fn guard_receiver_place(expr: &Expr) -> Option<&Expr> {
+    if is_guard_receiver_shape(&expr.kind) {
+        return Some(expr);
+    }
+    match &expr.kind {
+        ExprKind::Assignment { target, .. } if is_guard_receiver_shape(&target.kind) => {
+            Some(target.as_ref())
+        }
+        _ => None,
+    }
+}
+
 /// Extracts the guarded receiver, the target, and whether the guard is self-negating from a
 /// (syntactically non-negated) guard expression.
 ///
@@ -448,12 +467,9 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             // `is_guard_receiver_shape` rather than an inline `Variable | PropertyAccess`
             // match: it also accepts a static property, which is what lets the singleton
             // shape `if (self::$inst === null) { self::$inst = new S(); }` narrow.
-            let (receiver, lit) = if is_guard_receiver_shape(&left.kind) {
-                (left.as_ref(), &right.kind)
-            } else if is_guard_receiver_shape(&right.kind) {
-                (right.as_ref(), &left.kind)
-            } else {
-                return None;
+            let (receiver, lit) = match guard_receiver_place(left) {
+                Some(place) => (place, &right.kind),
+                None => (guard_receiver_place(right)?, &left.kind),
             };
             match lit {
                 ExprKind::BoolLiteral(false) => {
