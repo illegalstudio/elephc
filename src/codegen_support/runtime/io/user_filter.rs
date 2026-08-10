@@ -34,6 +34,11 @@ const USER_FILTER_REGISTRATIONS_CAP: u32 = 128;
 /// Input:  AArch64 x0=name_ptr x1=name_len x2=class_ptr x3=class_len.
 ///         x86_64  rdi=name_ptr rsi=name_len rdx=class_ptr rcx=class_len.
 /// Output: 1 = registered, 0 = table full.
+///
+/// Both strings are persisted with `__rt_str_persist` before being stored: the
+/// registration outlives the call, so keeping the caller's pointer means the
+/// registered filter name silently follows whatever that buffer holds later.
+/// A literal argument hides this — it lives in rodata and never moves.
 pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_filter_register_linux_x86_64(emitter);
@@ -43,6 +48,12 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
+
+    // Frame: [sp,#0..16] x29/x30, [sp,#16] free slot base, [sp,#24] class-name
+    //   pointer, [sp,#32] class-name length.
+    emitter.instruction("sub sp, sp, #48");                                     // frame for the two string-persist calls
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
@@ -56,15 +67,30 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sfr_scan");                                     // continue scanning
 
     emitter.label("__rt_sfr_store");
-    emitter.instruction("str x0, [x6]");                                        // filter-name pointer
-    emitter.instruction("str x1, [x6, #8]");                                    // filter-name length
-    emitter.instruction("str x2, [x6, #16]");                                   // class-name pointer
-    emitter.instruction("str x3, [x6, #24]");                                   // class-name length
+    emitter.instruction("str x6, [sp, #16]");                                   // save the free slot base across the persist calls
+    emitter.instruction("str x2, [sp, #24]");                                   // save the class-name pointer across the filter-name persist
+    emitter.instruction("str x3, [sp, #32]");                                   // save the class-name length across the filter-name persist
+    emitter.instruction("mov x2, x1");                                          // filter-name length → persist length input
+    emitter.instruction("mov x1, x0");                                          // filter-name pointer → persist pointer input
+    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned filter name, x2 = length
+    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
+    emitter.instruction("str x1, [x6]");                                        // owned filter-name pointer
+    emitter.instruction("str x2, [x6, #8]");                                    // filter-name length
+    emitter.instruction("ldr x1, [sp, #24]");                                   // class-name pointer → persist pointer input
+    emitter.instruction("ldr x2, [sp, #32]");                                   // class-name length → persist length input
+    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class name, x2 = length
+    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
+    emitter.instruction("str x1, [x6, #16]");                                   // owned class-name pointer
+    emitter.instruction("str x2, [x6, #24]");                                   // class-name length
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
-    emitter.instruction("ret");                                                 // return to the caller
+    emitter.instruction("b __rt_sfr_ret");                                      // share the common epilogue
 
     emitter.label("__rt_sfr_full");
     emitter.instruction("mov x0, #0");                                          // return false when the registry is full
+
+    emitter.label("__rt_sfr_ret");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 }
 
@@ -73,6 +99,12 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
+
+    // Frame: [rbp-8] free slot base, [rbp-16] class-name pointer, [rbp-24]
+    //   class-name length. push rbp then sub rsp,48 keeps rsp 16-aligned.
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // frame for the two string-persist calls
 
     abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
@@ -89,15 +121,30 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sfr_scan_x86");                               // continue scanning
 
     emitter.label("__rt_sfr_store_x86");
-    emitter.instruction("mov QWORD PTR [r10], rdi");                            // filter-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rsi");                        // filter-name length
-    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the free slot base across the persist calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the class-name pointer across the filter-name persist
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the class-name length across the filter-name persist
+    emitter.instruction("mov rax, rdi");                                        // filter-name pointer → persist pointer input
+    emitter.instruction("mov rdx, rsi");                                        // filter-name length → persist length input
+    emitter.instruction("call __rt_str_persist");                               // rax = owned filter name, rdx = length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // owned filter-name pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // filter-name length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // class-name pointer → persist pointer input
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // class-name length → persist length input
+    emitter.instruction("call __rt_str_persist");                               // rax = owned class name, rdx = length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
+    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // owned class-name pointer
+    emitter.instruction("mov QWORD PTR [r10 + 24], rdx");                       // class-name length
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
-    emitter.instruction("ret");                                                 // return to the caller
+    emitter.instruction("jmp __rt_sfr_ret_x86");                                // share the common epilogue
 
     emitter.label("__rt_sfr_full_x86");
     emitter.instruction("xor eax, eax");                                        // return false when the registry is full
+
+    emitter.label("__rt_sfr_ret_x86");
+    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }
 

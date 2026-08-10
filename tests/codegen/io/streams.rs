@@ -4730,6 +4730,38 @@ echo stream_wrapper_register("alt", "CustomWrapper", 0) ? "true" : "false";
     assert_eq!(out, "true|true");
 }
 
+/// Verifies a registration keeps its own copy of the scheme and class name.
+///
+/// The registry stored the caller's pointers verbatim, and a registration outlives the call:
+/// reassigning the variable afterwards rewrote what had been registered. Measured before the
+/// fix as `aa=0 bb=1 zz=1` where reference PHP answers `aa=1 bb=1 zz=0` — the first scheme
+/// became unroutable and `zz://`, never registered by anyone, dispatched into the wrapper.
+/// Every existing test passed a literal, which lives in rodata and never moves, so the whole
+/// suite pinned the one case that could not fail.
+#[test]
+fn test_wrapper_registration_owns_its_scheme_after_the_caller_reassigns_it() {
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public function url_stat(string $path, int $flags) {
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+$s = "aa";
+stream_wrapper_register($s, "W");
+$s = "bb";
+stream_wrapper_register($s, "W");
+$s = "zz";
+echo file_exists("aa://p") ? 1 : 0;
+echo file_exists("bb://p") ? 1 : 0;
+echo file_exists("zz://p") ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "110");
+}
+
 /// Verifies compiled PHP output for stream wrapper unregister round trip.
 #[test]
 fn test_stream_wrapper_unregister_round_trip() {
@@ -5354,6 +5386,43 @@ echo stream_filter_register("custom.filter", "CustomFilter") ? "true" : "false";
 "#,
     );
     assert_eq!(out, "true");
+}
+
+/// Verifies a filter registration keeps its own copy of the name — the twin of the wrapper case.
+///
+/// `_user_filter_registry` stored the caller's pointer, so reassigning the variable rewrote the
+/// registered name. Measured before the fix as both registrations resolving to the variable's
+/// LAST value: `aa` and `bb` were unusable and `zz`, never registered, filtered.
+#[test]
+fn test_filter_registration_owns_its_name_after_the_caller_reassigns_it() {
+    let out = compile_and_run(
+        r#"<?php
+class Up extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+$n = "aa";
+stream_filter_register($n, "Up");
+$n = "bb";
+stream_filter_register($n, "Up");
+$n = "zz";
+foreach (["aa", "bb", "zz"] as $name) {
+    $f = fopen("php://memory", "w+");
+    stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+    fwrite($f, "x");
+    rewind($f);
+    echo fread($f, 4);
+    fclose($f);
+}
+"#,
+    );
+    assert_eq!(out, "XXx");
 }
 
 /// Verifies compiled PHP output for fopen silent fail for registered user wrapper.
