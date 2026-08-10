@@ -322,13 +322,20 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
 
     // -- select the stat-array key string by field selector --
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the field selector
-    emitter.instruction("cbnz x10, __rt_uusf_mode");                            // non-zero selector → 'mode'
+    emitter.instruction("cmp x10, #1");                                         // selector 1 = 'mode'
+    emitter.instruction("b.eq __rt_uusf_mode");
+    emitter.instruction("cmp x10, #2");                                         // selector 2 = 'mtime'
+    emitter.instruction("b.eq __rt_uusf_mtime");
     abi::emit_symbol_address(emitter, "x1", "_stat_key_size");
     emitter.instruction("mov x2, #4");                                          // strlen("size")
     emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the size key
     emitter.label("__rt_uusf_mode");
     abi::emit_symbol_address(emitter, "x1", "_stat_key_mode");
     emitter.instruction("mov x2, #4");                                          // strlen("mode")
+    emitter.instruction("b __rt_uusf_havekey");                                 // proceed with the mode key
+    emitter.label("__rt_uusf_mtime");
+    abi::emit_symbol_address(emitter, "x1", "_stat_key_mtime");
+    emitter.instruction("mov x2, #5");                                          // strlen("mtime")
     emitter.label("__rt_uusf_havekey");
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key → key_lo/key_hi in x1/x2
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
@@ -388,14 +395,20 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
 
     // -- select the stat-array key string by field selector --
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the field selector
-    emitter.instruction("test r10, r10");                                       // size (0) or mode (non-zero)?
-    emitter.instruction("jnz __rt_uusf_mode_x86");                              // non-zero selector → 'mode'
+    emitter.instruction("cmp r10, 1");                                          // selector 1 = 'mode'
+    emitter.instruction("je __rt_uusf_mode_x86");
+    emitter.instruction("cmp r10, 2");                                          // selector 2 = 'mtime'
+    emitter.instruction("je __rt_uusf_mtime_x86");
     abi::emit_symbol_address(emitter, "rax", "_stat_key_size");                 // size key pointer (new_by_name-style rax/rdx string ABI)
     emitter.instruction("mov rdx, 4");                                          // strlen("size")
     emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the size key
     emitter.label("__rt_uusf_mode_x86");
     abi::emit_symbol_address(emitter, "rax", "_stat_key_mode");                 // mode key pointer
     emitter.instruction("mov rdx, 4");                                          // strlen("mode")
+    emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the mode key
+    emitter.label("__rt_uusf_mtime_x86");
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_mtime");                // mtime key pointer
+    emitter.instruction("mov rdx, 5");                                          // strlen("mtime")
     emitter.label("__rt_uusf_havekey_x86");
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key → key_lo in rax, key_hi in rdx
     emitter.instruction("mov rsi, rax");                                        // key_lo → SysV second arg for the reader

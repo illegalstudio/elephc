@@ -5847,6 +5847,35 @@ is_file("flagw://isfile");
     assert_eq!(out, "stat=4 lstat=5 exists=6 size=4 isfile=6 ");
 }
 
+/// Verifies `is_dir()` and `filemtime()` reach a registered wrapper's `url_stat()`.
+///
+/// `is_dir()` had no wrapper dispatch at all while its twin `is_file()` did — the two differ
+/// only in the `S_IFMT` value they compare against, and writing them as separate code paths is
+/// how one came to be wired and the other not. `filemtime()` needed a third field selector in
+/// the shared runtime helper, which until now could extract only `size` and `mode`.
+#[test]
+fn test_is_dir_and_filemtime_dispatch_to_wrapper_url_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class TypeW {
+    public function url_stat(string $path, int $flags) {
+        $mode = strpos($path, "dir") !== false ? 16877 : 33188;
+        return ['dev'=>0,'ino'=>0,'mode'=>$mode,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>3,'atime'=>0,'mtime'=>4321,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("typew", "TypeW");
+echo is_dir("typew://dir") ? "D" : "-";
+echo is_dir("typew://file") ? "D" : "-";
+echo is_file("typew://file") ? "F" : "-";
+echo is_file("typew://dir") ? "F" : "-";
+echo "|", filemtime("typew://file");
+"#,
+    );
+    assert_eq!(out, "D-F-|4321");
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {

@@ -297,20 +297,66 @@ pub(super) fn emit_url_stat_field_or_fallback(
     }
 }
 
+/// `S_IFMT` mask isolating the file-type bits of a `url_stat()` mode.
+const STAT_FILE_TYPE_MASK: u32 = 0xF000;
+/// `S_IFREG`, the file-type bits of a regular file.
+const STAT_TYPE_REGULAR: u32 = 0x8000;
+/// `S_IFDIR`, the file-type bits of a directory.
+const STAT_TYPE_DIRECTORY: u32 = 0x4000;
+
+/// Lowers `filemtime()` through userspace `url_stat()['mtime']` before filesystem stat.
+pub(super) fn lower_filemtime_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "filemtime", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "filemtime")?;
+    emit_url_stat_field_or_fallback(ctx, "__rt_filemtime", 2, URL_STAT_FLAGS_NOCACHE);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_dir()` through userspace `url_stat()['mode']` before filesystem stat.
+pub(super) fn lower_is_dir_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "is_dir", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "is_dir")?;
+    emit_file_type_wrapper_dispatch(ctx, "__rt_is_dir", STAT_TYPE_DIRECTORY, "is_dir");
+    store_if_result(ctx, inst)
+}
+
 /// Emits `is_file()` wrapper url_stat mode extraction plus file-type test.
 pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
-    emit_url_stat_field_or_fallback(ctx, "__rt_is_file", 1, URL_STAT_FLAGS_QUIET);
-    let no_wrapper = ctx.next_label("is_file_no_wrapper_adjust");
-    let done = ctx.next_label("is_file_adjust_done");
+    emit_file_type_wrapper_dispatch(ctx, "__rt_is_file", STAT_TYPE_REGULAR, "is_file");
+}
+
+/// Emits a wrapper `url_stat()['mode']` file-type predicate with a filesystem fallback.
+///
+/// Shared by `is_file()` and `is_dir()`: the two differ only in the `S_IFMT` value they
+/// compare against, and writing them separately is how `is_dir()` came to have no wrapper
+/// dispatch at all while its twin did.
+fn emit_file_type_wrapper_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    fallback_runtime: &str,
+    file_type: u32,
+    name: &str,
+) {
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, 1, URL_STAT_FLAGS_QUIET);
+    let no_wrapper = ctx.next_label(&format!("{}_no_wrapper_adjust", name));
+    let done = ctx.next_label(&format!("{}_adjust_done", name));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
             ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether the mode came from a wrapper
             ctx.emitter.instruction(&format!("cbz w9, {}", no_wrapper));        // native fallback already returned a boolean
-            ctx.emitter.instruction("and x0, x0, #0xF000");                     // isolate mode file-type bits from wrapper url_stat
-            ctx.emitter.instruction("mov x9, #0x8000");                         // materialize S_IFREG for regular files
-            ctx.emitter.instruction("cmp x0, x9");                              // compare wrapper mode against regular-file type
-            ctx.emitter.instruction("cset x0, eq");                             // return true only for regular-file modes
+            ctx.emitter
+                .instruction(&format!("and x0, x0, #{:#x}", STAT_FILE_TYPE_MASK)); // isolate mode file-type bits from wrapper url_stat
+            ctx.emitter.instruction(&format!("mov x9, #{:#x}", file_type));     // materialize the file type this predicate accepts
+            ctx.emitter.instruction("cmp x0, x9");                              // compare wrapper mode against that type
+            ctx.emitter.instruction("cset x0, eq");                             // return true only for a matching mode
             ctx.emitter.instruction(&format!("b {}", done));                    // skip the native-result path
             ctx.emitter.label(&no_wrapper);
             ctx.emitter.label(&done);
@@ -320,9 +366,10 @@ pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether the mode came from a wrapper
             ctx.emitter.instruction("test r9d, r9d");                           // test the url_stat matched flag
             ctx.emitter.instruction(&format!("jz {}", no_wrapper));             // native fallback already returned a boolean
-            ctx.emitter.instruction("and eax, 0xF000");                         // isolate mode file-type bits from wrapper url_stat
-            ctx.emitter.instruction("cmp eax, 0x8000");                         // compare wrapper mode against regular-file type
-            ctx.emitter.instruction("sete al");                                 // return true only for regular-file modes
+            ctx.emitter
+                .instruction(&format!("and eax, {:#x}", STAT_FILE_TYPE_MASK));  // isolate mode file-type bits from wrapper url_stat
+            ctx.emitter.instruction(&format!("cmp eax, {:#x}", file_type));     // compare wrapper mode against that type
+            ctx.emitter.instruction("sete al");                                 // return true only for a matching mode
             ctx.emitter.instruction("movzx eax, al");                           // widen the boolean into the result register
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the native-result path
             ctx.emitter.label(&no_wrapper);

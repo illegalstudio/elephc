@@ -52,7 +52,7 @@ pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_int(ctx, inst, "filemtime", "__rt_filemtime")
+    super::wrapper_dispatch::lower_filemtime_with_wrapper(ctx, inst)
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
@@ -232,7 +232,7 @@ pub(crate) fn lower_is_dir(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_dir", "__rt_is_dir")
+    super::wrapper_dispatch::lower_is_dir_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_readable(path)` through the target-aware runtime access helper.
