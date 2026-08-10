@@ -67,6 +67,23 @@ pub struct RuntimeFeatures {
     /// this bit keeps the address-of reference resolvable without pulling the body
     /// into non-PDO programs.
     pub pdo_udf: bool,
+    /// True when the program registers the builtin `Fiber` class, and therefore when a Fiber
+    /// object can exist to be collected.
+    ///
+    /// `__rt_object_free_deep` releases a fiber's 256 KB stack through `__rt_fiber_free_stack`,
+    /// which calls `munmap`. That arm was emitted unconditionally, so every binary imported
+    /// `munmap` to free a stack it could never have allocated. The condition is a fact, not an
+    /// analysis: a Fiber object cannot exist without the class, and `builtin_class_gate` decides
+    /// the class. When false the arm is absent and a receiver falls through to the ordinary
+    /// struct-free path, which is what a non-Fiber receiver already did.
+    pub fiber: bool,
+    /// True when the program registers the builtin `Generator` class.
+    ///
+    /// A Generator is a fiber-shaped coroutine and releases its stack through the SAME
+    /// `__rt_fiber_free_stack` helper, so gating the Fiber arm alone moved nothing — measured:
+    /// `_munmap` still imported, binary unchanged at 52 064 bytes. Both arms have to go for the
+    /// helper to become unreferenced and collectable.
+    pub generator: bool,
 }
 
 impl RuntimeFeatures {
@@ -89,6 +106,8 @@ impl RuntimeFeatures {
             | ((self.eval_scope as u64) << 5)
             | ((self.web as u64) << 6)
             | ((self.pdo_udf as u64) << 7)
+            | ((self.fiber as u64) << 8)
+            | ((self.generator as u64) << 9)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -102,6 +121,8 @@ impl RuntimeFeatures {
             eval_scope: false,
             web: false,
             pdo_udf: false,
+            fiber: false,
+            generator: false,
         }
     }
 
@@ -117,6 +138,8 @@ impl RuntimeFeatures {
             eval_scope: true,
             web: true,
             pdo_udf: true,
+            fiber: true,
+            generator: true,
         }
     }
 }
@@ -1216,6 +1239,8 @@ mod tests {
             eval_scope: false,
             web: false,
             pdo_udf: false,
+            fiber: false,
+            generator: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

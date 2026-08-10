@@ -19,6 +19,12 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
+    // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
+    // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
+    // that from the program's own text. Reading the answer here is exact, where scanning EIR for
+    // "something that makes a fiber" would be an approximation of it.
+    module.required_runtime_features.fiber |= module.class_infos.contains_key("Fiber");
+    module.required_runtime_features.generator |= module.class_infos.contains_key("Generator");
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.

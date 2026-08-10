@@ -88,6 +88,10 @@ fn compile_lfc_eval_project_and_run(
         eval_scope: true,
         web: false,
         pdo_udf: false,
+        // The LFC fixture is an eval program with no Fiber and no Generator, so the
+        // stack-releasing arms of `__rt_object_free_deep` are not emitted for it.
+        fiber: false,
+        generator: false,
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

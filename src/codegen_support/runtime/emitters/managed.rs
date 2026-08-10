@@ -187,7 +187,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
-    arrays::emit_object_free_deep(emitter);
+    arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter);
