@@ -84,6 +84,20 @@ pub struct RuntimeFeatures {
     /// `_munmap` still imported, binary unchanged at 52 064 bytes. Both arms have to go for the
     /// helper to become unreferenced and collectable.
     pub generator: bool,
+    /// True when the program can hold a `popen()` pipe resource, i.e. when its EIR calls
+    /// `RuntimeFnId::Popen` — the only producer of resource kind 3.
+    ///
+    /// Scope cleanup reaps such a pipe through `__rt_pclose`, and that reference was the only
+    /// thing keeping `__rt_pclose` alive in every binary, which imported `pclose`.
+    pub popen_resource: bool,
+    /// True when the program can hold an `opendir()` directory resource, i.e. when its EIR calls
+    /// `RuntimeFnId::Opendir` — the only producer of resource kind 4.
+    ///
+    /// Scope cleanup releases such a handle through `__rt_closedir`, whose two paths (libc `DIR*`
+    /// and the `glob://` handle minted by `__rt_opendir_glob`) between them imported `closedir`,
+    /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
+    /// had apart from the `getrlimit` stack probe.
+    pub directory_resource: bool,
 }
 
 impl RuntimeFeatures {
@@ -108,6 +122,8 @@ impl RuntimeFeatures {
             | ((self.pdo_udf as u64) << 7)
             | ((self.fiber as u64) << 8)
             | ((self.generator as u64) << 9)
+            | ((self.popen_resource as u64) << 10)
+            | ((self.directory_resource as u64) << 11)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -123,6 +139,8 @@ impl RuntimeFeatures {
             pdo_udf: false,
             fiber: false,
             generator: false,
+            popen_resource: false,
+            directory_resource: false,
         }
     }
 
@@ -140,6 +158,8 @@ impl RuntimeFeatures {
             pdo_udf: true,
             fiber: true,
             generator: true,
+            popen_resource: true,
+            directory_resource: true,
         }
     }
 }
@@ -1241,6 +1261,8 @@ mod tests {
             pdo_udf: false,
             fiber: false,
             generator: false,
+            popen_resource: false,
+            directory_resource: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

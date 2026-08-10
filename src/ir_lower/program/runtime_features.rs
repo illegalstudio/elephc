@@ -8,6 +8,7 @@
 //! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
 
 use super::*;
+use crate::ir::ResourceCleanupKind;
 
 /// Adds optional runtime features referenced by synthetic or lowered EIR functions.
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
@@ -19,6 +20,8 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
+    module.required_runtime_features.popen_resource |= features.popen_resource;
+    module.required_runtime_features.directory_resource |= features.directory_resource;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -47,6 +50,17 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
                             typed_builtin_requires_descriptor_invoker(function, inst, target);
+                        // The resource a builtin boxes is the ONLY way its cleanup kind reaches
+                        // `__rt_mixed_free_deep`: eval boxes its own handles as kind 0, and a
+                        // callable named by a runtime-unknown string is a fatal, not a dispatch.
+                        // So a call in this stream is exactly the condition for the arm.
+                        match target.resource_cleanup_kind() {
+                            Some(ResourceCleanupKind::PopenPipe) => features.popen_resource = true,
+                            Some(ResourceCleanupKind::Directory) => {
+                                features.directory_resource = true
+                            }
+                            Some(ResourceCleanupKind::StreamFd) | None => {}
+                        }
                     }
                 }
                 Op::LanguageConstructCall => {

@@ -121,3 +121,46 @@ fn test_executable_marks_its_internal_symbols() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the scope-cleanup destructor for a resource kind travels with the builtin that is
+/// its only producer.
+///
+/// The `__rt_mixed_free_deep` arms for `popen` pipes and `opendir` streams were the sole
+/// reference to `__rt_pclose` and `__rt_closedir`, so every binary imported `pclose`, `closedir`,
+/// `globfree` and `close` to release handles it could not open — the four libc imports a trivial
+/// program had apart from the `getrlimit` stack probe.
+///
+/// This is the direction the behaviour tests cannot see. `test_opendir_auto_closed_on_scope_exit`
+/// asserts the program prints `done` and passes just as well with the arm missing: a leaked
+/// descriptor in a process about to exit changes nothing observable. So the arm's PRESENCE for a
+/// program that opens a directory is checked here, on the emitted runtime, and not left to a
+/// functional test that would stay green while the handle leaked.
+#[test]
+fn test_resource_destructors_follow_the_builtin_that_produces_them() {
+    // The arm LABEL, not the helper symbol: `__rt_pclose` and `__rt_closedir` are defined
+    // unconditionally in the runtime and it is the linker that drops an unreferenced body, so
+    // their names are in the assembly either way. The ladder arm is what makes them reachable.
+    for (label, source, expects_popen_arm, expects_dir_arm) in [
+        ("plain", "<?php echo 1;", false, false),
+        ("popen", "<?php $p = popen(\"printf x\", \"r\"); echo fread($p, 4);", true, false),
+        ("opendir", "<?php $h = opendir(\".\"); readdir($h);", false, true),
+    ] {
+        let dir = make_cli_test_dir("elephc_resource_destructor_reachability");
+        let (_user_asm, runtime_asm, _required_libraries) =
+            compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+
+        assert_eq!(
+            runtime_asm.contains("__rt_mixed_free_deep_resource_popen"),
+            expects_popen_arm,
+            "{label}: the popen destructor arm must be emitted exactly when popen() is lowered"
+        );
+        assert_eq!(
+            runtime_asm.contains("__rt_mixed_free_deep_resource_dir"),
+            expects_dir_arm,
+            "{label}: the directory destructor arm must be emitted exactly when opendir() is \
+             lowered"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

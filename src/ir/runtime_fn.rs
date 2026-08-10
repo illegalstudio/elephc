@@ -24,6 +24,39 @@ pub enum RuntimeFnTargetSupport {
     AllSupported,
 }
 
+/// A resource destructor `__rt_mixed_free_deep` runs at scope exit, beyond the plain
+/// `close()` every kind-1 stream descriptor gets.
+///
+/// `RuntimeFnId::resource_cleanup_kind` is the SINGLE authority for which of these a
+/// program can produce: the lowering stamps the kind from it, and the runtime emitter
+/// omits the ladder arm for every kind no lowered call declares. A new producer that
+/// does not declare itself here compiles and runs, and silently leaks its handle at
+/// scope exit — declare it in `resource_cleanup_kind` before stamping it.
+///
+/// Kind 0 (generic, no destructor), kind 2 (`HashContext`, stamped by the runtime helper
+/// `__rt_hash_init` rather than by a lowering) and kind 5 (the eval-owned inert handle,
+/// which must never gain an arm) are deliberately absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceCleanupKind {
+    /// Kind 1: a native stream descriptor closed with `close()`.
+    StreamFd,
+    /// Kind 3: a `popen()` pipe closed and reaped through `__rt_pclose`.
+    PopenPipe,
+    /// Kind 4: an `opendir()` stream released through `__rt_closedir`.
+    Directory,
+}
+
+impl ResourceCleanupKind {
+    /// Returns the value written into the Mixed high payload word for this kind.
+    pub const fn stamp(self) -> u64 {
+        match self {
+            Self::StreamFd => 1,
+            Self::PopenPipe => 3,
+            Self::Directory => 4,
+        }
+    }
+}
+
 /// Complete central descriptor for one typed EIR runtime function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeFnDescriptor {
@@ -1129,6 +1162,24 @@ impl RuntimeFnId {
     /// Returns whether this operation requires the optional multibyte-length runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
         matches!(self, RuntimeFnId::MbStrlen)
+    }
+
+    /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
+    ///
+    /// Read twice, and that is the point: the lowering stamps `Some(kind).stamp()` into the
+    /// Mixed high payload word, and `lowered_runtime_features` turns the same answer into the
+    /// runtime feature bit that decides whether `__rt_mixed_free_deep` emits the matching arm.
+    /// One table, so the producer and the destructor cannot drift apart.
+    ///
+    /// Only kinds with a destructor appear. Every other resource-boxing builtin — `fopen`,
+    /// `tmpfile`, `fsockopen`, the socket family — carries kind 1, whose `close()` is a raw
+    /// syscall on AArch64 and needs nothing gated.
+    pub const fn resource_cleanup_kind(self) -> Option<ResourceCleanupKind> {
+        match self {
+            RuntimeFnId::Popen => Some(ResourceCleanupKind::PopenPipe),
+            RuntimeFnId::Opendir => Some(ResourceCleanupKind::Directory),
+            _ => None,
+        }
     }
 
     /// Returns whether this operation can publish PHAR bridge helper symbols.

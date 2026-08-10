@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::ir::ResourceCleanupKind;
 
 /// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 pub(super) fn box_stream_string_or_false_on_empty_result(
@@ -54,19 +55,24 @@ pub(super) fn box_stream_string_or_false_on_empty_result(
 /// `close()` at scope exit). Callers whose handle needs a different destructor use
 /// `box_stream_fd_or_false_result_kind` instead.
 pub(super) fn box_stream_fd_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
-    box_stream_fd_or_false_result_kind(ctx, label_prefix, 1);
+    box_stream_fd_or_false_result_kind(ctx, label_prefix, ResourceCleanupKind::StreamFd);
 }
 
 /// Boxes a non-negative descriptor as a PHP resource (or false on failure) and
 /// records the scope-cleanup `kind` in the Mixed high payload word so
-/// `__rt_mixed_free_deep` dispatches the right destructor: 1 = native stream fd
-/// (`close`), 3 = `popen` pipe (`__rt_pclose`), 4 = `opendir` stream
-/// (`__rt_closedir`).
+/// `__rt_mixed_free_deep` dispatches the right destructor.
+///
+/// The kind is a `ResourceCleanupKind` rather than a bare number because the runtime
+/// emitter no longer carries every arm: it emits an arm only for the kinds
+/// `RuntimeFnId::resource_cleanup_kind` says the lowered program can produce. Stamping a
+/// kind that no `RuntimeFnId` declares would box a resource whose destructor is not in the
+/// binary, and the handle would leak at scope exit with nothing to report it.
 pub(super) fn box_stream_fd_or_false_result_kind(
     ctx: &mut FunctionContext<'_>,
     label_prefix: &str,
-    kind: u64,
+    cleanup: ResourceCleanupKind,
 ) {
+    let kind = cleanup.stamp();
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {

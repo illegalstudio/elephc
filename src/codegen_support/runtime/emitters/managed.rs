@@ -177,7 +177,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_intval_base(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_count(emitter);
-    arrays::emit_mixed_free_deep(emitter);
+    arrays::emit_mixed_free_deep(emitter, features);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_int_checked_binops(emitter);
