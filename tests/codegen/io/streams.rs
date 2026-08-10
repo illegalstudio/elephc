@@ -413,6 +413,38 @@ unlink("rows.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the `while` guard narrowing does not outlive its loop.
+///
+/// The narrowing added for the read-loop idiom applies to every `while` in the language, so
+/// the interesting cases are the ones where the loop is left with the guard still TRUE. After
+/// a normal exit the guarded variable holds `false` and must read back as such — a narrowing
+/// that leaked would have codegen treat that `false` as an array. After a `break` it holds an
+/// array, which the conservative restore has to keep working too.
+#[test]
+fn test_while_guard_narrowing_does_not_outlive_the_loop() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("w.csv", "a,b\nc,d\n");
+$h = fopen("w.csv", "r");
+$seen = 0;
+while (($row = fgetcsv($h)) !== false) {
+    $seen += count($row);
+}
+fclose($h);
+echo "seen=", $seen, " after=", var_export($row, true), "|";
+$h = fopen("w.csv", "r");
+while (($r2 = fgetcsv($h)) !== false) {
+    break;
+}
+fclose($h);
+echo "broke=", ($r2 === false) ? "false" : "array";
+unlink("w.csv");
+"#,
+    );
+    assert_eq!(out, "seen=4 after=false|broke=array");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fputcsv() writes a valid CSV line and file_get_contents() reads it back.
 #[test]
 fn test_fputcsv() {

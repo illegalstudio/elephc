@@ -30,6 +30,28 @@ fn test_error_fopen_wrong_args() {
     );
 }
 
+/// Verifies the `while` guard narrowing is dropped once the loop exits.
+///
+/// The loop leaves precisely when the guard is false, so after it the variable holds `false`
+/// and `count()` on it must be refused. Without the restore the narrowed array type outlives
+/// the loop, this snippet COMPILES, and the emitted code reads a boxed `false` as an array —
+/// a silent wrong answer. The property is only visible at compile time: a run-time test of
+/// the same loop passes either way, because `var_export()` and `foreach` consult the runtime
+/// tag and never the static type. That is what makes this an error test rather than a
+/// behavioural one.
+#[test]
+fn test_error_while_guard_narrowing_does_not_outlive_the_loop() {
+    expect_error(
+        r#"<?php
+$h = fopen("x.csv", "r");
+while (($row = fgetcsv($h)) !== false) {
+}
+echo count($row);
+"#,
+        "count() argument must be array or Countable object",
+    );
+}
+
 /// Verifies fclose() produces correct error when called with no arguments.
 #[test]
 fn test_error_fclose_wrong_args() {
