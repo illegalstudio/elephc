@@ -122,6 +122,96 @@ fn test_executable_marks_its_internal_symbols() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the `__toString` dispatch ladder is emitted once for a program with several
+/// boxed-`Mixed` string contexts, and stays inline for a program with one.
+///
+/// The ladder carries one arm per class publishing `__toString` and used to be copied at every
+/// site: measured on `examples/iterators`, 12 sites of 592 IDENTICAL lines, 19.3% of the emitted
+/// assembly. Sharing it costs a call, so a single-site program must keep the inline form —
+/// without that second direction the change made `fizzbuzz` GROW, from 13 588 to 15 528 bytes of
+/// `__text`, by paying for a helper body to remove one copy of itself.
+#[test]
+fn test_mixed_string_ladder_is_shared_only_when_several_sites_use_it() {
+    const CLASSES: &str = r#"<?php
+class Stamp { public function __toString(): string { return "S"; } }
+function pick(int $i): mixed { return $i === 0 ? new Stamp() : $i; }
+"#;
+
+    let dir = make_cli_test_dir("elephc_shared_mixed_string_many");
+    let many = format!("{CLASSES}$a = pick(0); $b = pick(1); $c = pick(2);\necho $a; echo $b; echo $c;\n");
+    let (many_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(&many, &dir, 8_388_608, false, false);
+    assert_eq!(
+        many_asm.matches("_eir_shared_mixed_echo:").count(),
+        1,
+        "the shared echo helper must be defined exactly once"
+    );
+    assert!(
+        many_asm.matches("_eir_shared_mixed_echo").count() >= 4,
+        "each of the three sites must call the helper it shares"
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    let dir = make_cli_test_dir("elephc_shared_mixed_string_one");
+    let one = format!("{CLASSES}$a = pick(0);\necho $a;\n");
+    let (one_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(&one, &dir, 8_388_608, false, false);
+    assert!(
+        !one_asm.contains("_eir_shared_mixed_echo"),
+        "a single string context must stay inline rather than pay for a helper body"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a function whose only use of the reserved nested-call register is an inlined
+/// `__toString` ladder saves that register before writing it.
+///
+/// The register is callee-saved and outside the allocator's tracking, so the frame reserves a
+/// save slot from an explicit predicate — one that tested for a Mixed-receiver METHOD call and
+/// nothing else. A string context is not a method call, so `function show(mixed $v) { echo $v; }`
+/// emitted `mov x19, x1` under a prologue that saved nothing, breaking the calling convention
+/// the same way issue #511 did. No caller shape was found that turns this into a wrong answer —
+/// the receiver is established after argument lowering, which closes the obvious window — so
+/// this guards the convention itself rather than a reproduced failure.
+#[test]
+fn test_string_context_function_saves_the_nested_call_register() {
+    let dir = make_cli_test_dir("elephc_string_context_nested_reg");
+    let (user_asm, _runtime_asm, _libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Stamp { public function __toString(): string { return "S"; } }
+function show(mixed $v): void { echo $v; }
+show(new Stamp());
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let body = user_asm
+        .split("@fn name=show")
+        .nth(1)
+        .expect("the show function must be emitted")
+        .split("@endfn")
+        .next()
+        .expect("the show function must be terminated");
+    let register = if cfg!(target_arch = "x86_64") { "r12" } else { "x19" };
+    let first_write = body
+        .find(&format!("mov {register},"))
+        .or_else(|| body.find(&format!("mov {register} ,")))
+        .expect("the inlined ladder must move the receiver into the nested-call register");
+    let saved_before = body[..first_write].contains(&format!("stur {register},"))
+        || body[..first_write].contains(&format!("str {register},"))
+        || body[..first_write].contains(&format!("mov QWORD PTR [rbp - 8], {register}"))
+        || body[..first_write].contains(&format!("push {register}"));
+    assert!(
+        saved_before,
+        "the nested-call register must be saved before the ladder overwrites it:\n{body}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the scope-cleanup destructor for a resource kind travels with the builtin that is
 /// its only producer.
 ///

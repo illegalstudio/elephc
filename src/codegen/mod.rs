@@ -31,6 +31,7 @@ pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
 mod runtime_metadata;
+mod shared_mixed_string;
 mod shared_state;
 mod stack_guard;
 pub mod value_placement;

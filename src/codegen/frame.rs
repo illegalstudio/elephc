@@ -209,6 +209,17 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
 /// store and one load — so the receiver test errs toward inclusion.
 fn function_uses_nested_call_reg(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
+        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
+        // and is neither of the method-call opcodes below, so it used to slip through: a
+        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
+        // saved nothing. No caller shape was found that turns that into a wrong answer — the
+        // receiver is established AFTER argument lowering, which closes the obvious window —
+        // so this restores the callee-saved discipline rather than fixing a reproduced
+        // failure; per the note above, over-detection costs one store and one load.
+        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
+        {
+            return true;
+        }
         if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
             return false;
         }

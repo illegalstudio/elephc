@@ -215,13 +215,35 @@ pub(super) fn emit_mixed_string_context_stdout(
 }
 
 /// Describes whether a Mixed string context should leave a string result or write it.
-enum MixedStringContextMode {
+pub(in crate::codegen) enum MixedStringContextMode {
     Result,
     Stdout,
 }
 
 /// Handles PHP string contexts for boxed Mixed values with an object-aware branch.
+///
+/// The dispatch below carries one arm per class publishing `__toString`, so a program
+/// with several string contexts used to emit the same ladder once per site. When the
+/// module shares it, the site keeps only the load and calls the shared helper; the
+/// helper's own body takes the inline path, which is what terminates the recursion.
 fn emit_mixed_string_context(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    mode: MixedStringContextMode,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    if let Some(label) = crate::codegen::shared_mixed_string::shared_ladder_label(ctx, &mode) {
+        abi::emit_call_label(ctx.emitter, label);
+        return Ok(());
+    }
+    emit_mixed_string_dispatch_from_result(ctx, value, mode)
+}
+
+/// Emits the object-aware string dispatch for a boxed Mixed already in the result register.
+///
+/// Split out so the shared helper can emit the SAME arms rather than a reimplementation of
+/// them: what moves is where the ladder lives, not what it does.
+pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     mode: MixedStringContextMode,
@@ -241,7 +263,6 @@ fn emit_mixed_string_context(
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_result(value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_unboxed_mixed_object(ctx, &object_label);

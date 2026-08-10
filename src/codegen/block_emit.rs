@@ -66,6 +66,15 @@ pub(super) fn emit_module(
 ) -> Result<()> {
     let mut shared = SharedCodegenState::default();
     function_variants::emit_dispatchers(module, emitter, data);
+    // Emitted before the module's own bodies so every string context that calls them is
+    // lowered against helpers that already exist.
+    super::shared_mixed_string::emit_shared_mixed_string_helpers(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
