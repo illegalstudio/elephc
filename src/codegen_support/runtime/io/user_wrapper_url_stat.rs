@@ -285,17 +285,30 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed Mixed result (or 0 on no match)
 }
 
-/// Emits `__rt_user_wrapper_url_stat_field(path_ptr, path_len, field_sel)`.
+/// Emits `__rt_user_wrapper_url_stat_field(path_ptr, path_len, field_sel, flags)`.
 ///
-/// Calls `__rt_user_wrapper_url_stat` (which sets `_url_stat_matched`) and, on a
-/// stat-array result, extracts an integer field by its PHP string key:
-/// `field_sel` 0 → `'size'`, 1 → `'mode'`. Returns the field as an int, or `-1`
-/// when the scheme did not match, the wrapper reported the path absent, or the
-/// field is missing/non-integer. Backs `filesize()`/`is_file()` on `scheme://`
-/// URLs; the caller reads `_url_stat_matched` to choose between this result and
-/// the real-filesystem fallback. Reuses the boxed-Mixed reader
-/// (`__rt_mixed_array_get`) with a `__rt_hash_normalize_key`-normalized string
-/// key, then releases both the field box and the stat-array box.
+/// Calls `__rt_user_wrapper_url_stat` (which sets `_url_stat_matched`) and reads
+/// the stat array it returns. The selector picks what comes back:
+///
+/// | sel | key(s) read        | result                                    |
+/// |-----|--------------------|-------------------------------------------|
+/// | 0   | `size`             | the integer field, or `-1`                |
+/// | 1   | `mode`             | the integer field, or `-1`                |
+/// | 2   | `mtime`            | the integer field, or `-1`                |
+/// | 3   | `mode`+`uid`+`gid` | `is_readable()` as 0/1, or 0              |
+/// | 4   | `mode`+`uid`+`gid` | `is_writable()` as 0/1, or 0              |
+/// | 5   | `mode`+`uid`+`gid` | `is_executable()` as 0/1, or 0            |
+///
+/// Backs the whole stat family on `scheme://` URLs; the caller reads
+/// `_url_stat_matched` to choose between this result and the real-filesystem
+/// fallback. The boolean selectors report a plain `false` rather than the `-1`
+/// sentinel, because their callers store the answer straight into a PHP bool
+/// where `-1` would read as true.
+///
+/// The three boolean selectors read three keys from ONE `url_stat` call: PHP
+/// calls a wrapper's `url_stat()` once per predicate, and reading the fields
+/// through separate calls would make a wrapper with side effects observe a
+/// second one.
 pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_user_wrapper_url_stat_field_linux_x86_64(emitter);
@@ -306,22 +319,25 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_url_stat_field ---");
     emitter.label_global("__rt_user_wrapper_url_stat_field");
 
-    // Frame: 48 bytes. [sp,#0..16] x29/x30, [sp,#16] field_sel, [sp,#24] stat
-    //   Mixed, [sp,#32] extracted int result.
-    emitter.instruction("sub sp, sp, #48");                                     // helper frame
+    // Frame: 80 bytes. [sp,#0..16] x29/x30, [sp,#16] field_sel, [sp,#24] stat
+    //   Mixed, [sp,#32] primary field, [sp,#40] found flag, [sp,#48] uid,
+    //   [sp,#56] gid.
+    emitter.instruction("sub sp, sp, #80");                                     // helper frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-    emitter.instruction("str x2, [sp, #16]");                                   // save the field selector (0=size, 1=mode)
+    emitter.instruction("str x2, [sp, #16]");                                   // save the field selector (see the table above)
     emitter.instruction("mov x2, x3");                                          // url_stat flags chosen by the calling builtin, not a fixed 0
     emitter.instruction("bl __rt_user_wrapper_url_stat");                       // x0 = boxed Mixed stat array (sets _url_stat_matched)
-    emitter.instruction("cbz x0, __rt_uusf_fail");                              // scheme not matched / null → -1 (caller ignores when unmatched)
+    emitter.instruction("cbz x0, __rt_uusf_fail");                              // scheme not matched / null → sentinel (caller ignores when unmatched)
     emitter.instruction("ldr x9, [x0]");                                        // boxed Mixed runtime tag
     emitter.instruction("cmp x9, #3");                                          // wrapper reported the path absent (boxed false)?
-    emitter.instruction("b.eq __rt_uusf_fail_box");                             // → release the false box and return -1
-    emitter.instruction("str x0, [sp, #24]");                                   // save the stat-array Mixed across the key lookup
-
-    // -- select the stat-array key string by field selector --
+    emitter.instruction("b.eq __rt_uusf_fail_box");                             // → release the false box and return the sentinel
+    emitter.instruction("str x0, [sp, #24]");                                   // save the stat-array Mixed across the key lookups
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the field selector
+    emitter.instruction("cmp x10, #3");                                         // selectors 3..5 are the permission predicates
+    emitter.instruction("b.ge __rt_uusf_access");                               // → read mode, uid and gid together
+
+    // -- single integer field: select the stat-array key string --
     emitter.instruction("cmp x10, #1");                                         // selector 1 = 'mode'
     emitter.instruction("b.eq __rt_uusf_mode");
     emitter.instruction("cmp x10, #2");                                         // selector 2 = 'mtime'
@@ -337,39 +353,100 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_stat_key_mtime");
     emitter.instruction("mov x2, #5");                                          // strlen("mtime")
     emitter.label("__rt_uusf_havekey");
-    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key → key_lo/key_hi in x1/x2
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
-    emitter.instruction("mov x3, xzr");                                         // optional stat fields are probed without PHP undefined-key warnings
-    emitter.instruction("bl __rt_mixed_array_get");                             // x0 = boxed Mixed value at the key (Mixed null on miss)
-    emitter.instruction("mov x10, x0");                                         // keep the value box for release
-    emitter.instruction("ldr x9, [x0]");                                        // value runtime tag
-    emitter.instruction("cmp x9, #0");                                          // is the field an integer?
-    emitter.instruction("b.ne __rt_uusf_valfail");                              // missing/non-int field → -1
-    emitter.instruction("ldr x11, [x0, #8]");                                   // load the integer field payload
-    emitter.instruction("str x11, [sp, #32]");                                  // stash the result across the releases
-    emitter.instruction("mov x0, x10");                                         // value box
-    emitter.instruction("bl __rt_decref_any");                                  // release the boxed field value
+    emitter.instruction("bl __rt_uusf_read");                                   // x0 = integer field, x1 = 1 when present and integral
+    emitter.instruction("str x0, [sp, #32]");                                   // stash the field across the array release
+    emitter.instruction("str x1, [sp, #40]");                                   // stash whether it was readable at all
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed
     emitter.instruction("bl __rt_decref_any");                                  // release the boxed stat array
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the found flag
+    emitter.instruction("cbz x1, __rt_uusf_fail");                              // missing/non-int field → sentinel
     emitter.instruction("ldr x0, [sp, #32]");                                   // load the integer result
     emitter.instruction("b __rt_uusf_ret");                                     // return it
 
-    emitter.label("__rt_uusf_valfail");
-    emitter.instruction("mov x0, x10");                                         // value box
-    emitter.instruction("bl __rt_decref_any");                                  // release the boxed field value
+    // -- permission predicate: mode, uid and gid from the same stat array --
+    emitter.label("__rt_uusf_access");
+    abi::emit_symbol_address(emitter, "x1", "_stat_key_mode");
+    emitter.instruction("mov x2, #4");                                          // strlen("mode")
+    emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
+    emitter.instruction("bl __rt_uusf_read");                                   // x0 = mode, x1 = whether it was present
+    emitter.instruction("str x0, [sp, #32]");                                   // stash the mode
+    emitter.instruction("str x1, [sp, #40]");                                   // stash whether the mode was readable at all
+    abi::emit_symbol_address(emitter, "x1", "_stat_key_uid");
+    emitter.instruction("mov x2, #3");                                          // strlen("uid")
+    emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
+    emitter.instruction("bl __rt_uusf_read");                                   // x0 = uid (0 when the wrapper omitted it, as PHP zero-fills)
+    emitter.instruction("str x0, [sp, #48]");                                   // stash the reported owner uid
+    abi::emit_symbol_address(emitter, "x1", "_stat_key_gid");
+    emitter.instruction("mov x2, #3");                                          // strlen("gid")
+    emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed → reader receiver
+    emitter.instruction("bl __rt_uusf_read");                                   // x0 = gid (0 when the wrapper omitted it)
+    emitter.instruction("str x0, [sp, #56]");                                   // stash the reported owning gid
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed
     emitter.instruction("bl __rt_decref_any");                                  // release the boxed stat array
-    emitter.instruction("b __rt_uusf_fail");                                    // fall through to the -1 result
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether the mode was present
+    emitter.instruction("cbz x9, __rt_uusf_fail");                              // no integer 'mode' → the predicate is false
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selector to pick the permission bit
+    emitter.instruction("mov x10, #4");                                         // selector 3 (is_readable) wants the read bit
+    emitter.instruction("mov x11, #2");                                         // selector 4 (is_writable) wants the write bit
+    emitter.instruction("cmp x9, #4");
+    emitter.instruction("csel x10, x11, x10, eq");
+    emitter.instruction("mov x11, #1");                                         // selector 5 (is_executable) wants the execute bit
+    emitter.instruction("cmp x9, #5");
+    emitter.instruction("csel x10, x11, x10, eq");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // mode
+    emitter.instruction("ldr x1, [sp, #48]");                                   // reported owner uid
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reported owning gid
+    emitter.instruction("mov x3, x10");                                         // the permission bit this predicate asks about
+    emitter.instruction("bl __rt_stat_mode_access");                            // apply PHP's triad-selection rule
+    emitter.instruction("b __rt_uusf_ret");                                     // return the boolean
 
     emitter.label("__rt_uusf_fail_box");
     emitter.instruction("bl __rt_decref_any");                                  // release the boxed-false stat result (x0)
     emitter.label("__rt_uusf_fail");
-    emitter.instruction("mov x0, #-1");                                         // -1 sentinel (caller ignores when _url_stat_matched is 0)
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selector to choose the sentinel
+    emitter.instruction("mov x0, #-1");                                         // integer selectors report -1
+    emitter.instruction("mov x10, #0");                                         // boolean selectors report false
+    emitter.instruction("cmp x9, #3");
+    emitter.instruction("csel x0, x10, x0, ge");                                // a -1 stored into a PHP bool would read as true
 
     emitter.label("__rt_uusf_ret");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return the integer field (or -1)
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the integer field, the boolean, or the sentinel
+
+    // -- internal: read one integer field out of a borrowed stat array --
+    // Inputs: x0 = stat-array Mixed (borrowed), x1/x2 = key pointer/length.
+    // Outputs: x0 = the integer (0 when absent or not an int), x1 = 1 when it
+    // was present AND an integer. Factored out because the permission selectors
+    // read three keys from one array, and open-coding the read three times is
+    // how the release of the value box drifts from the release of the array.
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_url_stat_field (field reader) ---");
+    emitter.label("__rt_uusf_read");
+    emitter.instruction("sub sp, sp, #48");                                     // reader frame
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the reader frame pointer
+    emitter.instruction("str x0, [sp, #16]");                                   // save the borrowed stat array across the key normalization
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key → key_lo/key_hi in x1/x2
+    emitter.instruction("ldr x0, [sp, #16]");                                   // stat-array Mixed → reader receiver
+    emitter.instruction("mov x3, xzr");                                         // optional stat fields are probed without PHP undefined-key warnings
+    emitter.instruction("bl __rt_mixed_array_get");                             // x0 = boxed Mixed value at the key (Mixed null on miss)
+    emitter.instruction("mov x10, x0");                                         // keep the value box for release
+    emitter.instruction("ldr x9, [x0]");                                        // value runtime tag
+    emitter.instruction("ldr x11, [x0, #8]");                                   // integer payload (only meaningful for tag 0)
+    emitter.instruction("str x9, [sp, #24]");                                   // stash the tag across the release
+    emitter.instruction("str x11, [sp, #32]");                                  // stash the payload across the release
+    emitter.instruction("mov x0, x10");                                         // value box
+    emitter.instruction("bl __rt_decref_any");                                  // release the boxed field value
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the tag
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the payload
+    emitter.instruction("cmp x9, #0");                                          // was the field an integer?
+    emitter.instruction("csel x0, x0, xzr, eq");                                // a non-integer field reads as 0
+    emitter.instruction("cset x1, eq");                                         // and reports "absent" to the caller
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the reader frame
+    emitter.instruction("ret");                                                 // return the field and its presence flag
 }
 
 /// Emits the Linux x86_64 stream runtime helper for user wrapper url stat field.
@@ -378,23 +455,26 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_url_stat_field ---");
     emitter.label_global("__rt_user_wrapper_url_stat_field");
 
-    // Frame: [rbp-8] field_sel, [rbp-16] stat Mixed, [rbp-24] int result.
-    // push rbp then sub rsp,32 keeps rsp 16-aligned for the helper calls.
+    // Frame: [rbp-8] field_sel, [rbp-16] stat Mixed, [rbp-24] primary field,
+    //   [rbp-32] found flag, [rbp-40] uid, [rbp-48] gid.
+    // push rbp then sub rsp,64 keeps rsp 16-aligned for the helper calls.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // spill slots for field_sel/stat-mixed/result
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the field selector (0=size, 1=mode)
+    emitter.instruction("sub rsp, 64");                                         // spill slots for the selector, the array and the read fields
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the field selector (see the table on the AArch64 emitter)
     emitter.instruction("mov rdx, rcx");                                        // url_stat flags chosen by the calling builtin, not a fixed 0
     emitter.instruction("call __rt_user_wrapper_url_stat");                     // rax = boxed Mixed stat array (sets _url_stat_matched)
     emitter.instruction("test rax, rax");                                       // scheme not matched / null?
-    emitter.instruction("jz __rt_uusf_fail_x86");                               // → -1 (caller ignores when unmatched)
+    emitter.instruction("jz __rt_uusf_fail_x86");                               // → sentinel (caller ignores when unmatched)
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // boxed Mixed runtime tag
     emitter.instruction("cmp r9, 3");                                           // wrapper reported the path absent (boxed false)?
-    emitter.instruction("je __rt_uusf_fail_box_x86");                           // → release the false box and return -1
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the stat-array Mixed across the key lookup
-
-    // -- select the stat-array key string by field selector --
+    emitter.instruction("je __rt_uusf_fail_box_x86");                           // → release the false box and return the sentinel
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the stat-array Mixed across the key lookups
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the field selector
+    emitter.instruction("cmp r10, 3");                                          // selectors 3..5 are the permission predicates
+    emitter.instruction("jge __rt_uusf_access_x86");                            // → read mode, uid and gid together
+
+    // -- single integer field: select the stat-array key string --
     emitter.instruction("cmp r10, 1");                                          // selector 1 = 'mode'
     emitter.instruction("je __rt_uusf_mode_x86");
     emitter.instruction("cmp r10, 2");                                          // selector 2 = 'mtime'
@@ -410,38 +490,100 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_stat_key_mtime");                // mtime key pointer
     emitter.instruction("mov rdx, 5");                                          // strlen("mtime")
     emitter.label("__rt_uusf_havekey_x86");
-    emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key → key_lo in rax, key_hi in rdx
-    emitter.instruction("mov rsi, rax");                                        // key_lo → SysV second arg for the reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
-    emitter.instruction("xor ecx, ecx");                                        // optional stat fields are probed without PHP undefined-key warnings
-    emitter.instruction("call __rt_mixed_array_get");                           // rax = boxed Mixed value at the key (Mixed null on miss)
-    emitter.instruction("mov r10, rax");                                        // keep the value box for release
-    emitter.instruction("mov r9, QWORD PTR [rax]");                             // value runtime tag
-    emitter.instruction("test r9, r9");                                         // is the field an integer (tag 0)?
-    emitter.instruction("jnz __rt_uusf_valfail_x86");                           // missing/non-int field → -1
-    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the integer field payload
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // stash the result across the releases
-    emitter.instruction("mov rax, r10");                                        // value box
-    emitter.instruction("call __rt_decref_any");                                // release the boxed field value
+    emitter.instruction("call __rt_uusf_read_x86");                             // rax = integer field, rdx = 1 when present and integral
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // stash the field across the array release
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // stash whether it was readable at all
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // stat-array Mixed
     emitter.instruction("call __rt_decref_any");                                // release the boxed stat array
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the found flag
+    emitter.instruction("test rdx, rdx");                                       // was the field present and an integer?
+    emitter.instruction("jz __rt_uusf_fail_x86");                               // missing/non-int field → sentinel
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the integer result
     emitter.instruction("jmp __rt_uusf_ret_x86");                               // return it
 
-    emitter.label("__rt_uusf_valfail_x86");
-    emitter.instruction("mov rax, r10");                                        // value box
-    emitter.instruction("call __rt_decref_any");                                // release the boxed field value
+    // -- permission predicate: mode, uid and gid from the same stat array --
+    emitter.label("__rt_uusf_access_x86");
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_mode");                 // mode key pointer
+    emitter.instruction("mov rdx, 4");                                          // strlen("mode")
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
+    emitter.instruction("call __rt_uusf_read_x86");                             // rax = mode, rdx = whether it was present
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // stash the mode
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // stash whether the mode was readable at all
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_uid");                  // uid key pointer
+    emitter.instruction("mov rdx, 3");                                          // strlen("uid")
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
+    emitter.instruction("call __rt_uusf_read_x86");                             // rax = uid (0 when the wrapper omitted it, as PHP zero-fills)
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // stash the reported owner uid
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_gid");                  // gid key pointer
+    emitter.instruction("mov rdx, 3");                                          // strlen("gid")
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stat-array Mixed → reader receiver
+    emitter.instruction("call __rt_uusf_read_x86");                             // rax = gid (0 when the wrapper omitted it)
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the reported owning gid
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // stat-array Mixed
     emitter.instruction("call __rt_decref_any");                                // release the boxed stat array
-    emitter.instruction("jmp __rt_uusf_fail_x86");                              // fall through to the -1 result
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload whether the mode was present
+    emitter.instruction("test r9, r9");                                         // no integer 'mode'?
+    emitter.instruction("jz __rt_uusf_fail_x86");                               // → the predicate is false
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the selector to pick the permission bit
+    emitter.instruction("mov ecx, 4");                                          // selector 3 (is_readable) wants the read bit
+    emitter.instruction("mov r8d, 2");                                          // selector 4 (is_writable) wants the write bit
+    emitter.instruction("cmp r10, 4");
+    emitter.instruction("cmove ecx, r8d");
+    emitter.instruction("mov r8d, 1");                                          // selector 5 (is_executable) wants the execute bit
+    emitter.instruction("cmp r10, 5");
+    emitter.instruction("cmove ecx, r8d");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // mode
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reported owner uid
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reported owning gid
+    emitter.instruction("call __rt_stat_mode_access");                          // apply PHP's triad-selection rule
+    emitter.instruction("jmp __rt_uusf_ret_x86");                               // return the boolean
 
     emitter.label("__rt_uusf_fail_box_x86");
     emitter.instruction("call __rt_decref_any");                                // release the boxed-false stat result (rax)
     emitter.label("__rt_uusf_fail_x86");
-    emitter.instruction("mov rax, -1");                                         // -1 sentinel (caller ignores when _url_stat_matched is 0)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the selector to choose the sentinel
+    emitter.instruction("mov rax, -1");                                         // integer selectors report -1
+    emitter.instruction("xor edx, edx");                                        // boolean selectors report false
+    emitter.instruction("cmp r9, 3");
+    emitter.instruction("cmovge rax, rdx");                                     // a -1 stored into a PHP bool would read as true
 
     emitter.label("__rt_uusf_ret_x86");
-    emitter.instruction("add rsp, 32");                                         // release the helper frame
+    emitter.instruction("add rsp, 64");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the integer field (or -1)
+    emitter.instruction("ret");                                                 // return the integer field, the boolean, or the sentinel
+
+    // -- internal: read one integer field out of a borrowed stat array --
+    // Inputs: rdi = stat-array Mixed (borrowed), rax/rdx = key pointer/length.
+    // Outputs: rax = the integer (0 when absent or not an int), rdx = 1 when it
+    // was present AND an integer.
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_url_stat_field (field reader) ---");
+    emitter.label("__rt_uusf_read_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the reader frame pointer
+    emitter.instruction("sub rsp, 48");                                         // spill slots for the array, the tag and the payload
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the borrowed stat array across the key normalization
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key → key_lo in rax, key_hi in rdx
+    emitter.instruction("mov rsi, rax");                                        // key_lo → SysV second arg for the reader
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stat-array Mixed → reader receiver
+    emitter.instruction("xor ecx, ecx");                                        // optional stat fields are probed without PHP undefined-key warnings
+    emitter.instruction("call __rt_mixed_array_get");                           // rax = boxed Mixed value at the key (Mixed null on miss)
+    emitter.instruction("mov r10, rax");                                        // keep the value box for release
+    emitter.instruction("mov r9, QWORD PTR [rax]");                             // value runtime tag
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // integer payload (only meaningful for tag 0)
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // stash the tag across the release
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // stash the payload across the release
+    emitter.instruction("mov rax, r10");                                        // value box
+    emitter.instruction("call __rt_decref_any");                                // release the boxed field value
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the tag
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the payload
+    emitter.instruction("xor edx, edx");                                        // zero source for the non-integer case
+    emitter.instruction("test r9, r9");                                         // was the field an integer (tag 0)?
+    emitter.instruction("cmovne rax, rdx");                                     // a non-integer field reads as 0
+    emitter.instruction("sete dl");                                             // and reports "absent" to the caller
+    emitter.instruction("movzx edx, dl");                                       // widen the presence flag
+    emitter.instruction("add rsp, 48");                                         // release the reader frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the field and its presence flag
 }

@@ -240,7 +240,7 @@ pub(crate) fn lower_is_readable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_readable", "__rt_is_readable")
+    super::wrapper_dispatch::lower_is_readable_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_writable(path)` through the target-aware runtime access helper.
@@ -248,7 +248,7 @@ pub(crate) fn lower_is_writable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_writable", "__rt_is_writable")
+    super::wrapper_dispatch::lower_is_writable_with_wrapper(ctx, inst, "is_writable")
 }
 
 /// Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`.
@@ -256,7 +256,7 @@ pub(crate) fn lower_is_writeable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_writeable", "__rt_is_writable")
+    super::wrapper_dispatch::lower_is_writable_with_wrapper(ctx, inst, "is_writeable")
 }
 
 /// Lowers `is_executable(path)` through the target-aware runtime access helper.
@@ -264,7 +264,7 @@ pub(crate) fn lower_is_executable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_predicate(ctx, inst, "is_executable", "__rt_is_executable")
+    super::wrapper_dispatch::lower_is_executable_with_wrapper(ctx, inst)
 }
 
 /// Lowers `is_link(path)` through the target-aware runtime lstat helper.

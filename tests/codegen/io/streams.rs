@@ -5824,6 +5824,10 @@ unlink("statw_probe.txt");
 /// file_exists 6 · is_file 6` — NOCACHE everywhere, plus LINK for `lstat` and QUIET for the
 /// existence predicates. All five passed 0 or nothing at all before, so a wrapper deciding from
 /// the quiet bit whether to emit its own warning never saw it.
+///
+/// The one echo per builtin also pins the call COUNT: PHP invokes `url_stat()` exactly once per
+/// builtin, so the permission predicates — which need `mode`, `uid` and `gid` together — have to
+/// read all three out of a single result rather than one field per call.
 #[test]
 fn test_stat_family_hands_the_wrapper_the_flags_php_hands_it() {
     let out = compile_and_run(
@@ -5842,9 +5846,52 @@ lstat("flagw://lstat");
 file_exists("flagw://exists");
 filesize("flagw://size");
 is_file("flagw://isfile");
+is_readable("flagw://readable");
+is_writable("flagw://writable");
+is_executable("flagw://executable");
 "#,
     );
-    assert_eq!(out, "stat=4 lstat=5 exists=6 size=4 isfile=6 ");
+    assert_eq!(
+        out,
+        "stat=4 lstat=5 exists=6 size=4 isfile=6 readable=6 writable=6 executable=6 "
+    );
+}
+
+/// Verifies the permission predicates apply PHP's triad-selection rule to a wrapper's stat.
+///
+/// PHP does not mask the mode against `S_IRUSR|S_IRGRP|S_IROTH`: it picks ONE triad — owner when
+/// the reported uid is the process uid, group when the reported gid is the process gid or one of
+/// its supplementary groups, world otherwise — and then ignores the other two. Measured against
+/// reference PHP, which answers `is_readable() === false` for a `mode 0700` file owned by someone
+/// else even though the owner read bit is set.
+///
+/// The uid/gid here are values no process can hold, so the world triad is selected on every host
+/// and the expectation does not depend on who runs the suite. Before this dispatch existed the
+/// three predicates ran a real `access()` on the literal `perm://…` path and answered false for
+/// all six cases, including the ones PHP answers true for.
+#[test]
+fn test_permission_predicates_apply_the_php_triad_rule_to_wrapper_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class PermW {
+    public function url_stat(string $path, int $flags) {
+        $mode = (int) substr($path, 7);
+        return ['dev'=>0,'ino'=>0,'mode'=>$mode,'nlink'=>1,
+                'uid'=>2000000001,'gid'=>2000000002,
+                'rdev'=>0,'size'=>1,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("perm", "PermW");
+foreach ([0644, 0700, 0007, 0002, 0070] as $mode) {
+    echo is_readable("perm://$mode") ? "r" : "-";
+    echo is_writable("perm://$mode") ? "w" : "-";
+    echo is_executable("perm://$mode") ? "x" : "-";
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "r-- --- rwx -w- --- ");
 }
 
 /// Verifies `is_dir()` and `filemtime()` reach a registered wrapper's `url_stat()`.

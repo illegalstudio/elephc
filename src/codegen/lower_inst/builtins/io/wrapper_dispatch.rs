@@ -15,9 +15,11 @@ use super::*;
 /// documented `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit (4) that
 /// userland never sees named. The full observed table is
 /// `stat 4 · lstat 5 · filesize 4 · filemtime 4 · file_exists 6 · is_file 6 · is_dir 6 ·
-/// is_readable 6 · is_writable 6`, i.e. NOCACHE everywhere, plus LINK for `lstat` and QUIET
-/// for the predicates. A wrapper that branches on QUIET to decide whether to warn therefore
-/// sees the same value it would under PHP.
+/// is_readable 6 · is_writable 6 · is_writeable 6 · is_executable 6`, i.e. NOCACHE everywhere,
+/// plus LINK for `lstat` and QUIET for the predicates. A wrapper that branches on QUIET to
+/// decide whether to warn therefore sees the same value it would under PHP. Each predicate
+/// calls `url_stat()` exactly ONCE, which is why the permission ones read `mode`, `uid` and
+/// `gid` out of a single result instead of one field per call.
 pub(super) const URL_STAT_FLAGS_NOCACHE: u64 = 4;
 /// `lstat()`: the no-cache bit plus `STREAM_URL_STAT_LINK`.
 pub(super) const URL_STAT_FLAGS_LINK: u64 = 5;
@@ -325,6 +327,69 @@ pub(super) fn lower_is_dir_with_wrapper(
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "is_dir")?;
     emit_file_type_wrapper_dispatch(ctx, "__rt_is_dir", STAT_TYPE_DIRECTORY, "is_dir");
+    store_if_result(ctx, inst)
+}
+
+/// `__rt_user_wrapper_url_stat_field` selector for `is_readable()`.
+const ACCESS_SELECTOR_READ: usize = 3;
+/// `__rt_user_wrapper_url_stat_field` selector for `is_writable()`.
+const ACCESS_SELECTOR_WRITE: usize = 4;
+/// `__rt_user_wrapper_url_stat_field` selector for `is_executable()`.
+const ACCESS_SELECTOR_EXECUTE: usize = 5;
+
+/// Lowers `is_readable()` through userspace `url_stat()` before the filesystem check.
+pub(super) fn lower_is_readable_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_access_predicate_with_wrapper(
+        ctx,
+        inst,
+        "is_readable",
+        "__rt_is_readable",
+        ACCESS_SELECTOR_READ,
+    )
+}
+
+/// Lowers `is_writable()`/`is_writeable()` through userspace `url_stat()`.
+pub(super) fn lower_is_writable_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    lower_access_predicate_with_wrapper(ctx, inst, name, "__rt_is_writable", ACCESS_SELECTOR_WRITE)
+}
+
+/// Lowers `is_executable()` through userspace `url_stat()` before the filesystem check.
+pub(super) fn lower_is_executable_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_access_predicate_with_wrapper(
+        ctx,
+        inst,
+        "is_executable",
+        "__rt_is_executable",
+        ACCESS_SELECTOR_EXECUTE,
+    )
+}
+
+/// Lowers one permission predicate through a wrapper's `url_stat()`.
+///
+/// The runtime helper already answers 0/1 for these selectors — PHP's triad rule needs
+/// `mode`, `uid` and `gid` together, which no per-field selector can express — so unlike
+/// the file-type predicates there is nothing left to adjust at the call site.
+fn lower_access_predicate_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    fallback_runtime: &str,
+    selector: usize,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, name)?;
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, selector, URL_STAT_FLAGS_QUIET);
     store_if_result(ctx, inst)
 }
 
