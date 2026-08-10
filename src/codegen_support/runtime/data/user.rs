@@ -2270,15 +2270,19 @@ const USER_FILTER_METHOD_NAMES: [&str; 3] = [
 /// note on `USER_WRAPPER_VTABLE_SLOTS`), so a union return is the shape they want.
 const USER_WRAPPER_STRING_RESULT_SLOTS: [usize; 2] = [2, 20];
 
-/// Slots whose helper reads a raw integer or boolean out of the result register:
-/// `stream_write`, `stream_eof`, `stream_tell`, `stream_seek`, `stream_flush`,
-/// `stream_lock`, `stream_truncate`.
+/// Slots whose helper reads a raw integer or boolean out of the result register.
 ///
 /// These need the same treatment as the string slots for the opposite reason: real
 /// wrapper code does NOT annotate `stream_tell(): int`, so the undeclared form —
 /// which returns a boxed cell — is the common one, and reading that register as a
 /// raw integer answered a pointer.
-const USER_WRAPPER_SCALAR_RESULT_SLOTS: [usize; 7] = [3, 4, 5, 6, 7, 11, 12];
+///
+/// `dir_closedir` and `dir_rewinddir` are absent because nothing reads their result;
+/// `stream_stat`/`url_stat` already expect a boxed Mixed and `stream_cast` normalizes
+/// both shapes itself, so converting any of those would break a correct result.
+const USER_WRAPPER_SCALAR_RESULT_SLOTS: [usize; 13] =
+    [0, 3, 4, 5, 6, 7, 11, 12, 15, 16, 17, 18, 19];
+
 
 /// Returns the bitmask stored after the method pointers, where bit `i` marks a slot
 /// whose method returns a boxed Mixed although its helper expects the raw string pair.
@@ -2991,7 +2995,8 @@ mod boxed_result_mask_tests {
     /// than a build failure. Anchoring to the name makes any reordering fail here.
     #[test]
     fn every_scalar_slot_names_the_method_whose_helper_reads_a_raw_scalar() {
-        const EXPECTED: [(usize, &str); 7] = [
+        const EXPECTED: [(usize, &str); 13] = [
+            (0, "stream_open"),
             (3, "stream_write"),
             (4, "stream_eof"),
             (5, "stream_tell"),
@@ -2999,6 +3004,11 @@ mod boxed_result_mask_tests {
             (7, "stream_flush"),
             (11, "stream_lock"),
             (12, "stream_truncate"),
+            (15, "unlink"),
+            (16, "rename"),
+            (17, "mkdir"),
+            (18, "rmdir"),
+            (19, "dir_opendir"),
         ];
         assert_eq!(
             USER_WRAPPER_SCALAR_RESULT_SLOTS.len(),
@@ -3020,6 +3030,16 @@ mod boxed_result_mask_tests {
             assert!(
                 !USER_WRAPPER_STRING_RESULT_SLOTS.contains(&slot),
                 "slot {slot} cannot be both a string-pair and a scalar result"
+            );
+        }
+        // Reached through `__rt_user_wrapper_path_op`, whose vtable slot is a runtime
+        // argument rather than a constant: the helper selects the mask bit with a
+        // variable shift, so all four must be marked or one of them silently keeps
+        // reading a boxed cell as a boolean.
+        for slot in [15, 16, 17, 18] {
+            assert!(
+                USER_WRAPPER_SCALAR_RESULT_SLOTS.contains(&slot),
+                "path-op slot {slot} must also be marked as a scalar result"
             );
         }
     }

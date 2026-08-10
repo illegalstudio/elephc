@@ -93,3 +93,48 @@ fn emit_wrapper_unbox_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the scalar
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::runtime::emit_runtime;
+    use crate::codegen_support::RuntimeFeatures;
+
+    /// Every helper that reads a wrapper result as a raw scalar must route through the
+    /// conversion, on BOTH architectures.
+    ///
+    /// Two of those families have no behavioural reproducer: no wrapper body written so
+    /// far makes `stream_open` or the path ops infer a `Mixed` return, so their mask bit
+    /// is never set and removing their conversion changes no observable output. That is
+    /// exactly why they need a structural check — a behavioural test cannot tell whether
+    /// their wiring is present or has rotted away.
+    #[test]
+    fn every_scalar_reading_helper_routes_through_the_unbox_conversion() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emitter.emit_text_prelude();
+            emit_runtime(&mut emitter, RuntimeFeatures::all());
+            let asm = emitter.output();
+            let call = if arch == Arch::X86_64 {
+                "call __rt_wrapper_unbox_int"
+            } else {
+                "bl __rt_wrapper_unbox_int"
+            };
+            let sites = asm.matches(call).count();
+            assert!(
+                sites >= 11,
+                "{arch:?}: only {sites} call sites convert a boxed scalar result; the seven \
+                 stream slots plus stream_open, dir_opendir, the path ops and rename should \
+                 all be wired"
+            );
+            assert!(
+                asm.contains("__rt_wrapper_unbox_int:"),
+                "{arch:?}: the conversion helper itself must be emitted"
+            );
+        }
+    }
+}
