@@ -31,6 +31,12 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
 
+    // The array is allocated BEFORE `opendir`, and a null `DIR*` returns it empty
+    // rather than entering the loop: `readdir(NULL)` is undefined and segfaulted on
+    // a missing directory. The x86_64 emitter below already tested `opendir`, which
+    // is why only one target crashed — the same one-architecture asymmetry the stat
+    // field helpers had. (PHP answers `false` here; that needs the declared return
+    // type to become a union and is tracked with the rest of that family.)
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -38,16 +44,19 @@ pub fn emit_scandir(emitter: &mut Emitter) {
 
     // -- null-terminate path --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-
-    // -- open directory --
-    emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
-    emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
+    emitter.instruction("str x0, [sp, #16]");                                   // save the C path across the array allocation
 
     // -- create a new string array (capacity = 128 entries) --
     emitter.instruction("mov x0, #128");                                        // initial capacity of 128 elements
     emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
     emitter.instruction("bl __rt_array_new");                                   // create array, x0=array pointer
     emitter.instruction("str x0, [sp, #8]");                                    // save array pointer on stack
+
+    // -- open directory --
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the C path for the directory open
+    emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
+    emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
+    emitter.instruction("cbz x0, __rt_scandir_ret");                            // a missing directory must not reach readdir(NULL), which segfaults
 
     // -- read directory entries in a loop --
     emitter.label("__rt_scandir_loop");
@@ -81,6 +90,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.bl_c("closedir");                                        // closedir(DIR*)
 
     // -- return array pointer --
+    emitter.label("__rt_scandir_ret");
     emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
 
     // -- restore frame and return --
@@ -146,4 +156,42 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the temporary scandir() spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the directory entry array
     emitter.instruction("ret");                                                 // return the array of directory entry names to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::emit_scandir;
+
+    /// `scandir()` must test `opendir()` before iterating, on BOTH architectures.
+    ///
+    /// The AArch64 emitter opened the directory and went straight into the loop, so a
+    /// missing path reached `readdir(NULL)` and the program died with SIGSEGV where PHP
+    /// answers `false`. x86_64 already tested the handle — which is exactly why a
+    /// behavioural test running on one host could not see it, and why the parity is
+    /// pinned on the EMITTED assembly of each target instead.
+    #[test]
+    fn scandir_tests_the_directory_handle_before_iterating_on_every_target() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(Target::new(platform, arch));
+            emit_scandir(&mut emitter);
+            let asm = emitter.output();
+            let open_at = asm.find("opendir").expect("scandir opens the directory");
+            let loop_at = asm
+                .find("__rt_scandir_loop:")
+                .expect("scandir iterates the directory");
+            let guard = &asm[open_at..loop_at];
+            let branches_away = guard.contains("cbz x0, __rt_scandir_ret")
+                || guard.contains("jz __rt_scandir_ret");
+            assert!(
+                branches_away,
+                "{arch:?}: a null DIR* must skip the loop, or readdir(NULL) segfaults:\n{guard}"
+            );
+        }
+    }
 }
