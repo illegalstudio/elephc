@@ -5817,6 +5817,36 @@ unlink("statw_probe.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies every stat-family builtin that consults a wrapper hands it the flags PHP hands it.
+///
+/// The values are not derivable from the two documented `STREAM_URL_STAT_*` constants: PHP also
+/// sets an internal no-cache bit, so the observed table is `stat 4 · lstat 5 · filesize 4 ·
+/// file_exists 6 · is_file 6` — NOCACHE everywhere, plus LINK for `lstat` and QUIET for the
+/// existence predicates. All five passed 0 or nothing at all before, so a wrapper deciding from
+/// the quiet bit whether to emit its own warning never saw it.
+#[test]
+fn test_stat_family_hands_the_wrapper_the_flags_php_hands_it() {
+    let out = compile_and_run(
+        r#"<?php
+class FlagW {
+    public function url_stat(string $path, int $flags) {
+        echo substr($path, 8), "=", $flags, " ";
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("flagw", "FlagW");
+stat("flagw://stat");
+lstat("flagw://lstat");
+file_exists("flagw://exists");
+filesize("flagw://size");
+is_file("flagw://isfile");
+"#,
+    );
+    assert_eq!(out, "stat=4 lstat=5 exists=6 size=4 isfile=6 ");
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {

@@ -228,7 +228,7 @@ pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &
     super::super::ensure_arg_count(inst, "filesize", 1)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "filesize")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0, URL_STAT_FLAGS_NOCACHE);
     store_if_result(ctx, inst)
 }
 
@@ -246,6 +246,7 @@ pub(super) fn emit_url_stat_field_or_fallback(
     ctx: &mut FunctionContext<'_>,
     fallback_runtime: &str,
     field_selector: usize,
+    url_stat_flags: u64,
 ) {
     let fallback = ctx.next_label("url_stat_field_fs");
     let done = ctx.next_label("url_stat_field_done");
@@ -257,6 +258,8 @@ pub(super) fn emit_url_stat_field_or_fallback(
             ctx.emitter.instruction("mov x0, x1");                              // pass the path pointer to url_stat field lookup
             ctx.emitter.instruction("mov x1, x2");                              // pass the path length to url_stat field lookup
             ctx.emitter.instruction(&format!("mov x2, #{}", field_selector));   // select the url_stat field to extract
+            ctx.emitter
+                .instruction(&format!("mov x3, #{}", url_stat_flags));          // PHP's own url_stat flags for the calling builtin
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat_field");
             abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
             ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether a registered wrapper scheme matched
@@ -276,6 +279,8 @@ pub(super) fn emit_url_stat_field_or_fallback(
             ctx.emitter.instruction("mov rdi, rax");                            // pass the path pointer to url_stat field lookup
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the path length to url_stat field lookup
             ctx.emitter.instruction(&format!("mov edx, {}", field_selector));   // select the url_stat field to extract
+            ctx.emitter
+                .instruction(&format!("mov ecx, {}", url_stat_flags));          // PHP's own url_stat flags for the calling builtin
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat_field");
             abi::emit_symbol_address(ctx.emitter, "r9", "_url_stat_matched");
             ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether a registered wrapper scheme matched
@@ -294,7 +299,7 @@ pub(super) fn emit_url_stat_field_or_fallback(
 
 /// Emits `is_file()` wrapper url_stat mode extraction plus file-type test.
 pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
-    emit_url_stat_field_or_fallback(ctx, "__rt_is_file", 1);
+    emit_url_stat_field_or_fallback(ctx, "__rt_is_file", 1, URL_STAT_FLAGS_QUIET);
     let no_wrapper = ctx.next_label("is_file_no_wrapper_adjust");
     let done = ctx.next_label("is_file_adjust_done");
     match ctx.emitter.target.arch {

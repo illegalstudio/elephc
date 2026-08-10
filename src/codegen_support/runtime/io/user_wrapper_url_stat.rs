@@ -312,7 +312,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the field selector (0=size, 1=mode)
-    emitter.instruction("mov x2, #0");                                          // url_stat flags = 0
+    emitter.instruction("mov x2, x3");                                          // url_stat flags chosen by the calling builtin, not a fixed 0
     emitter.instruction("bl __rt_user_wrapper_url_stat");                       // x0 = boxed Mixed stat array (sets _url_stat_matched)
     emitter.instruction("cbz x0, __rt_uusf_fail");                              // scheme not matched / null → -1 (caller ignores when unmatched)
     emitter.instruction("ldr x9, [x0]");                                        // boxed Mixed runtime tag
@@ -377,7 +377,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // spill slots for field_sel/stat-mixed/result
     emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the field selector (0=size, 1=mode)
-    emitter.instruction("xor edx, edx");                                        // url_stat flags = 0
+    emitter.instruction("mov rdx, rcx");                                        // url_stat flags chosen by the calling builtin, not a fixed 0
     emitter.instruction("call __rt_user_wrapper_url_stat");                     // rax = boxed Mixed stat array (sets _url_stat_matched)
     emitter.instruction("test rax, rax");                                       // scheme not matched / null?
     emitter.instruction("jz __rt_uusf_fail_x86");                               // → -1 (caller ignores when unmatched)
