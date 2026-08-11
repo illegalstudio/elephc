@@ -9,6 +9,93 @@
 
 use super::*;
 
+/// PHP's `count()` TypeError, which names the offending type — and a boolean by its VALUE.
+const COUNT_TYPE_ERROR_PREFIX: &str =
+    "count(): Argument #1 ($value) must be of type Countable|array, ";
+
+/// Raises PHP's `count()` TypeError unless the boxed value in the int result register is
+/// countable, and returns to its caller when it is.
+///
+/// `__rt_mixed_count` answered 0 for every non-countable tag and let execution continue, where
+/// PHP 8 raises a TypeError and stops — measured, `count(false)` is fatal there and was `0`
+/// here. The quiet return dates from PHP 7.2's warning. The checker hid most of it by refusing
+/// a union unless EVERY member is countable, which is why that rule could not be relaxed to
+/// give `file()` its `array|false` return type: relaxing it without this would have spread the
+/// silent zero rather than removed it.
+///
+/// A tag 6 (object) is left to `__rt_mixed_count`. PHP also throws for an object that does not
+/// implement `Countable`; deciding that needs the interface check at run time and is not done
+/// here, so objects keep exactly the behaviour they had.
+///
+/// This reads its argument from the result register rather than an operand so the SAME body
+/// serves the inline site and the shared helper — see `crate::codegen::shared_count_guard`,
+/// which exists because the first version of this guard was inlined and cost 292 lines of
+/// assembly at every site.
+pub(in crate::codegen) fn emit_count_countable_guard_from_result(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
+    let countable = ctx.next_label("count_countable");
+    let int_case = ctx.next_label("count_type_int");
+    let string_case = ctx.next_label("count_type_string");
+    let float_case = ctx.next_label("count_type_float");
+    let bool_case = ctx.next_label("count_type_bool");
+    let true_case = ctx.next_label("count_type_true");
+    let resource_case = ctx.next_label("count_type_resource");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    for tag in [4u8, 5, 6] {
+        super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, tag, &countable);
+    }
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
+    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    // Every remaining tag is PHP's null.
+    emit_count_type_error(ctx, "null");
+
+    ctx.emitter.label(&int_case);
+    emit_count_type_error(ctx, "int");
+    ctx.emitter.label(&string_case);
+    emit_count_type_error(ctx, "string");
+    ctx.emitter.label(&float_case);
+    emit_count_type_error(ctx, "float");
+    ctx.emitter.label(&resource_case);
+    emit_count_type_error(ctx, "resource");
+
+    // PHP prints a boolean by value: "false given" / "true given", never "bool given".
+    ctx.emitter.label(&bool_case);
+    let payload = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload); // unbox left value_lo here
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_case);
+    emit_count_type_error(ctx, "false");
+    ctx.emitter.label(&true_case);
+    emit_count_type_error(ctx, "true");
+
+    ctx.emitter.label(&countable);
+    Ok(())
+}
+
+/// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.
+fn emit_count_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
+    super::exceptions::emit_type_error(ctx, &format!("{COUNT_TYPE_ERROR_PREFIX}{type_name} given"));
+}
+
+/// Guards one `count()` site, through the shared helper when the module emits one.
+fn emit_count_countable_guard(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    match crate::codegen::shared_count_guard::shared_guard_label(ctx) {
+        Some(label) => {
+            abi::emit_call_label(ctx.emitter, label);
+            Ok(())
+        }
+        None => emit_count_countable_guard_from_result(ctx),
+    }
+}
+
 /// Lowers `count(array)` for concrete array values by reading the runtime length header.
 ///
 /// Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.
@@ -47,6 +134,7 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            emit_count_countable_guard(ctx, value)?;
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             store_if_result(ctx, inst)

@@ -124,6 +124,7 @@ pub(super) use call_operands::{
     direct_call_stack_pad_bytes, emit_mixed_string_for_persistent_store,
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
+pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
 pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };

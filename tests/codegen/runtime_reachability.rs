@@ -196,6 +196,101 @@ function pick(int $i): mixed { return $i === 0 ? new Stamp() : $i; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the `count()` countable guard is emitted once for a program with several boxed
+/// `count()` sites, and stays inline for a program with one.
+///
+/// The guard is seven tag comparisons and seven raises. The first version of this fix inlined
+/// it and cost 292 lines of assembly PER SITE — measured on this exact five-site shape, 4 102
+/// lines without the guard against 5 563 with it — which is why it was reverted rather than
+/// kept. Shared, the same program is 4 457.
+///
+/// The single-site direction is not symmetry for its own sake: measured, one site is 4 191
+/// inline against 4 201 shared, so sharing there would make the program grow.
+#[test]
+fn test_count_guard_is_shared_only_when_several_sites_use_it() {
+    const PICK: &str = r#"<?php
+function pick(int $i): mixed { return $i === 0 ? [1,2,3] : $i; }
+"#;
+
+    let dir = make_cli_test_dir("elephc_shared_count_guard_many");
+    let many = format!(
+        "{PICK}$a = pick(0); $b = pick(1); $c = pick(2);\necho count($a), count($b), count($c);\n"
+    );
+    let (many_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(&many, &dir, 8_388_608, false, false);
+    assert_eq!(
+        many_asm.matches("_eir_shared_count_guard:").count(),
+        1,
+        "the shared count guard must be defined exactly once"
+    );
+    assert!(
+        many_asm.matches("_eir_shared_count_guard").count() >= 4,
+        "each of the three sites must call the guard it shares"
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    let dir = make_cli_test_dir("elephc_shared_count_guard_one");
+    let one = format!("{PICK}$a = pick(0);\necho count($a);\n");
+    let (one_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(&one, &dir, 8_388_608, false, false);
+    assert!(
+        !one_asm.contains("_eir_shared_count_guard"),
+        "a single count() site must stay inline rather than pay for a helper body"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `count()`'s TypeError names every non-countable type the way reference PHP does,
+/// from inside the SHARED guard.
+///
+/// The seven call sites are load-bearing twice over. Below the threshold the guard is inlined
+/// and the throw never crosses a helper frame, so the test would exercise the wrong path; and
+/// a `foreach` over seven values is ONE site, which is how the first version of this probe
+/// silently measured the inline form — the emitted assembly named the shared label zero times.
+///
+/// The boolean is named by its VALUE. `false given` / `true given`, never `bool given`, is the
+/// detail that makes the bool arm a two-way branch on the payload rather than one more tag
+/// comparison.
+#[test]
+fn test_count_type_error_names_every_type_from_the_shared_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $i): mixed {
+    if ($i === 0) { return false; }
+    if ($i === 1) { return true; }
+    if ($i === 2) { return 7; }
+    if ($i === 3) { return 1.5; }
+    if ($i === 4) { return "s"; }
+    if ($i === 5) { return null; }
+    return [1, 2, 3];
+}
+$a = pick(0); $b = pick(1); $c = pick(2); $d = pick(3);
+$e = pick(4); $f = pick(5); $g = pick(6);
+try { echo count($a); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($b); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($c); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($d); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($e); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($f); } catch (TypeError $t) { echo $t->getMessage(); }
+echo "\n";
+try { echo count($g); } catch (TypeError $t) { echo $t->getMessage(); }
+"#,
+    );
+    let prefix = "count(): Argument #1 ($value) must be of type Countable|array,";
+    assert_eq!(
+        out,
+        format!(
+            "{prefix} false given\n{prefix} true given\n{prefix} int given\n{prefix} float \
+             given\n{prefix} string given\n{prefix} null given\n3"
+        )
+    );
+}
+
 /// Verifies a function whose only use of the reserved nested-call register is an inlined
 /// `__toString` ladder saves that register before writing it.
 ///

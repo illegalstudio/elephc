@@ -75,6 +75,13 @@ pub(super) fn emit_module(
         &mut shared,
         regalloc_linear,
     )?;
+    super::shared_count_guard::emit_shared_count_guard(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.

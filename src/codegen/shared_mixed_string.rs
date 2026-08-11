@@ -17,22 +17,18 @@
 //!   for that reason: vtable slots are numbered per class, in declaration order, which
 //!   is exactly why the ladder exists.
 //! - The helpers take the boxed pointer in the INT RESULT register, not an argument
-//!   register, because that is where the inlined sequence already had it.
+//!   register, because that is where the inlined sequence already had it. The frame that
+//!   makes this possible lives in `crate::codegen::shared_helper`.
 
-use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::frame;
-use crate::codegen::platform::Arch;
 use crate::codegen::shared_state::SharedCodegenState;
-use crate::ir::{
-    BasicBlock, BlockId, Function, FunctionParam, IrHeapKind, IrType, Module, Ownership, Value,
-    ValueDef, ValueId,
-};
+use crate::ir::{Function, IrType, Module};
 use crate::types::PhpType;
 
 use super::lower_inst::{emit_mixed_string_dispatch_from_result, MixedStringContextMode};
+use super::shared_helper::{emit_shared_helper, helper_value};
 use super::Result;
 
 /// Label of the helper that leaves the string result of a boxed `Mixed`.
@@ -202,6 +198,7 @@ pub(super) fn emit_shared_mixed_string_helpers(
 }
 
 /// Emits one helper: frame, the shared dispatch, and the matching return.
+#[allow(clippy::too_many_arguments)]
 fn emit_one_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -212,100 +209,21 @@ fn emit_one_helper(
     mode: MixedStringContextMode,
     return_php_type: PhpType,
 ) -> Result<()> {
-    let function = helper_function(label, return_php_type);
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear);
-    let mut ctx = FunctionContext::new(
-        module, &function, emitter, data, shared, layout, false, false, false, None,
-    );
-
-    ctx.emitter.blank();
-    ctx.emitter.comment(&format!("--- shared mixed string context: {} ---", label));
-    ctx.emitter.label(label);
-    emit_helper_entry(&mut ctx);
-    // The boxed pointer already sits in the int result register, which is where the
-    // inlined sequence expected it, so the dispatch needs no argument shuffling.
-    emit_mixed_string_dispatch_from_result(&mut ctx, helper_value(), mode)?;
-    emit_helper_exit(&mut ctx);
-    Ok(())
-}
-
-/// The SSA value standing in for the helper's parameter.
-///
-/// `__toString` takes no arguments, so the receiver-register materializer skips this
-/// operand entirely (`operands.iter().skip(1)`, and the by-reference planner ignores a
-/// non-reference parameter). It exists to satisfy the shared signature, and is never
-/// loaded — which is what makes moving the ladder out of its original frame possible.
-fn helper_value() -> ValueId {
-    ValueId::from_raw(0)
-}
-
-/// Builds the minimal EIR function a `FunctionContext` needs to exist.
-fn helper_function(label: &str, return_php_type: PhpType) -> Function {
-    let return_ir_type = match return_php_type {
-        PhpType::Str => IrType::Str,
-        _ => IrType::Void,
-    };
-    let mut function = Function::new(label.to_string(), return_ir_type, return_php_type);
-    function.flags.is_synthetic = true;
-    function.params.push(FunctionParam {
-        name: "value".to_string(),
-        ir_type: IrType::Heap(IrHeapKind::Mixed),
-        php_type: PhpType::Mixed,
-        by_ref: false,
-        variadic: false,
-    });
-    let entry = BlockId::from_raw(0);
-    function
-        .blocks
-        .push(BasicBlock::new(entry, "entry".to_string(), vec![ValueId::from_raw(0)]));
-    function.values.push(Value {
-        ir_type: IrType::Heap(IrHeapKind::Mixed),
-        php_type: PhpType::Mixed,
-        def: ValueDef::BlockParam { block: entry, index: 0 },
-        ownership: Ownership::Borrowed,
-    });
-    function.entry = entry;
-    function
-}
-
-/// Saves the link register and the reserved nested-call register.
-///
-/// The ladder holds the unboxed receiver in the nested-call register across the
-/// `__toString` call. That register is callee-saved and outside the allocator's
-/// tracking, and the frame layout only reserves a save slot for functions containing a
-/// Mixed-receiver METHOD call — a string context is neither, so the helper saves it
-/// itself rather than relying on its caller having done so.
-fn emit_helper_entry(ctx: &mut FunctionContext<'_>) {
-    let nested = abi::nested_call_reg(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("stp x29, x30, [sp, #-16]!");              // save frame pointer and return address
-            ctx.emitter.instruction("mov x29, sp");                            // establish the helper frame pointer
-            ctx.emitter.instruction(&format!("str {}, [sp, #-16]!", nested));   // preserve the caller's nested-call register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("push rbp");                                // preserve the caller frame pointer
-            ctx.emitter.instruction("mov rbp, rsp");                            // establish the helper frame pointer
-            ctx.emitter.instruction(&format!("push {}", nested));               // preserve the caller's nested-call register
-            ctx.emitter.instruction("sub rsp, 8");                              // restore 16-byte alignment before nested calls
-        }
-    }
-}
-
-/// Restores what `emit_helper_entry` saved and returns, leaving the result untouched.
-fn emit_helper_exit(ctx: &mut FunctionContext<'_>) {
-    let nested = abi::nested_call_reg(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp], #16", nested));      // restore the caller's nested-call register
-            ctx.emitter.instruction("ldp x29, x30, [sp], #16");                 // restore frame pointer and return address
-            ctx.emitter.instruction("ret");                                     // return the string result in the string pair
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rsp, 8");                               // release the alignment padding
-            ctx.emitter.instruction(&format!("pop {}", nested));                 // restore the caller's nested-call register
-            ctx.emitter.instruction("pop rbp");                                  // restore the caller frame pointer
-            ctx.emitter.instruction("ret");                                      // return the string result in the string pair
-        }
-    }
+    emit_shared_helper(
+        module,
+        emitter,
+        data,
+        shared,
+        regalloc_linear,
+        label,
+        return_php_type,
+        &format!("--- shared mixed string context: {} ---", label),
+        // The boxed pointer already sits in the int result register, which is where the
+        // inlined sequence expected it, so the dispatch needs no argument shuffling.
+        // `__toString` takes no arguments, so the receiver-register materializer skips the
+        // helper's parameter entirely and it is never loaded.
+        |ctx: &mut FunctionContext<'_>| {
+            emit_mixed_string_dispatch_from_result(ctx, helper_value(), mode)
+        },
+    )
 }
