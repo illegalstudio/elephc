@@ -8,6 +8,7 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use crate::codegen_support::arrays::emit_array_value_type_inherit;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -58,6 +59,7 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // use 8-byte slots for refcounted payload pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate inner array
     emitter.instruction("str x0, [sp, #32]");                                   // save inner array pointer
+    emit_array_value_type_inherit(emitter, "x0", "[sp, #0]");                   // the chunk holds the same element shape as its source
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize inner index j = 0
 
     emitter.label("__rt_array_chunk_ref_inner");
@@ -133,6 +135,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the current implementation chunks refcounted indexed arrays
     emitter.instruction("call __rt_array_new");                                 // allocate the current inner indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the current inner indexed-array pointer while filling it from the source array
+    emit_array_value_type_inherit(emitter, "rax", "QWORD PTR [rbp - 8]");       // the chunk holds the same element shape as its source
     emitter.instruction("xor r9, r9");                                          // initialize the inner chunk index to the first payload slot of the current inner indexed array
 
     emitter.label("__rt_array_chunk_ref_inner_x86");

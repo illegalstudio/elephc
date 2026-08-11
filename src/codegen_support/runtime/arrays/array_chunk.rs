@@ -7,7 +7,12 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - Each INNER chunk inherits the source array's `value_type`. It cannot be stamped at emit
+//!   time — the helper is shared and the element type is only known from the source header at
+//!   run time — and without it every reader treated the chunk's slots as raw words: a
+//!   heterogeneous source produced chunks of correct SIZE whose elements printed as ADDRESSES.
 
+use crate::codegen_support::arrays::emit_array_value_type_inherit;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -78,6 +83,7 @@ pub fn emit_array_chunk(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // x1 = elem_size (8 bytes per int)
     emitter.instruction("bl __rt_array_new");                                   // create inner array, x0 = inner ptr
     emitter.instruction("str x0, [sp, #32]");                                   // save inner array pointer
+    emit_array_value_type_inherit(emitter, "x0", "[sp, #0]");                   // the chunk holds the same element shape as its source
 
     // -- inner loop: copy up to chunk_size elements to inner array --
     emitter.instruction("mov x5, #0");                                          // x5 = j = 0 (count within this chunk)
@@ -165,6 +171,7 @@ fn emit_array_chunk_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the current implementation chunks scalar indexed arrays
     emitter.instruction("call __rt_array_new");                                 // allocate the current inner indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the current inner indexed-array pointer while filling it from the source array
+    emit_array_value_type_inherit(emitter, "rax", "QWORD PTR [rbp - 8]");       // the chunk holds the same element shape as its source
     emitter.instruction("xor r9, r9");                                          // initialize the inner chunk index to the first payload slot of the current inner indexed array
     emitter.label("__rt_array_chunk_inner_x86");
     emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                        // compare the inner chunk index against the requested chunk size

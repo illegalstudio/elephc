@@ -184,6 +184,14 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     abi::emit_call_label(ctx.emitter, array_merge_runtime_helper(&elem_ty));
+    // The helper allocates its result through the shared constructor, which leaves the
+    // value_type lane empty. Unstamped, every reader treats the merged slots as raw words:
+    // merging two heterogeneous arrays produced the right COUNT and printed ADDRESSES.
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &elem_ty,
+    );
     store_if_result(ctx, inst)
 }
 

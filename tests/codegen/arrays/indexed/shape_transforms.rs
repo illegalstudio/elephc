@@ -139,6 +139,32 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Verifies `array_chunk()` and `array_merge()` carry their element SHAPE, not just their size.
+///
+/// Both allocate through the shared array constructor, which leaves the `value_type` lane of
+/// the packed kind word empty, and neither stamped it. Every reader then treated the slots as
+/// raw words: a heterogeneous source produced the right number of chunks of the right sizes
+/// whose elements printed as ADDRESSES, and `implode()` over one of them read those addresses
+/// as string pointers and died with SIGBUS.
+///
+/// The source is heterogeneous on purpose. A `[1,2,3]` source is `array<int>`, whose value_type
+/// is the zero the constructor already leaves behind — so the whole defect is invisible unless
+/// the elements are boxed. The existing size-only assertion above passed throughout.
+///
+/// `array_chunk` inherits the tag at RUN time (the helper is shared and only sees the source
+/// header), `array_merge` stamps it at emit time from the element type its lowering computed.
+#[test]
+fn test_chunk_and_merge_carry_the_element_shape_of_a_heterogeneous_source() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "b", 3, 4, 5];
+foreach (array_chunk($a, 2) as $i => $c) { echo $i, ":", implode(",", $c), ";"; }
+echo "|", implode(",", array_merge($a, ["c", 9]));
+"#,
+    );
+    assert_eq!(out, "0:1,b;1:3,4;2:5;|1,b,3,4,5,c,9");
+}
+
 /// Tests `array_fill_keys($keys, value)` — creates an array from `["x", "y"]` as keys,
 /// both initialized to `0`, then verifies the resulting associative array has exactly 2 entries.
 #[test]
