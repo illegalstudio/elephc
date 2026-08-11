@@ -170,6 +170,12 @@ pub(super) fn plan_call_arg_temp_cleanups(
                 offset: cleanups.len() * 16,
                 ty: PhpType::Mixed,
             });
+        } else if direct_call_arg_splits_borrowed_array(ctx, *value, &source_ty, param_ty)? {
+            cleanups.push(CallArgTempCleanup {
+                param_index: index,
+                offset: cleanups.len() * 16,
+                ty: widened_array_temp_type(&source_ty),
+            });
         }
     }
     Ok(cleanups)
@@ -179,6 +185,48 @@ pub(super) fn plan_call_arg_temp_cleanups(
 pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: &PhpType) -> bool {
     matches!(param_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns whether widening a typed array for a gradual `array` parameter must COPY it first.
+///
+/// `__rt_array_to_mixed` CONSUMES an owner slot: it splits through
+/// `__rt_array_ensure_unique`, which rewrites the element slots in place when the refcount is
+/// 1 and only clones when the array is visibly shared. Handing it a BORROWED array therefore
+/// rewrote the caller's own array — `f($pts)` with `function f(array $a)` and `$pts` an array
+/// of objects left `$pts[0]->x` reading a boxed cell as a raw object pointer AFTER the call,
+/// on data the callee never touched, with no diagnostic. An owned temporary is left alone: it
+/// has no other reader, so converting it in place is both correct and free.
+fn direct_call_arg_splits_borrowed_array(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    source_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Result<bool> {
+    if !argument_widens_typed_array(source_ty, param_ty) {
+        return Ok(false);
+    }
+    Ok(ctx.value_ownership(value)? != Ownership::Owned)
+}
+
+/// Returns whether this argument boundary widens a typed array into Mixed element slots.
+pub(super) fn argument_widens_typed_array(source_ty: &PhpType, param_ty: &PhpType) -> bool {
+    let (PhpType::Array(param_elem), PhpType::Array(source_elem)) =
+        (param_ty.codegen_repr(), source_ty.codegen_repr())
+    else {
+        return false;
+    };
+    param_elem.codegen_repr() == PhpType::Mixed && source_elem.codegen_repr() != PhpType::Mixed
+}
+
+/// The type of the widened copy, used to pick its release helper.
+fn widened_array_temp_type(source_ty: &PhpType) -> PhpType {
+    match source_ty.codegen_repr() {
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Mixed)),
+    }
 }
 
 /// Saves the current pointer result into the reserved call-argument cleanup area.

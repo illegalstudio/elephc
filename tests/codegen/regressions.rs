@@ -27,6 +27,8 @@ mod concat_buffer_args;
 mod param_inference;
 #[path = "regressions/method_array_assoc_param.rs"]
 mod method_array_assoc_param;
+#[path = "regressions/borrowed_array_widening.rs"]
+mod borrowed_array_widening;
 #[path = "regressions/mixed_method_dispatch.rs"]
 mod mixed_method_dispatch;
 #[path = "regressions/switch_and_float_params.rs"]

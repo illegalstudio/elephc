@@ -3367,13 +3367,23 @@ echo ($r[0] ?? "quiet"), "\n";
 /// Sentinel-derived nulls stay canonical across non-indexing Mixed consumers:
 /// count/casts/empty, JSON encoding, and serialization must not dereference a
 /// container-shaped payload or observe it as an array.
+///
+/// `count()` asserted a quiet `0` here until it learned to raise PHP's TypeError. Reference
+/// PHP fatals on this exact program, so the old assertion recorded the divergence; caught,
+/// the message is a STRONGER witness for what this test is about than the zero was, because
+/// `null given` names the observed type outright where `0` was equally consistent with an
+/// empty container.
 #[test]
 fn test_ternary_missed_read_structural_mixed_consumers_observe_null() {
     let out = compile_and_run_capture(
         r#"<?php
 $rows = [[1, 2]];
 $r = $argc == 1 ? $rows[5] : ["fallback"];
-echo count($r), "\n";
+try {
+    echo count($r), "\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
 echo empty($r) ? "empty\n" : "not-empty\n";
 echo (int) $r, "\n";
 echo json_encode($r), "\n";
@@ -3382,7 +3392,11 @@ echo zval_type(zval_pack($r)), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
-    assert_eq!(out.stdout, "0\nempty\n0\nnull\nN;\n1\n");
+    assert_eq!(
+        out.stdout,
+        "count(): Argument #1 ($value) must be of type Countable|array, null given\nempty\n0\n\
+         null\nN;\n1\n"
+    );
     assert_eq!(
         out.stderr.matches("Warning: Undefined array key 5").count(),
         1
