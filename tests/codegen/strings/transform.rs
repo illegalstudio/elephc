@@ -203,6 +203,51 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies `implode()` and `join()` accept an ASSOCIATIVE array, joining its values.
+///
+/// PHP ignores the keys entirely, so this is ordinary code — but the renderers walk a dense
+/// indexed payload and a hash was rejected outright at lowering time, whatever its value
+/// type. The sparse-key case is the one that shows the keys really are ignored rather than
+/// used as positions.
+#[test]
+fn test_implode_joins_associative_array_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", ["a" => 1, "b" => 2, "c" => 3]), "|";
+echo implode("-", ["x" => "p", "y" => "q"]), "|";
+echo join(["x" => "p", "y" => "q"]), "|";
+echo implode("|", [0 => "u", 5 => "v", 9 => "w"]);
+"#,
+    );
+    assert_eq!(out, "1,2,3|p-q|pq|u|v|w");
+}
+
+/// Verifies the indexed copy `implode()` makes from a hash is released.
+///
+/// The values are copied into a fresh indexed array the caller owns, so the join has to
+/// stack its STRING result pair while that copy is released — releasing first would free the
+/// payload the join just read. A single call hides an imbalance; the loop is what makes one
+/// accumulate. Measured with the release removed: 7 blocks and 400 bytes leaked.
+#[test]
+fn test_implode_releases_the_indexed_copy_it_makes_from_a_hash() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$map = ["a" => 1, "b" => 2, "c" => 3];
+$strs = ["x" => "p", "y" => "q"];
+for ($i = 0; $i < 200; $i++) {
+    $s = implode(",", $map);
+    $t = implode("-", $strs);
+}
+echo $s, $t;
+"#,
+    );
+    let report = format!("{}{}", out.stdout, out.stderr);
+    assert!(
+        report.contains("leak summary: clean"),
+        "implode must release the indexed copy it makes from a hash:\n{report}"
+    );
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {
