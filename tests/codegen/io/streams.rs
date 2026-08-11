@@ -4902,6 +4902,43 @@ foreach (["q", "qq"] as $s) {
     assert_eq!(out.stdout, "0000000|1111111|");
 }
 
+/// Verifies `stream_open`, `dir_opendir` and the path ops unbox an undeclared boolean result.
+///
+/// A boxed `false` is a NON-NULL pointer, so a helper that reads the result register raw turns
+/// every refusal into a success. When these slots were wired in I could not build a wrapper
+/// whose body made them infer `Mixed`, and said so rather than claim a fix I had not shown:
+/// `return false;` infers `bool`, and returning an INITIALISED property infers that property's
+/// type. The shape that does it is a property with NO initialiser assigned two different types,
+/// which is what widens it — the same thing that made `stream_tell()` return a pointer.
+///
+/// Removing those slots from the boxed-result mask flips all six answers from 0 to 1.
+#[test]
+fn test_undeclared_boolean_refusals_are_unboxed_on_every_wrapper_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Deny {
+    public $context;
+    private $state;
+    public function seed(int $n) { $this->state = $n > 0 ? "no" : false; }
+    public function stream_open($path, $mode, $options, &$opened) { $this->seed(0); return $this->state; }
+    public function dir_opendir($path, $options) { $this->seed(0); return $this->state; }
+    public function unlink($path) { $this->seed(0); return $this->state; }
+    public function mkdir($path, $mode, $options) { $this->seed(0); return $this->state; }
+    public function rmdir($path, $options) { $this->seed(0); return $this->state; }
+    public function rename($from, $to) { $this->seed(0); return $this->state; }
+}
+stream_wrapper_register("wd", "Deny");
+echo @fopen("wd://x", "r") === false ? 0 : 1;
+echo @opendir("wd://d") === false ? 0 : 1;
+echo @unlink("wd://a") ? 1 : 0;
+echo @mkdir("wd://d") ? 1 : 0;
+echo @rmdir("wd://d") ? 1 : 0;
+echo @rename("wd://a", "wd://b") ? 1 : 0;
+"#,
+    );
+    assert_eq!(out.stdout, "000000");
+}
+
 /// Verifies compiled PHP output for stream wrapper unregister round trip.
 #[test]
 fn test_stream_wrapper_unregister_round_trip() {
