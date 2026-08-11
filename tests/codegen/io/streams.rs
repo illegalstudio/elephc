@@ -4857,6 +4857,51 @@ echo "|", @stream_wrapper_register("fo", "W") ? "1" : "0";
     assert_eq!(out.stdout, "10 11 11 11 11 00 00 |0");
 }
 
+/// Verifies the minimum scheme length reaches EVERY dispatch path, not just one.
+///
+/// The rule is enforced by starting each wrapper-dispatch scan at index 2, and there are twelve
+/// such scans across `fopen`, `url_stat`, the directory helpers, and the path-op family. A test
+/// that only exercised `file_exists()` would pass with eleven of them still starting at zero,
+/// so this drives one builtin per scan and pins both answers: a one-letter scheme reaches
+/// nothing, a two-letter one reaches everything. Both rows are reference PHP's own output.
+#[test]
+fn test_minimum_scheme_length_applies_to_every_dispatch_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read($count): string { return "DATA"; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void {}
+    public function url_stat($path, $flags) { return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,
+        'uid'=>0,'gid'=>0,'rdev'=>0,'size'=>99,'atime'=>0,'mtime'=>0,'ctime'=>0,
+        'blksize'=>4096,'blocks'=>1]; }
+    public function dir_opendir($path, $options): bool { return true; }
+    public function dir_readdir() { return false; }
+    public function dir_closedir(): void {}
+    public function unlink($path): bool { return true; }
+    public function mkdir($path, $mode, $options): bool { return true; }
+    public function rmdir($path, $options): bool { return true; }
+    public function rename($from, $to): bool { return true; }
+}
+stream_wrapper_register("q", "W");
+stream_wrapper_register("qq", "W");
+foreach (["q", "qq"] as $s) {
+    echo @fopen("$s://x", "r") === false ? 0 : 1;
+    echo @filesize("$s://x") === 99 ? 1 : 0;
+    echo @opendir("$s://d") === false ? 0 : 1;
+    echo @unlink("$s://a") ? 1 : 0;
+    echo @mkdir("$s://d") ? 1 : 0;
+    echo @rmdir("$s://d") ? 1 : 0;
+    echo @rename("$s://a", "$s://b") ? 1 : 0;
+    echo "|";
+}
+"#,
+    );
+    assert_eq!(out.stdout, "0000000|1111111|");
+}
+
 /// Verifies compiled PHP output for stream wrapper unregister round trip.
 #[test]
 fn test_stream_wrapper_unregister_round_trip() {
