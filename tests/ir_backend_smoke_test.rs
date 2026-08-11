@@ -4810,10 +4810,15 @@ fn ir_backend_handles_indexed_array_reverse() {
     assert_eq!(compile_and_run_ir_backend("array_reverse_indexed", source), "213:312");
 }
 
-/// Verifies indexed-array deduplication returns first occurrences without mutating the source.
+/// Verifies indexed-array deduplication returns first occurrences without mutating the source,
+/// KEEPING each survivor's original key.
+///
+/// The reads are `$b[0] . $b[1] . $b[3]`, not `[0][1][2]`: PHP preserves the key of every
+/// survivor, so de-duplicating `[1,2,1,3,2]` yields keys `0, 1, 3` and there is no key 2. The
+/// dense reading this test used to make is the divergence it recorded.
 #[test]
 fn ir_backend_handles_indexed_array_unique() {
-    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
+    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
     assert_eq!(
         compile_and_run_ir_backend("array_unique_indexed", source),
         "3:123:5:12132"

@@ -90,11 +90,10 @@ mod array_sum;
 mod array_sum_mixed;
 mod array_to_hash;
 mod array_to_hash_reverse;
+mod array_to_hash_unique;
 mod array_to_mixed;
 mod array_udiff_uintersect;
 mod array_union;
-mod array_unique;
-mod array_unique_refcounted;
 mod array_unshift;
 mod array_walk;
 mod array_walk_recursive;
@@ -349,15 +348,15 @@ pub use array_to_hash::emit_array_to_hash;
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
 pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
+pub use array_to_hash_unique::emit_array_to_hash_unique;
+/// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.
 pub use array_union::emit_array_union;
 /// Emit array union helper.
-pub use array_unique::emit_array_unique;
 /// Emit array unique helper.
-pub use array_unique_refcounted::emit_array_unique_refcounted;
 /// Emit refcounted array unique helper.
 pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.

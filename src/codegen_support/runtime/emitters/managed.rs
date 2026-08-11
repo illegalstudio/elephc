@@ -87,8 +87,6 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_chunk_to_hash(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
-    arrays::emit_array_unique(emitter);
-    arrays::emit_array_unique_refcounted(emitter);
     arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
@@ -132,6 +130,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
     arrays::emit_array_to_hash_reverse(emitter);
+    arrays::emit_array_to_hash_unique(emitter);
     arrays::emit_array_replace(emitter);
     arrays::emit_array_replace_recursive(emitter);
     arrays::emit_assoc_diff_intersect(emitter);

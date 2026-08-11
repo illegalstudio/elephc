@@ -297,15 +297,6 @@ pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
     }
 }
 
-/// Returns the runtime helper for `array_unique()` based on element ownership.
-pub(super) fn array_unique_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.is_refcounted() {
-        "__rt_array_unique_refcounted"
-    } else {
-        "__rt_array_unique"
-    }
-}
-
 /// Returns the runtime helper for `array_merge()` based on element ownership.
 pub(super) fn array_merge_runtime_helper(elem_ty: &PhpType) -> &'static str {
     if elem_ty.is_refcounted() {

@@ -5,9 +5,11 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` reproduces the legacy rule: de-duplication preserves the array shape,
-//!   so the return type is the (array-or-assoc) input type unchanged. A check hook is
-//!   required both to reject non-array arguments and to echo the input type back.
+//! - PHP preserves the KEY of every surviving element, so de-duplicating an indexed array
+//!   yields a SPARSE result — `array_unique([1,2,2,3,1])` has keys `[0, 1, 3]` and no key 2.
+//!   That shape is a hash, which is why an indexed input returns
+//!   `AssocArray { key: Int, value: T }` rather than the input type echoed back.
+//! - An associative input already records its keys and comes back unchanged.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
@@ -28,18 +30,27 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-unique.php",
 }
 
-/// Returns the (shape-preserving) array type for an `array_unique` call.
+/// Returns the key-preserving result type for an `array_unique` call.
 ///
-/// De-duplication keeps the array shape, so the input array/assoc type is returned
-/// unchanged. Non-array arguments are rejected. The argument is re-inferred here;
-/// the registry already inferred it once for side effects, and arity is pre-validated.
+/// Each survivor keeps its ORIGINAL key, so an indexed input yields a sparse result:
+/// `[1,2,2,3,1]` keeps keys `0, 1, 3`. A dense indexed array cannot express that, so an
+/// indexed input widens to `AssocArray { key: Int, value: T }` — the same shape
+/// `array_reverse($a, true)` already returns for the same reason. An associative input keeps
+/// its own type.
+///
+/// Non-array arguments are rejected. The argument is re-inferred here; the registry already
+/// inferred it once for side effects, and arity is pre-validated.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
+    match ty {
+        PhpType::Array(elem) => Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem,
+        }),
+        PhpType::AssocArray { .. } => Ok(ty),
+        _ => Err(CompileError::new(
             cx.span,
             "array_unique() argument must be array",
-        ));
+        )),
     }
-    Ok(ty)
 }

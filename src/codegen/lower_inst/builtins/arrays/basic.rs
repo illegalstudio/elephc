@@ -334,13 +334,22 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // Verified rather than assumed: the checker widens an indexed input to a hash because PHP
+    // keeps each survivor's ORIGINAL key, so the result of `[1,2,2,3,1]` has no key 2. A
+    // lowering that still built a dense array would disagree with its own declared type,
+    // which miscompiles instead of failing to build.
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    let _ = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
-    abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_unique");
     store_if_result(ctx, inst)
 }
 
