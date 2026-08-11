@@ -150,9 +150,19 @@ fn test_mixed_count_assoc() {
 /// warning and return 1 in older versions / 0 in PHP 8+; elefant collapses
 /// to 0).
 #[test]
-fn test_mixed_count_scalar_is_zero() {
-    let out = compile_and_run(r#"<?php echo count(json_decode("42"));"#);
-    assert_eq!(out, "0");
+fn test_mixed_count_scalar_throws_like_php() {
+    // Was `test_mixed_count_scalar_is_zero`, asserting "0". Reference PHP 8 raises
+    // `TypeError: count(): Argument #1 ($value) must be of type Countable|array, int given`
+    // and stops — the quiet zero is PHP 7.2 behaviour. The test pinned the divergence.
+    let out = compile_and_run_capture(r#"<?php echo "before"; echo count(json_decode("42")); echo "after";"#);
+    assert_eq!(out.stdout, "before");
+    assert!(
+        out.stderr.contains(
+            "count(): Argument #1 ($value) must be of type Countable|array, int given"
+        ),
+        "expected PHP's own TypeError wording, got: {}",
+        out.stderr
+    );
 }
 
 /// Nested access with int key first, then string key: `arr[0]["x"]` on an
