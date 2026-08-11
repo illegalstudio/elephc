@@ -437,6 +437,13 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
+            // `$k = $c->i++;` is an ASSIGNMENT whose right-hand side ends in `++`, not an
+            // increment statement targeting `$k = $c->i`. Stopping at a top-level `=` hands
+            // it to the expression parser, which desugars the increment in place; without
+            // this the whole line was claimed here and rejected as an invalid target.
+            Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return Some((pos, true));
             }
@@ -598,7 +605,7 @@ fn lower_effectful_postfix_assignment(
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
 /// here too: with the result unused, `++X` and `X++` are both `X += 1`.
-pub(in crate::parser::stmt::assign) fn lower_postfix_incdec_assignment(
+pub(crate) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,

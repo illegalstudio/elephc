@@ -367,6 +367,20 @@ fn parse_prefix_inc_dec(
             ));
         }
     }
+    // Not a bare variable: it may still be an l-value the increment node cannot name,
+    // such as `++$this->n` or `++$a[0]`. Parsing it as a unary operand and desugaring is
+    // purely additive — every input that reaches here failed to parse before, so the
+    // original error stands for anything the desugaring declines (a call, for instance,
+    // which cannot be read twice).
+    let rewind = *pos;
+    if let Ok(target) = parse_expr_bp(tokens, pos, 35) {
+        if let Some(desugared) =
+            super::assignment_targets::desugar_lvalue_incdec(target, increment, true, span)
+        {
+            return Ok(desugared);
+        }
+    }
+    *pos = rewind;
     Err(CompileError::new(
         span,
         if increment {

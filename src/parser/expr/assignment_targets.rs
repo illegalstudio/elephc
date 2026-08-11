@@ -11,8 +11,64 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
-use crate::parser::stmt::can_replay_assignment_target;
+use crate::parser::stmt::{can_replay_assignment_target, lower_postfix_incdec_assignment};
 use crate::span::Span;
+
+/// Desugars `$p++` / `++$p` where `$p` is an l-value that `ExprKind::PreIncrement` cannot name
+/// — a property, static property, or array element. Returns `None` when the target is not one
+/// this can safely rewrite, leaving the caller's existing parse error in place.
+///
+/// The AST models increment as `PreIncrement(String)` / `PostIncrement(String)`: a variable
+/// NAME, not an l-value. Statement position gets away with that by desugaring to a
+/// read-modify-write and discarding the operator's value. Expression position needs the value,
+/// and `ExprKind::Assignment` already carries a `prelude` the checker runs BEFORE the value —
+/// which is exactly "perform the write, then evaluate to the right one of the two values". No
+/// new AST node, so nothing downstream of the parser changes.
+///
+/// The target is read twice — once for the write, once for the value or the capture — so this
+/// only applies where `can_replay_assignment_target` holds. `$a[f()]++` keeps the existing
+/// error rather than silently calling `f()` twice.
+pub(super) fn desugar_lvalue_incdec(
+    target: Expr,
+    increment: bool,
+    prefix: bool,
+    span: Span,
+) -> Option<Expr> {
+    if !can_replay_assignment_target(&target) || matches!(target.kind, ExprKind::Variable(_)) {
+        // A bare variable already has a dedicated node; only the shapes it cannot name reach here.
+        return None;
+    }
+    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
+    let (prelude, value) = if prefix {
+        // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
+        (vec![write], target)
+    } else {
+        // `$p++` evaluates to the OLD value, so it has to be captured before the write.
+        let temp = format!("__elephc_incdec_{}_{}", span.line, span.col);
+        let capture = Stmt::new(
+            StmtKind::Assign {
+                name: temp.clone(),
+                value: target,
+            },
+            span,
+        );
+        (
+            vec![capture, write],
+            Expr::new(ExprKind::Variable(temp), span),
+        )
+    };
+    let result = format!("__elephc_incdec_result_{}_{}", span.line, span.col);
+    Some(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(value),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        },
+        span,
+    ))
+}
 
 /// Returns true if the expression is a non-local assignment target (array-access,
 /// property-access, dynamic-property-access, or static-property-access). These

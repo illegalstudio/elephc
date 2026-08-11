@@ -31,6 +31,7 @@ pub(super) use locals::{
 };
 pub(crate) use postfix::{
     can_replay_assignment_target,
+    lower_postfix_incdec_assignment,
 };
 pub(super) use postfix::{
     try_parse_postfix_assignment,
