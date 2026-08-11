@@ -9,6 +9,68 @@
 
 use super::*;
 
+/// Verifies the value-comparing array builtins refuse BOXED elements rather than compare their
+/// addresses.
+///
+/// These helpers compare slots as raw 8-byte words — the value itself for an int or float, a
+/// POINTER for anything heap-backed. Boxed elements therefore compared cell addresses, and two
+/// separately boxed `3`s never matched:
+///
+/// - `array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4`, PHP answers `1,b,4`
+/// - `array_intersect` of the same pair answered NOTHING, PHP answers `3`
+/// - `array_unique([1,"b",1,4])` answered `1,b,1,4`, PHP answers `1,b,4`
+///
+/// All three silent. PHP compares these elements by their STRING rendering, which needs a
+/// by-value comparison in the runtime; until that exists the calls are refused, exactly as
+/// `array<string>` already is — its 16-byte slots do not fit these helpers either.
+#[test]
+fn test_value_comparing_builtins_refuse_boxed_elements() {
+    for (source, message) in [
+        (
+            r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_diff($a, $b);"#,
+            "array_diff compares boxed elements by identity",
+        ),
+        (
+            r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_intersect($a, $b);"#,
+            "array_intersect compares boxed elements by identity",
+        ),
+        (
+            r#"<?php $a = [1, "b", 1, 4]; $r = array_unique($a);"#,
+            "array_unique compares boxed elements by identity",
+        ),
+    ] {
+        let error = compile_source_expect_backend_error(source);
+        assert!(
+            error.contains(message),
+            "expected `{message}` for this source, got: {error}"
+        );
+    }
+}
+
+/// Verifies the refusal of BOXED elements did not take the typed cases with it.
+///
+/// `array_diff`, `array_intersect` and `array_unique` refuse a boxed source because they would
+/// compare cell addresses (see `test_error_value_comparing_builtins_refuse_boxed_elements`).
+/// The refusal has to be narrow: an `array<int>` slot IS the value, so raw comparison is the
+/// right one, and these three must keep working. `array_reverse` and `array_merge` share the
+/// element gate but never compare, so they still accept a boxed array — that is why the
+/// refusal sits at each comparing builtin rather than in the gate.
+#[test]
+fn test_value_comparing_builtins_still_accept_typed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_diff([1, 2, 3], [2])), "|";
+echo implode(",", array_intersect([1, 2, 3], [2, 3])), "|";
+echo implode(",", array_unique([1, 2, 2, 3])), "|";
+$boxed = [1, "b", 3];
+$more = [9, "z"];
+echo implode(",", array_reverse($boxed)), "|";
+echo implode(",", array_merge($boxed, $more));
+"#,
+    );
+    assert_eq!(out, "1,3|2,3|1,2,3|3,b,1|1,b,3,9,z");
+}
+
 /// Verifies `array_unique()` removes duplicate values; count of `[1,2,2,3,3,3]` is 3.
 #[test]
 fn test_array_unique() {

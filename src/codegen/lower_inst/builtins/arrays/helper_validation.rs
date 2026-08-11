@@ -10,10 +10,27 @@
 use super::*;
 
 /// Returns the element type accepted by indexed-array value set-operation helpers.
+///
+/// The helpers compare slots as RAW 8-byte words, which is the value itself for an int, bool,
+/// float or callable and a POINTER for anything heap-backed. A boxed `Mixed` slot therefore
+/// compared cell addresses, so `array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4` — the `3`
+/// was never matched — and `array_intersect` of the same pair answered nothing at all, both
+/// silently. PHP compares these builtins' elements by their STRING rendering.
+///
+/// Boxed elements are refused rather than compared wrongly, which is what `array<string>`
+/// already gets here: its 16-byte slots do not fit the helper either. Comparing them properly
+/// needs a shared by-value comparison in the runtime, which `array_unique` needs too.
 pub(super) fn set_op_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            if matches!(elem, PhpType::Mixed | PhpType::Union(_)) {
+                return Err(CodegenIrError::unsupported(format!(
+                    "{} compares boxed elements by identity, not by value, for indexed-array \
+                     element PHP type {:?}",
+                    name, elem
+                )));
+            }
             if matches!(
                 elem,
                 PhpType::Int

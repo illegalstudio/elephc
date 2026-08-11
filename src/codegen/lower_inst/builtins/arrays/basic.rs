@@ -344,7 +344,20 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
             inst.result_php_type
         )));
     };
-    let _ = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // The dedup scan compares slots as RAW words, which is a POINTER for a boxed element, so
+    // two separately boxed `1`s never matched: `array_unique([1,"b",1,4])` answered `1,b,1,4`
+    // where PHP answers `1,b,4`. PHP compares these elements by their STRING rendering.
+    // Refused rather than answered wrongly, like the set operations that share the defect; the
+    // gate itself cannot carry this, because `array_reverse`, `shuffle` and `array_merge` use
+    // it too and never compare their elements.
+    if matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique compares boxed elements by identity, not by value, for indexed-array \
+             element PHP type {:?}",
+            elem_ty
+        )));
+    }
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
