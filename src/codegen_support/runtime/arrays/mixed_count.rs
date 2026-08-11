@@ -7,7 +7,9 @@
 //!
 //! Key details:
 //! - Boxed indexed arrays and hashes read the entry count from their payload header.
-//! - Non-countable tags return zero instead of modeling PHP's warning surface.
+//! - Non-countable tags return zero. That is a KNOWN divergence, not a modelling
+//!   choice: PHP 8 throws a `TypeError` and stops. See the note on the emitter below
+//!   for the measurement and for why the checker's strict union rule depends on it.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -32,8 +34,13 @@ pub fn emit_mixed_count(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `x0`.
-/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
-///   "not countable" semantics.
+/// - Any other tag (including null): returns 0 silently. ⚠️ This does NOT match PHP.
+///   PHP 8 raises `TypeError: count(): Argument #1 ($value) must be of type
+///   Countable|array, <type> given` and stops; the quiet return dates from PHP 7.2's
+///   warning. Measured against 8.5: `count(false)` is fatal, elephc answers 0 and
+///   carries on. The checker hides most of it by refusing a union unless EVERY member
+///   is countable — which is also why `file()` cannot be given its `array|false`
+///   return type without this being fixed first.
 fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
@@ -97,8 +104,13 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
 /// Behavior:
 /// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
 ///   payload header at offset 0 and returns it in `rax`.
-/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
-///   "not countable" semantics.
+/// - Any other tag (including null): returns 0 silently. ⚠️ This does NOT match PHP.
+///   PHP 8 raises `TypeError: count(): Argument #1 ($value) must be of type
+///   Countable|array, <type> given` and stops; the quiet return dates from PHP 7.2's
+///   warning. Measured against 8.5: `count(false)` is fatal, elephc answers 0 and
+///   carries on. The checker hides most of it by refusing a union unless EVERY member
+///   is countable — which is also why `file()` cannot be given its `array|false`
+///   return type without this being fixed first.
 fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
