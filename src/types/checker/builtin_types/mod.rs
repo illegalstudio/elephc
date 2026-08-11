@@ -34,7 +34,9 @@ mod timezone_ids;
 /// ArithmeticError; RuntimeException/ReflectionException extend Exception;
 /// JsonException extends RuntimeException; FiberError extends Error. Fiber is
 /// final with no parent.
-pub(crate) use declarations::{InterfaceDeclInfo, inject_builtin_throwables};
+pub(crate) use declarations::{
+    inject_builtin_throwables, InterfaceDeclInfo, RESERVED_FOR_INTERNAL_USE,
+};
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,

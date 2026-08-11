@@ -70,6 +70,18 @@ impl Clone for InterfaceDeclInfo {
 /// `php -d xdebug.mode=off -r 'var_dump(class_parents("ArgumentCountError"));'`
 /// (`["TypeError", "Error"]`), the same probe for `DivisionByZeroError`
 /// (`["ArithmeticError", "Error"]`) and `AssertionError` (`["Error"]`).
+/// Builtin classes reference PHP reserves for internal use, which `new` must refuse.
+///
+/// The engine raises these itself and gives them no user-callable constructor, so
+/// `new FiberError("boom")` is `Error: The "FiberError" class is reserved for internal use and
+/// cannot be manually instantiated` there while it produced a working object here.
+///
+/// Kept next to the declaration list on purpose: the same edit that introduces a builtin
+/// throwable is the one that has to answer whether PHP lets user code construct it. Most do —
+/// `throw new RuntimeException(...)` is ordinary — which is why this cannot be inferred from
+/// "is a builtin throwable" and has to be stated.
+pub(crate) const RESERVED_FOR_INTERNAL_USE: [&str; 1] = ["FiberError"];
+
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,

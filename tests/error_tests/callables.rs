@@ -320,6 +320,21 @@ fn test_error_closure_void_return_type_rejects_value() {
     );
 }
 
+/// Verifies `new FiberError(...)` is refused, as reference PHP refuses it.
+///
+/// PHP reserves the class for internal use and gives it no user-callable constructor, so
+/// `new FiberError("boom")` raises an `Error` there; here it produced a working object. The
+/// engine still RAISES a `FiberError` of its own and user code still catches it by name —
+/// `test_fiber_error_is_still_raised_and_catchable` is the other half, and without it a guard
+/// that simply removed the class would look correct here.
+#[test]
+fn test_error_fiber_error_is_reserved_for_internal_use() {
+    expect_error(
+        r#"<?php $e = new FiberError("boom");"#,
+        "The \"FiberError\" class is reserved for internal use and cannot be manually instantiated",
+    );
+}
+
 /// Verifies that error fiber callback rejects too many start args.
 #[test]
 fn test_error_fiber_callback_rejects_too_many_start_args() {
