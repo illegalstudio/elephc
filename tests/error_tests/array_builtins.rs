@@ -284,6 +284,33 @@ fn test_error_isset_wrong_args() {
     expect_error("<?php isset();", "isset() takes at least 1 argument");
 }
 
+/// Verifies a builtin's by-reference parameter refuses an argument with no storage.
+///
+/// `array_walk([1,2], "f")` RAN here — printing `1 2 reached`, exit 0 — where reference PHP
+/// raises `Error: array_walk(): Argument #1 ($array) could not be passed by reference`. There
+/// is nowhere to write the modified array back to. The guard is one authority over every
+/// builtin that declares a by-reference parameter, not a per-builtin check: several builtins
+/// hand-rolled it, and the ones nobody wrote it for accepted silently.
+#[test]
+fn test_error_by_ref_builtin_parameter_refuses_a_value_with_no_storage() {
+    for (source, message) in [
+        (
+            r#"<?php function f($v) {} array_walk([1, 2], "f");"#,
+            "array_walk(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            "<?php sort([3, 1, 2]);",
+            "sort(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            "<?php array_push([1], 2);",
+            "array_push(): Argument #1 ($array) could not be passed by reference",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
 /// Verifies that error array unique wrong args.
 #[test]
 fn test_error_array_unique_wrong_args() {
