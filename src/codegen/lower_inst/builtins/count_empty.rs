@@ -15,76 +15,6 @@ use super::*;
 /// Handles Array/AssocArray (reads length directly from the runtime header), Mixed/Union
 /// (delegates to `__rt_mixed_count`), and Countable Object (calls the object's `count`
 /// method via intrinsic or dynamic dispatch).
-/// PHP's `count()` TypeError, which names the offending type — and a boolean by its VALUE.
-const COUNT_TYPE_ERROR_PREFIX: &str = "count(): Argument #1 ($value) must be of type Countable|array, ";
-
-/// Throws PHP's `count()` TypeError when a boxed value is not countable.
-///
-/// `__rt_mixed_count` answered 0 for every non-countable tag and let execution continue,
-/// where PHP 8 raises a TypeError and stops — measured, `count(false)` is fatal there and
-/// was `0` here. The quiet return dates from PHP 7.2's warning. The checker hid most of it
-/// by refusing a union unless EVERY member is countable, which is why that rule could not be
-/// relaxed to give `file()` its `array|false` return type: relaxing it without this would
-/// have spread the silent zero rather than removed it.
-///
-/// A tag 6 (object) is left to `__rt_mixed_count`. PHP also throws for an object that does
-/// not implement `Countable`; deciding that needs the interface check at run time and is not
-/// done here, so objects keep exactly the behaviour they had.
-fn emit_count_countable_guard(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    let countable = ctx.next_label("count_countable");
-    let int_case = ctx.next_label("count_type_int");
-    let string_case = ctx.next_label("count_type_string");
-    let float_case = ctx.next_label("count_type_float");
-    let bool_case = ctx.next_label("count_type_bool");
-    let true_case = ctx.next_label("count_type_true");
-    let resource_case = ctx.next_label("count_type_resource");
-
-    ctx.load_value_to_result(value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    for tag in [4u8, 5, 6] {
-        super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, tag, &countable);
-    }
-    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
-    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
-    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
-    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
-    super::scalar_metadata::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
-    // Every remaining tag is PHP's null.
-    emit_count_type_error(ctx, "null");
-
-    ctx.emitter.label(&int_case);
-    emit_count_type_error(ctx, "int");
-    ctx.emitter.label(&string_case);
-    emit_count_type_error(ctx, "string");
-    ctx.emitter.label(&float_case);
-    emit_count_type_error(ctx, "float");
-    ctx.emitter.label(&resource_case);
-    emit_count_type_error(ctx, "resource");
-
-    // PHP prints a boolean by value: "false given" / "true given", never "bool given".
-    ctx.emitter.label(&bool_case);
-    let payload = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x1",
-        Arch::X86_64 => "rdi",
-    };
-    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload); // unbox left value_lo here
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_case);
-    emit_count_type_error(ctx, "false");
-    ctx.emitter.label(&true_case);
-    emit_count_type_error(ctx, "true");
-
-    ctx.emitter.label(&countable);
-    Ok(())
-}
-
-/// Throws the `count()` TypeError naming `type_name`, exactly as php-src words it.
-fn emit_count_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
-    crate::codegen::lower_inst::exceptions::emit_type_error(
-        ctx,
-        &format!("{COUNT_TYPE_ERROR_PREFIX}{type_name} given"),
-    );
-}
-
 pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "count", 1, 2)?;
     let value = expect_operand(inst, 0)?;
@@ -117,7 +47,6 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_count_countable_guard(ctx, value)?;
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             store_if_result(ctx, inst)
