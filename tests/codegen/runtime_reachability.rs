@@ -8,7 +8,7 @@
 //! - Plain native programs must not carry the optional eval Reflection surface.
 //! - A read whose path is a constant local string must not carry the URL reader.
 
-use crate::support::{compile_source_to_asm_with_options, fs, make_cli_test_dir};
+use crate::support::{compile_and_run, compile_source_to_asm_with_options, fs, make_cli_test_dir};
 
 /// Verifies a program without eval or Reflection omits their synthetic methods and metadata.
 #[test]
@@ -120,6 +120,39 @@ fn test_executable_marks_its_internal_symbols() {
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an exception raised inside the SHARED `__toString` ladder still reaches the
+/// caller's `catch`.
+///
+/// Moving the ladder into a synthetic function put a frame between the throw and the handler
+/// that was not there when it was inlined, and nothing covered that: every existing test has a
+/// `__toString` that returns. The three distinct call sites are load-bearing — with fewer the
+/// ladder stays INLINE and the program never enters the helper, so the test would pass while
+/// proving nothing. Measured that way first, and the emitted assembly named the shared label
+/// zero times.
+#[test]
+fn test_a_throw_inside_the_shared_string_ladder_is_still_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class Boom { public function __toString(): string { throw new RuntimeException("boom"); } }
+class Fine { public function __toString(): string { return "fine"; } }
+function first(mixed $v): void { echo $v; }
+function second(mixed $v): void { echo $v; }
+function third(mixed $v): void { echo $v; }
+first(new Fine());
+echo "|";
+try {
+    second(new Boom());
+    echo "not-reached";
+} catch (RuntimeException $e) {
+    echo "caught:", $e->getMessage();
+}
+echo "|";
+third(new Fine());
+"#,
+    );
+    assert_eq!(out, "fine|caught:boom|fine");
 }
 
 /// Verifies the `__toString` dispatch ladder is emitted once for a program with several
