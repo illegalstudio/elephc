@@ -32,23 +32,29 @@ fn test_error_fopen_wrong_args() {
 
 /// Verifies the `while` guard narrowing is dropped once the loop exits.
 ///
-/// The loop leaves precisely when the guard is false, so after it the variable holds `false`
-/// and `count()` on it must be refused. Without the restore the narrowed array type outlives
-/// the loop, this snippet COMPILES, and the emitted code reads a boxed `false` as an array —
-/// a silent wrong answer. The property is only visible at compile time: a run-time test of
-/// the same loop passes either way, because `var_export()` and `foreach` consult the runtime
-/// tag and never the static type. That is what makes this an error test rather than a
-/// behavioural one.
+/// The loop leaves precisely when the guard is false, so after it the variable is back to
+/// `array|false` and a parameter declared `array` must refuse it. Without the restore the
+/// narrowed array type outlives the loop, this snippet COMPILES, and the emitted code reads
+/// a boxed `false` as an array — a silent wrong answer.
+///
+/// The witness is a typed parameter rather than `count()`, which is what this test used
+/// until `count()` learned to raise PHP's TypeError at run time: with the runtime guard in
+/// place, `count()` accepts a union with one countable member exactly as PHP does, so it can
+/// no longer tell the narrowed type from the union. Verified by sentinel mutation in both
+/// directions — dropping the restore makes this snippet compile, and a behavioural probe of
+/// the same loop does NOT distinguish the two (both raise the TypeError), which is why this
+/// stays an error test.
 #[test]
 fn test_error_while_guard_narrowing_does_not_outlive_the_loop() {
     expect_error(
         r#"<?php
+function takesArray(array $a): int { return count($a); }
 $h = fopen("x.csv", "r");
 while (($row = fgetcsv($h)) !== false) {
 }
-echo count($row);
+echo takesArray($row);
 "#,
-        "count() argument must be array or Countable object",
+        "expects Array(Mixed), got Union([Array(Str), False])",
     );
 }
 

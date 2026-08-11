@@ -647,16 +647,18 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
-            // `fgetcsv()` answers `false` at end of file, so its fallback type must carry
-            // that arm too: the checker declares the union, and a builtin whose EIR and
-            // checker types disagree miscompiles rather than failing to build.
-            RuntimeFnId::Fgetcsv => PhpType::Union(vec![
+            // `fgetcsv()` answers `false` at end of file and `file()` answers `false` when the
+            // read fails, so their fallback type must carry that arm too: the checker declares
+            // the union, and a builtin whose EIR and checker types disagree miscompiles rather
+            // than failing to build. This is the authority that is easy to forget, because a
+            // SYNTHESIZED call has no call-site type to fall back on — leaving `fgetcsv()` here
+            // made `SplFileObject::fgetcsv()` read the boxed cell as a raw pointer.
+            RuntimeFnId::Fgetcsv | RuntimeFnId::File => PhpType::Union(vec![
                 PhpType::Array(Box::new(PhpType::Str)),
                 PhpType::False,
             ]),
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
-            | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),

@@ -382,6 +382,7 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_file");
+    box_indexed_array_or_false_result(ctx);                                     // a failed read is a null result, which PHP reports as false
     store_if_result(ctx, inst)
 }
 

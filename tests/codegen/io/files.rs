@@ -192,6 +192,42 @@ unlink("ts.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `file()` answers `false` for a read it could not perform, and an EMPTY ARRAY for a
+/// file that is genuinely empty.
+///
+/// Both used to be the same empty array, so no caller could tell them apart — the shape PHP
+/// gives a `false` return exists precisely to separate them. The empty-file half is the one
+/// that constrains the implementation: the failure signal has to be the payload pointer from
+/// `__rt_file_get_contents`, because an empty file and a missing one both produce zero LINES.
+///
+/// The `count()` calls are load-bearing. Giving `file()` its union return type is what made
+/// this conversion fail twice before: `count($lines)` stopped compiling, since `count()`
+/// refused a union unless every member was countable. That rule was standing in for a missing
+/// run-time `TypeError`, which now exists, so the ordinary shape compiles again.
+#[test]
+fn test_file_reports_a_failed_read_as_false_and_an_empty_file_as_an_empty_array() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("two.txt", "a\nb\n");
+file_put_contents("none.txt", "");
+$lines = file("two.txt");
+$empty = file("none.txt");
+$absent = @file("absent.txt");
+var_dump($lines === false);
+echo count($lines), "|";
+var_dump($empty === false);
+echo count($empty), "|";
+var_dump($absent === false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\n2|bool(false)\n0|bool(true)\n",
+        "an empty file is an empty array; only a failed read is false"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `file()`'s `$flags` bitmask over every combination PHP distinguishes.
 ///
 /// The fixture writes a file with two empty lines so `FILE_IGNORE_NEW_LINES` and
