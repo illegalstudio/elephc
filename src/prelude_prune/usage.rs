@@ -279,12 +279,6 @@ pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     usage
 }
 
-/// Collects references from one expression and all nested AST children.
-pub(crate) fn collect_expr(expr: &Expr) -> Usage {
-    let mut usage = Usage::default();
-    scan_expr(expr, &mut usage);
-    usage
-}
 
 /// Records one normalized PHP function name.
 fn record_name(usage: &mut Usage, name: &str) {

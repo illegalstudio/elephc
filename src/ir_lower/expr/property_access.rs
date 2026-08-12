@@ -316,10 +316,13 @@ pub(super) fn property_can_be_uninitialized(
     // The DECLARED type, not its codegen representation: `?string` represents as `Mixed` and
     // is still a declared type that starts uninitialized, while an untyped `public $x;` is
     // plain null from the start and must stay on the ordinary path.
-    if matches!(info.properties[index].1, PhpType::Mixed) {
-        return false;
-    }
-    matches!(info.defaults.get(index), Some(None))
+    //
+    // A DEFAULT does not exclude the property. It used to: a defaulted slot is live from
+    // construction, so it looked as though it could never be uninitialized. `unset($o->x)`
+    // returns a typed property to the uninitialized state whatever its default, and the
+    // ordinary read then raises where PHP's `??` answers the default. The runtime probe
+    // settles both cases, so the gate asks only whether the property is TYPED.
+    !matches!(info.properties[index].1, PhpType::Mixed)
 }
 
 /// Reads `property` the way `isset()` does: yields null instead of raising when the slot is
@@ -363,6 +366,11 @@ pub(super) fn lower_initialized_property_value(
     });
 
     ctx.builder.position_at_end(uninitialized_block);
+    // This path never reads the property, so nothing downstream consumes the receiver — an
+    // OWNING one has to be released here. The read path below hands it to
+    // `lower_property_get_from_value`, which disposes of it the way an ordinary read does.
+    // `mk()->p ?? "none"` leaked one object per call without this.
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null_value, expr.span);
     branch_to(ctx, merge);

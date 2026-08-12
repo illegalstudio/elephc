@@ -348,9 +348,12 @@ fn lower_nullsafe_postfix_segment(
 /// Sends the chain to its null block when `property` is a typed slot that is still
 /// uninitialized, instead of letting the read raise.
 ///
-/// Returns `false` when the segment was diverted, matching `guard_nullsafe_chain_receiver`'s
-/// contract. Properties that cannot be in that state — untyped, or carrying a default — are
-/// not probed at all, so they keep their exact previous lowering.
+/// Always returns `true`: the divert is a CONDITIONAL branch, so the caller must go on lowering
+/// the segment for the initialized path. That differs from `guard_nullsafe_chain_receiver`, which
+/// returns `false` when it diverts UNCONDITIONALLY on a provably-null receiver. Only an UNTYPED
+/// property is left unprobed — it is plain null from the start and keeps its exact previous
+/// lowering. A default does not exempt a typed property, because `unset()` returns it to the
+/// uninitialized state whatever its default.
 fn guard_initialized_chain_property(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,
@@ -373,13 +376,25 @@ fn guard_initialized_chain_property(
     let continue_block = ctx
         .builder
         .create_named_block("nullsafe.chain.initialized", Vec::new());
+    // Diverting to the chain's null block skips every later segment, including whatever would
+    // have consumed this receiver — so an OWNING receiver has to be released on the way out,
+    // exactly as the null-receiver guard below does. `mk()?->p?->c ?? "none"` leaked one object
+    // per call without this.
+    let cleanup_block = ctx
+        .value_is_owning_temporary(current)
+        .then(|| ctx.builder.create_named_block("nullsafe.chain.uninit_cleanup", Vec::new()));
     ctx.builder.terminate(Terminator::CondBr {
         cond: initialized.value,
         then_target: continue_block,
         then_args: Vec::new(),
-        else_target: null_block,
+        else_target: cleanup_block.unwrap_or(null_block),
         else_args: Vec::new(),
     });
+    if let Some(cleanup_block) = cleanup_block {
+        ctx.builder.position_at_end(cleanup_block);
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
+        branch_to(ctx, null_block);
+    }
     ctx.builder.position_at_end(continue_block);
     true
 }

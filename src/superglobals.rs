@@ -17,29 +17,36 @@
 //!   reference PHP rather than derived from each other.
 
 use crate::types::PhpType;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether this compile targets `--web`, for the passes that cannot be handed the
-/// flag through their signature.
-///
-/// `seed_cli_populated_superglobals` runs from `optimize::fold_constants`, and that
-/// has THIRTEEN call sites: the driver plus twelve test harnesses that each rebuild
-/// the phase order by hand (`tests/codegen/support/compiler.rs` says so in a
-/// comment: "Mirrors `pipeline::compile`"). A pass that changes what a program
-/// MEANS must not be one of the things those harnesses can forget to mirror, or the
-/// suites keep pinning the behaviour the driver no longer has. Riding along inside a
-/// call they all already make is what makes it unforgettable; this flag is the price.
-/// Same shape as `codegen::set_null_repr`. Default `false`: a plain CLI compile.
-static COMPILING_FOR_WEB: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// Whether this compile targets `--web`, for the passes that cannot be handed the flag
+    /// through their signature.
+    ///
+    /// `seed_cli_populated_superglobals` runs from `optimize::fold_constants`, and that has
+    /// THIRTEEN call sites: the driver plus twelve test harnesses that each rebuild the phase
+    /// order by hand (`tests/codegen/support/compiler.rs` says so in a comment: "Mirrors
+    /// `pipeline::compile`"). A pass that changes what a program MEANS must not be one of the
+    /// things those harnesses can forget to mirror, or the suites keep pinning the behaviour
+    /// the driver no longer has. Riding along inside a call they all already make is what
+    /// makes it unforgettable; this flag is the price.
+    ///
+    /// THREAD-LOCAL, not a process-wide static: one compilation is single-threaded, but a test
+    /// binary runs many of them in ONE process, on several threads. A shared flag would let a
+    /// `--web` unit test blank the flag another thread is compiling CLI code under, and a panic
+    /// between set and reset would leave every later compile in that process in web mode. The
+    /// lifetime of this fact is "this compile", and a thread-local says exactly that;
+    /// `optimize.rs` already uses `thread_local!` for the same reason.
+    static COMPILING_FOR_WEB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Records whether the compile in progress is a `--web` build.
 pub fn set_compiling_for_web(web: bool) {
-    COMPILING_FOR_WEB.store(web, Ordering::Relaxed);
+    COMPILING_FOR_WEB.with(|cell| cell.set(web));
 }
 
 /// Returns true when the compile in progress is a `--web` build.
 pub fn compiling_for_web() -> bool {
-    COMPILING_FOR_WEB.load(Ordering::Relaxed)
+    COMPILING_FOR_WEB.with(std::cell::Cell::get)
 }
 
 /// PHP request superglobals visible in every scope under `--web`.
@@ -53,10 +60,16 @@ pub fn is_superglobal(name: &str) -> bool {
 
 /// The superglobals PHP's CLI SAPI has already populated when the script starts.
 ///
-/// Measured, not assumed — under `php -n`:
-/// `$_SERVER` holds 67 entries, `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES` are empty
-/// ARRAYS, and `$_REQUEST`/`$_ENV`/`$_SESSION` do not exist at all (the first two
-/// depend on `variables_order`/`request_order`, the third on `session_start()`).
+/// Measured, not assumed — and the FIRST measurement was wrong, which is worth stating
+/// because the trap is easy to fall into twice. Probing with `isset($GLOBALS["_ENV"])`
+/// answers false, so the set looked like five. PHP materializes an auto-global when the
+/// script MENTIONS IT BY NAME; a string subscript of `$GLOBALS` is not a mention. Probing
+/// with `isset($_ENV)` answers true, and the set is SEVEN:
+///
+///     php -n -r 'var_dump(isset($_ENV), isset($_REQUEST), isset($_SESSION));'
+///     bool(true)  bool(true)  bool(false)
+///
+/// Only `$_SESSION` is genuinely absent until `session_start()`.
 ///
 /// The distinction is observable and both halves are pinned by tests: a CLI
 /// `count($_SERVER)` must answer a number rather than raise `count(): Argument #1
@@ -64,7 +77,8 @@ pub fn is_superglobal(name: &str) -> bool {
 /// must stay false. Off-web these names are ordinary top-level locals — nothing
 /// pre-initializes the shared `_eir_global_*` storage — so a program that never
 /// mentions one pays nothing for it.
-pub const CLI_POPULATED_SUPERGLOBALS: &[&str] = &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES"];
+pub const CLI_POPULATED_SUPERGLOBALS: &[&str] =
+    &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST"];
 
 /// The shared type of every request superglobal: a string-keyed associative
 /// array of heterogeneous (Mixed) values.
@@ -165,12 +179,17 @@ mod tests {
         assert_eq!(seeded_names("<?php echo count($_GET);"), vec!["_GET".to_string()]);
     }
 
-    /// `$_REQUEST`, `$_ENV` and `$_SESSION` are never seeded even when spelled: PHP's
-    /// CLI SAPI does not create them, so `isset()` on them must stay false.
+    /// `$_SESSION` is never seeded even when spelled: PHP's CLI SAPI does not create it
+    /// until `session_start()`, so `isset($_SESSION)` must stay false. `$_ENV` and
+    /// `$_REQUEST` ARE created and are seeded alongside it here, which is what separates
+    /// "not in the set" from "not mentioned".
     #[test]
-    fn superglobals_the_cli_does_not_create_are_never_seeded() {
+    fn the_session_superglobal_is_never_seeded() {
         let source = "<?php echo isset($_SESSION), isset($_ENV), isset($_REQUEST);";
-        assert!(seeded_names(source).is_empty());
+        assert_eq!(
+            seeded_names(source),
+            vec!["_ENV".to_string(), "_REQUEST".to_string()],
+        );
     }
 
     /// A `--web` compile must be left completely alone: the request prelude owns

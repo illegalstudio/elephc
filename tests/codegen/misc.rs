@@ -436,13 +436,21 @@ echo ":", $_SERVER["k"], count($_SERVER);
     assert_eq!(out, "yyyyy:0:v1");
 }
 
-/// The other half of the same measurement, and the reason the seeded set is a
-/// SUBSET: `php -n` leaves `$_REQUEST`, `$_ENV` and `$_SESSION` undefined — the
-/// first two depend on `variables_order`/`request_order`, the third on
-/// `session_start()`. Seeding all eight superglobals would have made every one of
-/// these `isset()` answer true, which PHP does not.
+/// The other half of the same measurement, and the reason the seeded set is a SUBSET:
+///
+/// Seeding is driven by MENTION, which is also how PHP itself materializes an auto-global, so
+/// the emulation holds in every scope: a closure with no `use`, an arrow function, and a method
+/// all see them (`only_the_session_superglobal_stays_unset_in_a_cli_build` covers the top level;
+/// `superglobals_reach_every_scope` below covers the rest).
+/// `$_SESSION` does not exist until `session_start()`, so seeding all eight superglobals
+/// would have made its `isset()` answer true, which PHP does not.
+///
+/// `$_REQUEST` and `$_ENV` DO exist and are asserted above. They were originally excluded
+/// from a probe that read `isset($GLOBALS["_ENV"])`, which answers false: PHP materializes
+/// an auto-global when the script MENTIONS IT BY NAME, and a string subscript of `$GLOBALS`
+/// is not a mention. Naming them — `isset($_ENV)` — answers true.
 #[test]
-fn superglobals_the_cli_does_not_create_stay_unset() {
+fn only_the_session_superglobal_stays_unset_in_a_cli_build() {
     let out = compile_and_run(
         r#"<?php
 echo isset($_REQUEST) ? "y" : "n";
@@ -450,7 +458,29 @@ echo isset($_ENV) ? "y" : "n";
 echo isset($_SESSION) ? "y" : "n";
 "#,
     );
-    assert_eq!(out, "nnn");
+    assert_eq!(out, "yyn");
+}
+
+/// A superglobal is visible in EVERY scope, which is the half a top-level test cannot show.
+/// The seeding is driven by MENTION — the same thing that makes PHP materialize an auto-global —
+/// so a closure with no `use`, an arrow function and a method all reach them, and a write from
+/// inside a function is visible outside it.
+#[test]
+fn superglobals_reach_every_scope() {
+    let out = compile_and_run(
+        r#"<?php
+echo (function() { return isset($_GET) ? "y" : "n"; })();
+echo (fn() => isset($_SERVER) ? "y" : "n")();
+function outer() { return (function() { return count($_POST); })(); }
+echo outer();
+class C { public function m() { return count($_GET); } }
+echo (new C())->m();
+function w() { $_GET["a"] = 1; }
+w();
+echo $_GET["a"] ?? "none";
+"#,
+    );
+    assert_eq!(out, "yy001");
 }
 
 /// BUG-7 / A1 regression: `PHP_SESSION_DISABLED`/`PHP_SESSION_NONE`/`PHP_SESSION_ACTIVE`

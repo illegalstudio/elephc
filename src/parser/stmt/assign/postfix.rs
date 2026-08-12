@@ -157,24 +157,24 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
 /// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign
 /// that variable before the write lands.
 ///
-/// A replay-safe right-hand side has no effects at all, so it can disturb nothing — which
-/// is what keeps `$counts[$k]++` and `$sums[$k] += $n` on the existing path, emitting no
-/// temporary. Beyond that, the right-hand side has to at least MENTION the index for a
-/// direct assignment or a by-reference argument to reach it. The gap that leaves is a
-/// callee reaching the index through `global`, which mentions nothing at the call site.
+/// A replay-safe right-hand side has no effects at all, so it can disturb nothing — which is
+/// what keeps `$counts[$k]++` and `$sums[$k] += $n` on the existing path, emitting no temporary.
+/// Every other right-hand side is settled first.
+///
+/// The gate used to also require the right-hand side to MENTION the index by name, which was
+/// unsound: `$c[$k] += (function() use (&$k) { $k = 1; return 1; })();` answered `10,11` where
+/// PHP answers `10,21`, because the mention sits in a closure the call expression does not scan.
+/// Widening it costs a temporary on shapes like `$sums[$k] += f()` and costs no correctness:
+/// PHP evaluates a compound assignment's right-hand side BEFORE reading the element, so settling
+/// it early is what the language does anyway.
 fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
     let ExprKind::ArrayAccess { index, .. } = &target.kind else {
         return false;
     };
-    let ExprKind::Variable(name) = &index.kind else {
-        return false;
-    };
-    if can_replay_assignment_target(rhs) {
+    if !matches!(index.kind, ExprKind::Variable(_)) {
         return false;
     }
-    crate::prelude_prune::usage::collect_expr(rhs)
-        .variables
-        .contains(name.as_str())
+    !can_replay_assignment_target(rhs)
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a
