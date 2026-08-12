@@ -265,6 +265,7 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    StaticPropInitialized,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -629,6 +630,7 @@ impl Op {
             ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal
             | LoadStaticProperty
+            | StaticPropInitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -847,6 +849,7 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            StaticPropInitialized => "static_prop_initialized",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",

@@ -27,6 +27,7 @@ pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module
                 inst.op,
                 Op::LoadStaticProperty
                     | Op::StoreStaticProperty
+                    | Op::StaticPropInitialized
                     | Op::LoadReflectionStaticProperty
                     | Op::ReflectionStaticPropertyInitialized
                     | Op::StoreReflectionStaticProperty

@@ -95,6 +95,15 @@ pub(super) fn lower_lazy_isset_operand(
         | ExprKind::NullsafePropertyAccess { object, property } => {
             lower_lazy_property_isset_operand(ctx, object, property, arg)
         }
+        // A typed static property starts uninitialized and `isset()` must answer false there
+        // rather than take the ordinary read, whose backend guard is fatal.
+        ExprKind::StaticPropertyAccess { receiver, property }
+            if static_property_can_be_uninitialized(ctx, receiver, property) =>
+        {
+            Some(lower_initialized_static_property_isset(
+                ctx, receiver, property, arg,
+            ))
+        }
         // `isset($this)` inside a static closure always evaluates to `false`
         // because static closures have no `$this` binding. PHP allows this
         // probe and returns false; elephc must not try to load a missing slot.
@@ -135,6 +144,16 @@ pub(super) fn lower_lazy_empty(
             expr.span,
             None,
         ));
+    }
+    // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
+    // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
+    // slot probe. Uninitialized answers true without the read.
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &args[0].kind {
+        if static_property_can_be_uninitialized(ctx, receiver, property) {
+            return Some(lower_initialized_static_property_empty(
+                ctx, receiver, property, name, &args[0],
+            ));
+        }
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
 

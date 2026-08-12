@@ -147,6 +147,22 @@ pub(super) fn lower_load_reflection_static_property(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a static-property initialization probe for ordinary PHP source.
+///
+/// The read below it (`lower_load_static_property`) emits a fatal guard for a typed slot that
+/// is still uninitialized, so `S::$s ?? "d"` had no way to answer the default: the guard is
+/// emitted in codegen rather than as an operation the lowering could branch on. This is that
+/// operation. It differs from the Reflection probe only in ENFORCING visibility — Reflection is
+/// allowed past a private slot and `??` is not.
+pub(super) fn lower_static_property_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
+    emit_direct_static_property_initialized_result(ctx, &slot);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a Reflection static-property initialization probe.
 pub(super) fn lower_reflection_static_property_initialized(
     ctx: &mut FunctionContext<'_>,

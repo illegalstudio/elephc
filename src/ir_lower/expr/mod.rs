@@ -502,6 +502,129 @@ fn lower_initialized_property_isset(
     take_owned_temp(ctx, &temp_name, arg.span)
 }
 
+/// Lowers `isset(S::$s)` for a DECLARED (typed) STATIC property slot.
+///
+/// The static twin of `lower_initialized_property_isset`, and needed for the same reason: a
+/// typed static property starts uninitialized, PHP answers `false` there without raising, and
+/// the ordinary static read carries a fatal guard the lowering could not route around until
+/// `Op::StaticPropInitialized` existed.
+fn lower_initialized_static_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    arg: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let uninitialized_block = ctx
+        .builder
+        .create_named_block("isset.static_property.uninitialized", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("isset.static_property.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.static_property.merge", Vec::new());
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    let data = ctx.intern_string(&name);
+    let initialized = ctx.emit_value(
+        Op::StaticPropInitialized,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::StaticPropInitialized.default_effects(),
+        Some(arg.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: read_block,
+        then_args: Vec::new(),
+        else_target: uninitialized_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(uninitialized_block);
+    let false_value = emit_bool_literal(ctx, false, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_static_property_get(ctx, receiver, property, arg);
+    let is_set = emit_builtin_call_value(
+        ctx,
+        "isset",
+        vec![read_value.value],
+        PhpType::Int,
+        arg.span,
+        None,
+    );
+    let is_set = ctx.truthy_consuming(is_set, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, is_set, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, arg.span)
+}
+
+/// Lowers `empty(S::$s)` for a DECLARED (typed) STATIC property slot: an uninitialized slot is
+/// empty, and saying so must not go through the read whose backend guard is fatal.
+fn lower_initialized_static_property_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    construct: &str,
+    arg: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let uninitialized_block = ctx
+        .builder
+        .create_named_block("empty.static_property.uninitialized", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("empty.static_property.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("empty.static_property.merge", Vec::new());
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    let data = ctx.intern_string(&name);
+    let initialized = ctx.emit_value(
+        Op::StaticPropInitialized,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::StaticPropInitialized.default_effects(),
+        Some(arg.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: read_block,
+        then_args: Vec::new(),
+        else_target: uninitialized_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(uninitialized_block);
+    let true_value = emit_bool_literal(ctx, true, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, true_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_static_property_get(ctx, receiver, property, arg);
+    let construct_name = ctx.intern_function_name(construct);
+    let empty_value = ctx.emit_value(
+        Op::LanguageConstructCall,
+        vec![read_value.value],
+        Some(Immediate::Data(construct_name)),
+        PhpType::Bool,
+        effects_lookup::language_construct_effects(construct),
+        Some(arg.span),
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, arg.span)
+}
+
 /// Chooses how to unset an undeclared name on an `#[AllowDynamicProperties]` class.
 ///
 /// PHP consults `__unset()` for such a name only when the dynamic property is ABSENT at

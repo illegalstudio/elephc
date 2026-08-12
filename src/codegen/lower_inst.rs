@@ -326,6 +326,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::StaticPropInitialized => {
+            static_properties::lower_static_property_initialized(ctx, &inst)
+        }
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
         }

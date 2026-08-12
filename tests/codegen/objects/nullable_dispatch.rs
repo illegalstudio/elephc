@@ -250,12 +250,16 @@ echo $o->getInner()->get(noisy());
     );
 }
 
-/// Tests that accessing a property on a null `?Holder` receiver issues a
-/// warning and returns null (which coalesces to the fallback). Verifies
-/// the error-control @ operator does NOT suppress this specific warning
-/// when used on the property access itself.
+/// Reading a property on a null `?Holder` receiver under `??` yields the fallback and emits
+/// NOTHING. `??` suppresses the "Attempt to read property on null" warning — `php -n` prints
+/// `fallback` on stdout and leaves stderr empty for this exact program.
+///
+/// This test used to assert the warning WAS emitted, which is what elephc did and what PHP does
+/// not. It was written from the implementation rather than from the language, so the fix that
+/// made the two agree turned it red. The warning-on-a-plain-read case is the test below, which
+/// is where that assertion belongs.
 #[test]
-fn test_nullable_object_property_access_on_null_receiver_warns_and_returns_null() {
+fn test_nullable_object_property_access_on_null_receiver_coalesces_without_warning() {
     let out = compile_and_run_capture(
         r#"<?php
 class Holder {
@@ -269,6 +273,26 @@ read(null);
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
+    assert_eq!(out.stderr, "", "`??` must suppress the property-on-null warning");
+}
+
+/// The companion, and the one that keeps the warning honest: a PLAIN read of a property on a
+/// null receiver — no `??` anywhere — warns and yields null, exactly as `php -n` does.
+#[test]
+fn test_nullable_object_property_access_on_null_receiver_warns_without_coalesce() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Holder {
+    public string $msg = "unused";
+}
+function read(?Holder $h): void {
+    echo "[", $h->msg, "]";
+}
+read(null);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[]");
     assert!(
         out.stderr.contains("Warning: Attempt to read property \"msg\" on null"),
         "{}",
