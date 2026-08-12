@@ -246,10 +246,33 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             // paths that do not return it — the same deliberate leak-over-crash trade-off
             // the `may_alias` suppression already makes for array/hash arguments. A
             // follow-up issue tracks runtime alias disambiguation.
+            // Whether the runtime can settle the question itself: two boxed payloads compare
+            // as single pointers, so `ReleaseUnlessAliases` can decide per call. Where that
+            // holds, the leak-versus-double-free trade-off below does not have to be made at
+            // COMPILE time at all, which is what lets the fresh-box exclusion be lifted for a
+            // MAY summary — see the third disjunct.
+            let conditionally_releasable = result.is_some_and(|result| {
+                let arg_repr = ctx.builder.value_php_type(*value).codegen_repr();
+                let result_repr = ctx.builder.value_php_type(result).codegen_repr();
+                matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                    && matches!(result_repr, PhpType::Mixed | PhpType::Union(_))
+            });
             let result_reuses_arg = result.is_some_and(|result| {
                 (return_alias.may_alias_parameter(parameter_index)
                     && ctx.call_result_may_alias_arg(*value, result))
                     || (return_alias.proven_aliases_parameter(parameter_index)
+                        && ctx.arg_and_result_types_can_alias(*value, result))
+                    // A MAY summary whose argument is a fresh checked-arithmetic box.
+                    // `call_result_may_alias_arg` excludes that shape on purpose: with no proof
+                    // the callee hands it back, an unconditional SKIP leaks it once per call
+                    // (issue #486). But the choice it was avoiding is only forced when the
+                    // release has to be decided statically. `fib($n - 1)` is exactly this: the
+                    // summary is `Unknown` because the body calls itself, the argument is a
+                    // fresh box, and the base case `return $n;` hands it straight back — so the
+                    // caller released the argument AND the result, the same cell twice, and
+                    // `fib()` answered its own predecessor.
+                    || (return_alias.may_alias_parameter(parameter_index)
+                        && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
             if !callee_owns && !independently_boxed && result_reuses_arg {
