@@ -132,7 +132,11 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     else {
         return None;
     };
-    let current = lower_expr(ctx, current);
+    // `??=` reads its target the way `??` does — the whole point of the operator is that the
+    // target is allowed to be absent — so this must go through the suppressing read rather than
+    // a plain one. `$a[$k] ??= 5` on an absent key warned `Undefined array key`, which reference
+    // PHP does not, and `$o->p ??= 5` on an uninitialized typed property would fatal.
+    let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![current.value],
