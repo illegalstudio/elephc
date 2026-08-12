@@ -38,7 +38,7 @@ echo json_encode("a" . chr(0x0E) . "b") . "\n";
 echo json_encode("a" . chr(0x1F) . "b");
 "#,
     );
-    let expected = "\"a\\u0000b\"\n\"a\\u0001b\"\n\"a\\bb\"\n\"a\\u000Bb\"\n\"a\\fb\"\n\"a\\u000Eb\"\n\"a\\u001Fb\"";
+    let expected = "\"a\\u0000b\"\n\"a\\u0001b\"\n\"a\\bb\"\n\"a\\u000bb\"\n\"a\\fb\"\n\"a\\u000eb\"\n\"a\\u001fb\"";
     assert_eq!(out, expected);
 }
 
@@ -61,7 +61,7 @@ fn test_json_encode_multiple_control_bytes() {
     let out = compile_and_run(
         r#"<?php echo json_encode(chr(0x00) . chr(0x08) . chr(0x09) . chr(0x0A) . chr(0x0B));"#,
     );
-    assert_eq!(out, "\"\\u0000\\b\\t\\n\\u000B\"");
+    assert_eq!(out, "\"\\u0000\\b\\t\\n\\u000b\"");
 }
 
 /// Verifies control-byte escaping works for array element strings.

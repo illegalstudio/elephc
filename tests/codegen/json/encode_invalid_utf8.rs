@@ -72,7 +72,7 @@ echo $encoded . "/" . json_last_error();
 }
 
 /// Tests that JSON_INVALID_UTF8_SUBSTITUTE replaces the lone continuation byte
-/// with the Unicode replacement character U+FFFD (emitted as \\uFFFD escape
+/// with the Unicode replacement character U+FFFD (emitted as \\ufffd escape
 /// because JSON_UNESCAPED_UNICODE is clear).
 #[test]
 fn test_json_encode_invalid_utf8_substitute_emits_replacement() {
@@ -84,7 +84,7 @@ $encoded = json_encode("a" . chr(0x80) . "b", JSON_INVALID_UTF8_SUBSTITUTE);
 echo $encoded . "/" . json_last_error();
 "#,
     );
-    assert_eq!(out, "\"a\\uFFFDb\"/0");
+    assert_eq!(out, "\"a\\ufffdb\"/0");
 }
 
 /// Tests that a truncated 2-byte UTF-8 sequence (valid lead 0xC3 with no
@@ -110,7 +110,7 @@ $encoded = json_encode("a" . chr(0xC3), JSON_INVALID_UTF8_SUBSTITUTE);
 echo $encoded;
 "#,
     );
-    assert_eq!(out, "\"a\\uFFFD\"");
+    assert_eq!(out, "\"a\\ufffd\"");
 }
 
 /// Tests that an out-of-range lead byte (0xFF, above 0xF5 RFC 3629 limit)
@@ -136,7 +136,7 @@ $encoded = json_encode("x" . chr(0xFF) . "y", JSON_INVALID_UTF8_SUBSTITUTE);
 echo $encoded;
 "#,
     );
-    assert_eq!(out, "\"x\\uFFFDy\"");
+    assert_eq!(out, "\"x\\ufffdy\"");
 }
 
 /// Tests that a valid 2-byte lead (0xC3) followed by a non-continuation byte
@@ -208,7 +208,7 @@ echo json_encode(
 );
 "#,
     );
-    assert_eq!(out, "[\"ok\",\"bad\\uFFFDbyte\",\"fine\"]");
+    assert_eq!(out, "[\"ok\",\"bad\\ufffdbyte\",\"fine\"]");
 }
 
 /// Tests that JSON_INVALID_UTF8_IGNORE drops malformed bytes inside array
@@ -239,7 +239,7 @@ fn test_json_encode_clean_input_unaffected_by_substitute_flag() {
 }
 
 /// Tests that JSON_INVALID_UTF8_SUBSTITUTE is a no-op on well-formed multibyte
-/// UTF-8 (U+00E9 = 0xC3 0xA9) — the é is correctly escaped as \\u00E9.
+/// UTF-8 (U+00E9 = 0xC3 0xA9) — the é is correctly escaped as \\u00e9.
 #[test]
 fn test_json_encode_clean_multibyte_unaffected_by_substitute_flag() {
     // Well-formed multibyte UTF-8 (here e-acute = 0xC3 0xA9) passes
@@ -248,5 +248,5 @@ fn test_json_encode_clean_multibyte_unaffected_by_substitute_flag() {
     let out = compile_and_run(
         r#"<?php echo json_encode("caf" . chr(0xC3) . chr(0xA9), JSON_INVALID_UTF8_SUBSTITUTE);"#,
     );
-    assert_eq!(out, "\"caf\\u00E9\"");
+    assert_eq!(out, "\"caf\\u00e9\"");
 }

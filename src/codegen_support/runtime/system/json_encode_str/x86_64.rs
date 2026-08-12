@@ -495,7 +495,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // mask to four bits
     emitter.instruction("cmp rax, 10");                                         // is the nibble in 0..9?
     emitter.instruction("jl __rt_json_str_emit_u16_n3_dec_x");                  // decimal-digit branch
-    emitter.instruction("add rax, 7");                                          // shift A..F up to ASCII range
+    emitter.instruction("add rax, 39");                                         // shift A..F up to ASCII range
     emitter.label("__rt_json_str_emit_u16_n3_dec_x");
     emitter.instruction("add rax, 48");                                         // convert nibble to ASCII digit
     emitter.instruction("mov BYTE PTR [r11 + 2], al");                          // emit the digit
@@ -505,7 +505,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n2_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // update the JSON string encoder cursor or counter
     emitter.label("__rt_json_str_emit_u16_n2_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 3], al");                          // load or prepare JSON string encoder state
@@ -515,7 +515,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n1_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // update the JSON string encoder cursor or counter
     emitter.label("__rt_json_str_emit_u16_n1_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 4], al");                          // load or prepare JSON string encoder state
@@ -524,7 +524,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n0_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // update the JSON string encoder cursor or counter
     emitter.label("__rt_json_str_emit_u16_n0_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 5], al");                          // load or prepare JSON string encoder state
