@@ -1098,6 +1098,14 @@ statics, and static class properties all reset between requests). Run it with
 - [ ] WASI support for I/O
 - [ ] NPM package generation
 
+## v0.30.x — PHP curl extension
+
+- [ ] `ext/curl` function, class, and constant surface on AOT and magician
+- [ ] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
+- [ ] Easy, multi, and share interfaces including PHP 8.5 additions
+- [ ] `CURLFile` / `CURLStringFile` uploads
+- [ ] libcurl callbacks via the runtime callable invoker
+
 
 ## Deferred ideas
 
