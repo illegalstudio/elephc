@@ -671,6 +671,7 @@ dependencies = [
  "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
+ "elephc-curl",
  "elephc-image",
  "elephc-magician",
  "elephc-pdo",
@@ -724,6 +725,14 @@ dependencies = [
  "sha3",
  "subtle",
  "whirlpool",
+]
+
+[[package]]
+name = "elephc-curl"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

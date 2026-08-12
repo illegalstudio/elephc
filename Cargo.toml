@@ -17,13 +17,18 @@ categories = ["compilers", "command-line-utilities"]
 # (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
-# listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo), and
-# libelephc_web.a (--web prefork HTTP server), and libelephc_magician.a
-# (optional eval runtime) into target/<profile>/, where linker.rs locates them
-# for programs that use those features.
+# listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
+# libelephc_web.a (--web prefork HTTP server), libelephc_magician.a
+# (optional eval runtime), and libelephc_curl.a (ext/curl bridge, Task 3 of
+# the php-curl-family plan) into target/<profile>/, where linker.rs locates
+# them for programs that use those features. elephc-curl declares libcurl's
+# `extern "C"` symbols without linking them, so being a default member never
+# requires a system/managed libcurl for a plain `cargo build`/`cargo test`;
+# see crates/elephc-curl/build.rs for how its own gated tests opt into a real
+# link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician", "crates/elephc-curl"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician", "crates/elephc-curl"]
 resolver = "2"
 
 [[bin]]
@@ -83,6 +88,7 @@ elephc-tz = { path = "crates/elephc-tz" }
 elephc-image = { path = "crates/elephc-image" }
 elephc-web = { path = "crates/elephc-web" }
 elephc-magician = { path = "crates/elephc-magician" }
+elephc-curl = { path = "crates/elephc-curl" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
