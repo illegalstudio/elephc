@@ -262,9 +262,13 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("mul x9, x16, x9");                                     // compute the property slot byte offset within the instance
     emitter.instruction("add x9, x9, #8");                                      // skip the leading class_id field at offset 0
     emitter.instruction("add x9, x0, x9");                                      // resolve the absolute address of the property slot
-    emitter.instruction("ldr x18, [x9]");                                       // load the property low payload word
+    // x14, not x18: Apple AArch64 reserves x18 for the OS, which is free to overwrite it at
+    // any point — the load and the store below are two instructions apart, and that is enough.
+    // x14 carries nothing across this whole region, and x15 already served the same purpose
+    // for the high word to avoid clobbering the caller's x19.
+    emitter.instruction("ldr x14, [x9]");                                       // load the property low payload word
     emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
-    emitter.instruction("str x18, [sp, #64]");                                  // save the property low payload across the encoder dispatch
+    emitter.instruction("str x14, [sp, #64]");                                  // save the property low payload across the encoder dispatch
     emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
     // Dispatch on the property type tag. Each branch leaves the encoded

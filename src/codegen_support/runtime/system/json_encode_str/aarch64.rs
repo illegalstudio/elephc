@@ -393,9 +393,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x0F");                                 // b1 & 0x0F → high 4 bits
     emitter.instruction("lsl w16, w16, #12");                                   // shift into bits 12..15
-    emitter.instruction("and w18, w15, #0x3F");                                 // b2 & 0x3F → middle 6 bits
-    emitter.instruction("lsl w18, w18, #6");                                    // shift into bits 6..11
-    emitter.instruction("orr w16, w16, w18");                                   // merge middle bits
+    emitter.instruction("and w9, w15, #0x3F");                                  // b2 & 0x3F (w9: x18 is reserved on Apple)
+    emitter.instruction("lsl w9, w9, #6");                                      // shift into bits 6..11
+    emitter.instruction("orr w16, w16, w9");                                    // merge middle bits
     emitter.instruction("and w17, w17, #0x3F");                                 // b3 & 0x3F → low 6 bits
     emitter.instruction("orr w16, w16, w17");                                   // assemble the codepoint in w16
     emitter.instruction("mov x12, #3");                                         // 3 source bytes consumed
@@ -422,9 +422,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("add x10, x13, #3");                                    // index of byte 4
-    emitter.instruction("ldrb w18, [x1, x10]");                                 // load b4
+    emitter.instruction("ldrb w9, [x1, x10]");                                  // load b4 (w9: x18 is reserved on Apple)
     // Validate b4 is a continuation byte.
-    emitter.instruction("sub w10, w18, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("sub w10, w9, #0x80");                                  // bias the byte so valid continuations land in 0..0x3F
     emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x07");                                 // b1 & 0x07 → top 3 bits
@@ -435,8 +435,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w19, w17, #0x3F");                                 // b3 & 0x3F → 6 bits
     emitter.instruction("lsl w19, w19, #6");                                    // shift into bits 6..11
     emitter.instruction("orr w16, w16, w19");                                   // merge bits 6..11
-    emitter.instruction("and w18, w18, #0x3F");                                 // b4 & 0x3F → low 6 bits
-    emitter.instruction("orr w16, w16, w18");                                   // full 21-bit codepoint
+    emitter.instruction("and w9, w9, #0x3F");                                   // b4 & 0x3F → low 6 bits
+    emitter.instruction("orr w16, w16, w9");                                    // full 21-bit codepoint
     // Compute the surrogate pair: cp -= 0x10000; high = 0xD800 + (cp >> 10);
     // low = 0xDC00 + (cp & 0x3FF).
     emitter.instruction("mov w20, #0x10000");                                   // 0x10000 base offset for surrogate pair maths

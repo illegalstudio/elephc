@@ -206,8 +206,11 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     // -- copy integer digits with thousands separator --
     emitter.instruction("mov x16, #0");                                         // source index into integer digits
     emitter.instruction("mov x17, #3");                                         // group size for thousands
-    emitter.instruction("udiv x18, x13, x17");                                  // number of complete 3-digit groups
-    emitter.instruction("msub x14, x18, x17, x13");                             // first group size = digit_count % 3
+    // The quotient lands straight in x14 and `msub` reads it back as a source, so this needs
+    // no scratch register at all — x18 is reserved for the OS on Apple AArch64, and every
+    // register free here is already carrying loop state.
+    emitter.instruction("udiv x14, x13, x17");                                  // number of complete 3-digit groups
+    emitter.instruction("msub x14, x14, x17, x13");                             // first group size = digit_count % 3
     emitter.instruction("cbnz x14, __rt_nf_copy_int");                          // if first group non-empty, start copying
     emitter.instruction("mov x14, #3");                                         // first group is full 3 digits
 
