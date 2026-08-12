@@ -413,6 +413,46 @@ if (isset($_SESSION)) {
     assert_eq!(out, "unset");
 }
 
+/// A CLI build must offer the superglobals PHP's CLI SAPI has already created, as
+/// ARRAYS rather than `null`. Measured under `php -n`: `$_SERVER` holds entries and
+/// `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES` are empty arrays. elephc does not populate
+/// `$_SERVER`'s contents, but the TYPE is what every consumer depends on — `count()`
+/// raises `count(): Argument #1 ($value) must be of type Countable|array, null given`
+/// on the old `null`, and an index read yielded null for anything.
+#[test]
+fn cli_populated_superglobals_read_as_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+echo is_array($_SERVER) ? "y" : "n";
+echo is_array($_GET) ? "y" : "n";
+echo is_array($_POST) ? "y" : "n";
+echo is_array($_COOKIE) ? "y" : "n";
+echo is_array($_FILES) ? "y" : "n";
+echo ":", count($_GET);
+$_SERVER["k"] = "v";
+echo ":", $_SERVER["k"], count($_SERVER);
+"#,
+    );
+    assert_eq!(out, "yyyyy:0:v1");
+}
+
+/// The other half of the same measurement, and the reason the seeded set is a
+/// SUBSET: `php -n` leaves `$_REQUEST`, `$_ENV` and `$_SESSION` undefined — the
+/// first two depend on `variables_order`/`request_order`, the third on
+/// `session_start()`. Seeding all eight superglobals would have made every one of
+/// these `isset()` answer true, which PHP does not.
+#[test]
+fn superglobals_the_cli_does_not_create_stay_unset() {
+    let out = compile_and_run(
+        r#"<?php
+echo isset($_REQUEST) ? "y" : "n";
+echo isset($_ENV) ? "y" : "n";
+echo isset($_SESSION) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "nnn");
+}
+
 /// BUG-7 / A1 regression: `PHP_SESSION_DISABLED`/`PHP_SESSION_NONE`/`PHP_SESSION_ACTIVE`
 /// are predefined `ext/session` integer constants (`src/types/session_constants.rs`,
 /// `SESSION_INT_CONSTANTS`), registered the same way as `JSON_INT_CONSTANTS` at the
