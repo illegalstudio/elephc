@@ -54,12 +54,16 @@ echo $without->profile?->name ?? "none";
     assert_eq!(out, "Ada|none");
 }
 
-/// Verifies nullsafe (?->) does NOT suppress the "must not be accessed before
-/// initialization" error for typed properties that are genuinely uninitialized,
-/// as opposed to explicitly set to null. Fixture: User with uninitialized
-/// typed property ?Profile $profile (no default, not set in __construct).
-/// After issue #339 the guard throws a catchable Error; without a try/catch
-/// the no-handler fast path still reports the specific fatal diagnostic.
+/// Verifies nullsafe (`?->`) does NOT suppress the "must not be accessed before
+/// initialization" error for a typed property that is genuinely uninitialized, as opposed to
+/// explicitly set to null. `?->` guards a null RECEIVER; it says nothing about the property it
+/// then reads, and reference PHP fatals on this exact program.
+///
+/// The fixture deliberately carries no `??`. It used to, and that made the test assert the
+/// opposite of reference PHP: `echo $without?->profile?->name ?? "none";` prints `none` and
+/// exits 0 under `php -n`, because `??` DOES suppress it. The suppressing case is the test
+/// below; keeping both is what separates the two constructs, which the single `??` fixture
+/// could not do.
 #[test]
 fn test_nullsafe_property_access_does_not_suppress_uninitialized_typed_property() {
     let err = compile_and_run_expect_failure(
@@ -71,13 +75,38 @@ class User {
     public ?Profile $profile;
 }
 $without = new User();
-echo $without?->profile?->name ?? "none";
+echo $without?->profile?->name;
 "#,
     );
     assert!(
         err.contains("Fatal error: Typed property User::$profile must not be accessed before initialization"),
         "{err}"
     );
+}
+
+/// The companion: `??` DOES suppress it, whether the uninitialized property sits at the root
+/// of a nullsafe chain or is read on its own.
+#[test]
+fn test_coalesce_suppresses_an_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Profile {
+    public string $name = "Ada";
+}
+class User {
+    public ?Profile $profile;
+}
+$without = new User();
+echo $without?->profile?->name ?? "none";
+echo "|";
+echo $without->profile ?? "absent";
+echo "|";
+$with = new User();
+$with->profile = new Profile();
+echo $with?->profile?->name ?? "none";
+"#,
+    );
+    assert_eq!(out, "none|absent|Ada");
 }
 
 /// Verifies nullsafe method call (?->) does not evaluate call arguments when

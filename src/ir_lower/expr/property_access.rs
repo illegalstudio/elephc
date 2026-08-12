@@ -280,6 +280,118 @@ pub(super) fn class_declares_hook_accessor(
         .is_some_and(|info| info.methods.contains_key(&key))
 }
 
+/// Returns true when reading `property` on `object` can hit PHP's
+/// "must not be accessed before initialization" fatal.
+///
+/// A property is uninitialized only while it is DECLARED WITH A TYPE and has no default:
+/// `public ?P $p;` and `public string $s;` both start uninitialized, and PHP fatals on a plain
+/// read of either. A default makes the slot live before the constructor body runs, and an
+/// untyped property is plain null, so neither can ever be in that state — which is what keeps
+/// this gate off the overwhelmingly common shapes.
+///
+/// The one case it misses is `unset($this->s)`, which returns an already-initialized typed
+/// property to the uninitialized state in PHP.
+pub(super) fn property_can_be_uninitialized(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object);
+    // `Op::PropInitialized` needs a concrete object pointer; the backend refuses a boxed
+    // receiver. A `?C`-typed value represents as `Mixed`, so it reaches here as a candidate
+    // and must be turned away — the read stays on the ordinary path, which is what it did
+    // before.
+    if !matches!(object_ty.codegen_repr(), PhpType::Object(_)) {
+        return false;
+    }
+    let Some((class_name, _nullable)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    let Some(info) = ctx.classes.get(class_name) else {
+        return false;
+    };
+    let Some(index) = info.properties.iter().position(|(name, _)| name == property) else {
+        return false;
+    };
+    // The DECLARED type, not its codegen representation: `?string` represents as `Mixed` and
+    // is still a declared type that starts uninitialized, while an untyped `public $x;` is
+    // plain null from the start and must stay on the ordinary path.
+    if matches!(info.properties[index].1, PhpType::Mixed) {
+        return false;
+    }
+    matches!(info.defaults.get(index), Some(None))
+}
+
+/// Reads `property` the way `isset()` does: yields null instead of raising when the slot is
+/// still uninitialized.
+///
+/// `??` must not fatal on `$o->p` — PHP answers the default — but the ordinary read does. The
+/// initialized-aware read already exists for `isset()`, which produces a BOOLEAN; this is its
+/// value-producing twin, and it is entered only for the properties
+/// `property_can_be_uninitialized` admits, so every other read keeps its exact slot type.
+pub(super) fn lower_initialized_property_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let uninitialized_block = ctx
+        .builder
+        .create_named_block("coalesce.property.uninitialized", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("coalesce.property.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("coalesce.property.merge", Vec::new());
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: read_block,
+        then_args: Vec::new(),
+        else_target: uninitialized_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(uninitialized_block);
+    let null_value = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, expr);
+    // Both arms store into one Mixed temporary, so a slot that is not already boxed has to be.
+    let read_value = if matches!(
+        ctx.builder.value_php_type(read_value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        read_value
+    } else {
+        ctx.emit_value(
+            Op::MixedBox,
+            vec![read_value.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(expr.span),
+        )
+    };
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, read_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
 /// Returns the class name and nullability if `php_type` is a single object type (optionally
 /// nullable). Heterogeneous unions and non-object types return `None`.
 pub(super) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
