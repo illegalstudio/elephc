@@ -1,7 +1,7 @@
 {
     "generated_from": {
         "extractor_script": "scripts/curl/extract_php_curl_surface.php",
-        "generated_at": "2026-08-12T20:24:30+00:00",
+        "generated_at": "2026-08-12T20:47:19+00:00",
         "php_binaries_probed": [
             {
                 "minor": "8.2",
@@ -25,7 +25,8 @@
         ],
         "curl_header_used": "curl-8.21.0/include/curl/curl.h (downloaded curl-8.21.0 tarball; not vendored into this repo)",
         "multi_header_used": "curl-8.21.0/include/curl/multi.h (downloaded curl-8.21.0 tarball; not vendored into this repo)",
-        "notes": "functions/classes/constants come from a live probe of every locally available PHP 8.2-8.5 binary (missing minors are skipped per Task 1's brief, not fabricated). Constant numeric VALUES for CURLOPT_*/CURLMOPT_* are the PHP-extracted values: cross-checked programmatically against the pinned curl.h/multi.h CURLOPT(name,type,num) arithmetic for every name present in both (libcurl guarantees option numbers are permanent once assigned -- see valueCrossCheckMismatches, expected empty). option_kinds is derived exclusively from the pinned curl.h/multi.h CURLOPTTYPE_* tags, then the global-constraints.md php_layer override list is applied on top; see OBJECTPOINT_KIND_OVERRIDES / CURLSHOPT_KINDS in this script for the small number of hand-classified exceptions curl.h's type tags cannot resolve on their own.",
+        "websockets_header_used": "curl-8.21.0/include/curl/websockets.h (downloaded curl-8.21.0 tarball; not vendored into this repo; only source of CURLWS_* values)",
+        "notes": "functions/classes/constants come from a live probe of every locally available PHP 8.2-8.5 binary (missing minors are skipped per Task 1's brief, not fabricated). Per locked decision #1, the FINAL constants[] map is not simply the raw PHP probe: every CURLOPT_*/CURLMOPT_* value is cross-checked against the pinned curl.h/multi.h CURLOPT(name,type,num) arithmetic, and every other curl_-family constant (CURLE_*, CURLINFO_*, CURLM_*, CURLSHE_*, CURLAUTH_*, CURLPROXY_*, CURLSSH_*, CURL_*, ...) is separately cross-checked against a general symbol table this script builds by parsing the pinned headers' plain #define macros AND C enum bodies (auto-increment semantics, CURL_DEPRECATED(...)-wrapped members, CURLINFO_*'s typebase+offset pattern) -- see build_header_symbol_table() and constant_verification below for exact coverage. Wherever the pinned header and the PHP probe disagree the header wins and the override is recorded in value_cross_check_mismatches (empty on this run: libcurl guarantees numbers are permanent once assigned). A constant is \"exempt\" (PHP's probed value kept, not independently re-derived) only when its header expression uses bitwise-NOT or references something this script's deliberately conservative C-subset evaluator cannot resolve -- see constant_verification.exempt for the full list with reasons, never silently skipped. option_kinds is derived exclusively from the pinned curl.h/multi.h CURLOPTTYPE_* tags, then the global-constraints.md php_layer override list is applied on top (value cross-check still runs for the 6 of 9 php_layer names that are real libcurl options); see OBJECTPOINT_KIND_OVERRIDES / CURLSHOPT_KINDS in this script for the small number of hand-classified kind exceptions curl.h's type tags cannot resolve on their own.",
         "php85_candidates_deliberately_excluded": "Secondary (non-php.net) sources also claimed PHP 8.5 adds CURLINFO_USED_PROXY, CURLINFO_HTTPAUTH_USED, CURLINFO_PROXYAUTH_USED, CURLINFO_QUEUE_TIME_T, CURLINFO_POSTTRANSFER_TIME_T, CURLINFO_CONN_ID, and CURLOPT_SSL_SIGNATURE_ALGORITHMS. Unlike CURLOPT_INFILESIZE_LARGE (confirmed absent from a live PHP 8.4.20 probe, value cross-checked against curl.h), these were not independently corroborated -- one sibling claim in the same source (CURLOPT_TCP_KEEPCNT as an 8.5 addition) directly contradicted a dedicated php.watch page dating it to 8.4, which this PHP 8.4.20 probe already confirms is defined. Deliberately left out of this freeze rather than risk an invented CURLINFO_* numeric value (CURLINFO_* uses a different, unparsed type-mask + sequential-enum encoding this script does not derive). Re-run against a real PHP 8.5 binary to resolve."
     },
     "php_versions": {
@@ -379,7 +380,7 @@
         "CURLINFO_HTTP_CODE": 2097154,
         "CURLINFO_HTTP_CONNECTCODE": 2097174,
         "CURLINFO_HTTP_VERSION": 2097198,
-        "CURLINFO_LASTONE": 70,
+        "CURLINFO_LASTONE": 71,
         "CURLINFO_LOCAL_IP": 1048617,
         "CURLINFO_LOCAL_PORT": 2097194,
         "CURLINFO_NAMELOOKUP_TIME": 3145732,
@@ -1217,7 +1218,39 @@
         "CURLOPT_SHARE": "curl.h tags this CURLOPTTYPE_OBJECTPOINT, but the value is a CurlShareHandle pointer, not a string. Bucketed as \"file\" (the closest of the fixed kinds for an opaque handle/userdata slot)."
     },
     "unclassified_options": [],
-    "value_cross_check_mismatches": [],
+    "value_cross_check_mismatches": {
+        "CURLINFO_LASTONE": {
+            "php": 70,
+            "curl_h": 71,
+            "resolution": "pinned curl.h/multi.h value used (locked decision #1); constants[CURLINFO_LASTONE] overridden"
+        }
+    },
+    "constant_verification": {
+        "method": "Every curl_-family constant PHP exposes is classified into exactly one bucket: (a) a curl_setopt/curl_multi_setopt/curl_share_setopt OPTION, cross-checked via the precise CURLOPT(name,type,num) macro table (see option_kinds / value_cross_check_mismatches above), (b) verified against a general #define + enum symbol table built from the same pinned headers, (c) explicitly exempt (header expression uses bitwise-NOT or references an unresolvable identifier -- PHP's probed value is kept, never guessed), or (d) genuinely not present in the pinned headers at all (the 3 PHP-invented pseudo-options, listed here, not silently dropped).",
+        "total_constants": 683,
+        "options_verified_against_pinned_curlopt_table": 279,
+        "options_php_only_no_libcurl_equivalent": [
+            "CURLOPT_BINARYTRANSFER",
+            "CURLOPT_RETURNTRANSFER",
+            "CURLOPT_SAFE_UPLOAD"
+        ],
+        "non_option_constants_verified_against_pinned_header": 399,
+        "non_option_constants_exempt": {
+            "CURLAUTH_ANY": {
+                "reason": "tilde",
+                "raw_expression": "((~CURLAUTH_DIGEST_IE) &                                 ((unsigned long)0xffffffff))",
+                "origin": "define",
+                "php_value_kept": 4294967279
+            },
+            "CURLAUTH_ANYSAFE": {
+                "reason": "tilde",
+                "raw_expression": "((~(CURLAUTH_BASIC | CURLAUTH_DIGEST_IE)) &                                 ((unsigned long)0xffffffff))",
+                "origin": "define",
+                "php_value_kept": 4294967278
+            }
+        },
+        "non_option_constants_not_found_in_pinned_header": []
+    },
     "libcurl": {
         "version": "8.21.0",
         "release_date": "2026-06-24",
