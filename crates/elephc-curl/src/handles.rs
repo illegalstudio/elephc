@@ -61,15 +61,34 @@ pub(crate) struct EasyEntry {
     pub(crate) last_error: Vec<u8>,
 }
 
-// SAFETY: `EasyEntry` is only ever reached through `handles()`'s `Mutex`,
-// which serializes every access. `*mut CURL` is not `Send` by default only
-// because raw pointers make no promise about *what* they point to; a libcurl
-// easy handle itself has no thread affinity as long as it is never driven by
-// two threads at once (libcurl's own documented contract), and the table
-// mutex is exactly what prevents that. elephc-compiled programs are
-// effectively single-threaded (mirroring the identical rationale in
-// `elephc-pdo`'s connection/statement tables), so this is a simplicity
-// trade-off, not contention management.
+// SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
+// no promise about *what* they point to. What the `handles()` `Mutex` (and
+// this impl) actually guarantee is narrower than "no two threads ever drive
+// the same handle at once": the mutex only serializes access to the TABLE
+// itself (insert/remove/lookup), not to an individual `EasyEntry`'s libcurl
+// calls for the full duration of one operation. `crate::abi::
+// elephc_curl_easy_perform` and `elephc_curl_easy_free` both deliberately
+// DROP the table lock before calling into libcurl (`curl_easy_perform`/
+// `curl_easy_cleanup`) — the write callback re-locks the table per chunk from
+// the same thread during `perform`, which would deadlock a non-reentrant
+// `Mutex` if the lock were held for the whole call. That means a `free(id)`
+// running concurrently with an in-flight `perform(id)` on the SAME id from a
+// DIFFERENT OS thread can run `curl_easy_cleanup` on the same `*mut CURL` a
+// blocked `curl_easy_perform` is still using — a real use-after-free at the
+// libcurl level that this mutex does NOT prevent.
+//
+// This is sound today only because the caller contract this crate assumes is
+// upheld: elephc-compiled PHP programs are effectively single-threaded, so no
+// two `elephc_curl_*` calls for the SAME id are ever in flight concurrently
+// (mirrors the identical rationale in `elephc-pdo`'s connection/statement
+// tables). Any future concurrent caller (e.g. a multi-threaded driver, or
+// Task 9's multi interface if it ever fans work across OS threads) MUST
+// itself guarantee no two threads call `elephc_curl_easy_perform`/`_free`/
+// `_setopt_*`/`_take_body` for the SAME id concurrently — this table cannot
+// enforce that without a per-handle lock, which is a deliberate redesign left
+// out of scope here. See `crate::abi`'s module doc and the
+// `elephc_curl_easy_perform`/`elephc_curl_easy_free` doc comments for the
+// identical contract stated at the ABI boundary.
 unsafe impl Send for EasyEntry {}
 
 impl EasyEntry {

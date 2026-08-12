@@ -24,6 +24,20 @@
 //!   report the required/actual length through their `*_len` out-parameter,
 //!   even on a `0` (too-small-buffer) return — mirroring
 //!   `elephc-crypto`'s cipher ABI (`crates/elephc-crypto/src/cipher/abi.rs`).
+//! - **Caller contract — no concurrent calls on the same id.** The table
+//!   mutex (`crate::handles::handles`) only serializes access to the table
+//!   itself; `elephc_curl_easy_perform` and `elephc_curl_easy_free` both
+//!   deliberately drop that lock before calling into libcurl (see their own
+//!   doc comments below for why), so it does NOT stop a `free(id)` on one
+//!   thread from running `curl_easy_cleanup` on the same `*mut CURL` while
+//!   another thread is still blocked inside `perform(id)` — a real
+//!   use-after-free at the libcurl level. This is sound only because
+//!   elephc-compiled PHP programs are effectively single-threaded today, so
+//!   no two `elephc_curl_*` calls for the same id are ever concurrent. Any
+//!   future concurrent caller (a multi-threaded driver, or Task 9's multi
+//!   interface if it ever fans work across OS threads) MUST itself guarantee
+//!   that no two threads call into this ABI for the same id at once — see
+//!   `crate::handles::EasyEntry`'s `Send` impl for the full reasoning.
 
 use std::ffi::{c_char, c_int, c_void, CString};
 
@@ -138,6 +152,15 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
 /// capture independent of whether a previous body was taken. Returns `0` for
 /// an unknown id or any non-`CURLE_OK` result; call
 /// `elephc_curl_easy_errno`/`elephc_curl_easy_error` for the specific reason.
+///
+/// Deliberately drops the table lock before calling `curl_easy_perform`
+/// (below) — the write callback needs to re-lock the table per chunk from
+/// this same thread, which would deadlock otherwise. Consequence: while a
+/// `perform(id)` is blocked inside libcurl, the table lock does NOT protect
+/// `curl`'s underlying `*mut CURL` from a concurrent `elephc_curl_easy_free`
+/// on the same `id` from another thread (see `crate::handles::EasyEntry`'s
+/// `Send` impl). Sound only under this crate's caller contract: no two
+/// `elephc_curl_*` calls for the same id run concurrently.
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
     handles::ffi_guard(0, || {
@@ -155,7 +178,8 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
         // The table lock is NOT held across the blocking transfer: the write
         // callback (crate::php_layer::write_callback) re-locks the table
         // per chunk from the same thread, which would deadlock on a
-        // non-reentrant `Mutex` otherwise.
+        // non-reentrant `Mutex` otherwise. See this function's doc comment
+        // for the resulting caller contract (no concurrent calls on `id`).
         let code = unsafe { easy::perform(curl) };
         let mut guard = handles::lock_recover(handles::handles());
         let Some(entry) = guard.get_mut(&id) else {
@@ -242,6 +266,16 @@ pub unsafe extern "C" fn elephc_curl_easy_take_body(
 /// Removes handle `id` from the table and runs `curl_easy_cleanup` on it.
 /// A no-op for an unknown/already-freed id (ids are never reused, so a
 /// double-free is harmless here, unlike a raw libcurl double-cleanup).
+///
+/// Deliberately drops the table lock before calling `curl_easy_cleanup`
+/// (below), matching `elephc_curl_easy_perform`'s reason for the same
+/// pattern. Consequence: this removes `id` from the table (safe under the
+/// mutex — nothing else can look `id` up again after this returns), but if
+/// another thread is mid-`elephc_curl_easy_perform(id)` when this runs, that
+/// thread's already-copied `*mut CURL` is freed out from under it — a real
+/// use-after-free at the libcurl level. Sound only under this crate's caller
+/// contract: no two `elephc_curl_*` calls for the same id run concurrently
+/// (see `crate::handles::EasyEntry`'s `Send` impl for the full reasoning).
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_free(id: i64) {
     handles::ffi_guard((), || {
