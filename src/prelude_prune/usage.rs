@@ -62,6 +62,11 @@ pub(crate) struct Usage {
     pub(crate) methods: HashSet<String>,
     /// Every string literal in the subtree, normalized. The fallback root set.
     pub(crate) literals: HashSet<String>,
+    /// PHP variable names written exactly as they appear (`$_SERVER` → `_SERVER`),
+    /// case-sensitively, since PHP variables are. Only names the source SPELLS land
+    /// here: a `$$computed` access does not, which is what keeps a consumer honest
+    /// about being a pay-for-use gate rather than a completeness claim.
+    pub(crate) variables: HashSet<String>,
     /// A CALL whose target this walk cannot name (`$f()`, `call_user_func($x)`, a closure
     /// call). Its failure mode is LOUD — an undefined function at the call site — so the pruner
     /// answers it by widening the roots to the names the program does mention.
@@ -92,6 +97,7 @@ impl Usage {
         self.classes.extend(other.classes);
         self.methods.extend(other.methods);
         self.literals.extend(other.literals);
+        self.variables.extend(other.variables);
         self.dynamic_function_call |= other.dynamic_function_call;
         self.constructs_dynamic_class |= other.constructs_dynamic_class;
         self.uses_yield |= other.uses_yield;
@@ -270,6 +276,13 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
 pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     let mut usage = Usage::default();
     scan_stmt(stmt, &mut usage);
+    usage
+}
+
+/// Collects references from one expression and all nested AST children.
+pub(crate) fn collect_expr(expr: &Expr) -> Usage {
+    let mut usage = Usage::default();
+    scan_expr(expr, &mut usage);
     usage
 }
 
@@ -877,7 +890,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(value, usage);
             }
         }
-        ExprKind::Variable(_) => {}
+        ExprKind::Variable(name) => {
+            // A name repeats far more often than it first appears, and `collect` runs
+            // five times per compile, so check membership before paying for the clone.
+            if !usage.variables.contains(name.as_str()) {
+                usage.variables.insert(name.clone());
+            }
+        }
         ExprKind::StringLiteral(text) => {
             usage.literals.insert(php_symbol_key(text.trim_start_matches('\\')));
         }
