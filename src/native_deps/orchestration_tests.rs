@@ -8,6 +8,7 @@
 //! - Injected downloader, recipe, and toolchain fixtures keep tests deterministic and network-free.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -356,12 +357,44 @@ fn failed_recipe_leaves_no_resolvable_artifact_or_staging() {
     let target = Target::detect_host();
     let toolchain = fixture_toolchain();
     let downloader = CountingDownloader { calls: Cell::new(0) };
-    assert!(materialize_package("fixture", version, target, true, &cache, &downloader, &FailingRecipe, &toolchain).is_err());
+    assert!(materialize_package("fixture", version, target, true, &cache, &downloader, &FailingRecipe, &toolchain, &BTreeMap::new()).is_err());
     let key = ArtifactKey { package: "fixture", version: "1.0", recipe: 1, source_sha256: version.source.sha256, target: target.as_str(), abi: &toolchain.abi, toolchain_fingerprint: &toolchain.fingerprint };
     let final_path = cache.artifact_path(&key).unwrap();
     assert!(!final_path.exists());
     let parent = final_path.parent().unwrap();
     assert!(fs::read_dir(parent).unwrap().next().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies `materialize_package` forwards the caller-supplied dependency prefixes into the
+/// recipe's `RecipeRequest` unchanged, matching the contract `curl`'s recipe relies on to find its
+/// already-materialized `openssl`/`zlib` prefixes without ever probing the system.
+#[test]
+fn materialize_package_forwards_dependency_prefixes_to_the_recipe() {
+    struct AssertingRecipe { expected: PathBuf }
+    impl RecipeRunner for AssertingRecipe {
+        fn build(&self, request: &RecipeRequest<'_>) -> Result<(), NativeError> {
+            assert_eq!(request.dependency_prefixes.get("openssl"), Some(&self.expected));
+            assert_eq!(request.dependency_prefixes.len(), 1);
+            fs::create_dir_all(request.staging_prefix.join("lib")).unwrap();
+            fs::create_dir_all(request.staging_prefix.join("include")).unwrap();
+            fs::write(request.staging_prefix.join("lib/libfixture.a"), b"archive").unwrap();
+            fs::write(request.staging_prefix.join("include/fixture.h"), b"header").unwrap();
+            Ok(())
+        }
+    }
+
+    let (root, cache_path) = fixture("dependency-prefixes");
+    let cache = CacheLayout::from_values(&root, Some(cache_path.as_os_str()), None, None).unwrap();
+    let version = fixture_version(&cache);
+    let target = Target::detect_host();
+    let toolchain = fixture_toolchain();
+    let downloader = CountingDownloader { calls: Cell::new(0) };
+    let openssl_prefix = root.join("already-built-openssl");
+    let mut prefixes = BTreeMap::new();
+    prefixes.insert("openssl".to_string(), openssl_prefix.clone());
+    let recipe = AssertingRecipe { expected: openssl_prefix };
+    materialize_package("fixture", version, target, true, &cache, &downloader, &recipe, &toolchain, &prefixes).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -381,7 +414,7 @@ fn concurrent_materialization_builds_once_and_reuses_verified_winner() {
         let recipe = WritingRecipe { calls: calls.clone() };
         handles.push(std::thread::spawn(move || {
             let downloader = CountingDownloader { calls: Cell::new(0) };
-            materialize_package("fixture", version, target, true, &cache, &downloader, &recipe, &toolchain)
+            materialize_package("fixture", version, target, true, &cache, &downloader, &recipe, &toolchain, &BTreeMap::new())
         }));
     }
     let first = handles.remove(0).join().unwrap().unwrap();

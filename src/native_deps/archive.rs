@@ -50,6 +50,13 @@ pub fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<PathBuf
         if entry_count > MAX_ENTRIES {
             return Err(archive_error(archive_path, format!("archive exceeds {MAX_ENTRIES} entries")));
         }
+        // A PAX global extended header (typeflag 'g', synthetic name `pax_global_header`) carries
+        // only archive-wide metadata (e.g. `git archive`'s embedded commit comment) and is not a
+        // real path; some upstream releases (e.g. OpenSSL's) are built with `git archive` and
+        // include one before the real top-level directory entry.
+        if entry.header().entry_type() == tar::EntryType::XGlobalHeader {
+            continue;
+        }
         let original = entry.path().map_err(|error| archive_error(archive_path, format!("invalid tar path: {error}")))?.into_owned();
         let relative = stripped_path(&original, &mut root)?;
         if relative.as_os_str().is_empty() {
@@ -177,6 +184,37 @@ mod tests {
     /// Builds a normal non-executable tiny archive entry.
     fn write_tar(path: &Path, entry_path: &str, entry_type: tar::EntryType) {
         write_tar_mode(path, entry_path, entry_type, 0o644);
+    }
+
+    /// Verifies a leading `git archive`-style PAX global extended header (as shipped in
+    /// OpenSSL's real release tarball) is skipped rather than rejected as a non-directory root.
+    #[test]
+    fn skips_leading_pax_global_header_entry() {
+        let root = fixture("pax-global");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("a.tar.gz");
+        let file = fs::File::create(&archive).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let pax_body = b"52 comment=8cf17aaeb4599f8af87fefd810b5b5fee90fe69e\n";
+        let mut pax_header = tar::Header::new_ustar();
+        pax_header.set_entry_type(tar::EntryType::XGlobalHeader);
+        pax_header.set_size(pax_body.len() as u64);
+        pax_header.set_mode(0o666);
+        pax_header.set_cksum();
+        builder.append_data(&mut pax_header, "pax_global_header", &pax_body[..]).unwrap();
+        let mut file_header = tar::Header::new_gnu();
+        file_header.set_entry_type(tar::EntryType::Regular);
+        file_header.set_size(7);
+        file_header.set_mode(0o644);
+        file_header.set_cksum();
+        builder.append_data(&mut file_header, "root/file.txt", &b"fixture"[..]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let output = root.join("out");
+        extract_tar_gz(&archive, &output).unwrap();
+        assert_eq!(fs::read(output.join("file.txt")).unwrap(), b"fixture");
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// Verifies a normal single-root archive is stripped and extracted.
