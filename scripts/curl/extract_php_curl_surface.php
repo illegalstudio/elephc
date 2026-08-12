@@ -860,6 +860,24 @@ function main(array $argv): void
     }
     $headerTable = $curlOptTable + $curlMOptTable;
 
+    // Built here (before the option loop, not just before the later
+    // non-option pass) so the CURLSHOPT_* branch below can look its
+    // values up too: CURLSHOPT_NONE/SHARE/UNSHARE don't use the
+    // CURLOPT(name,type,num) macro convention at all (see CURLSHOPT_KINDS
+    // above) and so never appear in $headerTable -- their curl.h source is
+    // the plain `typedef enum { CURLSHOPT_NONE, ... } CURLSHoption;` body,
+    // which only the general symbol table parses.
+    $genSymbols = [];
+    $genMeta = [];
+    $headerSourcesForGeneral = array_values(array_filter(
+        [$curlHeaderSource, $multiHeaderSource, $websocketsHeaderSource],
+        static fn($s) => $s !== null
+    ));
+    if ($headerSourcesForGeneral !== []) {
+        [$genSymbols, $genMeta] = build_header_symbol_table($headerSourcesForGeneral);
+    }
+    $curlshoptValueChecked = []; // name => bool; only true once actually compared to $genSymbols
+
     foreach ($constants as $name => $value) {
         $isOption = str_starts_with($name, 'CURLOPT_') || str_starts_with($name, 'CURLMOPT_') || str_starts_with($name, 'CURLSHOPT_');
         if (!$isOption) {
@@ -870,6 +888,23 @@ function main(array $argv): void
                 $optionKinds[$name] = CURLSHOPT_KINDS[$name];
             } else {
                 $unclassifiedOptions[] = $name;
+            }
+            // KIND is hand-classified (CURLSHOPT_KINDS) because these
+            // options don't use the CURLOPT()-macro type-tag convention;
+            // the numeric VALUE still needs an actual header cross-check,
+            // same as every other constant -- look it up in the general
+            // #define/enum symbol table (curl.h's `CURLSHoption` enum).
+            if (isset($genSymbols[$name])) {
+                $expected = $genSymbols[$name];
+                if ($expected !== $value) {
+                    $valueCrossCheckMismatches[$name] = [
+                        'php' => $value,
+                        'curl_h' => $expected,
+                        'resolution' => 'pinned curl.h/multi.h value used (locked decision #1); constants[' . $name . '] overridden',
+                    ];
+                    $constants[$name] = $expected;
+                }
+                $curlshoptValueChecked[$name] = true;
             }
             continue;
         }
@@ -922,18 +957,13 @@ function main(array $argv): void
 
     // --- non-option constant cross-check (CURLE_*, CURLINFO_*, CURLM_*,
     // CURLAUTH_*, CURLPROXY_*, CURLSSH_*, CURL_*, ...) against the pinned
-    // headers' #define macros and enum bodies. ------------------------
+    // headers' #define macros and enum bodies. $genSymbols/$genMeta were
+    // already built above (before the option loop) so the CURLSHOPT_*
+    // branch there could use them too; reused here as-is. -------------
     $constantVerifiedCount = 0;
     $constantExempt = [];
     $constantNotFoundInHeader = [];
-    $genSymbols = [];
-    $genMeta = [];
-    $headerSourcesForGeneral = array_values(array_filter(
-        [$curlHeaderSource, $multiHeaderSource, $websocketsHeaderSource],
-        static fn($s) => $s !== null
-    ));
     if ($headerSourcesForGeneral !== []) {
-        [$genSymbols, $genMeta] = build_header_symbol_table($headerSourcesForGeneral);
         foreach ($constants as $name => $value) {
             $isOption = str_starts_with($name, 'CURLOPT_') || str_starts_with($name, 'CURLMOPT_') || str_starts_with($name, 'CURLSHOPT_');
             if ($isOption) {
@@ -992,10 +1022,15 @@ function main(array $argv): void
     $phpOnlyOptions = PHP_LAYER_OPTIONS;
     sort($phpOnlyOptions);
 
-    // CURLOPT_*/CURLMOPT_*/CURLSHOPT_* option values were cross-checked
-    // above via the dedicated CURLOPT()-macro table; count those that
-    // actually matched a header entry (i.e. all but the 3 genuinely
-    // PHP-invented pseudo-options, which have no libcurl equivalent).
+    // CURLOPT_*/CURLMOPT_* option values were cross-checked above via the
+    // dedicated CURLOPT()-macro table; CURLSHOPT_* values were separately
+    // cross-checked against the general #define/enum symbol table (see
+    // $curlshoptValueChecked, populated in the option loop above -- curl.h
+    // doesn't use the CURLOPT()-macro convention for share options at
+    // all). Count only names an actual header comparison ran for -- i.e.
+    // all but the 3 genuinely PHP-invented pseudo-options, which have no
+    // libcurl equivalent, and (only when no header was supplied at all)
+    // CURLSHOPT_* names that therefore never got checked.
     $optionsVerifiedCount = 0;
     foreach ($constants as $name => $value) {
         $isOption = str_starts_with($name, 'CURLOPT_') || str_starts_with($name, 'CURLMOPT_') || str_starts_with($name, 'CURLSHOPT_');
@@ -1003,7 +1038,9 @@ function main(array $argv): void
             continue;
         }
         if (str_starts_with($name, 'CURLSHOPT_')) {
-            $optionsVerifiedCount++; // hand-classified against curl.h's small plain enum, see CURLSHOPT_KINDS
+            if (isset($curlshoptValueChecked[$name])) {
+                $optionsVerifiedCount++;
+            }
             continue;
         }
         if (isset($headerTable[$name])) {
@@ -1016,11 +1053,15 @@ function main(array $argv): void
     $constantVerification = [
         'method' =>
             'Every curl_-family constant PHP exposes is classified into exactly one ' .
-            'bucket: (a) a curl_setopt/curl_multi_setopt/curl_share_setopt OPTION, ' .
-            'cross-checked via the precise CURLOPT(name,type,num) macro table (see ' .
-            'option_kinds / value_cross_check_mismatches above), (b) verified against a ' .
-            'general #define + enum symbol table built from the same pinned headers, ' .
-            '(c) explicitly exempt (header expression uses bitwise-NOT or references an ' .
+            'bucket: (a) a curl_setopt/curl_multi_setopt OPTION, cross-checked via the ' .
+            'precise CURLOPT(name,type,num) macro table (see option_kinds / ' .
+            'value_cross_check_mismatches above); a curl_share_setopt OPTION ' .
+            '(CURLSHOPT_*) is cross-checked the same way but against the general ' .
+            'symbol table instead, since curl.h declares CURLSHOPT_* as a plain ' .
+            '`typedef enum { CURLSHOPT_NONE, ... } CURLSHoption;` rather than via the ' .
+            'CURLOPT() macro, (b) a non-option constant verified against the same ' .
+            'general #define + enum symbol table built from the pinned headers, (c) ' .
+            'explicitly exempt (header expression uses bitwise-NOT or references an ' .
             'unresolvable identifier -- PHP\'s probed value is kept, never guessed), or ' .
             '(d) genuinely not present in the pinned headers at all (the 3 PHP-invented ' .
             'pseudo-options, listed here, not silently dropped).',
