@@ -456,7 +456,7 @@ fn test_error_preg_match_one_arg() {
 fn test_error_preg_match_matches_must_be_variable() {
     expect_error(
         r#"<?php preg_match("/test/", "test", []);"#,
-        "preg_match() parameter $matches must be passed a variable",
+        "preg_match(): Argument #3 ($matches) could not be passed by reference",
     );
 }
 

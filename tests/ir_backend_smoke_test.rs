@@ -3076,7 +3076,8 @@ class BaseCallbacks {
     public static function run(): void {
         echo array_reduce([1, 2], static::add(...), 0);
         echo ":";
-        array_walk([1, 2], static::show(...));
+        $walked = [1, 2];
+        array_walk($walked, static::show(...));
         echo ":";
         $usorted = [1, 2, 3];
         usort($usorted, static::compare(...));
@@ -3171,7 +3172,8 @@ class CallbackBox {
 $box = new CallbackBox();
 echo array_reduce([1, 2], $box->add_offset(...), 0);
 echo "|";
-array_walk([1, 2], $box->show(...));
+$walked = [1, 2];
+array_walk($walked, $box->show(...));
 "#;
     assert_eq!(
         compile_and_run_ir_backend("instance_method_reduce_and_walk_callbacks", source),
@@ -3306,7 +3308,8 @@ $box = new StoredReduceWalkBox();
 $box->base = 100;
 echo array_reduce([1, 2], $reduce, 0);
 echo "|";
-array_walk([1, 2], $walk);
+$walked = [1, 2];
+array_walk($walked, $walk);
 "#;
     assert_eq!(
         compile_and_run_ir_backend("stored_instance_method_reduce_and_walk_callbacks", source),

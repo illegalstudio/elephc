@@ -831,12 +831,18 @@ fn test_error_array_multisort_wrong_args() {
     );
 }
 
-/// Verifies that array_multisort() rejects non-indexed-array arguments.
+/// Verifies that `array_multisort()` rejects a literal in one of its by-reference array
+/// positions, with php-src's own message.
+///
+/// Reference PHP ACCEPTS this exact call: `array_multisort($a, 5)` reads the `5` as a sort
+/// flag, which those positions also allow. elephc does not implement the scalar flag
+/// arguments, so it refuses — as it did before this message changed, under a wording of its
+/// own invention. The refusal is the pre-existing gap; only the diagnostic moved.
 #[test]
 fn test_error_array_multisort_non_array() {
     expect_error(
         "<?php $a = [1, 2]; array_multisort($a, 5);",
-        "array_multisort() arguments must be indexed arrays",
+        "array_multisort(): Argument #2 ($array2) could not be passed by reference",
     );
 }
 
@@ -1026,6 +1032,6 @@ fn test_error_array_pointer_call_result_receiver() {
 fn test_error_array_pointer_literal_receiver() {
     expect_error(
         r#"<?php reset([1, 2, 3]);"#,
-        "reset() argument must be an array variable",
+        "reset(): Argument #1 ($array) could not be passed by reference",
     );
 }
