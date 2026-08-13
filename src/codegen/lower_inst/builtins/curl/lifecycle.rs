@@ -105,7 +105,11 @@ pub(crate) fn lower_curl_strerror(
 
 /// Lowers any `($handle)`-only curl builtin: unbox the handle into the first C argument
 /// register, publish the bridge pointers, call.
-fn lower_handle_only(
+///
+/// `pub(super)` rather than private: `mime.rs`'s four handle-only mime builder lowerings
+/// (`__elephc_curl_mime_new`/`_add_part`/`_post`/`_abort`) reuse this directly rather than
+/// duplicating it a second time.
+pub(super) fn lower_handle_only(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     builtin_name: &str,

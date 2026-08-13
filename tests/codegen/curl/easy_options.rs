@@ -353,16 +353,18 @@ fn wave_b_postfields_string_posts_a_raw_body() {
     assert_eq!(out, "post\nbody\nlen\n");
 }
 
-/// `CURLOPT_POSTFIELDS` as an ARRAY of scalars encodes as
-/// `application/x-www-form-urlencoded`, exactly as PHP does when no `CURLFile` is
-/// present: `urlencode()` per key and value, joined with `&`.
+/// TASK 11: `CURLOPT_POSTFIELDS` as an ARRAY of scalars now posts REAL
+/// `multipart/form-data` — one part per key/value pair — exactly as php-src does whether
+/// or not the array contains a `CURLFile`. This REPLACES the Task 8 stopgap that
+/// urlencoded a scalar array (a documented divergence, now gone): `wave_b_postfields_...`
+/// keeps its name for `git blame` continuity even though the assertion is now Task 11's.
 #[test]
 fn wave_b_postfields_array_form_encodes() {
     if skip_without_curl_native("wave_b_postfields_array_form_encodes") {
         return;
     }
     let server = LocalHttpServer::spawn_hello();
-    let url = server.url("/echo");
+    let url = server.url("/multipart");
     let out = compile_and_run(&format!(
         r#"<?php
         $ch = curl_init("{url}");
@@ -370,10 +372,18 @@ fn wave_b_postfields_array_form_encodes() {
         curl_setopt($ch, CURLOPT_POSTFIELDS, ["name" => "a b", "n" => 42]);
         $body = curl_exec($ch);
         echo str_contains($body, "method=POST") ? "post\n" : "no-post\n";
-        echo str_contains($body, "body=name=a+b&n=42") ? "encoded\n" : "no-encoded\n";
+        echo str_contains($body, "content-type=multipart/form-data") ? "multipart\n" : "no-multipart\n";
+        echo str_contains($body, "parts=2") ? "parts\n" : "no-parts\n";
+        echo str_contains($body, "part[0].name=name") ? "name0\n" : "no-name0\n";
+        echo str_contains($body, "part[0].body=a b") ? "body0\n" : "no-body0\n";
+        echo str_contains($body, "part[1].name=n") ? "name1\n" : "no-name1\n";
+        echo str_contains($body, "part[1].body=42") ? "body1\n" : "no-body1\n";
         "#
     ));
-    assert_eq!(out, "post\nencoded\n");
+    assert_eq!(
+        out,
+        "post\nmultipart\nparts\nname0\nbody0\nname1\nbody1\n"
+    );
 }
 
 /// A POST body containing NUL bytes survives intact: the bridge sets
@@ -399,10 +409,15 @@ fn wave_b_postfields_are_binary_safe() {
     assert_eq!(out, "len\n");
 }
 
-/// An array `CURLOPT_POSTFIELDS` holding an OBJECT is refused with a clear message rather
-/// than half-encoded: in php-src that is a `CURLFile` and switches the body to
-/// `multipart/form-data`, which lands in Task 11. Silently posting the object's string
-/// cast would be worse than an error.
+/// TASK 11: an array `CURLOPT_POSTFIELDS` holding a `CURLFile`/`CURLStringFile` now
+/// UPLOADS it as a real mime part (see `multipart.rs`) instead of being refused — this
+/// test now covers the one object shape that is STILL refused: any OTHER object class.
+/// Real php-src would attempt `(string) $value` here (accepting a `Stringable` object,
+/// raising a catchable `\Error` otherwise); elephc's own object-to-string cast for a class
+/// with no `__toString()` is an UNCATCHABLE process exit, so `__elephc_curl_build_multipart`
+/// refuses any non-`CURLFile`/`CURLStringFile` object explicitly, with a catchable
+/// `\TypeError`, before ever reaching that cast — see `src/curl_prelude.rs`'s
+/// `__elephc_curl_build_multipart` doc comment for the full reasoning.
 #[test]
 fn wave_b_postfields_object_values_are_refused() {
     if skip_without_curl_native("wave_b_postfields_object_values_are_refused") {
@@ -415,14 +430,14 @@ fn wave_b_postfields_object_values_are_refused() {
         try {
             curl_setopt($ch, CURLOPT_POSTFIELDS, ["file" => new Upload()]);
             echo "accepted\n";
-        } catch (\RuntimeException $e) {
+        } catch (\TypeError $e) {
             echo $e->getMessage(), "\n";
         }
         "#,
     );
     assert_eq!(
         out,
-        "curl_setopt(): CURLOPT_POSTFIELDS with an object value (multipart/form-data upload) is not supported by this build\n"
+        "curl_setopt(): CURLOPT_POSTFIELDS array value must be of type string|int|float|bool|CURLFile|CURLStringFile, Upload given\n"
     );
 }
 

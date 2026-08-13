@@ -526,6 +526,19 @@ pub enum RuntimeFnId {
     /// Builds or finds the process-lifetime share for `curl_share_init_persistent()`
     /// (PHP 8.5), boxed as a resource-kind-8 Mixed cell.
     CurlShareInitPersistent,
+    /// Starts a fresh `curl_mime` builder for an easy handle's forthcoming
+    /// `multipart/form-data` `CURLOPT_POSTFIELDS` body (Task 11).
+    CurlMimeNew,
+    /// Appends a fresh, empty part to the pending mime builder.
+    CurlMimeAddPart,
+    /// Sets one field (name, data, a local file's data, MIME type, or posted filename) on
+    /// the current pending mime part.
+    CurlMimePartField,
+    /// Attaches the pending mime builder to an easy handle via `CURLOPT_MIMEPOST`.
+    CurlMimePost,
+    /// Discards the pending mime builder without attaching it, for an array walk that
+    /// failed partway through.
+    CurlMimeAbort,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1274,6 +1287,11 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlShareStrerror
             | RuntimeFnId::CurlEasySetShare
             | RuntimeFnId::CurlShareInitPersistent
+            | RuntimeFnId::CurlMimeNew
+            | RuntimeFnId::CurlMimeAddPart
+            | RuntimeFnId::CurlMimePartField
+            | RuntimeFnId::CurlMimePost
+            | RuntimeFnId::CurlMimeAbort
             | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1497,6 +1515,17 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlShareSetopt
                 | RuntimeFnId::CurlShareErrno
                 | RuntimeFnId::CurlEasySetShare
+                // Task 11's mime builder entry points every answer a bare `0`/`1`
+                // acceptance flag — never storage — for the identical reason: their one
+                // (or, for `CurlMimePartField`, two) operand(s) is a boxed Mixed handle
+                // cell, and the default `MayAliasArguments` bucket would keep it (and the
+                // live libcurl handle/socket it owns) alive for the boolean's whole
+                // lifetime.
+                | RuntimeFnId::CurlMimeNew
+                | RuntimeFnId::CurlMimeAddPart
+                | RuntimeFnId::CurlMimePartField
+                | RuntimeFnId::CurlMimePost
+                | RuntimeFnId::CurlMimeAbort
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -2119,6 +2148,11 @@ impl RuntimeFnId {
             RuntimeFnId::CurlShareStrerror => "__elephc_curl_share_strerror",
             RuntimeFnId::CurlEasySetShare => "__elephc_curl_easy_set_share",
             RuntimeFnId::CurlShareInitPersistent => "__elephc_curl_share_init_persistent",
+            RuntimeFnId::CurlMimeNew => "__elephc_curl_mime_new",
+            RuntimeFnId::CurlMimeAddPart => "__elephc_curl_mime_add_part",
+            RuntimeFnId::CurlMimePartField => "__elephc_curl_mime_part_field",
+            RuntimeFnId::CurlMimePost => "__elephc_curl_mime_post",
+            RuntimeFnId::CurlMimeAbort => "__elephc_curl_mime_abort",
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",

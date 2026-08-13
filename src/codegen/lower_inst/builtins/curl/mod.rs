@@ -29,6 +29,7 @@ mod easy_perform;
 mod easy_setopt;
 mod easy_setopt_slist;
 mod lifecycle;
+mod mime;
 mod multi;
 mod option_kind;
 mod share;
@@ -48,6 +49,10 @@ pub(crate) use easy_setopt_slist::lower_curl_easy_setopt_slist;
 pub(crate) use lifecycle::{
     lower_curl_easy_copy, lower_curl_easy_pause, lower_curl_easy_reset, lower_curl_easy_upkeep,
     lower_curl_strerror,
+};
+pub(crate) use mime::{
+    lower_curl_mime_abort, lower_curl_mime_add_part, lower_curl_mime_new,
+    lower_curl_mime_part_field, lower_curl_mime_post,
 };
 pub(crate) use multi::{
     lower_curl_easy_id, lower_curl_multi_add, lower_curl_multi_errno, lower_curl_multi_exec,

@@ -123,6 +123,19 @@
 //!   `__elephc_curl_share_free()` — elephc has no PHP-FPM-worker-restart boundary to key a
 //!   shorter lifetime off, so "process lifetime" is the honest answer. See that function's
 //!   own comment below.
+//! - `CURLFile`/`CURLStringFile` (Task 11) ARE PLAIN PHP DATA CLASSES, UNLIKE EVERY OTHER
+//!   CLASS IN THIS FILE: neither wraps a native handle, so neither has `$__elephc_handle`,
+//!   a private constructor, or a `__elephc_wrap` factory — both are ordinary, user-
+//!   constructible classes with public properties, matching php-src's own shape
+//!   (`ext/curl/curl_file.stub.php`). `curl_setopt(..., CURLOPT_POSTFIELDS, $array)`'s
+//!   ARRAY FORM NOW POSTS REAL `multipart/form-data`, closing the divergence Task 8's
+//!   urlencoded stopgap documented: `__elephc_curl_build_multipart()` below walks the
+//!   array through `crates/elephc-curl/src/mime.rs`'s builder ABI field by field, and its
+//!   own comment records the one new divergence this introduces (a nested array value is
+//!   refused rather than reproducing a measured, surprising corner of php-src's own
+//!   flattening behavior) and the one FILE-NOT-FOUND divergence (elephc fails at
+//!   `curl_setopt()` time via `curl_mime_filedata`'s own eager validation; php-src fails
+//!   later, at `curl_exec()`, via a custom read callback this build does not have).
 
 mod detect;
 
@@ -234,18 +247,12 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         return __elephc_curl_easy_setopt_slist($raw, $option, $blob);
     }
     // CURLOPT_POSTFIELDS (10015) is the one option whose value may be an array as well as
-    // a string.
-    //
-    // DIVERGENCE FROM PHP: php-src routes ANY non-empty array through
-    // `build_mime_structure_from_hash` and posts `multipart/form-data`, unconditionally —
-    // `application/x-www-form-urlencoded` is what PHP produces for a STRING body, never
-    // for an array. elephc has no mime builder yet (Task 11 adds `CURLFile` and the mime
-    // structure with it), so an array of scalars is urlencoded here instead. That is the
-    // stopgap this feature's brief authorizes, not parity: a receiver that distinguishes
-    // the two content types WILL see a different request than PHP would have sent.
-    // Task 11 replaces this branch with a real mime multipart body.
+    // a string. An array posts `multipart/form-data`, exactly matching php-src's own
+    // `build_mime_structure_from_hash` (`ext/curl/interface.c`) — as of Task 11, this is
+    // parity, not the urlencoded stopgap Task 8 shipped (see `__elephc_curl_build_multipart`
+    // below for the field-by-field mapping and its one documented divergence).
     if ($option === 10015 && is_array($value)) {
-        return __elephc_curl_easy_setopt_str($raw, $option, __elephc_curl_form_encode($value));
+        return __elephc_curl_build_multipart($raw, $value);
     }
     // THE PHP-LAYER OPTIONS ARE DISPATCHED BEFORE THE SCALAR TYPE GUARD BELOW, because
     // they do not reach libcurl and therefore have no C type to be wrong for. php-src
@@ -319,77 +326,242 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     return false;
 }
 
-// `CURLOPT_POSTFIELDS`'s ARRAY form as `application/x-www-form-urlencoded`: keys and
-// values percent-encoded (spaces as `+`), joined with `&`.
+// TASK 11: `CURLFile` / `CURLStringFile`. Pure PHP data classes — neither wraps a native
+// handle, so neither needs `$__elephc_handle`, a private constructor, or a factory the way
+// every OTHER curl class in this file does. Property names, defaults and constructor
+// signatures are php-src's own (`ext/curl/curl_file.stub.php`): `CURLFile`'s constructor
+// order is `(filename, mimeType, postFilename)`; `CURLStringFile`'s is
+// `(data, postname, mime)` — DIFFERENT ARGUMENT ORDER, deliberately not harmonized, because
+// that is what php-src itself declares.
 //
-// DIVERGENCE FROM PHP, stated in full at the call site above: php-src posts an array as
-// `multipart/form-data`, always. This is Task 11's placeholder, not PHP's encoding.
-//
-// AN OBJECT IN THE ARRAY IS REFUSED, LOUDLY. In php-src an object here is a `CURLFile`
-// (or `CURLStringFile`) and its file contents become a mime part. Silently posting the
-// object's string cast as a field value would be worse than an error, so this throws and
-// says exactly what is missing.
-//
-// `$fields` IS DECLARED `mixed`, NOT `array`, ONLY BECAUSE OF THE CHECKER: the caller
-// reaches this from inside `curl_setopt()`'s `mixed $value`, and elephc's checker does not
-// narrow a `mixed` to `Array(Mixed)` after an `is_array()` guard, so an `array` parameter
-// makes the call a COMPILE ERROR. The guard is still there at the only call site.
-function __elephc_curl_form_encode(mixed $fields): string {
-    $encoded = "";
-    foreach ($fields as $name => $value) {
-        if (is_object($value)) {
-            throw new \RuntimeException("curl_setopt(): CURLOPT_POSTFIELDS with an object value (multipart/form-data upload) is not supported by this build");
-        }
-        if (is_array($value)) {
-            throw new \RuntimeException("curl_setopt(): CURLOPT_POSTFIELDS with a nested array value is not supported by this build");
-        }
-        if ($encoded !== "") {
-            $encoded .= "&";
-        }
-        // `(string) $x . ""`, NOT `(string) $x`, AND BOUND TO A LOCAL BEFORE THE CALL.
-        // A bare `(string) $mixed` cast handed straight to a function argument leaks its
-        // temporary (measured with `--gc-stats`: one block per cast, unbounded across a
-        // loop); routing it through a concatenation first produces an ordinary owned
-        // string local that the caller releases normally. Same family of pre-existing
-        // codegen leaks as the "bind the property to a local" rule `crate::hash_prelude`
-        // documents, and the reason every wrapper in this prelude binds before it calls.
-        $nameRaw = (string) $name . "";
-        $valueRaw = (string) $value . "";
-        $key = __elephc_curl_urlencode($nameRaw);
-        $val = __elephc_curl_urlencode($valueRaw);
-        $encoded .= $key . "=" . $val;
+// NEITHER CLASS IS `final`, AND `CURLStringFile` DOES NOT EXTEND `CURLFile` — both verified
+// against a real PHP 8.4.20/libcurl `ext/curl` (`is_subclass_of('CURLStringFile',
+// 'CURLFile')` is `false`; subclassing `CURLFile` from userland succeeds) rather than
+// assumed from the property-name similarity.
+class CURLFile {
+    public string $name = "";
+    public string $mime = "";
+    public string $postname = "";
+
+    // `?string $mimeType`/`?string $postFilename` COLLAPSE `null` TO `""` HERE, not left
+    // nullable on the properties: php-src declares both properties plain `string` (never
+    // `?string`) and reads back `""` from `getMimeType()`/`getPostFilename()` when the
+    // constructor argument was omitted or explicitly `null` — verified directly against a
+    // real `ext/curl`.
+    public function __construct(string $filename, ?string $mimeType = null, ?string $postFilename = null) {
+        $this->name = $filename;
+        $this->mime = $mimeType ?? "";
+        $this->postname = $postFilename ?? "";
     }
-    return $encoded;
+
+    public function getFilename(): string {
+        return $this->name;
+    }
+
+    public function getMimeType(): string {
+        return $this->mime;
+    }
+
+    public function getPostFilename(): string {
+        return $this->postname;
+    }
+
+    public function setMimeType(string $mime): void {
+        $this->mime = $mime;
+    }
+
+    public function setPostFilename(string $postname): void {
+        $this->postname = $postname;
+    }
 }
 
-// `application/x-www-form-urlencoded` percent-encoding: `[A-Za-z0-9_.-]` pass through, a
-// space becomes `+`, every other byte becomes uppercase `%XX`. Exactly PHP's `urlencode()`.
+// `curl_file_create()` is a plain alias of `CURLFile::__construct()`, matching the PHP
+// surface's own description of it (`.superpowers/sdd/php-curl-family/global-constraints.md`).
+function curl_file_create(string $filename, ?string $mime_type = null, ?string $posted_filename = null): CURLFile {
+    return new CURLFile($filename, $mime_type, $posted_filename);
+}
+
+// `CURLStringFile`'s `$mime` DEFAULTS TO `"application/octet-stream"`, NOT `""` — the one
+// property default that differs from `CURLFile`'s all-empty defaults, and it is why
+// `__elephc_curl_build_multipart()` below always sets a `Content-Type` for a
+// `CURLStringFile` part but only conditionally for a `CURLFile` one. `$postname` has NO
+// default (php-src's constructor requires it) and no getter/setter pair — php-src gives
+// `CURLStringFile` only a constructor and its three public properties, none of
+// `CURLFile`'s six methods.
+class CURLStringFile {
+    public string $data = "";
+    public string $postname = "";
+    public string $mime = "application/octet-stream";
+
+    public function __construct(string $data, string $postname, string $mime = "application/octet-stream") {
+        $this->data = $data;
+        $this->postname = $postname;
+        $this->mime = $mime;
+    }
+}
+
+// `CURLOPT_POSTFIELDS`'s ARRAY form as REAL `multipart/form-data`, field for field matching
+// php-src's `build_mime_structure_from_hash` (`ext/curl/interface.c`):
 //
-// IT DOES NOT CALL THE `urlencode()` BUILTIN, DELIBERATELY. elephc's `__rt_urlencode` /
-// `__rt_rawurlencode` helpers percent-encode ASCII DIGITS: their `A-Z` range test branches
-// straight to the punctuation check when the byte is below `'A'`, so the `0-9` test that
-// follows is unreachable (`urlencode("42")` answers `"%34%32"`, PHP answers `"42"`). That
-// is a pre-existing bug in a shared string builtin, outside this feature's blast radius to
-// fix here — but a form body that mangles every number in it would be worse than useless,
-// so this encoder is self-contained. When the builtin is fixed, this can collapse back to
-// a `urlencode()` call and the behaviour will not change.
-function __elephc_curl_urlencode(string $raw): string {
-    $out = "";
-    $len = strlen($raw);
-    for ($i = 0; $i < $len; $i++) {
-        $byte = ord($raw[$i]);
-        if (($byte >= 48 && $byte <= 57)
-            || ($byte >= 65 && $byte <= 90)
-            || ($byte >= 97 && $byte <= 122)
-            || $byte === 45 || $byte === 46 || $byte === 95) {
-            $out .= $raw[$i];
-        } elseif ($byte === 32) {
-            $out .= "+";
-        } else {
-            $out .= "%" . "0123456789ABCDEF"[($byte >> 4) & 15] . "0123456789ABCDEF"[$byte & 15];
+//   scalar          -> a plain form field: NAME + binary-safe DATA (`curl_mime_data`,
+//                       never NUL-terminated, so an embedded NUL in the value survives)
+//   CURLFile        -> a FILE part read from disk at transfer time: NAME = the array key,
+//                       the part's data source = `$file->name` (`curl_mime_filedata`),
+//                       TYPE = `$file->mime` UNLESS IT IS EMPTY (php-src never guesses a
+//                       type it was not given — confirmed: a real `ext/curl` still sends
+//                       `Content-Type: application/octet-stream` for an unset mime, but
+//                       that is LIBCURL's own default for an unset file-part type, not a
+//                       value php-src ever computed or this prelude ever sets), FILENAME =
+//                       `$file->postname` UNLESS IT IS EMPTY, in which case FILENAME IS
+//                       `$file->name` VERBATIM — the full path as given, NOT its
+//                       `basename()`. This looks like a mistake, and PHP users have
+//                       reported it as one (the local filesystem path leaks into the
+//                       posted filename), but it is what a real `ext/curl` sends on the
+//                       wire, measured directly rather than assumed from the docs.
+//   CURLStringFile  -> an IN-MEMORY file part: NAME = the array key, DATA = `$file->data`
+//                       (binary-safe), FILENAME = `$file->postname` (always — the
+//                       constructor requires it), TYPE = `$file->mime` (always — the
+//                       constructor defaults it to `"application/octet-stream"`).
+//   scalar (again)  -> everything that is not a `CURLFile`/`CURLStringFile`/array/object
+//                       goes through `(string) $value`, matching php-src's own fallback
+//                       (`zval_get_tmp_string`) for a plain scalar.
+//
+// DIVERGENCE FROM PHP: ANY OTHER OBJECT IS REFUSED, LOUDLY, rather than string-cast.
+// php-src's own fallback for a non-`CURLFile` object is `zval_get_tmp_string`, which posts
+// a `Stringable` object's string value as an ordinary field and raises a catchable
+// `\Error: Object of class … could not be converted to string` for one with no
+// `__toString()` — measured directly against a real `ext/curl`. elephc's OWN `(string)`
+// cast for an object with no matching `__toString()` is NOT a catchable error, though: it
+// is a hard, UNCATCHABLE process exit (`src/codegen/lower_inst/conversions.rs`'s
+// `emit_missing_tostring_fatal`/`emit_mixed_missing_tostring_fatal`), a pre-existing
+// limitation of that general cast, not something curl introduces. Relying on it here would
+// mean a bad `CURLOPT_POSTFIELDS` array value KILLS THE PROCESS instead of raising an
+// exception the caller can catch — clearly worse than php-src's own answer for the same
+// input. This function therefore refuses ANY object that is not a `CURLFile`/
+// `CURLStringFile` explicitly, with a catchable `\TypeError`, before ever reaching a
+// `(string)` cast. The one thing this gives up versus real PHP is a `Stringable` object
+// being accepted as a plain field; every other object shape (the vast majority, since
+// `Stringable` `CURLOPT_POSTFIELDS` values are not a documented, common pattern) ends up
+// with the SAME kind of loud, honest rejection php-src gives it, just a different
+// exception class and message.
+//
+// DIVERGENCE FROM PHP: A NESTED ARRAY VALUE IS REFUSED, LOUDLY, rather than reproduced.
+// Measured directly against a real `ext/curl` (not assumed from the brief, which guessed
+// "REJECTS" — it does not): `['a' => ['x' => '1', 'y' => '2']]` sends TWO separate parts,
+// both named `"a"`, one per INNER array element's value (`1`, then `2`) — one level of
+// flattening, with the outer key repeated as every inner element's field name and the
+// inner keys discarded entirely; going one level deeper (`['a' => [['q' => 'deep']]]`)
+// stops recursing and instead raises PHP's ordinary `Warning: Array to string conversion`
+// and posts the literal string `"Array"`. Reproducing that exact shape — a surprising
+// corner of php-src's own implementation, not documented PHP behavior anyone is likely to
+// rely on — was judged not worth the complexity; a caller who nests an array here gets a
+// clear, loud `\TypeError` instead of a silently mangled request.
+//
+// `$raw` AND `$fields` ARE DECLARED `mixed`, ONLY BECAUSE OF THE CHECKER: the caller reaches
+// this from inside `curl_setopt()`'s `mixed $value`/local `$raw`, and elephc's checker does
+// not narrow a `mixed` to a more specific type after an `is_array()`/property-read guard, so
+// tighter parameter types would make the call a COMPILE ERROR. The `is_array()` guard is
+// still enforced at the only call site, in `curl_setopt()` above.
+//
+// READING `$value->name`/`->mime`/`->postname`/`->data` ON A `mixed` LOCAL NARROWED BY
+// `instanceof`, NEVER PASSING `$value` ITSELF TO A TYPED PARAMETER: this is the same idiom
+// `curl_multi_info_read()`'s `CurlMultiHandle::__elephc_lookup()` result requires (see this
+// file's header and `docs/php/compatibility.md`) — property reads on a Mixed-sourced object
+// work; it is passing such an object to a TYPED parameter that miscompiles, which this
+// walker never does.
+//
+// EVERY FAILURE PATH CALLS `__elephc_curl_mime_abort()` BEFORE RETURNING/THROWING, so a walk
+// that dies partway (an unsupported shape, an embedded NUL in a name/path/type/filename, a
+// file libcurl itself refuses) never leaves the half-built structure this crate owns
+// dangling, and never disturbs whatever mime is already ATTACHED from an earlier,
+// successful `curl_setopt()` call on the same handle — see
+// `crates/elephc-curl/src/mime.rs`'s module doc for the pending/attached split this mirrors.
+//
+// `__elephc_curl_mime_part_field()`'s SECOND ARGUMENT is the field-kind code
+// `crates/elephc-curl/src/mime.rs`'s `FIELD_*` constants define: `0` NAME, `1` DATA
+// (binary-safe), `2` FILEDATA (a local file path), `3` TYPE (MIME type), `4` FILENAME
+// (posted/remote filename) — literal numbers below, matching every other option/kind code
+// this whole prelude already spells out as a literal rather than importing a constant.
+function __elephc_curl_build_multipart(mixed $raw, mixed $fields): bool {
+    if (!__elephc_curl_mime_new($raw)) {
+        return false;
+    }
+    foreach ($fields as $name => $value) {
+        if (!__elephc_curl_mime_add_part($raw)) {
+            __elephc_curl_mime_abort($raw);
+            return false;
+        }
+        // `(string) $x . ""`, NOT `(string) $x`, AND BOUND TO A LOCAL BEFORE EVERY CALL
+        // BELOW. A bare `(string) $mixed` cast handed straight to a function argument
+        // leaks its temporary (measured with `--gc-stats`: one block per cast, unbounded
+        // across a loop); routing it through a concatenation first produces an ordinary
+        // owned string local the caller releases normally. Same family of pre-existing
+        // codegen leaks as the "bind the property to a local" rule this module's header
+        // documents.
+        $nameRaw = (string) $name . "";
+        if (!__elephc_curl_mime_part_field($raw, 0, $nameRaw)) {
+            __elephc_curl_mime_abort($raw);
+            return false;
+        }
+        if ($value instanceof CURLFile) {
+            $path = (string) $value->name . "";
+            if (!__elephc_curl_mime_part_field($raw, 2, $path)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            $mime = (string) $value->mime . "";
+            if ($mime !== "" && !__elephc_curl_mime_part_field($raw, 3, $mime)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            // NO `basename()` HERE — see this function's header for why the full path is
+            // the measured, correct fallback.
+            $postname = (string) $value->postname . "";
+            $filename = $postname !== "" ? $postname : $path;
+            if (!__elephc_curl_mime_part_field($raw, 4, $filename)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            continue;
+        }
+        if ($value instanceof CURLStringFile) {
+            $data = (string) $value->data . "";
+            if (!__elephc_curl_mime_part_field($raw, 1, $data)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            $postname = (string) $value->postname . "";
+            if (!__elephc_curl_mime_part_field($raw, 4, $postname)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            $mime = (string) $value->mime . "";
+            if (!__elephc_curl_mime_part_field($raw, 3, $mime)) {
+                __elephc_curl_mime_abort($raw);
+                return false;
+            }
+            continue;
+        }
+        // DIVERGENCE FROM PHP, documented in full above this function: a nested array is
+        // refused rather than flattened the way a real `ext/curl` flattens it.
+        if (is_array($value)) {
+            __elephc_curl_mime_abort($raw);
+            throw new \TypeError("curl_setopt(): CURLOPT_POSTFIELDS array value must not be an array");
+        }
+        // DIVERGENCE FROM PHP, documented in full above this function: ANY object here is
+        // refused BEFORE the `(string)` cast below ever runs, precisely so that cast never
+        // has a chance to reach elephc's own uncatchable object-to-string fatal.
+        if (is_object($value)) {
+            __elephc_curl_mime_abort($raw);
+            throw new \TypeError("curl_setopt(): CURLOPT_POSTFIELDS array value must be of type string|int|float|bool|CURLFile|CURLStringFile, " . get_class($value) . " given");
+        }
+        $valueRaw = (string) $value . "";
+        if (!__elephc_curl_mime_part_field($raw, 1, $valueRaw)) {
+            __elephc_curl_mime_abort($raw);
+            return false;
         }
     }
-    return $out;
+    return __elephc_curl_mime_post($raw);
 }
 
 function curl_setopt_array(CurlHandle $handle, array $options): bool {

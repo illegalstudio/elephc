@@ -132,6 +132,11 @@ mod tests {
         "__rt_curl_easy_set_share",
         "__rt_curl_share_init_persistent",
         "__rt_curl_share_free",
+        "__rt_curl_mime_new",
+        "__rt_curl_mime_add_part",
+        "__rt_curl_mime_part_field",
+        "__rt_curl_mime_post",
+        "__rt_curl_mime_abort",
     ];
 
     /// Renders the shared runtime object's assembly for one supported target.

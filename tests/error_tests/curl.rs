@@ -234,6 +234,40 @@ fn curl_share_init_persistent_is_undefined_before_php_85() {
     );
 }
 
+/// TASK 11: `CURLFile`'s `$filename` is required, so a bare `new CURLFile()` is an arity
+/// error — unlike `CurlHandle`/`CurlMultiHandle`/`CurlShareHandle`, `CURLFile` is an
+/// ORDINARY, user-constructible class, so this is a plain constructor-arity diagnostic,
+/// not a "private constructor" one.
+#[test]
+fn curlfile_rejects_wrong_arity() {
+    expect_curl_error("<?php $f = new CURLFile();", "CURLFile");
+}
+
+/// `CURLFile`'s `$filename` is typed `string`, so passing an array (which weak-mode PHP
+/// does NOT scalar-coerce, unlike an int or a float) is a compile-time type error.
+#[test]
+fn curlfile_rejects_a_non_string_filename() {
+    expect_curl_error("<?php $f = new CURLFile([1, 2]);", "CURLFile");
+}
+
+/// `CURLStringFile`'s `$postname` (unlike `CURLFile`'s optional `$postFilename`) has NO
+/// default — php-src's own constructor requires it — so a call with only `$data` is an
+/// arity error.
+#[test]
+fn curlstringfile_rejects_missing_required_postname() {
+    expect_curl_error(
+        r#"<?php $f = new CURLStringFile("data only");"#,
+        "CURLStringFile",
+    );
+}
+
+/// `curl_file_create()`'s parameters mirror `CURLFile::__construct()`'s, so its arity
+/// diagnostic is not a `new CURLFile(...)`-only accident.
+#[test]
+fn curl_file_create_rejects_wrong_arity() {
+    expect_curl_error("<?php $f = curl_file_create();", "curl_file_create");
+}
+
 /// Runs the frontend with an explicit PHP compatibility version, so the version-gated
 /// halves of the curl prelude can be checked from here. Mirrors `check_source`, which
 /// always uses the default (8.5) profile.

@@ -622,6 +622,301 @@ mod native {
 }
 
 /// Purpose:
+/// Task 11's `curl_mime` builder ABI: the `elephc_curl_mime_new`/`_add_part`/`_part_field`/
+/// `_post`/`_abort` state machine, exercised directly (no PHP program involved) against
+/// real libcurl.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness, when `ELEPHC_CURL_LIB_DIR` is
+///   set (see this module's header).
+///
+/// Key details:
+/// - End-to-end wire verification (does a real transfer really carry `multipart/form-data`
+///   with the right field/filename/body) lives at the elephc compiler level
+///   (`tests/codegen/curl/`), which has the loopback HTTP fixture this crate does not. These
+///   tests instead pin the ABI's own state machine: which calls succeed, which fail without
+///   a live builder, and what `elephc_curl_mime_new` replacing an already-attached mime does
+///   to `EasyEntry::mime`/`pending_mime`.
+#[cfg(elephc_curl_native)]
+mod native_mime {
+    use crate::abi::{
+        elephc_curl_easy_free, elephc_curl_easy_init, elephc_curl_mime_abort,
+        elephc_curl_mime_add_part, elephc_curl_mime_new, elephc_curl_mime_part_field,
+        elephc_curl_mime_post,
+    };
+    use crate::handles;
+    use crate::mime::{FIELD_DATA, FIELD_FILEDATA, FIELD_FILENAME, FIELD_NAME, FIELD_TYPE};
+
+    /// Whether `id`'s entry currently has an ATTACHED mime (survived a successful `post`).
+    fn has_attached_mime(id: i64) -> bool {
+        handles::lock_recover(handles::handles())
+            .get(&id)
+            .is_some_and(|entry| entry.mime.is_some())
+    }
+
+    /// Whether `id`'s entry currently has a PENDING (not yet posted) mime builder.
+    fn has_pending_mime(id: i64) -> bool {
+        handles::lock_recover(handles::handles())
+            .get(&id)
+            .is_some_and(|entry| entry.pending_mime.is_some())
+    }
+
+    /// The happy path: `new` -> `add_part` -> two fields -> `post` succeeds end to end, and
+    /// the pending builder becomes the attached one.
+    #[test]
+    fn happy_path_new_add_part_field_post_attaches() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert!(has_pending_mime(id));
+        assert!(!has_attached_mime(id));
+
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name = b"f";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) },
+            1
+        );
+        let data = b"hello world";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_DATA, data.as_ptr(), data.len()) },
+            1
+        );
+
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+        assert!(!has_pending_mime(id), "post must clear the pending slot");
+
+        elephc_curl_easy_free(id);
+    }
+
+    /// A SECOND successful build replaces the first ATTACHED mime rather than leaking it or
+    /// leaving two live structures — the same "free the old one only after the new one is
+    /// live" contract `elephc_curl_easy_setopt_slist` has for `CURLOPT_HTTPHEADER`. This is
+    /// the shape `curl_setopt($ch, CURLOPT_POSTFIELDS, $array)` takes every time it runs
+    /// against a handle that already posted a multipart body once.
+    #[test]
+    fn second_build_replaces_the_first_attached_mime() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name = b"a";
+        unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) };
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name2 = b"b";
+        unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name2.as_ptr(), name2.len()) };
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id), "the replacement must still be attached");
+
+        elephc_curl_easy_free(id);
+    }
+
+    /// `elephc_curl_mime_part_field` before `elephc_curl_mime_add_part` fails closed: there
+    /// is no current part to write to.
+    #[test]
+    fn field_without_add_part_fails() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        let name = b"f";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) },
+            0
+        );
+        elephc_curl_easy_free(id);
+    }
+
+    /// `elephc_curl_mime_add_part` before `elephc_curl_mime_new` fails closed: there is no
+    /// pending builder to append to.
+    #[test]
+    fn add_part_without_new_fails() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_add_part(id), 0);
+        elephc_curl_easy_free(id);
+    }
+
+    /// `elephc_curl_mime_post` before `elephc_curl_mime_new` fails closed: there is no
+    /// pending builder to attach.
+    #[test]
+    fn post_without_new_fails() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_post(id), 0);
+        elephc_curl_easy_free(id);
+    }
+
+    /// `elephc_curl_mime_abort` discards a half-built PENDING mime without touching a mime
+    /// already ATTACHED from an earlier successful build — the exact shape a
+    /// `curl_setopt(..., CURLOPT_POSTFIELDS, $array)` call takes when the SECOND call's array
+    /// contains something this build refuses partway through the walk (a nested array, an
+    /// unrecognized object). The first, successful multipart body must stay attached and
+    /// usable.
+    #[test]
+    fn abort_discards_only_the_pending_builder() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        // First, successful build.
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name = b"a";
+        unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) };
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+
+        // Second build, abandoned partway through (mirrors a nested-array rejection).
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert!(has_pending_mime(id));
+        assert_eq!(elephc_curl_mime_abort(id), 1);
+        assert!(!has_pending_mime(id), "abort must clear the pending builder");
+        assert!(
+            has_attached_mime(id),
+            "abort must not touch the already-attached mime from the first build"
+        );
+
+        elephc_curl_easy_free(id);
+    }
+
+    /// `elephc_curl_mime_abort` on an id with no pending builder at all (nothing to build,
+    /// or already posted) is a harmless, always-successful no-op — this is a cleanup call,
+    /// not a status query, matching every other "nothing to do" shape in this ABI.
+    #[test]
+    fn abort_is_idempotent_with_no_pending_builder() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_abort(id), 1);
+        assert_eq!(elephc_curl_mime_abort(id), 1);
+        elephc_curl_easy_free(id);
+    }
+
+    /// Every entry point tolerates an unknown id the same way the rest of this ABI does:
+    /// `0` for anything that answers a status, never a crash.
+    #[test]
+    fn unknown_id_reports_zero_or_tolerates_free() {
+        assert_eq!(elephc_curl_mime_new(-999), 0);
+        assert_eq!(elephc_curl_mime_add_part(-999), 0);
+        let name = b"f";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(-999, FIELD_NAME, name.as_ptr(), name.len()) },
+            0
+        );
+        assert_eq!(elephc_curl_mime_post(-999), 0);
+        assert_eq!(elephc_curl_mime_abort(-999), 1);
+    }
+
+    /// Builds a full `CURLFile`-shaped part (name + local file path + explicit type +
+    /// posted filename) against a REAL temp file, pinning the field-kind wiring end to end
+    /// at the ABI level (the wire-level `multipart/form-data` assertion is the elephc
+    /// codegen test's job).
+    #[test]
+    fn curlfile_shaped_part_with_a_real_file_succeeds() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("elephc_curl_mime_test_{}.txt", std::process::id()));
+        std::fs::write(&path, b"file contents").expect("write temp fixture file");
+        let path_bytes = path.to_string_lossy().into_owned().into_bytes();
+
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name = b"f";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                elephc_curl_mime_part_field(
+                    id,
+                    FIELD_FILEDATA,
+                    path_bytes.as_ptr(),
+                    path_bytes.len(),
+                )
+            },
+            1,
+            "curl_mime_filedata must succeed for a file that really exists"
+        );
+        let mime_type = b"text/plain";
+        assert_eq!(
+            unsafe {
+                elephc_curl_mime_part_field(id, FIELD_TYPE, mime_type.as_ptr(), mime_type.len())
+            },
+            1
+        );
+        let postname = b"hello.txt";
+        assert_eq!(
+            unsafe {
+                elephc_curl_mime_part_field(
+                    id,
+                    FIELD_FILENAME,
+                    postname.as_ptr(),
+                    postname.len(),
+                )
+            },
+            1
+        );
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+
+        elephc_curl_easy_free(id);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ANSWERS THE OPEN QUESTION `crate::mime`'s module doc leaves to observation: does
+    /// `curl_mime_filedata` validate the file's existence EAGERLY (at this call, mirroring
+    /// php-src's own `open_basedir`/`stat` check at `curl_setopt()` time) or LAZILY (only
+    /// when the transfer actually tries to read it, surfacing as `CURLE_READ_ERROR` from
+    /// `curl_easy_perform`)? Whichever this pinned libcurl 8.21.0 build does is recorded
+    /// here as a fact, not assumed — see the task report for what this measured.
+    #[test]
+    fn filedata_missing_file_behavior_is_observed_and_pinned() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!(
+            "elephc_curl_mime_missing_{}_does_not_exist.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing); // ensure it really is absent
+        let path_bytes = missing.to_string_lossy().into_owned().into_bytes();
+
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+        let name = b"f";
+        unsafe { elephc_curl_mime_part_field(id, FIELD_NAME, name.as_ptr(), name.len()) };
+
+        let filedata_result = unsafe {
+            elephc_curl_mime_part_field(id, FIELD_FILEDATA, path_bytes.as_ptr(), path_bytes.len())
+        };
+        // MEASURED, not assumed: this pinned libcurl 8.21.0 build's `curl_mime_filedata`
+        // DOES validate the file EAGERLY — it fails right here (a non-`CURLE_OK` return,
+        // this field-setter answering `0`) for a path that does not exist, presumably
+        // because it stats the file immediately to compute the part's size. This is NOT a
+        // divergence from php-src: the brief notes php-src ALSO validates with
+        // `php_check_open_basedir`/`stat` at `curl_setopt()` time (`ext/curl/interface.c`'s
+        // `build_mime_structure_from_hash`), so elephc's `curl_setopt(..., POSTFIELDS,
+        // ['f' => new CURLFile($missingPath)])` failing immediately with `false` — never
+        // reaching `curl_exec()` at all — is the SAME shape PHP itself has, reached here
+        // through libcurl's own validation rather than a bespoke `stat()` call this bridge
+        // would otherwise have needed to add.
+        assert_eq!(
+            filedata_result, 0,
+            "curl_mime_filedata must reject a path that does not exist"
+        );
+
+        elephc_curl_easy_free(id);
+    }
+}
+
+/// Purpose:
 /// The MULTI interface's real-libcurl tests: lifecycle, attach/detach, a `file://` transfer
 /// driven to completion through `curl_multi_perform`, the completion queue's parked fields,
 /// and the error surface.

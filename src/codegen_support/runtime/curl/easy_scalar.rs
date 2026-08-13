@@ -110,6 +110,46 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_easy_errno (report the last CURLcode)",
         IntResult::CurlCode,
     );
+    // Task 11: the curl_mime builder family. All five are the SAME "forward whatever's
+    // already in the C argument registers, widen a 0/1 answer" shape as the setters above
+    // — `elephc_curl_mime_part_field`'s extra (kind, ptr, len) arguments are staged by its
+    // lowering exactly the way `elephc_curl_easy_setopt_str`'s (option, ptr, len) already
+    // are, so this forwarder needs no shape-specific logic to reuse.
+    emit_forwarder(
+        emitter,
+        "__rt_curl_mime_new",
+        "_elephc_curl_mime_new_fn",
+        "curl_mime_new (start a fresh curl_mime builder)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_mime_add_part",
+        "_elephc_curl_mime_add_part_fn",
+        "curl_mime_add_part (append a part to the pending builder)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_mime_part_field",
+        "_elephc_curl_mime_part_field_fn",
+        "curl_mime_part_field (set one field on the current pending part)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_mime_post",
+        "_elephc_curl_mime_post_fn",
+        "curl_mime_post (attach the pending builder via CURLOPT_MIMEPOST)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_mime_abort",
+        "_elephc_curl_mime_abort_fn",
+        "curl_mime_abort (discard the pending builder without attaching it)",
+        IntResult::Boolean,
+    );
 }
 
 /// Emits one forwarding helper: probe the slot, call it with the arguments already in the

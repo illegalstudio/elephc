@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::easy::{self, CurlSlist, CURL};
+use crate::mime::{self, CurlMime, CurlMimePart};
 
 /// One tracked libcurl easy handle plus the PHP-layer state elephc keeps
 /// around it: the RETURNTRANSFER capture flag/buffer, the most recently taken
@@ -86,6 +87,25 @@ pub(crate) struct EasyEntry {
     /// `curl_share_init_persistent()`) share. See `crate::share`'s module doc for the
     /// full lifetime argument this field is part of.
     pub(crate) share_id: Option<i64>,
+    /// The `curl_mime` structure currently ATTACHED to this handle via `CURLOPT_MIMEPOST`
+    /// (Task 11's multipart/form-data uploads), or `None` when no array `CURLOPT_POSTFIELDS`
+    /// has ever been applied. Owned by this entry the same way `slists` owns its lists:
+    /// libcurl does not copy the structure a pointer-typed option carries, so it must
+    /// outlive every `curl_easy_perform` on this handle, and is freed only on reset, free,
+    /// or once a REPLACEMENT builder has been successfully attached (`crate::mime::post`).
+    pub(crate) mime: Option<*mut CurlMime>,
+    /// A `curl_mime` structure UNDER CONSTRUCTION (`crate::mime::new_pending`/`add_part`/
+    /// `set_field`), not yet attached to the handle. Separate from `mime` so a
+    /// `curl_setopt(..., CURLOPT_POSTFIELDS, $array)` call that fails partway through the
+    /// PHP-level array walk (an unsupported value shape, a field libcurl itself refused)
+    /// can discard the half-built structure (`crate::mime::abort`) without disturbing
+    /// whatever mime is already attached from an earlier, successful call.
+    pub(crate) pending_mime: Option<*mut CurlMime>,
+    /// The part `set_field` currently writes to inside `pending_mime`, or `None` before the
+    /// first `add_part` (or after `post`/`abort` clears the builder). Never independently
+    /// freed: parts are owned by the `curl_mime` structure they belong to, and are released
+    /// as a whole when that structure is freed.
+    pub(crate) pending_part: Option<*mut CurlMimePart>,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -134,6 +154,9 @@ impl EasyEntry {
             slists: HashMap::new(),
             scratch: Vec::new(),
             share_id: None,
+            mime: None,
+            pending_mime: None,
+            pending_part: None,
         }
     }
 
@@ -151,6 +174,15 @@ impl EasyEntry {
             // is freed, so no double free is reachable.
             unsafe { easy::slist_free_all(list) };
         }
+    }
+
+    /// Frees this handle's ATTACHED and PENDING `curl_mime` structures (if any) and forgets
+    /// them, mirroring [`Self::free_slists`]. Called on `curl_reset()` and on handle
+    /// teardown, AFTER `curl_easy_reset`/`curl_easy_cleanup` for the same reason
+    /// `free_slists` is: libcurl may still hold a live pointer into the structure until the
+    /// handle itself has been reset/torn down.
+    pub(crate) fn free_mime(&mut self) {
+        mime::free_all(self);
     }
 }
 

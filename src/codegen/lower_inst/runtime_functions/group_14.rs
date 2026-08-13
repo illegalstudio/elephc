@@ -133,6 +133,21 @@ pub(super) fn lower(
                 ctx, inst,
             )
         }),
+        RuntimeFnId::CurlMimeNew => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_mime_new(ctx, inst)
+        }),
+        RuntimeFnId::CurlMimeAddPart => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_mime_add_part(ctx, inst)
+        }),
+        RuntimeFnId::CurlMimePartField => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_mime_part_field(ctx, inst)
+        }),
+        RuntimeFnId::CurlMimePost => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_mime_post(ctx, inst)
+        }),
+        RuntimeFnId::CurlMimeAbort => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_mime_abort(ctx, inst)
+        }),
         _ => None,
     }
 }

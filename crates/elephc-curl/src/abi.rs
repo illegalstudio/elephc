@@ -246,6 +246,98 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
     })
 }
 
+/// TASK 11 — `multipart/form-data` uploads. Starts a fresh `curl_mime` builder for handle
+/// `id`, discarding any earlier PENDING (never-posted) one. Does not touch whatever mime is
+/// already ATTACHED via `CURLOPT_MIMEPOST` from an earlier successful call — see
+/// `crate::mime`'s module doc for the whole pending/attached split. `0` for an unknown id
+/// or a libcurl allocation failure.
+#[no_mangle]
+pub extern "C" fn elephc_curl_mime_new(id: i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        (unsafe { crate::mime::new_pending(entry) }) as i32
+    })
+}
+
+/// Appends a fresh, empty part to the pending builder, which becomes the target of every
+/// following `elephc_curl_mime_part_field` call. `0` for an unknown id, no pending builder
+/// (`elephc_curl_mime_new` was never called), or a libcurl allocation failure.
+#[no_mangle]
+pub extern "C" fn elephc_curl_mime_add_part(id: i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        (unsafe { crate::mime::add_part(entry) }) as i32
+    })
+}
+
+/// Sets one field on the current pending part. `kind` is one of `crate::mime`'s `FIELD_*`
+/// codes (`NAME`/`DATA`/`FILEDATA`/`TYPE`/`FILENAME`); `FIELD_DATA` is read as `len`
+/// binary-safe bytes, every other kind as a NUL-free byte string. `0` for an unknown id, no
+/// current part (`elephc_curl_mime_add_part` was never called), an unrecognized `kind`, an
+/// embedded NUL in a non-`FIELD_DATA` value, or a libcurl-level rejection.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_mime_part_field(
+    id: i64,
+    kind: i32,
+    ptr: *const u8,
+    len: usize,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else if ptr.is_null() {
+            return 0;
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        (unsafe { crate::mime::set_field(entry, kind, bytes) }) as i32
+    })
+}
+
+/// Attaches the pending builder to handle `id` via `CURLOPT_MIMEPOST`, completing the
+/// `CURLOPT_POSTFIELDS` array walk this whole family exists for. `0` for an unknown id, no
+/// pending builder, or a libcurl setopt failure — in which case the pending builder is
+/// freed here and whatever was previously attached (if anything) is left in place; see
+/// `crate::mime::post`.
+#[no_mangle]
+pub extern "C" fn elephc_curl_mime_post(id: i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        (unsafe { crate::mime::post(entry) }) as i32
+    })
+}
+
+/// Discards the pending builder without attaching it, for a PHP-level array walk that
+/// failed partway through. Always `1`, including for an unknown id or when there is no
+/// pending builder — this is a cleanup call, not a status query, and every other shape of
+/// "nothing to do here" in this ABI is likewise not a failure.
+#[no_mangle]
+pub extern "C" fn elephc_curl_mime_abort(id: i64) -> i32 {
+    handles::ffi_guard(1, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        if let Some(entry) = guard.get_mut(&id) {
+            crate::mime::abort(entry);
+        }
+        1
+    })
+}
+
 /// Runs the configured transfer to completion. Resets the RETURNTRANSFER
 /// capture buffer and error buffer first, so each call starts a fresh
 /// capture independent of whether a previous body was taken. Returns `0` for
@@ -590,6 +682,7 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         };
         unsafe { easy::reset(entry.curl) };
         entry.free_slists();
+        entry.free_mime();
         entry.return_transfer = false;
         entry.body.clear();
         entry.taken_body.clear();
@@ -672,6 +765,20 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
 /// the same dangling read. Copying the bridge's own map would be worse still —
 /// two entries owning one list, hence a double free. Rebuilding is the only
 /// shape where each handle owns exactly what it points at.
+///
+/// TASK 11: THE MIME PART NEEDS NO REBUILD, UNLIKE SLISTS — it is in the OTHER bucket
+/// `dupset` re-duplicates (alongside the strings, the blobs and `CURLOPT_COPYPOSTFIELDS`),
+/// so the copy already has its own independent `curl_mime` structure the moment
+/// `easy::duphandle` returns, before any Rust code here runs. The new `EasyEntry` below
+/// deliberately leaves `mime`/`pending_mime` at their `EasyEntry::new` default of `None`
+/// rather than tracking a pointer to that duplicate: `curl_easy_duphandle` hands back no
+/// way to READ the option it just copied (there is no `curl_easy_getinfo` for
+/// `CURLOPT_MIMEPOST`), so this bridge never legitimately holds a pointer to the
+/// duplicate and therefore never calls `curl_mime_free` on it either — freeing a pointer
+/// obtained by any other means here would not be sound. Whatever `curl_easy_cleanup(copy)`
+/// eventually does with libcurl's own internally-duplicated structure is between the
+/// duplicate handle and libcurl; this bridge's `mime` bookkeeping continues to track only
+/// what IT itself built via `elephc_curl_mime_new`/`_post` on this (or any other) id.
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
     handles::ffi_guard(0, || {
@@ -802,6 +909,8 @@ pub extern "C" fn elephc_curl_easy_free(id: i64) {
             // AFTER cleanup, never before: libcurl holds raw pointers to the
             // handle's slist options until the handle itself is gone.
             entry.free_slists();
+            // Same ordering, same reason: freed only after `curl_easy_cleanup` has run.
+            entry.free_mime();
             // Remove this id from its share's `attached` bookkeeping (if any). Called
             // AFTER `curl_easy_cleanup()` above, which is what actually releases libcurl's
             // own reference on the share (`crate::share`'s module doc — `data->share` is
