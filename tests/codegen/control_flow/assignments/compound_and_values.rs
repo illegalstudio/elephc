@@ -25,6 +25,46 @@ fn test_post_increment() {
     assert_eq!(out, "2 1");
 }
 
+/// Verifies `++`/`--` on a property or array element in EXPRESSION position.
+///
+/// The AST models increment as `PreIncrement(String)` — a variable NAME, not an l-value — so
+/// only statement position worked, by desugaring to a read-modify-write and discarding the
+/// value. `return $this->i++;`, `$k = $this->i++;` and `$this->entries[$this->i++]` were parse
+/// errors, and `$this->i += 1` was the workaround for one of the most ordinary idioms there is.
+///
+/// The expectations are reference PHP's output for the same program. The two orders are what
+/// this is really about: post- yields the value BEFORE the write, pre- the value after.
+#[test]
+fn test_increment_on_property_and_element_in_expression_position() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public $i = 0;
+    public $entries = ["x", "y", "z"];
+    public function post()   { return $this->i++; }
+    public function pre()    { return ++$this->i; }
+    public function idx()    { return $this->entries[$this->i++]; }
+    public function assign() { $k = $this->i++; return $k; }
+    public function dec()    { return $this->i--; }
+    public function predec() { return --$this->i; }
+}
+$c = new C();
+echo "post=", $c->post(), " pre=", $c->pre(), " i=", $c->i, "|";
+$c->i = 0;
+echo "idx=", $c->idx(), $c->idx(), " i=", $c->i, "|";
+$c->i = 5;
+echo "assign=", $c->assign(), " dec=", $c->dec(), " predec=", $c->predec(), " i=", $c->i, "|";
+$a = [10, 20];
+$j = 0;
+echo "arr=", $a[$j]++, " a0=", $a[0];
+"#,
+    );
+    assert_eq!(
+        out,
+        "post=0 pre=2 i=2|idx=xy i=2|assign=5 dec=6 predec=4 i=4|arr=10 a0=11"
+    );
+}
+
 /// Verifies pre-decrement (`--$i`) decrements before value capture.
 /// Fixture: simple local `$i = 5` then `$k = --$i`, expects `$i` and `$k` both 4.
 #[test]

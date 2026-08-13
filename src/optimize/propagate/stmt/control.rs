@@ -309,12 +309,23 @@ pub(super) fn propagate_if_stmt(
         None => (None, Some(base_env.clone())),
     };
 
-    let next_env = match scalar_value(&condition) {
-        Some(value) if value.truthy() => then_env,
-        Some(_) => else_env.unwrap_or_default(),
-        None => {
+    // A statically FALSE condition selects the else branch only when there is nothing between
+    // it and the else: every `elseif` clause is still live, and taking `else_env` there
+    // discarded whatever those clauses assigned. `$n = 5; $r = "?"; if ($n >= 10) { $r = "A"; }
+    // elseif ($n >= 3) { $r = "B"; } echo $r;` folded the echo back to "?" — the branch ran, its
+    // store was emitted, and the read had already been rewritten to the pre-if constant.
+    // `else if` spelled as two words is a nested `If` in the else body and was never affected,
+    // which is what made this look like an `elseif` parsing problem rather than a merge one.
+    let condition_value = scalar_value(&condition);
+    let then_taken = condition_value.as_ref().map(|value| value.truthy());
+    let next_env = match then_taken {
+        Some(true) => then_env,
+        Some(false) if propagated_elseifs.is_empty() => else_env.unwrap_or_default(),
+        then_taken => {
             let mut paths = Vec::new();
-            if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
+            if then_taken != Some(false)
+                && matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough)
+            {
                 paths.push(then_env);
             }
             paths.extend(elseif_envs);

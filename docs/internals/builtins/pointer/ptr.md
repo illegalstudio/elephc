@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ptr(mixed $value): mixed
+function ptr(mixed $value): pointer
 ```
 
 ## What the type checker enforces

@@ -91,6 +91,32 @@ fn env_after_expr_side_effects(mut env: ConstantEnv, exprs: &[&Expr]) -> Constan
     env
 }
 
+/// Propagates the key and the value of an element write in PHP's evaluation order.
+///
+/// An index *expression* is frozen into a temporary before the right-hand side runs, so it
+/// folds against the environment as it stands here. A plain *variable* index is instead read
+/// at store time, after the right-hand side, so folding it against the current environment
+/// would bake in a value the right-hand side is still free to overwrite — turning
+/// `$i = 0; $a[$i] = ($i = 1);` into a write to index 0. Folding it against the post-value
+/// environment leaves it a variable whenever the right-hand side can touch it, which is what
+/// lets IR lowering defer the read.
+fn propagate_write_key_and_value(index: Expr, value: Expr, env: &ConstantEnv) -> (Expr, Expr) {
+    let ExprKind::Variable(name) = &index.kind else {
+        let index = propagate_expr(index, env);
+        return (index, propagate_expr(value, env));
+    };
+    let value = propagate_expr(value, env);
+    // Folding a bare variable consults exactly one entry, so carry that one through the
+    // invalidation instead of cloning the whole environment: this runs on every element
+    // write in the program and `ConstantEnv` is a map over every live local.
+    let mut after: ConstantEnv = HashMap::new();
+    if let Some(fact) = env.get(name.as_str()) {
+        after.insert(name.clone(), fact.clone());
+    }
+    let after = env_after_expr_side_effects(after, &[&value]);
+    (propagate_expr(index, &after), value)
+}
+
 /// Iterates through a block of statements, propagating constants and stopping early
 /// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
@@ -201,8 +227,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             index,
             value,
         } => {
-            let index = propagate_expr(index, &env);
-            let value = propagate_expr(value, &env);
+            let (index, value) = propagate_write_key_and_value(index, value, &env);
             let mut next_env = env_after_expr_side_effects(env, &[&index, &value]);
             next_env.remove(&array);
             (

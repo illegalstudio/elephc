@@ -15,7 +15,7 @@ builtin! {
     name: "zval_pack",
     area: Pointers,
     params: [value: Mixed],
-    returns: Mixed,
+    returns: Ptr,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ZvalPack,

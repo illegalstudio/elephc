@@ -222,7 +222,8 @@ class OffsetCallbacks {
 $offsets = new OffsetCallbacks();
 echo "method callable array_reduce: " . array_reduce([1, 2], $offsets->add_offset(...), 0) . "\n";
 echo "method callable array_walk: ";
-array_walk([1, 2], $offsets->show_shifted(...));
+$walk_pair = [1, 2];
+array_walk($walk_pair, $offsets->show_shifted(...));
 echo "\n";
 
 class SelectedOffsetCallbacks {
@@ -256,7 +257,8 @@ $selected_map = array_map($use_small_offsets ? $small_offsets->map_selected(...)
 echo "selected callable array_map: " . $selected_map[0] . " " . $selected_map[1] . "\n";
 echo "selected callable array_reduce: " . array_reduce([1, 2], $use_small_offsets ? $small_offsets->add_selected(...) : $large_offsets->add_selected(...), 0) . "\n";
 echo "selected callable array_walk: ";
-array_walk([1, 2], $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
+$walk_pair = [1, 2];
+array_walk($walk_pair, $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
 echo "\n";
 
 class SelectedCalculator {

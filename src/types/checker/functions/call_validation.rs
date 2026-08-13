@@ -161,6 +161,31 @@ impl Checker {
         }
     }
 
+    /// Returns whether an argument can be bound to a BUILTIN's by-reference parameter.
+    ///
+    /// Deliberately separate from `is_by_ref_argument_lvalue`, which answers the same question
+    /// for a USER function and must stay narrower: that path writes its result back to a LOCAL
+    /// SLOT (`RefArgWriteback::source_slot`), and a property has no slot, so widening the shared
+    /// predicate would let the checker accept what the backend cannot lower — the exact
+    /// "checker accepts, backend refuses" trade this codebase treats as a false win.
+    ///
+    /// Builtins reach their by-reference argument through the storage itself, which is why
+    /// `array_push($this->items, 9)` already compiles and runs today. What PHP refuses, and
+    /// what this rejects, is an argument with NO storage to write back to: a literal, an array
+    /// literal, or a call result.
+    pub(crate) fn is_builtin_by_ref_argument_lvalue(&self, arg: &Expr) -> bool {
+        matches!(
+            arg.kind,
+            ExprKind::Variable(_)
+                | ExprKind::ArrayAccess { .. }
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::NullsafePropertyAccess { .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        )
+    }
+
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
     /// to be collected into the variadic parameter.
     ///

@@ -71,6 +71,18 @@ impl Checker {
                 &format!("Undefined class: {}", class_name),
             ));
         }
+        if crate::types::checker::builtin_types::RESERVED_FOR_INTERNAL_USE
+            .iter()
+            .any(|reserved| *reserved == class_name)
+        {
+            return Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "The \"{}\" class is reserved for internal use and cannot be manually instantiated",
+                    class_name
+                ),
+            ));
+        }
         if class_name == "Fiber" {
             self.validate_fiber_constructor_args(args, expr, env)?;
         }

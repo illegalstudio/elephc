@@ -132,7 +132,11 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     else {
         return None;
     };
-    let current = lower_expr(ctx, current);
+    // `??=` reads its target the way `??` does — the whole point of the operator is that the
+    // target is allowed to be absent — so this must go through the suppressing read rather than
+    // a plain one. `$a[$k] ??= 5` on an absent key warned `Undefined array key`, which reference
+    // PHP does not, and `$o->p ??= 5` on an uninitialized typed property would fatal.
+    let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![current.value],
@@ -155,9 +159,19 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     });
 
     ctx.builder.position_at_end(assign_block);
+    // The target was read once, before the branch, to decide which way to go. The keep path
+    // adopts that value; THIS path discards it, so it has to be released here or it leaks one
+    // block per execution — a leak the old over-release used to cancel, which is why the two
+    // defects hid each other.
+    crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
     store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
     let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
-    lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+    // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
+    // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
+    // load — the merge's — per execution.
+    ctx.with_borrowed_write_operand(|ctx| {
+        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+    });
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);
@@ -165,7 +179,7 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(ctx.load_local(temp_name, Some(expr.span)))
+    Some(take_owned_temp(ctx, temp_name, expr.span))
 }
 
 /// Emits the write side of an assignment expression whose target is not a local variable.

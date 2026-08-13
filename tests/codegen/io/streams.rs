@@ -384,6 +384,67 @@ unlink("data.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the PHP manual's own `fgetcsv()` read loop terminates and yields every row.
+///
+/// `while (($row = fgetcsv($h)) !== false)` ran forever: `fgetcsv()` was declared to return
+/// `array<string>` and answered an empty array at end of file, which is never `!== false`.
+/// Three things had to agree for the idiom to work — the runtime signalling EOF distinctly,
+/// the declared type carrying a `false` arm (as `False`, not `Bool`, so the guard can strip
+/// it), and the guard narrowing seeing through the assignment inside the condition. The
+/// `count($row)` in the body is the part that fails when the narrowing does not apply, and
+/// the empty third line is the part that fails if EOF is confused with an empty row.
+#[test]
+fn test_fgetcsv_manual_read_loop_terminates_and_narrows() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rows.csv", "a,b,c\n1,2,3\n\nx,y,z\n");
+$h = fopen("rows.csv", "r");
+$n = 0;
+while (($row = fgetcsv($h)) !== false) {
+    $n += 1;
+    echo "[", count($row), ":", $row[0], "]";
+}
+fclose($h);
+echo "|rows=", $n;
+unlink("rows.csv");
+"#,
+    );
+    assert_eq!(out, "[3:a][3:1][1:][3:x]|rows=4");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the `while` guard narrowing does not outlive its loop.
+///
+/// The narrowing added for the read-loop idiom applies to every `while` in the language, so
+/// the interesting cases are the ones where the loop is left with the guard still TRUE. After
+/// a normal exit the guarded variable holds `false` and must read back as such — a narrowing
+/// that leaked would have codegen treat that `false` as an array. After a `break` it holds an
+/// array, which the conservative restore has to keep working too.
+#[test]
+fn test_while_guard_narrowing_does_not_outlive_the_loop() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("w.csv", "a,b\nc,d\n");
+$h = fopen("w.csv", "r");
+$seen = 0;
+while (($row = fgetcsv($h)) !== false) {
+    $seen += count($row);
+}
+fclose($h);
+echo "seen=", $seen, " after=", var_export($row, true), "|";
+$h = fopen("w.csv", "r");
+while (($r2 = fgetcsv($h)) !== false) {
+    break;
+}
+fclose($h);
+echo "broke=", ($r2 === false) ? "false" : "array";
+unlink("w.csv");
+"#,
+    );
+    assert_eq!(out, "seen=4 after=false|broke=array");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fputcsv() writes a valid CSV line and file_get_contents() reads it back.
 #[test]
 fn test_fputcsv() {
@@ -4730,6 +4791,154 @@ echo stream_wrapper_register("alt", "CustomWrapper", 0) ? "true" : "false";
     assert_eq!(out, "true|true");
 }
 
+/// Verifies a registration keeps its own copy of the scheme and class name.
+///
+/// The registry stored the caller's pointers verbatim, and a registration outlives the call:
+/// reassigning the variable afterwards rewrote what had been registered. Measured before the
+/// fix as `aa=0 bb=1 zz=1` where reference PHP answers `aa=1 bb=1 zz=0` — the first scheme
+/// became unroutable and `zz://`, never registered by anyone, dispatched into the wrapper.
+/// Every existing test passed a literal, which lives in rodata and never moves, so the whole
+/// suite pinned the one case that could not fail.
+#[test]
+fn test_wrapper_registration_owns_its_scheme_after_the_caller_reassigns_it() {
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public function url_stat(string $path, int $flags) {
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+$s = "aa";
+stream_wrapper_register($s, "W");
+$s = "bb";
+stream_wrapper_register($s, "W");
+$s = "zz";
+echo file_exists("aa://p") ? 1 : 0;
+echo file_exists("bb://p") ? 1 : 0;
+echo file_exists("zz://p") ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "110");
+}
+
+/// Verifies which schemes `stream_wrapper_register()` accepts, and which ever dispatch.
+///
+/// Two separate rules, both read off reference PHP rather than inferred. Registration
+/// refuses a protocol holding anything outside `[A-Za-z0-9+.-]`, and refuses one that is
+/// already registered. Dispatch additionally ignores a ONE-LETTER scheme — PHP's
+/// `php_stream_locate_url_wrapper` requires `n > 1`, because `f:` is a Windows drive
+/// letter — so `f` registers successfully and still never routes anywhere.
+///
+/// Before this, every one of these was accepted: `x_y` and `x y` registered, a protocol
+/// could be registered twice, and `f://` reached the wrapper.
+#[test]
+fn test_wrapper_scheme_acceptance_matches_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public function url_stat(string $path, int $flags) {
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+foreach (["f", "fo", "x+y", "x-y", "x.y", "x_y", "x y"] as $scheme) {
+    echo @stream_wrapper_register($scheme, "W") ? "1" : "0";
+    echo @file_exists("$scheme://p") ? "1" : "0";
+    echo " ";
+}
+echo "|", @stream_wrapper_register("fo", "W") ? "1" : "0";
+"#,
+    );
+    // f registers but never dispatches; fo/x+y/x-y/x.y do both; x_y and x y do neither;
+    // re-registering fo is refused.
+    assert_eq!(out.stdout, "10 11 11 11 11 00 00 |0");
+}
+
+/// Verifies the minimum scheme length reaches EVERY dispatch path, not just one.
+///
+/// The rule is enforced by starting each wrapper-dispatch scan at index 2, and there are twelve
+/// such scans across `fopen`, `url_stat`, the directory helpers, and the path-op family. A test
+/// that only exercised `file_exists()` would pass with eleven of them still starting at zero,
+/// so this drives one builtin per scan and pins both answers: a one-letter scheme reaches
+/// nothing, a two-letter one reaches everything. Both rows are reference PHP's own output.
+#[test]
+fn test_minimum_scheme_length_applies_to_every_dispatch_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read($count): string { return "DATA"; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void {}
+    public function url_stat($path, $flags) { return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,
+        'uid'=>0,'gid'=>0,'rdev'=>0,'size'=>99,'atime'=>0,'mtime'=>0,'ctime'=>0,
+        'blksize'=>4096,'blocks'=>1]; }
+    public function dir_opendir($path, $options): bool { return true; }
+    public function dir_readdir() { return false; }
+    public function dir_closedir(): void {}
+    public function unlink($path): bool { return true; }
+    public function mkdir($path, $mode, $options): bool { return true; }
+    public function rmdir($path, $options): bool { return true; }
+    public function rename($from, $to): bool { return true; }
+}
+stream_wrapper_register("q", "W");
+stream_wrapper_register("qq", "W");
+foreach (["q", "qq"] as $s) {
+    echo @fopen("$s://x", "r") === false ? 0 : 1;
+    echo @filesize("$s://x") === 99 ? 1 : 0;
+    echo @opendir("$s://d") === false ? 0 : 1;
+    echo @unlink("$s://a") ? 1 : 0;
+    echo @mkdir("$s://d") ? 1 : 0;
+    echo @rmdir("$s://d") ? 1 : 0;
+    echo @rename("$s://a", "$s://b") ? 1 : 0;
+    echo "|";
+}
+"#,
+    );
+    assert_eq!(out.stdout, "0000000|1111111|");
+}
+
+/// Verifies `stream_open`, `dir_opendir` and the path ops unbox an undeclared boolean result.
+///
+/// A boxed `false` is a NON-NULL pointer, so a helper that reads the result register raw turns
+/// every refusal into a success. When these slots were wired in I could not build a wrapper
+/// whose body made them infer `Mixed`, and said so rather than claim a fix I had not shown:
+/// `return false;` infers `bool`, and returning an INITIALISED property infers that property's
+/// type. The shape that does it is a property with NO initialiser assigned two different types,
+/// which is what widens it — the same thing that made `stream_tell()` return a pointer.
+///
+/// Removing those slots from the boxed-result mask flips all six answers from 0 to 1.
+#[test]
+fn test_undeclared_boolean_refusals_are_unboxed_on_every_wrapper_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Deny {
+    public $context;
+    private $state;
+    public function seed(int $n) { $this->state = $n > 0 ? "no" : false; }
+    public function stream_open($path, $mode, $options, &$opened) { $this->seed(0); return $this->state; }
+    public function dir_opendir($path, $options) { $this->seed(0); return $this->state; }
+    public function unlink($path) { $this->seed(0); return $this->state; }
+    public function mkdir($path, $mode, $options) { $this->seed(0); return $this->state; }
+    public function rmdir($path, $options) { $this->seed(0); return $this->state; }
+    public function rename($from, $to) { $this->seed(0); return $this->state; }
+}
+stream_wrapper_register("wd", "Deny");
+echo @fopen("wd://x", "r") === false ? 0 : 1;
+echo @opendir("wd://d") === false ? 0 : 1;
+echo @unlink("wd://a") ? 1 : 0;
+echo @mkdir("wd://d") ? 1 : 0;
+echo @rmdir("wd://d") ? 1 : 0;
+echo @rename("wd://a", "wd://b") ? 1 : 0;
+"#,
+    );
+    assert_eq!(out.stdout, "000000");
+}
+
 /// Verifies compiled PHP output for stream wrapper unregister round trip.
 #[test]
 fn test_stream_wrapper_unregister_round_trip() {
@@ -5356,6 +5565,93 @@ echo stream_filter_register("custom.filter", "CustomFilter") ? "true" : "false";
     assert_eq!(out, "true");
 }
 
+/// Verifies a filter registration keeps its own copy of the name — the twin of the wrapper case.
+///
+/// `_user_filter_registry` stored the caller's pointer, so reassigning the variable rewrote the
+/// registered name. Measured before the fix as both registrations resolving to the variable's
+/// LAST value: `aa` and `bb` were unusable and `zz`, never registered, filtered.
+#[test]
+fn test_filter_registration_owns_its_name_after_the_caller_reassigns_it() {
+    let out = compile_and_run(
+        r#"<?php
+class Up extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+$n = "aa";
+stream_filter_register($n, "Up");
+$n = "bb";
+stream_filter_register($n, "Up");
+$n = "zz";
+foreach (["aa", "bb", "zz"] as $name) {
+    $f = fopen("php://memory", "w+");
+    stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+    fwrite($f, "x");
+    rewind($f);
+    echo fread($f, 4);
+    fclose($f);
+}
+"#,
+    );
+    assert_eq!(out, "XXx");
+}
+
+/// Verifies a wrapper whose scalar methods carry NO return type behaves like one that does.
+///
+/// A method with no declared return type has codegen representation `Mixed`, so it hands back
+/// a boxed cell where the helper reads a raw integer or boolean — and leaving the return type
+/// off is how ordinary wrapper code is written, so the broken shape was the common one.
+/// Measured before the fix: `ftell()` answered 4329450168, a pointer, where PHP answers 5.
+///
+/// The expectation is the output of the SAME wrapper with every return type declared, which is
+/// the property that matters: the declaration must not change the answer. `ftell()` reporting
+/// the wrapper's own position rather than PHP's write-advanced one is a separate, pre-existing
+/// divergence — it shows identically in both forms, which is how it was told apart from this.
+#[test]
+fn test_undeclared_scalar_returns_behave_like_declared_ones() {
+    let source = r#"<?php
+class S {
+    public $context;
+    private $buf = "abcdefghij";
+    private $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { $this->pos = 0; return true; }
+    public function stream_read($count): string { $c = substr($this->buf, $this->pos, $count); $this->pos += strlen($c); return $c; }
+    public function stream_write(string $data)RET_INT { $this->buf .= $data; return strlen($data); }
+    public function stream_eof()RET_BOOL { return $this->pos >= strlen($this->buf); }
+    public function stream_tell()RET_INT { return $this->pos; }
+    public function stream_seek($offset, $whence)RET_BOOL { $this->pos = $offset; return true; }
+    public function stream_flush()RET_BOOL { return true; }
+    public function stream_lock($op)RET_BOOL { return true; }
+    public function stream_truncate($size)RET_BOOL { $this->buf = substr($this->buf, 0, $size); return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("slots", "S");
+$f = fopen("slots://x", "r+");
+echo "w", fwrite($f, "XY");
+echo "s", fseek($f, 3);
+echo "t", ftell($f);
+echo "r", fread($f, 4);
+echo "f", fflush($f) ? 1 : 0;
+echo "l", flock($f, LOCK_EX) ? 1 : 0;
+echo "u", ftruncate($f, 4) ? 1 : 0;
+echo "e", feof($f) ? 1 : 0;
+fclose($f);
+"#;
+    let declared = compile_and_run(&source.replace("RET_INT", ": int").replace("RET_BOOL", ": bool"));
+    let undeclared = compile_and_run(&source.replace("RET_INT", "").replace("RET_BOOL", ""));
+    assert_eq!(
+        undeclared, declared,
+        "omitting the return type must not change what the wrapper reports"
+    );
+    assert_eq!(declared, "w2s0t3rdefgf1l1u1e1");
+}
+
 /// Verifies compiled PHP output for fopen silent fail for registered user wrapper.
 #[test]
 fn test_fopen_silent_fail_for_registered_user_wrapper() {
@@ -5510,8 +5806,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 echo fgetc($f) . fgetc($f);
 rewind($f);
 echo fgetc($f);
@@ -5538,8 +5834,8 @@ class W {
     public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w", "W");
-$h = fopen("w://x", "r");
+stream_wrapper_register("ww", "W");
+$h = fopen("ww://x", "r");
 echo fread($h, 100);
 fclose($h);
 "#,
@@ -5564,8 +5860,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $x = stream_get_contents($f);
 echo "[$x]";
 fclose($f);
@@ -5590,8 +5886,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $n=fpassthru($f);
 echo "|n=$n";
 fclose($f);
@@ -5616,8 +5912,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 while (($l = fgets($f)) !== false) { echo "[" . rtrim($l, "\n") . "]"; }
 fclose($f);
 echo "|t=" . gettype($f);
@@ -5641,8 +5937,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$f=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$f=fopen("ww://x","r");
 $r = fscanf($f, "%d %f %s");
 echo $r[0] . "|" . $r[1] . "|" . $r[2];
 fclose($f);
@@ -5666,8 +5962,8 @@ class W {
     public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
     public function stream_close(): void {}
 }
-stream_wrapper_register("w","W");
-$src=fopen("w://x","r");
+stream_wrapper_register("ww","W");
+$src=fopen("ww://x","r");
 $dst=fopen("php://temp","r+");
 $n=stream_copy_to_stream($src,$dst);
 rewind($dst);
@@ -5779,6 +6075,148 @@ echo file_exists("no_such_elephc_probe.txt") ? "Y" : "N";
 "#,
     );
     assert_eq!(out, "YNYN");
+}
+
+/// Verifies `stat()` and `lstat()` reach a registered wrapper's `url_stat()`, with the flags
+/// PHP hands them, and still fall back to the filesystem for an ordinary path.
+///
+/// `stat()` was the one member of the stat family that never consulted a wrapper — the others
+/// all probed `url_stat()` first — so `stat("scheme://x")` returned the filesystem's answer for
+/// a path that only exists inside the wrapper. The flag values are read off reference PHP with
+/// a wrapper that echoes its `$flags`, not inferred from the two documented
+/// `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit, so `stat()` arrives
+/// as 4 and `lstat()` as 4|1. A wrapper that branches on the link bit needs that exact value.
+#[test]
+fn test_stat_and_lstat_dispatch_to_wrapper_url_stat() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class StatW {
+    public function url_stat(string $path, int $flags) {
+        echo "[", $flags, "]";
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>77,'atime'=>0,'mtime'=>5,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("statw", "StatW");
+file_put_contents("statw_probe.txt", "abcd");
+$a = stat("statw://x");
+echo $a["size"], ":", $a["mtime"], "|";
+$b = lstat("statw://y");
+echo $b["size"], "|";
+$c = stat("statw_probe.txt");
+echo $c["size"];
+unlink("statw_probe.txt");
+"#,
+    );
+    assert_eq!(out, "[4]77:5|[5]77|4");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies every stat-family builtin that consults a wrapper hands it the flags PHP hands it.
+///
+/// The values are not derivable from the two documented `STREAM_URL_STAT_*` constants: PHP also
+/// sets an internal no-cache bit, so the observed table is `stat 4 · lstat 5 · filesize 4 ·
+/// file_exists 6 · is_file 6` — NOCACHE everywhere, plus LINK for `lstat` and QUIET for the
+/// existence predicates. All five passed 0 or nothing at all before, so a wrapper deciding from
+/// the quiet bit whether to emit its own warning never saw it.
+///
+/// The one echo per builtin also pins the call COUNT: PHP invokes `url_stat()` exactly once per
+/// builtin, so the permission predicates — which need `mode`, `uid` and `gid` together — have to
+/// read all three out of a single result rather than one field per call.
+#[test]
+fn test_stat_family_hands_the_wrapper_the_flags_php_hands_it() {
+    let out = compile_and_run(
+        r#"<?php
+class FlagW {
+    public function url_stat(string $path, int $flags) {
+        echo substr($path, 8), "=", $flags, " ";
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("flagw", "FlagW");
+stat("flagw://stat");
+lstat("flagw://lstat");
+file_exists("flagw://exists");
+filesize("flagw://size");
+is_file("flagw://isfile");
+is_readable("flagw://readable");
+is_writable("flagw://writable");
+is_executable("flagw://executable");
+"#,
+    );
+    assert_eq!(
+        out,
+        "stat=4 lstat=5 exists=6 size=4 isfile=6 readable=6 writable=6 executable=6 "
+    );
+}
+
+/// Verifies the permission predicates apply PHP's triad-selection rule to a wrapper's stat.
+///
+/// PHP does not mask the mode against `S_IRUSR|S_IRGRP|S_IROTH`: it picks ONE triad — owner when
+/// the reported uid is the process uid, group when the reported gid is the process gid or one of
+/// its supplementary groups, world otherwise — and then ignores the other two. Measured against
+/// reference PHP, which answers `is_readable() === false` for a `mode 0700` file owned by someone
+/// else even though the owner read bit is set.
+///
+/// The uid/gid here are values no process can hold, so the world triad is selected on every host
+/// and the expectation does not depend on who runs the suite. Before this dispatch existed the
+/// three predicates ran a real `access()` on the literal `perm://…` path and answered false for
+/// all six cases, including the ones PHP answers true for.
+#[test]
+fn test_permission_predicates_apply_the_php_triad_rule_to_wrapper_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class PermW {
+    public function url_stat(string $path, int $flags) {
+        $mode = (int) substr($path, 7);
+        return ['dev'=>0,'ino'=>0,'mode'=>$mode,'nlink'=>1,
+                'uid'=>2000000001,'gid'=>2000000002,
+                'rdev'=>0,'size'=>1,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("perm", "PermW");
+foreach ([0644, 0700, 0007, 0002, 0070] as $mode) {
+    echo is_readable("perm://$mode") ? "r" : "-";
+    echo is_writable("perm://$mode") ? "w" : "-";
+    echo is_executable("perm://$mode") ? "x" : "-";
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "r-- --- rwx -w- --- ");
+}
+
+/// Verifies `is_dir()` and `filemtime()` reach a registered wrapper's `url_stat()`.
+///
+/// `is_dir()` had no wrapper dispatch at all while its twin `is_file()` did — the two differ
+/// only in the `S_IFMT` value they compare against, and writing them as separate code paths is
+/// how one came to be wired and the other not. `filemtime()` needed a third field selector in
+/// the shared runtime helper, which until now could extract only `size` and `mode`.
+#[test]
+fn test_is_dir_and_filemtime_dispatch_to_wrapper_url_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class TypeW {
+    public function url_stat(string $path, int $flags) {
+        $mode = strpos($path, "dir") !== false ? 16877 : 33188;
+        return ['dev'=>0,'ino'=>0,'mode'=>$mode,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>3,'atime'=>0,'mtime'=>4321,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("typew", "TypeW");
+echo is_dir("typew://dir") ? "D" : "-";
+echo is_dir("typew://file") ? "D" : "-";
+echo is_file("typew://file") ? "F" : "-";
+echo is_file("typew://dir") ? "F" : "-";
+echo "|", filemtime("typew://file");
+"#,
+    );
+    assert_eq!(out, "D-F-|4321");
 }
 
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
@@ -7397,4 +7835,138 @@ echo strlen($a), "|", substr($a, 0, 3), "|", $b;
     );
     assert_eq!(out, "150000|QQQ|tail");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a wrapper declaring the PHP manual's `stream_read(): string|false` returns its
+/// actual bytes.
+///
+/// A wrapper method is called through the ABI its own return type produces: `: string` hands
+/// back the raw pointer/length pair, while the manual's union has codegen representation
+/// `Mixed` and hands back a single boxed cell. The runtime helper read the pair either way, so
+/// the documented signature yielded the right LENGTH and the wrong bytes — `fread()` answered
+/// five spaces where PHP answers "hello". Every other wrapper test in this file declares
+/// `: string`, so the suite pinned the limitation and not one of them could fail on this.
+#[test]
+fn test_wrapper_stream_read_declared_string_or_false_returns_its_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionReadW {
+    public $context;
+    private $data = "hello world";
+    private $pos = 0;
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $count): string|false {
+        if ($this->pos >= strlen($this->data)) { return false; }
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos = $this->pos + strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+}
+stream_wrapper_register("unionread", "UnionReadW");
+$f = fopen("unionread://x", "r");
+echo "[", fread($f, 5), "][", fread($f, 6), "]";
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[hello][ world]");
+}
+
+/// Verifies a wrapper declaring the manual's `dir_readdir(): string|false` yields its entries
+/// and stops on `false`.
+///
+/// Same boxed-return mismatch as the read slot above, and the reason `examples/dir-wrapper`
+/// used to declare `: string` and signal the end of the directory with an empty string: that
+/// spelling is not PHP's, and reference php loops forever on it because `"" !== false`.
+#[test]
+fn test_wrapper_dir_readdir_declared_string_or_false_ends_on_false() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionDirW {
+    public $context;
+    private $entries = ["alpha.txt", "beta.md"];
+    private $pos = 0;
+    public function dir_opendir($path, $options): bool { $this->pos = 0; return true; }
+    public function dir_readdir(): string|false {
+        if ($this->pos >= count($this->entries)) { return false; }
+        $name = $this->entries[$this->pos];
+        $this->pos = $this->pos + 1;
+        return $name;
+    }
+    public function dir_rewinddir(): bool { $this->pos = 0; return true; }
+    public function dir_closedir(): bool { return true; }
+}
+stream_wrapper_register("uniondir", "UnionDirW");
+$dh = opendir("uniondir://x");
+while (($entry = readdir($dh)) !== false) { echo "[", $entry, "]"; }
+rewinddir($dh);
+echo "|", readdir($dh);
+closedir($dh);
+"#,
+    );
+    assert_eq!(out, "[alpha.txt][beta.md]|alpha.txt");
+}
+
+/// Verifies the boxed return path releases the cell without freeing the string it hands back.
+///
+/// `__rt_mixed_cast_string` routes an already-persisted payload through `__rt_str_persist`,
+/// which DUPLICATES it — but takes a concat temporary over IN PLACE and returns that same
+/// pointer. Releasing the box afterwards would then free the entry name being returned, so the
+/// box is retagged as a scalar first and only its own storage is released. A method returning a
+/// concatenation is what makes that difference observable.
+#[test]
+fn test_wrapper_boxed_return_of_a_concatenation_survives_the_box_release() {
+    let out = compile_and_run(
+        r#"<?php
+class ConcatDirW {
+    public $context;
+    private $names = ["one", "two", "three"];
+    private $pos = 0;
+    public function dir_opendir($path, $options): bool { $this->pos = 0; return true; }
+    public function dir_readdir(): string|false {
+        if ($this->pos >= count($this->names)) { return false; }
+        $name = "e-" . $this->names[$this->pos] . ".txt";
+        $this->pos = $this->pos + 1;
+        return $name;
+    }
+    public function dir_closedir(): bool { return true; }
+}
+stream_wrapper_register("concatdir", "ConcatDirW");
+$dh = opendir("concatdir://x");
+while (($entry = readdir($dh)) !== false) { echo "[", $entry, "]"; }
+closedir($dh);
+"#,
+    );
+    assert_eq!(out, "[e-one.txt][e-two.txt][e-three.txt]");
+}
+
+/// Verifies the raw-pair path still works, so the conversion is selected and not applied to
+/// everything.
+///
+/// The boxed path is chosen by a per-class mask, and a mask that was always set would pass
+/// every test above while breaking every wrapper that declares `: string` — the spelling all
+/// the other tests in this file use.
+#[test]
+fn test_wrapper_stream_read_declared_string_still_uses_the_raw_pair() {
+    let out = compile_and_run(
+        r#"<?php
+class PlainReadW {
+    public $context;
+    private $data = "abcdef";
+    private $pos = 0;
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos = $this->pos + strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+}
+stream_wrapper_register("plainread", "PlainReadW");
+$f = fopen("plainread://x", "r");
+echo "[", fread($f, 3), "][", fread($f, 3), "]";
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[abc][def]");
 }

@@ -13,6 +13,7 @@ mod builtin_interfaces;
 mod builtin_iterators;
 mod builtin_json;
 mod builtin_spl_classes;
+mod builtin_class_gate;
 mod builtin_spl_exceptions;
 /// builtin_stdclass
 pub(crate) mod builtin_stdclass;
@@ -226,6 +227,11 @@ pub(crate) struct Checker {
     pub reference_property_promotions: HashSet<(String, String)>,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
+    ///
+    /// Record through `record_throw_access_site`, which refuses a span that cannot identify
+    /// one: lowering looks entries up by the span of the node it is lowering, so a key shared
+    /// by many nodes makes all of them throw. See that method for why the preludes make this
+    /// reachable rather than theoretical.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
@@ -240,6 +246,40 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+}
+
+/// Records an access violation that must lower to a catchable `Error` throw.
+///
+/// Refuses a span that identifies no single node. `throw_access_sites` is read back by lowering
+/// as `get(&span)` for the node being lowered, so an entry filed under a span many nodes share
+/// turns ALL of them into throws — a `$this->prop = ...` in an unrelated class would start
+/// raising "Cannot modify readonly property".
+///
+/// That is reachable, not theoretical. Every node the `synthetic_class` builders produce carries
+/// `Span::dummy()`, the PDO prelude declares `public readonly string $queryString` and writes it,
+/// and the write is allowed only by an `internal_pdo_statement_initializer` special case in
+/// `check_property_assignment`. The day that case stops matching, the violation would be filed
+/// under the shared dummy span rather than reported. Failing the build is the right answer there:
+/// a readonly violation inside a compiler-generated prelude is a compiler bug, not user code to
+/// diagnose at run time.
+///
+/// Takes the map rather than the `Checker` so a caller already holding a borrow of another field
+/// — `self.classes`, at both current call sites — can still record.
+pub(crate) fn record_throw_access_site(
+    sites: &mut HashMap<Span, ThrowAccessInfo>,
+    span: Span,
+    info: ThrowAccessInfo,
+) {
+    debug_assert!(
+        span.line != 0,
+        "throw-access site at a span that names no node ({:?}). Lowering would attach this throw \
+         to every other node sharing the span.",
+        info.kind,
+    );
+    if span.line == 0 {
+        return;
+    }
+    sites.insert(span, info);
 }
 
 #[derive(Clone)]
@@ -404,5 +444,46 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod throw_access_site_tests {
+    use super::record_throw_access_site;
+    use crate::span::Span;
+    use crate::types::{ThrowAccessInfo, ThrowAccessKind};
+    use std::collections::HashMap;
+
+    fn readonly_violation(span: Span) -> ThrowAccessInfo {
+        ThrowAccessInfo {
+            span,
+            kind: ThrowAccessKind::ReadonlyProperty {
+                class_name: "PDOStatement".to_string(),
+                property: "queryString".to_string(),
+            },
+        }
+    }
+
+    /// A violation the checker CAN locate is recorded, keyed by where it happened.
+    #[test]
+    fn a_located_violation_is_recorded() {
+        let mut sites = HashMap::new();
+        let span = Span::new(7, 3);
+        record_throw_access_site(&mut sites, span, readonly_violation(span));
+        assert_eq!(sites.len(), 1);
+        assert!(sites.contains_key(&span));
+    }
+
+    /// A violation the checker CANNOT locate never becomes a key.
+    ///
+    /// Debug builds abort on it instead — a compiler-generated node that violates readonly is a
+    /// compiler bug — so this covers the release behaviour, which is to degrade to silence
+    /// rather than attach the throw to every other node carrying the same dummy span.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn an_unlocatable_violation_never_becomes_a_key() {
+        let mut sites = HashMap::new();
+        record_throw_access_site(&mut sites, Span::dummy(), readonly_violation(Span::dummy()));
+        assert!(sites.is_empty());
     }
 }

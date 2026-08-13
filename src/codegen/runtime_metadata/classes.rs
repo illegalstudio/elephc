@@ -100,28 +100,79 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     if names.contains("Fiber") && module.class_infos.contains_key("FiberError") {
         names.insert("FiberError".to_string());
     }
+    // WHAT BELONGS IN THIS LIST. Only a class some helper can MATERIALIZE without an EIR
+    // class reference — everything a program names is already covered by the referenced-name
+    // scans above and by `expand_class_dependencies` below. The authority on "can be
+    // materialized" is the class-id symbol table in `codegen_support::runtime::data::user`:
+    // a helper stamps `[obj+0]` from a `_*_class_id` symbol, so a throwable with no such
+    // symbol has no unreferenced producer anywhere in the runtime.
     for class_name in [
         "Throwable",
-        "Error",
-        "TypeError",
-        "ArgumentCountError",
-        "ValueError",
-        "ArithmeticError",
-        "DivisionByZeroError",
-        "AssertionError",
-        "UnhandledMatchError",
+        "Error",               // _spl_error_class_id
+        "TypeError",           // _spl_type_error_class_id
+        "ValueError",          // _spl_value_error_class_id
+        "ArithmeticError",     // _spl_arithmetic_error_class_id
+        "DivisionByZeroError", // _spl_division_by_zero_error_class_id
+        "JsonException",       // _json_exception_class_id
+        // `JsonException extends Exception` DIRECTLY, as in reference PHP, so the ancestor
+        // expansion brings Exception back regardless; naming it here only states the dependency
+        // the catch-time walk relies on. (It also has `_exception_class_id` of its own.)
         "Exception",
-        "LogicException",
-        "RuntimeException",
-        "ReflectionException",
-        "JsonException",
-        "InvalidArgumentException",
-        "OutOfBoundsException",
-        "OutOfRangeException",
     ] {
         if module.class_infos.contains_key(class_name) {
             names.insert(class_name.to_string());
         }
+    }
+    // ArgumentCountError, AssertionError and UnhandledMatchError have NO id symbol, and the
+    // reason is the same in each case: nothing in elephc raises them.
+    // - ArgumentCountError: reference PHP raises it at runtime for a bad builtin arity;
+    //   elephc rejects that arity at COMPILE time (`error_class_hierarchy_tests` pins both
+    //   halves of the divergence).
+    // - AssertionError: `assert()` is not implemented — it is still an undefined function.
+    // - UnhandledMatchError: a match with no arm and no default ends in
+    //   `Terminator::Fatal` (`ir_lower::expr::match_expr`), not a throw. Reference PHP throws
+    //   a catchable `UnhandledMatchError` there, so this is a real gap; closing it will add
+    //   an EIR reference, which is exactly what makes the class survive this gate.
+    // A program that names one of them still gets it — `throw new AssertionError(...)` is an
+    // EIR reference. Only eval can conjure one from a string with nothing to scan, and the
+    // eval constructor bridge emits helpers for the whole family (see
+    // `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES`).
+    if module.required_runtime_features.eval_bridge {
+        for class_name in ["ArgumentCountError", "AssertionError", "UnhandledMatchError"] {
+            if module.class_infos.contains_key(class_name) {
+                names.insert(class_name.to_string());
+            }
+        }
+    }
+    // THE SECOND HALF OF THE SAME GATE. `codegen_support::emitted_classes` decides which class
+    // descriptors exist at all; this decides which of them the runtime tables carry. Both seed
+    // the throwable hierarchy, so narrowing one alone changes nothing — measured, after gating
+    // only the other: 7,990 lines before, 7,990 after.
+    //
+    // The condition matches that one exactly: these five are thrown by id from SPL container
+    // helpers only. RuntimeException is one of them and has no other producer — it used to come
+    // back through the ancestor expansion because `JsonException extends RuntimeException`, which
+    // was elephc's own invention; reference PHP puts JsonException directly under Exception. See
+    // `emitted_classes` for the full reasoning and for why getting it wrong is loud rather than
+    // silent.
+    if ["SplDoublyLinkedList", "SplFixedArray", "IteratorIterator"]
+        .iter()
+        .any(|name| module.class_infos.contains_key(*name))
+    {
+        for class_name in [
+            "LogicException",
+            "RuntimeException",
+            "InvalidArgumentException",
+            "OutOfBoundsException",
+            "OutOfRangeException",
+        ] {
+            if module.class_infos.contains_key(class_name) {
+                names.insert(class_name.to_string());
+            }
+        }
+    }
+    if module.class_infos.contains_key("ReflectionClass") {
+        names.insert("ReflectionException".to_string());
     }
 }
 

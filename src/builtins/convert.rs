@@ -29,6 +29,8 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Bool => PhpType::Bool,
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
+        TypeSpec::Ptr => PhpType::Pointer(None),
+        TypeSpec::Callable => PhpType::Callable,
     }
 }
 
@@ -78,6 +80,18 @@ mod tests {
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
+    }
+
+    /// Verifies the two non-PHP-value specs convert to the types their check hooks return.
+    ///
+    /// These exist so a builtin can DECLARE a descriptor: while they did not, six builtins
+    /// declared `Mixed` while checking as one, and every consumer reading the declaration —
+    /// including the result type lowering falls back to when it cannot identify a call — got a
+    /// boxed cell for a raw address.
+    #[test]
+    fn descriptor_type_specs_convert() {
+        assert_eq!(type_spec_to_php(&TypeSpec::Ptr), PhpType::Pointer(None));
+        assert_eq!(type_spec_to_php(&TypeSpec::Callable), PhpType::Callable);
     }
 
     /// Verifies integer DefaultSpec produces an IntLiteral expression matching int_lit().

@@ -359,3 +359,37 @@ var_dump(intval($text, base: 16));
         "int(34)\nint(42)\nint(42)\nint(1)\nint(0)\nint(26)\nint(26)\n"
     );
 }
+
+/// Verifies several `(string)` casts of a boxed `mixed` agree with PHP across every payload
+/// kind, including two different classes reached through `__toString`.
+///
+/// The dispatch these casts share is emitted once per program rather than once per site, and
+/// no example in the tree happened to exercise the result-producing mode — every one of them
+/// reaches the ladder through `echo` instead. Expected output is verbatim `php -n` for the same
+/// program: the two objects, then int, float, bool and string payloads taking the scalar path.
+#[test]
+fn test_repeated_string_casts_of_mixed_agree_with_php_for_every_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Stamp { public function __toString(): string { return "S"; } }
+class Tag { public function __toString(): string { return "T"; } }
+function pick(int $i): mixed {
+    if ($i === 0) { return new Stamp(); }
+    if ($i === 1) { return new Tag(); }
+    if ($i === 2) { return 42; }
+    if ($i === 3) { return 1.5; }
+    if ($i === 4) { return true; }
+    return "raw";
+}
+$a = (string) pick(0);
+$b = (string) pick(1);
+$c = (string) pick(2);
+$d = (string) pick(3);
+$e = (string) pick(4);
+$f = (string) pick(5);
+echo "[$a][$b][$c][$d][$e][$f]";
+echo "|", strlen($a) + strlen($b) + strlen($c);
+"#,
+    );
+    assert_eq!(out, "[S][T][42][1.5][1][raw]|4");
+}

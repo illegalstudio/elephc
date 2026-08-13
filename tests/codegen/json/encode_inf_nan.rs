@@ -130,13 +130,17 @@ try {
     assert_eq!(out, "Inf and NaN cannot be JSON encoded");
 }
 
-/// Verifies JsonException from INF encoding is catchable as RuntimeException (parent class).
+/// Verifies the JsonException from INF encoding is caught by `Exception`, not `RuntimeException`.
+///
+/// `JsonException extends Exception` directly in reference PHP. This test used to assert the
+/// RuntimeException catch matched, which is the divergence, not the behaviour.
 #[test]
-fn test_json_encode_inf_caught_as_runtime_exception() {
+fn test_json_encode_inf_caught_as_exception_not_runtime_exception() {
     let out = compile_and_run(
         r#"<?php
 try { json_encode(INF, JSON_THROW_ON_ERROR); }
-catch (RuntimeException $e) { echo $e->getMessage(); }
+catch (RuntimeException $e) { echo "rte"; }
+catch (Exception $e) { echo $e->getMessage(); }
 "#,
     );
     assert_eq!(out, "Inf and NaN cannot be JSON encoded");

@@ -76,6 +76,30 @@ fn parse_expr_bp_inner(
         }
 
         match &tokens[*pos].0 {
+            // `$this->n++` / `$a[0]--` in EXPRESSION position. A bare `$x++` never reaches here
+            // — `parse_variable` consumes it — so this only sees the l-values the dedicated
+            // increment node cannot name, which until now simply failed to parse. Purely
+            // additive: a target the desugaring declines leaves the original error in place.
+            Token::PlusPlus | Token::MinusMinus => {
+                let span = tokens[*pos].1.span;
+                let increment = tokens[*pos].0 == Token::PlusPlus;
+                match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
+                    lhs.clone(),
+                    increment,
+                    false,
+                    span,
+                ) {
+                    Some(desugared) => {
+                        *pos += 1;
+                        lhs = desugared;
+                        continue;
+                    }
+                    // Not a target this can rewrite (a call, say, which cannot be read
+                    // twice). Leave the operator unconsumed so the caller reports it
+                    // exactly as it did before.
+                    None => break,
+                }
+            }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;

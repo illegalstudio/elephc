@@ -260,7 +260,8 @@ fn check_object_property_write(
             // PHP raises this as a catchable `Error` at runtime instead of a
             // compile-time rejection. Record the throw site so EIR lowering
             // emits the throw sequence, and let lowering proceed.
-            checker.throw_access_sites.insert(
+            crate::types::checker::record_throw_access_site(
+                &mut checker.throw_access_sites,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,

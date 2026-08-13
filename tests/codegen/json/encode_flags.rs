@@ -545,11 +545,11 @@ fn test_json_encode_preserve_zero_fraction_does_not_affect_int() {
 
 // --- JSON_UNESCAPED_UNICODE ---
 
-/// Verifies that without `JSON_UNESCAPED_UNICODE`, a 2-byte UTF-8 character (é) is escaped as `\u00E9`.
+/// Verifies that without `JSON_UNESCAPED_UNICODE`, a 2-byte UTF-8 character (é) is escaped as `\u00e9`.
 #[test]
 fn test_json_encode_default_escapes_2byte_utf8() {
     let out = compile_and_run(r#"<?php echo json_encode("café");"#);
-    assert_eq!(out, "\"caf\\u00E9\"");
+    assert_eq!(out, "\"caf\\u00e9\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw UTF-8 character for 2-byte sequences.
@@ -565,7 +565,7 @@ fn test_json_encode_unescaped_unicode_passes_2byte_utf8() {
 #[test]
 fn test_json_encode_default_escapes_3byte_utf8() {
     let out = compile_and_run(r#"<?php echo json_encode("你好");"#);
-    assert_eq!(out, "\"\\u4F60\\u597D\"");
+    assert_eq!(out, "\"\\u4f60\\u597d\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw UTF-8 character for 3-byte sequences.
@@ -578,11 +578,35 @@ fn test_json_encode_unescaped_unicode_passes_3byte_utf8() {
 }
 
 /// Verifies that without `JSON_UNESCAPED_UNICODE`, a 4-byte UTF-8 character (😀) is encoded as a
-/// UTF-16 surrogate pair (`\uD83D\uDE00`).
+/// UTF-16 surrogate pair (`\ud83d\ude00`).
 #[test]
 fn test_json_encode_default_escapes_4byte_utf8_as_surrogate_pair() {
     let out = compile_and_run(r#"<?php echo json_encode("😀");"#);
-    assert_eq!(out, "\"\\uD83D\\uDE00\"");
+    assert_eq!(out, "\"\\ud83d\\ude00\"");
+}
+
+/// Verifies that emitting a surrogate pair leaves the escaping of LATER characters alone.
+///
+/// The AArch64 helper caches the active flag bitmask in x19 for the whole call, and the
+/// 4-byte UTF-8 path used x19 as scratch: after one astral character the cache held the
+/// high surrogate instead, so every subsequent flag probe read that number's bits. For
+/// U+1F600 the high surrogate is 0xD83D, whose low bits are exactly HEX_TAG|HEX_APOS|
+/// HEX_QUOT — so `<>'"` came back hex-escaped with no flag set. php-src leaves them bare.
+#[test]
+fn test_json_encode_surrogate_pair_does_not_disturb_later_escaping() {
+    let out = compile_and_run(r#"<?php echo json_encode("😀<>'\"");"#);
+    assert_eq!(out, "\"\\ud83d\\ude00<>'\\\"\"");
+}
+
+/// Verifies that a control byte is escaped with LOWERCASE hex digits.
+///
+/// php-src writes `\uXXXX` through a `"0123456789abcdef"` digit table, so every escape it
+/// computes is lowercase. Only the JSON_HEX_* flags are uppercase, and only because those
+/// are appended as literal strings — a split this test pins alongside the HEX_* tests above.
+#[test]
+fn test_json_encode_escapes_control_byte_in_lowercase_hex() {
+    let out = compile_and_run(r#"<?php echo json_encode("a\x1Fb\x0Bc");"#);
+    assert_eq!(out, "\"a\\u001fb\\u000bc\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw 4-byte UTF-8 character without surrogate escaping.
@@ -605,7 +629,7 @@ fn test_json_encode_default_keeps_ascii_unchanged() {
 #[test]
 fn test_json_encode_default_mixes_ascii_and_escaped_unicode() {
     let out = compile_and_run(r#"<?php echo json_encode("Hi café!");"#);
-    assert_eq!(out, "\"Hi caf\\u00E9!\"");
+    assert_eq!(out, "\"Hi caf\\u00e9!\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` applies to each element of an indexed array.

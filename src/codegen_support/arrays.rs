@@ -53,3 +53,48 @@ pub(crate) fn emit_array_value_type_stamp(
         }
     }
 }
+
+/// Copies one array's runtime `value_type` tag into another array's packed kind word.
+///
+/// The run-time twin of `emit_array_value_type_stamp`: that one bakes a tag known at EMIT
+/// time, which a SHARED runtime helper cannot do — a helper like `__rt_array_chunk` sees the
+/// element type only in the source header. Leaving the destination unstamped is silent: the
+/// container is well formed and the right SIZE, but every reader treats its slots as raw
+/// words, so a heterogeneous source produced chunks whose elements printed as ADDRESSES.
+///
+/// `dest_reg` holds the destination array pointer; `source_slot` is an assembler memory
+/// operand holding the source array pointer (a stack slot in the calling helper's frame).
+pub(crate) fn emit_array_value_type_inherit(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    source_slot: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, {}", source_slot));           // reload the source array pointer
+            emitter.instruction("ldr x9, [x9, #-8]");                           // load the source packed heap-kind word
+            emitter.instruction("lsr x9, x9, #8");                              // shift the source value_type into the low bits
+            emitter.instruction("and x9, x9, #0x7f");                           // isolate the value_type, dropping the COW bit
+            emitter.instruction("lsl x9, x9, #8");                              // move it back into the packed byte lane
+            emitter.instruction(&format!("ldr x10, [{}, #-8]", dest_reg));      // load the destination packed heap-kind word
+            emitter.instruction("mov x11, #0x80ff");                            // preserve the indexed-array kind and persistent COW flag
+            emitter.instruction("and x10, x10, x11");                           // keep only the destination's own metadata bits
+            emitter.instruction("orr x10, x10, x9");                            // combine them with the inherited value_type
+            emitter.instruction(&format!("str x10, [{}, #-8]", dest_reg));      // persist the destination packed kind word
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "r12");                                 // preserve the nested-call scratch register before reusing it
+            emitter.instruction(&format!("mov r10, {}", source_slot));          // reload the source array pointer
+            emitter.instruction("mov r10, QWORD PTR [r10 - 8]");                // load the source packed heap-kind word
+            emitter.instruction("shr r10, 8");                                  // shift the source value_type into the low bits
+            emitter.instruction("and r10, 127");                                // isolate the value_type, dropping the COW bit
+            emitter.instruction("shl r10, 8");                                  // move it back into the packed byte lane
+            emitter.instruction(&format!("mov r11, QWORD PTR [{} - 8]", dest_reg)); // load the destination packed heap-kind word
+            emitter.instruction("mov r12, 0xffffffff000080ff");                 // preserve the heap magic marker, kind and persistent COW flag
+            emitter.instruction("and r11, r12");                                // keep only the destination's own metadata bits
+            emitter.instruction("or r11, r10");                                 // combine them with the inherited value_type
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r11", dest_reg)); // persist the destination packed kind word
+            abi::emit_pop_reg(emitter, "r12");                                  // restore the nested-call scratch register
+        }
+    }
+}

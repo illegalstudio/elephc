@@ -73,12 +73,12 @@ $err = new Fiber(function(): void {
     try {
         Fiber::suspend(0);
         echo "not reached\n";
-    } catch (FiberError $e) {
+    } catch (Exception $e) {
         echo "fiber caught the throw: " . $e->getMessage() . "\n";
     }
 });
 $err->start();
-$err->throw(new FiberError("delivered"));
+$err->throw(new Exception("delivered"));
 
 // 5) Closures with use(...) captures bind values from the surrounding scope at
 //    construction time. Captures ride in the callable descriptor, so
@@ -166,8 +166,10 @@ $batch->start("batch", 10, 20, 30);
 echo "variadic return=" . $batch->getReturn() . "\n";
 
 // 11) FiberError is an Error subclass — catch it directly or through Error.
+//     The engine raises it; PHP reserves the class for internal use, so user code
+//     cannot construct one.
 try {
-    throw new FiberError("manual");
+    Fiber::suspend(0);
 } catch (Error $e) {
     echo "caught FiberError\n";
 }

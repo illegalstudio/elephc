@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::ir::ResourceCleanupKind;
 
 /// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 pub(super) fn box_stream_string_or_false_on_empty_result(
@@ -54,19 +55,24 @@ pub(super) fn box_stream_string_or_false_on_empty_result(
 /// `close()` at scope exit). Callers whose handle needs a different destructor use
 /// `box_stream_fd_or_false_result_kind` instead.
 pub(super) fn box_stream_fd_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
-    box_stream_fd_or_false_result_kind(ctx, label_prefix, 1);
+    box_stream_fd_or_false_result_kind(ctx, label_prefix, ResourceCleanupKind::StreamFd);
 }
 
 /// Boxes a non-negative descriptor as a PHP resource (or false on failure) and
 /// records the scope-cleanup `kind` in the Mixed high payload word so
-/// `__rt_mixed_free_deep` dispatches the right destructor: 1 = native stream fd
-/// (`close`), 3 = `popen` pipe (`__rt_pclose`), 4 = `opendir` stream
-/// (`__rt_closedir`).
+/// `__rt_mixed_free_deep` dispatches the right destructor.
+///
+/// The kind is a `ResourceCleanupKind` rather than a bare number because the runtime
+/// emitter no longer carries every arm: it emits an arm only for the kinds
+/// `RuntimeFnId::resource_cleanup_kind` says the lowered program can produce. Stamping a
+/// kind that no `RuntimeFnId` declares would box a resource whose destructor is not in the
+/// binary, and the handle would leak at scope exit with nothing to report it.
 pub(super) fn box_stream_fd_or_false_result_kind(
     ctx: &mut FunctionContext<'_>,
     label_prefix: &str,
-    kind: u64,
+    cleanup: ResourceCleanupKind,
 ) {
+    let kind = cleanup.stamp();
     let false_label = ctx.next_label(&format!("{}_false", label_prefix));
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
@@ -334,10 +340,29 @@ pub(super) fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Runtime Mixed tag for a packed indexed array payload.
+const MIXED_TAG_INDEXED_ARRAY: u64 = 4;
+/// Runtime Mixed tag for an associative-array (hash) payload.
+const MIXED_TAG_ASSOC_ARRAY: u64 = 5;
+
 /// Boxes the raw stat hash payload into PHP `array|false` Mixed form.
 pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
-    let false_label = ctx.next_label("stat_array_false");
-    let done_label = ctx.next_label("stat_array_done");
+    box_array_or_false_result(ctx, MIXED_TAG_ASSOC_ARRAY, "stat_array");
+}
+
+/// Boxes a packed indexed array — a `fgetcsv()` row — into PHP `array|false` Mixed form.
+///
+/// Same shape as the stat helper, a different runtime tag: the payload is a packed
+/// array, not a hash. Sharing one body is what keeps the two from drifting into
+/// mismatched heap-kind and tag pairs.
+pub(super) fn box_indexed_array_or_false_result(ctx: &mut FunctionContext<'_>) {
+    box_array_or_false_result(ctx, MIXED_TAG_INDEXED_ARRAY, "csv_row");
+}
+
+/// Boxes a runtime array pointer as a Mixed of `tag`, or PHP false when it is null.
+fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_prefix: &str) {
+    let false_label = ctx.next_label(&format!("{label_prefix}_false"));
+    let done_label = ctx.next_label(&format!("{label_prefix}_done"));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // branch when the stat runtime returned a null hash pointer
@@ -346,11 +371,11 @@ pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #5");                              // select heap kind 5 for a boxed Mixed cell
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a Mixed cell
-            ctx.emitter.instruction("mov x9, #5");                              // select runtime tag 5 for an associative-array Mixed payload
-            ctx.emitter.instruction("str x9, [x0]");                            // store the associative-array tag in the Mixed cell
+            ctx.emitter.instruction(&format!("mov x9, #{}", tag));              // select the runtime tag matching this array's payload shape
+            ctx.emitter.instruction("str x9, [x0]");                            // store the array tag in the Mixed cell
             abi::emit_pop_reg(ctx.emitter, "x10");
-            ctx.emitter.instruction("str x10, [x0, #8]");                       // store the owned stat hash pointer in the Mixed cell
-            ctx.emitter.instruction("str xzr, [x0, #16]");                      // associative-array Mixed payloads do not use a high word
+            ctx.emitter.instruction("str x10, [x0, #8]");                       // store the owned array pointer in the Mixed cell
+            ctx.emitter.instruction("str xzr, [x0, #16]");                      // array Mixed payloads do not use a high word
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the array Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
@@ -367,10 +392,10 @@ pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
-            ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax], {}", tag));  // select the runtime tag matching this array's payload shape
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned stat hash pointer in the Mixed cell
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], 0");             // associative-array Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned array pointer in the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], 0");             // array Mixed payloads do not use a high word
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the array Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box

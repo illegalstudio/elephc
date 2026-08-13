@@ -40,16 +40,22 @@ catch (JsonException $e) { echo "caught: " . $e->getMessage(); }
     assert_eq!(out, "caught: decode failed");
 }
 
-/// Verifies JsonException is catchable as RuntimeException (parent class).
+/// Verifies JsonException is NOT catchable as RuntimeException.
+///
+/// It was, until `JsonException` was moved under `Exception` where reference PHP puts it
+/// (`php -r 'var_dump(class_parents("JsonException"));'` answers `["Exception"]`). This test
+/// asserted the opposite and passed, which is what a test pinning a divergence looks like: a
+/// `catch (RuntimeException $e)` was silently swallowing a JSON error PHP lets escape.
 #[test]
-fn test_json_exception_caught_as_runtime_exception() {
+fn test_json_exception_not_caught_as_runtime_exception() {
     let out = compile_and_run(
         r#"<?php
 try { throw new JsonException("again"); }
 catch (RuntimeException $e) { echo "rte: " . $e->getMessage(); }
+catch (Exception $e) { echo "ex: " . $e->getMessage(); }
 "#,
     );
-    assert_eq!(out, "rte: again");
+    assert_eq!(out, "ex: again");
 }
 
 /// Verifies JsonException is catchable as Exception (root of exception hierarchy).
@@ -64,16 +70,16 @@ catch (Exception $e) { echo "ex: " . $e->getMessage(); }
     assert_eq!(out, "ex: third");
 }
 
-/// Verifies JsonException is an instanceof RuntimeException.
+/// Verifies JsonException is NOT an instanceof RuntimeException, matching reference PHP.
 #[test]
-fn test_json_exception_instanceof_runtime_exception() {
+fn test_json_exception_not_instanceof_runtime_exception() {
     let out = compile_and_run(
         r#"<?php
 $e = new JsonException("x");
 echo ($e instanceof RuntimeException ? "yes" : "no");
 "#,
     );
-    assert_eq!(out, "yes");
+    assert_eq!(out, "no");
 }
 
 /// Verifies JsonException is an instanceof Exception.

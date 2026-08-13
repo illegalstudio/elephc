@@ -84,6 +84,13 @@ mod tests {
         assert_eq!(map_syscall(1), 94);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
+        // The process-identity trio behind is_readable()/is_writable(): getuid,
+        // getgid, getgroups. Their macOS and Linux numbers share no digits, so a
+        // transcription slip here answers the permission question about the
+        // wrong identity rather than failing.
+        assert_eq!(map_syscall(24), 174);
+        assert_eq!(map_syscall(47), 176);
+        assert_eq!(map_syscall(79), 158);
         assert_eq!(map_syscall(29), 207);
         assert_eq!(map_syscall(30), 202);
         assert_eq!(map_syscall(31), 205);

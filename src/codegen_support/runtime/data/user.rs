@@ -347,15 +347,36 @@ pub(crate) fn emit_runtime_data_user(
         json_exception_class_id,
     ));
 
+    // TWO SENTINELS, BECAUSE THEY MEAN OPPOSITE THINGS. `__rt_exception_matches` walks this table
+    // from the thrown class upwards, and a slot that is not a parent id ends the walk. Until this
+    // distinction existed, one value ended it three ways: a class with no parent (a genuine root,
+    // where stopping is the right answer), a hole in the id space, and a class whose PARENT was
+    // never emitted. The last two are broken chains, and collapsing them onto the first is how a
+    // `catch (Exception $e)` silently fails to match a thrown JsonException — the walk reaches
+    // for an ancestor that is not there and reports, in good faith, no match.
+    //
+    // `-1` still means "root, stop and report no match". `-2` means "the metadata this walk needs
+    // was never emitted", and the helper aborts on it. Nothing should ever produce a `-2` walk
+    // today: `crate::codegen_support::emitted_classes` seeds the whole throwable hierarchy for
+    // exactly this reason. The sentinel is what lets a future gate there fail loudly instead of
+    // quietly, which is the precondition for narrowing that seeding at all.
+    const CLASS_PARENT_ROOT: i64 = -1;
+    const CLASS_PARENT_ABSENT: i64 = -2;
     out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
-            let parent_id = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.parent.as_ref())
-                .and_then(|parent_name| class_id_by_name.get(parent_name))
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "-1".to_string());
+            let parent_id = match class_info_by_id.get(&class_id) {
+                // A hole in the id space: nothing was emitted under this id at all.
+                None => CLASS_PARENT_ABSENT.to_string(),
+                Some(class_info) => match class_info.parent.as_ref() {
+                    None => CLASS_PARENT_ROOT.to_string(),
+                    Some(parent_name) => match class_id_by_name.get(parent_name) {
+                        Some(id) => id.to_string(),
+                        // The chain is broken: this class has a parent, but it was not emitted.
+                        None => CLASS_PARENT_ABSENT.to_string(),
+                    },
+                },
+            };
             out.push_str(&format!("    .quad {}\n", parent_id));
         }
     }
@@ -586,7 +607,9 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS {
+    // The method pointers plus the trailing boxed-result mask, so a class with no
+    // wrapper method shares a table the helpers can read to the same extent.
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 1 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2197,6 +2220,11 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// string keys (`size`, `mode`, ...) PHP stat arrays use.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 
+/// Byte offset of the boxed-result mask that follows the method pointers in every
+/// `_user_wrapper_vtable_<class_id>`. Single authority for the layout: the emitter
+/// writes the quad at this position and the runtime helpers read it from here.
+pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8;
+
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
@@ -2226,6 +2254,60 @@ const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "oncreate",
     "onclose",
 ];
+
+/// Vtable slots whose runtime helper reads the method's result as a RAW STRING PAIR
+/// (pointer + length in the string-result registers) rather than as a boxed Mixed.
+///
+/// A wrapper method is called through its own ABI, and that ABI follows its return
+/// type: `: string` returns the pair, while the union the PHP manual declares —
+/// `stream_read(): string|false`, `dir_readdir(): string|false` — has codegen
+/// representation `Mixed` and returns a single boxed pointer instead. The helper read
+/// the pair registers either way, so the manual's signature yielded the right length
+/// and the wrong bytes, silently. `user_wrapper_boxed_result_mask` records which slots
+/// need the conversion so the helper can do it.
+///
+/// The stat slots are deliberately absent: they already expect a boxed Mixed (see the
+/// note on `USER_WRAPPER_VTABLE_SLOTS`), so a union return is the shape they want.
+const USER_WRAPPER_STRING_RESULT_SLOTS: [usize; 2] = [2, 20];
+
+/// Slots whose helper reads a raw integer or boolean out of the result register.
+///
+/// These need the same treatment as the string slots for the opposite reason: real
+/// wrapper code does NOT annotate `stream_tell(): int`, so the undeclared form —
+/// which returns a boxed cell — is the common one, and reading that register as a
+/// raw integer answered a pointer.
+///
+/// `dir_closedir` and `dir_rewinddir` are absent because nothing reads their result;
+/// `stream_stat`/`url_stat` already expect a boxed Mixed and `stream_cast` normalizes
+/// both shapes itself, so converting any of those would break a correct result.
+const USER_WRAPPER_SCALAR_RESULT_SLOTS: [usize; 13] =
+    [0, 3, 4, 5, 6, 7, 11, 12, 15, 16, 17, 18, 19];
+
+
+/// Returns the bitmask stored after the method pointers, where bit `i` marks a slot
+/// whose method returns a boxed Mixed although its helper expects the raw string pair.
+///
+/// The mask is APPENDED to the vtable rather than kept in a table of its own: every
+/// existing slot offset stays where it is, no second dense per-class-id pointer table
+/// is emitted, and a helper that does not care never loads it.
+fn user_wrapper_boxed_result_mask(class_info: &ClassInfo) -> u64 {
+    let mut mask = 0u64;
+    let slots = USER_WRAPPER_STRING_RESULT_SLOTS
+        .iter()
+        .chain(USER_WRAPPER_SCALAR_RESULT_SLOTS.iter())
+        .copied();
+    for slot in slots {
+        let method_name = USER_WRAPPER_METHOD_NAMES[slot];
+        let returns_boxed = class_info
+            .methods
+            .get(method_name)
+            .is_some_and(|sig| matches!(sig.return_type.codegen_repr(), PhpType::Mixed));
+        if returns_boxed {
+            mask |= 1 << slot;
+        }
+    }
+    mask
+}
 
 const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
     "stream_open",
@@ -2351,6 +2433,11 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
+    // One trailing quad after the method pointers: the boxed-result mask.
+    out.push_str(&format!(
+        "    .quad {}\n",
+        user_wrapper_boxed_result_mask(class_info)
+    ));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
@@ -2813,6 +2900,152 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 }
 
 #[cfg(test)]
+mod boxed_result_mask_tests {
+    use std::collections::HashMap;
+
+    use crate::types::{FunctionSig, PhpType};
+
+    use super::{
+        user_wrapper_boxed_result_mask, USER_WRAPPER_SCALAR_RESULT_SLOTS,
+        USER_WRAPPER_STRING_RESULT_SLOTS,
+    };
+
+    /// Builds a signature carrying only the return type, which is all the mask reads.
+    fn returning(return_type: PhpType) -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Builds a class info whose named methods carry the given return types.
+    fn class_with(methods: &[(&str, PhpType)]) -> crate::types::ClassInfo {
+        let mut class_info = super::tests::empty_class_info(1, "stream_open");
+        class_info.methods = HashMap::new();
+        for (name, return_type) in methods {
+            class_info
+                .methods
+                .insert((*name).to_string(), returning(return_type.clone()));
+        }
+        class_info
+    }
+
+    /// The mask marks exactly the slots whose method returns the boxed representation.
+    ///
+    /// Both directions matter and the second is the one that bites: a mask that was always
+    /// set would satisfy every union test while breaking every wrapper declared `: string`,
+    /// which is how all the older tests and examples are written.
+    #[test]
+    fn the_mask_marks_a_union_return_and_leaves_a_string_return_alone() {
+        let union = PhpType::Union(vec![PhpType::Str, PhpType::False]);
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[("stream_read", union.clone())])),
+            1 << 2,
+            "a `string|false` stream_read must select the boxed conversion"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[("dir_readdir", union.clone())])),
+            1 << 20,
+            "a `string|false` dir_readdir must select the boxed conversion"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[
+                ("stream_read", PhpType::Str),
+                ("dir_readdir", PhpType::Str),
+            ])),
+            0,
+            "`: string` methods return the raw pair and must not be converted"
+        );
+        assert_eq!(
+            user_wrapper_boxed_result_mask(&class_with(&[])),
+            0,
+            "a class implementing neither slot marks nothing"
+        );
+    }
+
+    /// Only slots whose helper reads a raw string pair may appear in the mask.
+    ///
+    /// The stat slots already expect a boxed Mixed and `stream_cast` normalizes both shapes
+    /// itself, so adding either here would convert a result that is already correct.
+    #[test]
+    fn only_the_string_pair_slots_are_convertible() {
+        assert_eq!(USER_WRAPPER_STRING_RESULT_SLOTS, [2, 20]);
+        for slot in USER_WRAPPER_STRING_RESULT_SLOTS {
+            assert!(
+                matches!(super::USER_WRAPPER_METHOD_NAMES[slot], "stream_read" | "dir_readdir"),
+                "slot {slot} is not one of the string-pair methods"
+            );
+        }
+    }
+
+    /// The scalar slot numbers are anchored to method NAMES, not left as bare integers.
+    ///
+    /// They are a second authority: the runtime helpers test the mask bit for their own
+    /// `VTABLE_SLOT_*` constant, so a slot list that drifts from the vtable order would
+    /// convert one method's result on another method's bit — a silent miscompile rather
+    /// than a build failure. Anchoring to the name makes any reordering fail here.
+    #[test]
+    fn every_scalar_slot_names_the_method_whose_helper_reads_a_raw_scalar() {
+        const EXPECTED: [(usize, &str); 13] = [
+            (0, "stream_open"),
+            (3, "stream_write"),
+            (4, "stream_eof"),
+            (5, "stream_tell"),
+            (6, "stream_seek"),
+            (7, "stream_flush"),
+            (11, "stream_lock"),
+            (12, "stream_truncate"),
+            (15, "unlink"),
+            (16, "rename"),
+            (17, "mkdir"),
+            (18, "rmdir"),
+            (19, "dir_opendir"),
+        ];
+        assert_eq!(
+            USER_WRAPPER_SCALAR_RESULT_SLOTS.len(),
+            EXPECTED.len(),
+            "a slot was added or removed without updating this guard"
+        );
+        for (slot, name) in EXPECTED {
+            assert!(
+                USER_WRAPPER_SCALAR_RESULT_SLOTS.contains(&slot),
+                "{name} (slot {slot}) is missing from the scalar-result mask"
+            );
+            assert_eq!(
+                super::USER_WRAPPER_METHOD_NAMES[slot],
+                name,
+                "slot {slot} no longer holds {name}: the vtable order moved under the mask"
+            );
+        }
+        for slot in USER_WRAPPER_SCALAR_RESULT_SLOTS {
+            assert!(
+                !USER_WRAPPER_STRING_RESULT_SLOTS.contains(&slot),
+                "slot {slot} cannot be both a string-pair and a scalar result"
+            );
+        }
+        // Reached through `__rt_user_wrapper_path_op`, whose vtable slot is a runtime
+        // argument rather than a constant: the helper selects the mask bit with a
+        // variable shift, so all four must be marked or one of them silently keeps
+        // reading a boxed cell as a boolean.
+        for slot in [15, 16, 17, 18] {
+            assert!(
+                USER_WRAPPER_SCALAR_RESULT_SLOTS.contains(&slot),
+                "path-op slot {slot} must also be marked as a scalar result"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
 
@@ -2824,7 +3057,7 @@ mod tests {
     use super::emit_runtime_data_user;
 
     /// Provides the Empty class info helper used by the user module.
-    fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
+    pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
         let mut method_impl_classes = HashMap::new();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
 
@@ -2944,6 +3177,12 @@ mod tests {
     }
 
     /// Verifies that emit runtime data user keeps dense class tables when ids start at one.
+    ///
+    /// The fixture declares ids 1..3 and leaves 0 empty, so it also pins the two parent-id
+    /// sentinels apart: slot 0 is a HOLE and gets `-2` ("no metadata was emitted here", which
+    /// makes `__rt_exception_matches` abort), while 1..3 are genuine roots and get `-1` ("stop
+    /// walking and report no match"). Before they were distinguished, all four read `-1` and a
+    /// broken ancestor chain was indistinguishable from a class that simply had no parent.
     #[test]
     fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
         let mut classes = HashMap::new();
@@ -2973,7 +3212,7 @@ mod tests {
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
-        assert!(asm.contains("_class_parent_ids:\n    .quad -1\n    .quad -1\n    .quad -1\n    .quad -1\n"));
+        assert!(asm.contains("_class_parent_ids:\n    .quad -2\n    .quad -1\n    .quad -1\n    .quad -1\n"));
         assert!(asm.contains("_class_vtable_ptrs:\n    .quad _class_vtable_missing\n    .quad _class_vtable_1\n    .quad _class_vtable_2\n    .quad _class_vtable_3\n"));
         assert!(asm.contains("_class_static_vtable_ptrs:\n    .quad _class_static_vtable_missing\n    .quad _class_static_vtable_1\n    .quad _class_static_vtable_2\n    .quad _class_static_vtable_3\n"));
     }

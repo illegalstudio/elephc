@@ -334,13 +334,35 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // Verified rather than assumed: the checker widens an indexed input to a hash because PHP
+    // keeps each survivor's ORIGINAL key, so the result of `[1,2,2,3,1]` has no key 2. A
+    // lowering that still built a dense array would disagree with its own declared type,
+    // which miscompiles instead of failing to build.
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // The dedup scan compares slots as RAW words, which is a POINTER for a boxed element, so
+    // two separately boxed `1`s never matched: `array_unique([1,"b",1,4])` answered `1,b,1,4`
+    // where PHP answers `1,b,4`. PHP compares these elements by their STRING rendering.
+    // Refused rather than answered wrongly, like the set operations that share the defect; the
+    // gate itself cannot carry this, because `array_reverse`, `shuffle` and `array_merge` use
+    // it too and never compare their elements.
+    if matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_unique compares boxed elements by identity, not by value, for indexed-array \
+             element PHP type {:?}",
+            elem_ty
+        )));
+    }
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
-    abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_unique");
     store_if_result(ctx, inst)
 }
 

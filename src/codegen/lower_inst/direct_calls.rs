@@ -186,15 +186,11 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
             );
             abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-            if let Some(cleanup) = cleanup_slots
+            let cleanup = cleanup_slots
                 .iter()
-                .find(|cleanup| cleanup.param_index == index)
-            {
-                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
-            }
+                .find(|cleanup| cleanup.param_index == index);
+            let push_ty =
+                materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index]);
@@ -259,15 +255,11 @@ pub(super) fn materialize_static_method_call_args_with_refs(
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-            if let Some(cleanup) = cleanup_slots
+            let cleanup = cleanup_slots
                 .iter()
-                .find(|cleanup| cleanup.param_index == index)
-            {
-                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
-            }
+                .find(|cleanup| cleanup.param_index == index);
+            let push_ty =
+                materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&visible_abi_param_types[index]);
@@ -320,6 +312,37 @@ pub(super) fn materialize_called_class_id(
         }
     }
     Ok(())
+}
+
+/// Materializes one ordinary (non-by-reference, non-borrowed-cell) call argument.
+///
+/// The `__rt_incref` is what stops a widening conversion from rewriting the CALLER's array.
+/// `__rt_array_to_mixed` consumes an owner slot — it splits through
+/// `__rt_array_ensure_unique`, which only clones when the refcount says the array is shared —
+/// so a borrowed array reached it looking unique and had its element slots rewritten in place.
+/// Making it visibly shared first forces the clone; the reserved cleanup slot then releases
+/// that clone once the callee returns.
+///
+/// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
+/// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
+/// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
+fn materialize_plain_call_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    param_ty: &PhpType,
+    cleanup: Option<&CallArgTempCleanup>,
+    arg_temp_bytes: usize,
+) -> Result<PhpType> {
+    ctx.load_value_to_result(value)?;
+    let source_ty = ctx.raw_value_php_type(value)?;
+    if cleanup.is_some() && super::call_cleanup::argument_widens_typed_array(&source_ty, param_ty) {
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    }
+    let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+    if let Some(cleanup) = cleanup {
+        save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+    }
+    Ok(push_ty)
 }
 
 /// Converts the loaded call operand to the ABI shape required by the callee parameter.

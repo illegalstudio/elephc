@@ -61,6 +61,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
+| `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
@@ -402,6 +403,25 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
+
+## Symbol stripping
+
+A linked executable is stripped of its symbol table, which removes roughly a
+quarter of the file. Nothing in a compiled program reads those names, so this
+changes size only, never behavior.
+
+| Invocation | Symbol table | DWARF |
+|---|---|---|
+| `elephc app.php` | stripped | — |
+| `elephc --keep-symbols app.php` | kept | — |
+| `elephc --debug-info app.php` | kept | emitted |
+
+Use `--keep-symbols` when a profiler needs function names but the full DWARF of
+`--debug-info` is unwanted. Shared libraries built with `--emit cdylib` are
+never stripped, because their exported symbols are their interface.
+
+Details, including what happens when the `strip` tool is unavailable, are in
+[Symbol stripping](linking-and-conditional-compilation.md#symbol-stripping).
 
 ## Environment variables
 

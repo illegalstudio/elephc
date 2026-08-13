@@ -67,6 +67,27 @@ pub(in crate::ir_lower) fn indexed_array_write_element_type(
     }
 }
 
+/// Lowers the key and the value of an element write in PHP's evaluation order.
+///
+/// PHP freezes an index *expression* into a temporary before the right-hand side runs, so
+/// `$a[idx()] = val()` prints `[idx][val]` and stores at whatever `idx()` returned. But a
+/// plain *variable* index is not frozen: the store reads the variable's slot at store time,
+/// after the right-hand side, so `$i = 0; $a[$i] = ($i = 1);` writes index 1, not index 0.
+/// Only the read moves — the index expression keeps its place so side-effect order is
+/// unchanged, which for a bare variable is no order at all.
+fn lower_write_key_and_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    value: &Expr,
+) -> (LoweredValue, LoweredValue) {
+    if matches!(index.kind, ExprKind::Variable(_)) {
+        let value_value = lower_expr(ctx, value);
+        return (lower_expr(ctx, index), value_value);
+    }
+    let index_value = lower_expr(ctx, index);
+    (index_value, lower_expr(ctx, value))
+}
+
 /// Lowers an indexed array assignment.
 pub(super) fn lower_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -76,8 +97,7 @@ pub(super) fn lower_array_assign(
     span: Span,
 ) {
     let array_value = ctx.load_local(array, Some(span));
-    let mut index_value = lower_expr(ctx, index);
-    let mut value_value = lower_expr(ctx, value);
+    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either

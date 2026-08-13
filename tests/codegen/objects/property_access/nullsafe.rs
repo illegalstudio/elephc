@@ -54,12 +54,16 @@ echo $without->profile?->name ?? "none";
     assert_eq!(out, "Ada|none");
 }
 
-/// Verifies nullsafe (?->) does NOT suppress the "must not be accessed before
-/// initialization" error for typed properties that are genuinely uninitialized,
-/// as opposed to explicitly set to null. Fixture: User with uninitialized
-/// typed property ?Profile $profile (no default, not set in __construct).
-/// After issue #339 the guard throws a catchable Error; without a try/catch
-/// the no-handler fast path still reports the specific fatal diagnostic.
+/// Verifies nullsafe (`?->`) does NOT suppress the "must not be accessed before
+/// initialization" error for a typed property that is genuinely uninitialized, as opposed to
+/// explicitly set to null. `?->` guards a null RECEIVER; it says nothing about the property it
+/// then reads, and reference PHP fatals on this exact program.
+///
+/// The fixture deliberately carries no `??`. It used to, and that made the test assert the
+/// opposite of reference PHP: `echo $without?->profile?->name ?? "none";` prints `none` and
+/// exits 0 under `php -n`, because `??` DOES suppress it. The suppressing case is the test
+/// below; keeping both is what separates the two constructs, which the single `??` fixture
+/// could not do.
 #[test]
 fn test_nullsafe_property_access_does_not_suppress_uninitialized_typed_property() {
     let err = compile_and_run_expect_failure(
@@ -71,13 +75,38 @@ class User {
     public ?Profile $profile;
 }
 $without = new User();
-echo $without?->profile?->name ?? "none";
+echo $without?->profile?->name;
 "#,
     );
     assert!(
         err.contains("Fatal error: Typed property User::$profile must not be accessed before initialization"),
         "{err}"
     );
+}
+
+/// The companion: `??` DOES suppress it, whether the uninitialized property sits at the root
+/// of a nullsafe chain or is read on its own.
+#[test]
+fn test_coalesce_suppresses_an_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Profile {
+    public string $name = "Ada";
+}
+class User {
+    public ?Profile $profile;
+}
+$without = new User();
+echo $without?->profile?->name ?? "none";
+echo "|";
+echo $without->profile ?? "absent";
+echo "|";
+$with = new User();
+$with->profile = new Profile();
+echo $with?->profile?->name ?? "none";
+"#,
+    );
+    assert_eq!(out, "none|absent|Ada");
 }
 
 /// Verifies nullsafe method call (?->) does not evaluate call arguments when
@@ -267,12 +296,16 @@ read(null);
     assert_eq!(out.stderr, "");
 }
 
-/// Verifies mixed chain (nullsafe ?-> followed by regular ->) emits a warning
-/// when a real null is encountered at a non-nullsafe hop. Fixture: Root with
-/// Branch but Branch->leaf is null; $root?->branch->leaf->name emits
-/// "Attempt to read property 'name' on null" warning and returns "fallback".
+/// A mixed chain (nullsafe `?->` then regular `->`) that hits a real null at a non-nullsafe hop
+/// yields the `??` fallback and emits NOTHING: `??` suppresses the property-on-null warning
+/// wherever in the chain the null appears. Fixture: `Root` has a `Branch`, but `Branch->leaf` is
+/// null, so `$root?->branch->leaf->name` reads a property on null mid-chain.
+///
+/// This asserted the warning WAS emitted until the `??` suppression was made to match `php -n`,
+/// which prints `fallback` and leaves stderr empty for this exact program. Written from the
+/// implementation, it pinned the divergence.
 #[test]
-fn test_mixed_nullsafe_member_chain_warns_for_real_null_midpoint() {
+fn test_mixed_nullsafe_member_chain_coalesces_a_real_null_midpoint_without_warning() {
     let out = compile_and_run_capture(
         r#"<?php
 class Leaf {
@@ -291,10 +324,9 @@ echo $root?->branch->leaf->name ?? "fallback";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
-    assert!(
-        out.stderr.contains("Warning: Attempt to read property \"name\" on null"),
-        "{}",
-        out.stderr
+    assert_eq!(
+        out.stderr, "",
+        "`??` must suppress the mid-chain property-on-null warning"
     );
 }
 
@@ -471,4 +503,102 @@ read(new Root());
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "noisy|21");
     assert_eq!(out.stderr, "");
+}
+
+/// A `?C`-typed receiver represents as a boxed `Mixed`, which `Op::PropInitialized` used to be
+/// refused for: `$c->p ?? "d"` therefore stayed on the ordinary read and fatalled on an
+/// uninitialized typed property, and `isset($c->p)` did not compile at all
+/// (`unsupported EIR backend feature: prop_initialized for receiver PHP type Mixed`). Both are
+/// ordinary code — a nullable parameter is the common way to accept an optional object.
+///
+/// The backend now unboxes such a receiver, and a NULL one answers "not initialized", which is
+/// the answer both callers want: `isset(null->p)` is false and `null->p ?? "d"` is the default.
+#[test]
+fn test_coalesce_and_isset_reach_a_nullable_typed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $p;
+    public string $q = "def";
+}
+function read(?C $c): string { return $c->p ?? "d"; }
+function probe(?C $c): string { return isset($c->p) ? "y" : "n"; }
+function defaulted(?C $c): string { return $c->q ?? "d"; }
+$fresh = new C();
+$set = new C();
+$set->p = 3;
+$cleared = new C();
+$cleared->p = 5;
+unset($cleared->p);
+echo read($fresh), read(null), read($set), read($cleared), "|";
+echo probe($fresh), probe(null), probe($set), probe($cleared), "|";
+echo defaulted($fresh), defaulted(null);
+"#,
+    );
+    assert_eq!(out, "dd3d|nnyn|defd");
+}
+
+/// The slot is resolved from the receiver's DECLARED class, so a subclass instance arriving
+/// through the same `?C` parameter must still read its inherited slot — both the probe and the
+/// value. A layout mismatch would show here as a wrong number rather than a fatal.
+#[test]
+fn test_nullable_typed_receiver_probe_follows_an_inherited_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $p; }
+class D extends C { public int $r = 7; }
+function read(?C $c): string { return $c->p ?? "d"; }
+$plain = new D();
+$filled = new D();
+$filled->p = 9;
+echo read($plain), ",", read($filled);
+"#,
+    );
+    assert_eq!(out, "d,9");
+}
+
+/// `??=` through a nullable receiver exercises the probe AND the write that follows it. The
+/// uninitialized branch of the probe used to release the receiver unconditionally; for a boxed
+/// `?C` local that release freed the receiver the write then needed, and the program died with
+/// "Attempt to assign property on null" while holding a perfectly good object.
+#[test]
+fn test_coalesce_assign_through_a_nullable_typed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $p; }
+function fill(?C $c): string { $c->p ??= 42; return (string) $c->p; }
+$fresh = new C();
+$set = new C();
+$set->p = 3;
+echo fill($fresh), ",", fill($set), ",", $fresh->p;
+"#,
+    );
+    assert_eq!(out, "42,3,42");
+}
+
+/// The receiver of the suppressing read is released only when this expression OWNS it. A call
+/// result does — `mk()->p ?? "none"` leaked one object per call before it was released on the
+/// uninitialized path — and a plain variable does not. Both shapes run here, with a nullable
+/// call result covering the boxed case, and the heap must end balanced.
+#[test]
+fn test_coalesce_receiver_release_is_balanced_for_owned_and_borrowed_receivers() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class C { public int $p; }
+function mk(): C { return new C(); }
+function mkMaybe(bool $real): ?C { return $real ? new C() : null; }
+$local = new C();
+for ($i = 0; $i < 200; $i++) {
+    $a = mk()->p ?? "none";
+    $b = mk()?->p ?? "none";
+    $c = mkMaybe(true)->p ?? "none";
+    $d = mkMaybe(false)->p ?? "none";
+    $e = $local->p ?? "none";
+}
+echo $a, $b, $c, $d, $e;
+"#,
+    );
+    assert_eq!(out.stdout, "nonenonenonenonenone");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }

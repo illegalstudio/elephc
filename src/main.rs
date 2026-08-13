@@ -45,6 +45,7 @@ mod parser;
 mod php_version;
 mod pdo_prelude;
 mod php_profile;
+mod prelude_prune;
 mod pipeline;
 mod progress;
 mod resolver;
@@ -56,6 +57,8 @@ mod span;
 mod strict_php;
 mod string_bytes;
 mod superglobals;
+#[allow(dead_code)]
+mod synthetic_class;
 mod termination;
 mod timings;
 mod types;

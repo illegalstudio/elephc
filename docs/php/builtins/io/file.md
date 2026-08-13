@@ -8,7 +8,7 @@ sidebar:
 ## file()
 
 ```php
-function file(string $filename, int $flags = 0): array
+function file(string $filename, int $flags = 0): mixed
 ```
 
 Reads an entire file into an array.
@@ -17,7 +17,7 @@ Reads an entire file into an array.
 - `$filename` (`string`)
 - `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

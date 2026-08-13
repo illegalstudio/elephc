@@ -53,6 +53,7 @@ pub(crate) fn compile(config: CliConfig) {
         emit_timings,
         emit_source_map,
         emit_debug_info,
+        keep_symbols,
         regalloc_linear,
         ir_opt,
         target,
@@ -76,6 +77,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
@@ -511,6 +513,7 @@ pub(crate) fn compile(config: CliConfig) {
         exported_functions: &exported_functions,
         regalloc_linear,
         emit_debug_info,
+        keep_symbols,
         output_paths: &output_paths,
         emit_source_map,
         emit_asm,

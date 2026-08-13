@@ -721,3 +721,63 @@ var_dump(isset($u->v), $u->v);
     );
     assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
 }
+
+/// Pins the `??=` container targets that reach the BORROWED-write scope, and the one that does
+/// not.
+///
+/// `??=` writes its result temporary into the container and also hands it to the expression's
+/// consumer, so the write only borrows it. A reviewer argued the borrow was unsound for a
+/// target whose base is a temporary, and could not be settled by reading the code: the question
+/// is which targets reach that scope at all. These three do — a fresh temporary base, a base
+/// aliasing a live object, and a right-hand side that is itself an owned string — and each
+/// matches `php -n`.
+///
+/// The refusal below is the other half. `mkArr()[2] ??= 5` is accepted by PHP and refused here,
+/// so the accept set is bounded by a compile error rather than by an ownership argument. It is
+/// pinned so that widening the set has to come through this test instead of silently opening
+/// the borrowed-write scope to a shape nobody measured.
+#[test]
+fn test_coalesce_assign_borrowed_write_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $a = [1, 2];
+}
+$shared = new Bag();
+function mkShared(): Bag {
+    global $shared;
+    return $shared;
+}
+function mk(): Bag {
+    return new Bag();
+}
+mkShared()->a[2] ??= 5;
+mkShared()->a[3] ??= "o" . "wned";
+mkShared()->a[1] ??= 9;
+mk()->a[2] ??= 5;
+echo implode(",", $shared->a);
+"#,
+    );
+    assert_eq!(out, "1,2,5,owned");
+}
+
+/// The bound on that accept set: an element write through a call result the compiler cannot
+/// place is refused, where PHP accepts it and prints 5. An over-rejection, not a wrong answer —
+/// but it is the reason the shapes above are the whole of what the borrowed-write scope sees.
+#[test]
+fn test_coalesce_assign_on_a_returned_array_is_refused() {
+    let error = compile_expect_type_error(
+        r#"<?php
+function mkArr(): array {
+    return [1, 2];
+}
+mkArr()[2] ??= 5;
+echo "unreachable";
+"#,
+    );
+    assert!(
+        error.contains("Nested array assignment requires a Mixed or ArrayAccess target"),
+        "expected the nested-assignment refusal, got: {}",
+        error
+    );
+}

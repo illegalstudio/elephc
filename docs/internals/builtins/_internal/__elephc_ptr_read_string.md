@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_ptr_read_string(mixed $pointer, mixed $length): string
+function __elephc_ptr_read_string(pointer $pointer, mixed $length): string
 ```
 
 ## What the type checker enforces

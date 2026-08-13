@@ -70,9 +70,22 @@ impl Clone for InterfaceDeclInfo {
 /// `php -d xdebug.mode=off -r 'var_dump(class_parents("ArgumentCountError"));'`
 /// (`["TypeError", "Error"]`), the same probe for `DivisionByZeroError`
 /// (`["ArithmeticError", "Error"]`) and `AssertionError` (`["Error"]`).
+/// Builtin classes reference PHP reserves for internal use, which `new` must refuse.
+///
+/// The engine raises these itself and gives them no user-callable constructor, so
+/// `new FiberError("boom")` is `Error: The "FiberError" class is reserved for internal use and
+/// cannot be manually instantiated` there while it produced a working object here.
+///
+/// Kept next to the declaration list on purpose: the same edit that introduces a builtin
+/// throwable is the one that has to answer whether PHP lets user code construct it. Most do —
+/// `throw new RuntimeException(...)` is ordinary — which is why this cannot be inferred from
+/// "is a builtin throwable" and has to be stated.
+pub(crate) const RESERVED_FOR_INTERNAL_USE: [&str; 1] = ["FiberError"];
+
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    wanted: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "Throwable",
@@ -220,12 +233,16 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
+    // `JsonException extends Exception`, DIRECTLY — verified against reference PHP 8.5.6 with
+    // `php -n -r 'var_dump(class_parents("JsonException"));'`, which answers `["Exception"]`.
+    // elephc used to put it under RuntimeException, which made
+    // `catch (RuntimeException $e)` swallow a JSON error that PHP lets escape.
     class_map.insert(
         "JsonException".to_string(),
         FlattenedClass {
             name: "JsonException".to_string(),
             span: crate::span::Span::dummy(),
-            extends: Some("RuntimeException".to_string()),
+            extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,
             is_final: false,
@@ -425,6 +442,38 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
+
+    // Drop the four the program cannot reach, AFTER the redeclaration check above has run over
+    // the whole list — so `class ArgumentCountError {}` in user code is still rejected exactly as
+    // before, whether or not the gate wanted ours. Removing here rather than gating each literal
+    // block keeps the fourteen declarations reading as one table; building four `FlattenedClass`
+    // values and dropping them costs nothing measurable next to flattening them.
+    //
+    // `builtin_throwable_gate` carries the reasoning for why these four and no others: three have
+    // no producer anywhere in elephc, and `ReflectionException` has one only inside the Reflection
+    // surface that its own gate decides.
+    // `RuntimeException` is in this list because nothing raises it outside the SPL surface:
+    // `_spl_runtime_exception_class_id` is read only by `runtime/spl/doubly_linked_list.rs`. It
+    // was unconditional only while `JsonException` was wrongly declared to extend it. When a
+    // program does reach it, `inject_builtin_spl_exceptions` puts it back — that injection owns
+    // the whole SPL hierarchy and runs after this one.
+    // `Fiber` and `FiberError` join the list on the same terms: nothing raises a FiberError
+    // without a Fiber, and a program that never names either cannot make one. When absent,
+    // `_fiber_class_id` and `_fiber_error_class_id` are emitted as `u64::MAX`, which no object
+    // header carries, so the runtime comparisons never match.
+    for builtin_name in [
+        "ArgumentCountError",
+        "AssertionError",
+        "UnhandledMatchError",
+        "ReflectionException",
+        "RuntimeException",
+        "Fiber",
+        "FiberError",
+    ] {
+        if !wanted.contains(builtin_name) {
+            class_map.remove(builtin_name);
+        }
+    }
 
     Ok(())
 }

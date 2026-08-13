@@ -83,7 +83,7 @@ pub fn emit_str_ireplace(emitter: &mut Emitter) {
 
     emitter.instruction("add x16, x13, x15");                                   // subject position
     emitter.instruction("ldrb w17, [x5, x16]");                                 // load subject byte
-    emitter.instruction("ldrb w18, [x1, x15]");                                 // load search byte
+    emitter.instruction("ldrb w9, [x1, x15]");                                  // load search byte (w9: x18 is reserved on Apple)
     // -- tolower both for comparison --
     emitter.instruction("cmp w17, #65");                                        // subject byte >= 'A'?
     emitter.instruction("b.lt 1f");                                             // skip if not
@@ -91,13 +91,13 @@ pub fn emit_str_ireplace(emitter: &mut Emitter) {
     emitter.instruction("b.gt 1f");                                             // skip if not
     emitter.instruction("add w17, w17, #32");                                   // tolower subject byte
     emitter.raw("1:");
-    emitter.instruction("cmp w18, #65");                                        // search byte >= 'A'?
+    emitter.instruction("cmp w9, #65");                                         // search byte >= 'A'?
     emitter.instruction("b.lt 2f");                                             // skip if not
-    emitter.instruction("cmp w18, #90");                                        // search byte <= 'Z'?
+    emitter.instruction("cmp w9, #90");                                         // search byte <= 'Z'?
     emitter.instruction("b.gt 2f");                                             // skip if not
-    emitter.instruction("add w18, w18, #32");                                   // tolower search byte
+    emitter.instruction("add w9, w9, #32");                                     // tolower search byte
     emitter.raw("2:");
-    emitter.instruction("cmp w17, w18");                                        // compare lowered bytes
+    emitter.instruction("cmp w17, w9");                                         // compare lowered bytes
     emitter.instruction("b.ne __rt_sirepl_copy_byte");                          // mismatch → not a match
     emitter.instruction("add x15, x15, #1");                                    // advance match index
     emitter.instruction("b __rt_sirepl_cmp");                                   // continue matching

@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ptr_null(): mixed
+function ptr_null(): pointer
 ```
 
 ## What the type checker enforces

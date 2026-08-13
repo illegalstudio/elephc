@@ -579,6 +579,6 @@ fn test_error_strncasecmp_wrong_args() {
 fn test_error_openssl_encrypt_tag_must_be_variable() {
     expect_error(
         r#"<?php openssl_encrypt("data", "aes-256-gcm", "key", 1, "iv", "tag");"#,
-        "openssl_encrypt() parameter $tag must be passed a variable",
+        "openssl_encrypt(): Argument #6 ($tag) could not be passed by reference",
     );
 }

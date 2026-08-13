@@ -8,6 +8,7 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use crate::codegen_support::arrays::emit_array_value_type_inherit;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -58,6 +59,7 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // use 8-byte slots for refcounted payload pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate inner array
     emitter.instruction("str x0, [sp, #32]");                                   // save inner array pointer
+    emit_array_value_type_inherit(emitter, "x0", "[sp, #0]");                   // the chunk holds the same element shape as its source
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize inner index j = 0
 
     emitter.label("__rt_array_chunk_ref_inner");
@@ -109,7 +111,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving refcounted array-chunk spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array, chunk size, outer array, source index, and current inner array
-    emitter.instruction("sub rsp, 40");                                         // reserve aligned spill slots for the refcounted array-chunk bookkeeping while keeping nested calls 16-byte aligned
+    emitter.instruction("sub rsp, 56");                                         // reserve aligned spill slots for the refcounted array-chunk bookkeeping, including the inner chunk index, while keeping nested calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across nested constructor and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested chunk size across nested constructor and append helper calls
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length before computing the number of chunks
@@ -133,9 +135,18 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the current implementation chunks refcounted indexed arrays
     emitter.instruction("call __rt_array_new");                                 // allocate the current inner indexed array through the shared x86_64 constructor
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the current inner indexed-array pointer while filling it from the source array
-    emitter.instruction("xor r9, r9");                                          // initialize the inner chunk index to the first payload slot of the current inner indexed array
+    emit_array_value_type_inherit(emitter, "rax", "QWORD PTR [rbp - 8]");       // the chunk holds the same element shape as its source
+    // The inner chunk index lives in a SPILL SLOT, not in `r9`. `__rt_array_push_refcounted` is
+    // called from inside this loop and uses `r9` as scratch for the value_type tag it stamps, so
+    // an index held there came back as that tag shifted left by 8 — always past the chunk size,
+    // so every chunk closed after one element. `array_chunk([1,"b",3,4,5], 2)` answered five
+    // chunks of one on x86 and the correct three on AArch64, whose sibling helper uses different
+    // scratch. `intersect` and `diff` call the same helper and are unaffected: their inner loop
+    // RESTARTS after the push, so their index is dead across it — this one continues.
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the inner chunk index to the first payload slot of the current inner indexed array
 
     emitter.label("__rt_array_chunk_ref_inner_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the inner chunk index, which the append helper below clobbers
     emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                        // compare the inner chunk index against the requested chunk size
     emitter.instruction("jge __rt_array_chunk_ref_push_x86");                   // push the current inner indexed array once the requested chunk size has been reached
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before checking whether the source payload stream is exhausted
@@ -150,7 +161,9 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the source index after helper calls clobbered caller-saved registers
     emitter.instruction("add rcx, 1");                                          // advance the source index after copying one payload into the current inner indexed array
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // persist the updated source index across the next inner-loop iteration
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the inner chunk index the append helper clobbered before advancing it
     emitter.instruction("add r9, 1");                                           // advance the inner chunk index after filling one payload slot in the current inner indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // persist the inner chunk index across the next append helper call
     emitter.instruction("jmp __rt_array_chunk_ref_inner_x86");                  // continue filling the current inner indexed array until it is full or the source payload stream ends
 
     emitter.label("__rt_array_chunk_ref_push_x86");
@@ -162,7 +175,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_chunk_ref_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the outer indexed-array pointer in the standard x86_64 integer result register
-    emitter.instruction("add rsp, 40");                                         // release the refcounted array-chunk spill slots before returning
+    emitter.instruction("add rsp, 56");                                         // release the refcounted array-chunk spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the outer indexed-array pointer in rax
 }

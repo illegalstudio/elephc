@@ -34,7 +34,9 @@ mod timezone_ids;
 /// ArithmeticError; RuntimeException/ReflectionException extend Exception;
 /// JsonException extends RuntimeException; FiberError extends Error. Fiber is
 /// final with no parent.
-pub(crate) use declarations::{InterfaceDeclInfo, inject_builtin_throwables};
+pub(crate) use declarations::{
+    inject_builtin_throwables, InterfaceDeclInfo, RESERVED_FOR_INTERNAL_USE,
+};
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
@@ -57,10 +59,13 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 /// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// Does nothing for classes that do not declare these methods.
 pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
-pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_signatures};
+pub(crate) use reflection::{
+    inject_builtin_reflection, patch_builtin_reflection_signatures,
+    program_may_reference_reflection,
+};
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
-pub(crate) use datetime::inject_builtin_datetime;
+pub(crate) use datetime::{inject_builtin_datetime, program_may_reference_datetime};
 
 /// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
 pub(crate) use date_period::inject_builtin_date_period;

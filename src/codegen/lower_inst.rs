@@ -124,6 +124,10 @@ pub(super) use call_operands::{
     direct_call_stack_pad_bytes, emit_mixed_string_for_persistent_store,
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
+pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
+pub(in crate::codegen) use conversions::{
+    emit_mixed_string_dispatch_from_result, MixedStringContextMode,
+};
 pub(super) use core_closures::function_signature_from_eir;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
@@ -322,6 +326,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::StaticPropInitialized => {
+            static_properties::lower_static_property_initialized(ctx, &inst)
+        }
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
         }

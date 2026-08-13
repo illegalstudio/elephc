@@ -27,6 +27,16 @@ surface as `name` / `static` / `params` (`type`, `name`, `byref`, `default`) /
 throwing stub (spliced into `src/image_prelude.rs`) and a coverage test under
 `tests/codegen/image/`.
 
+The prelude is `synthetic_class` builder calls, so the stubs are emitted as
+`.method(method("x")…)` and spliced into the class's builder chain. Which methods
+count as implemented is read from that chain, minus the marker-delimited region
+the generator owns — so **a hand-written method must stay outside the markers**.
+That is not a formality: several hand-written methods throw the same "… is not
+supported in elephc" sentence a generated stub does (`Imagick::annotateImage`
+throws "requires FreeType text, which is not supported in elephc"), so nothing
+but the markers distinguishes them. One that drifts inside stops counting as
+implemented, and the next run silently replaces it with a generic stub.
+
 ## Provenance & licensing
 
 The method signatures were extracted from the PHP manual class synopses for the

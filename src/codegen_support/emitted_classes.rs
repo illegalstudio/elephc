@@ -13,11 +13,19 @@ use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::ClassInfo;
 use std::collections::{HashMap, HashSet};
 
-/// Returns the set of class names that should be emitted in the
-/// user-asm section. Starts from required classes, unconditionally includes
-/// the throwable hierarchy (needed by runtime JSON helpers), reflection
-/// classes, and attribute factories, then expands to cover the full
-/// inheritance and implementation dependency chain.
+/// Returns the class names a program's emitted metadata can reach. Starts from required
+/// classes, adds the throwable hierarchy a runtime helper can materialize, reflection
+/// classes, and attribute factories, then expands to cover the full inheritance and
+/// implementation dependency chain.
+///
+/// WHAT THIS DOES NOT DO, despite what its name suggests: decide what gets emitted. Its two
+/// callers both live in `runtime_features`, which asks whether the reachable class set
+/// contains a regex iterator or a PHAR helper — that is, whether to link pcre2 / the phar
+/// bridge. The set that actually drives class emission is
+/// `codegen::runtime_metadata::classes::runtime_referenced_class_names`, and that is where a
+/// narrowing has to go: gating the SPL-thrown exceptions here alone moved a trivial program's
+/// assembly by exactly nothing (7,990 lines before, 7,990 after). The lists are kept in step
+/// so the two never disagree about what a helper can throw, not because both are load-bearing.
 pub(super) fn collect_emitted_class_names(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
@@ -26,36 +34,77 @@ pub(super) fn collect_emitted_class_names(
     if names.contains("Fiber") {
         names.insert("FiberError".to_string());
     }
-    // Seed the throwable hierarchy unconditionally: json_encode /
-    // json_decode / json_validate can throw JsonException at runtime
-    // through JSON_THROW_ON_ERROR even when user code only catches a
-    // wider type (e.g. `catch (Exception $e)`). Without these
-    // descriptors in the user-asm tables, the catch-time inheritance
-    // walk in __rt_exception_matches sees a -1 parent for the thrown
-    // class and reports no match.
-    // The Error branch is seeded whole for the same reason as the JSON note above:
-    // `intdiv($a, 0)` throws a DivisionByZeroError from a codegen guard that has no
-    // EIR class reference, so its descriptor (and every ancestor's) must be present
-    // or __rt_exception_matches walks into a -1 parent and reports no match.
+    // The throwables a runtime helper can materialize with no EIR class reference to hang
+    // the id off: `json_encode`/`json_decode`/`json_validate` raise JsonException through
+    // JSON_THROW_ON_ERROR, and `intdiv($a, 0)` / `$a % 0` raise DivisionByZeroError from a
+    // codegen guard. User code that only catches a wider type (`catch (Exception $e)`) still
+    // needs every ancestor present, because the catch-time walk in `__rt_exception_matches`
+    // climbs `_class_parent_ids` from the THROWN class.
+    //
+    // The membership test is the class-id symbol table in `runtime::data::user`: a helper
+    // stamps `[obj+0]` from a `_*_class_id` symbol, so a throwable without one has no
+    // unreferenced producer. That rules out ArgumentCountError (elephc rejects a bad builtin
+    // arity at compile time, where reference PHP throws at runtime), AssertionError
+    // (`assert()` is not implemented) and UnhandledMatchError (an unmatched `match` ends in
+    // `Terminator::Fatal`, not a throw — a real gap against reference PHP, and closing it
+    // will give the class the EIR reference it currently lacks).
+    //
+    // WHAT THIS COSTS, so the next person to weigh it has both halves. For `<?php echo 1;`
+    // the sixteen originally seeded classes were 2,643 lines of a 7,990-line assembly — 33%
+    // of everything emitted, and 81% of all class metadata — at roughly 215 lines each.
+    // Assembling and linking are 81% of that program's compile, so the seeding is not free.
+    //
+    // One narrowing was considered and rejected: KEEP THE DESCRIPTORS, DROP THE CONSTRUCTION
+    // MACHINERY. The single largest item per class is `_eir__class_propinit_<id>_entry_0` at
+    // ~50 lines, and a class that is only ever caught never runs it. Tempting, and the
+    // metadata layer already tolerates an absent thunk (`runtime_class_infos` nulls the
+    // defaults for one). But `catch (Exception $e) { echo $e->getMessage(); }` dispatches on
+    // the THROWN class, not the caught type, so the vtable and callable-method tables stay
+    // live for a class the source never names — and the same argument reaches the var_dump
+    // and JSON descriptors through `var_dump($e)` and `json_encode($e)`.
+    //
+    // Getting any of this wrong used to fail silently, at catch time, in a program that
+    // looked unrelated. It no longer can: a class id whose metadata was never emitted now
+    // reads back as `-2` and `__rt_exception_matches` aborts instead of reporting no match.
     for builtin in [
         "Throwable",
         "Error",
         "TypeError",
-        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
         "DivisionByZeroError",
-        "AssertionError",
-        "UnhandledMatchError",
         "Exception",
-        "LogicException",
-        "RuntimeException",
         "JsonException",
-        "InvalidArgumentException",
-        "OutOfBoundsException",
-        "OutOfRangeException",
     ] {
         names.insert(builtin.to_string());
+    }
+    // These five are thrown BY ID from SPL container helpers only — `runtime/spl/
+    // doubly_linked_list.rs`, `runtime/spl/fixed_array.rs` and
+    // `lower_inst/objects/iterator_iterator.rs` are the sole readers of their
+    // `_spl_*_class_id` symbols — so a program with no SPL surface has no unreferenced
+    // path to them. Any other route already covers itself: user code that names one is
+    // in `collect_required_class_names`, and `expand_emitted_class_dependencies` pulls
+    // every ancestor to a fixed point. RuntimeException used to survive this gate regardless
+    // because `JsonException extends RuntimeException` — elephc's own invention, since reference
+    // PHP puts JsonException directly under Exception. With that corrected it survives only when
+    // the SPL surface is present, which is exactly when a helper can throw it.
+    //
+    // Getting this wrong is no longer silent: the walk meets `-2` and aborts.
+    if spl_surface_is_present(classes) {
+        for builtin in [
+            "LogicException",
+            "RuntimeException",
+            "InvalidArgumentException",
+            "OutOfBoundsException",
+            "OutOfRangeException",
+        ] {
+            names.insert(builtin.to_string());
+        }
+    }
+    // Likewise ReflectionException, whose unreferenced throwers are all inside the
+    // Reflection surface that `types::checker::builtin_types::reflection::gate` decides.
+    if classes.contains_key("ReflectionClass") {
+        names.insert("ReflectionException".to_string());
     }
     for builtin in [
         "ReflectionAttribute",
@@ -75,6 +124,18 @@ pub(super) fn collect_emitted_class_names(
     collect_dynamic_object_factory_classes(program, classes, &mut names);
     expand_emitted_class_dependencies(&mut names, classes);
     names
+}
+
+/// Whether any SPL container that throws one of the SPL exception ids is registered.
+///
+/// One representative per throwing helper rather than the whole family: SPL registration is
+/// all-or-nothing (`types::checker::builtin_spl_classes::program_may_reference_spl` decides it
+/// for the entire surface at once), so a single hit means the family is there. The three names
+/// are the containers whose runtime helpers actually read `_spl_*_class_id`.
+fn spl_surface_is_present(classes: &HashMap<String, ClassInfo>) -> bool {
+    ["SplDoublyLinkedList", "SplFixedArray", "IteratorIterator"]
+        .iter()
+        .any(|name| classes.contains_key(*name))
 }
 
 /// Repeatedly expands `names` by adding parent classes and all

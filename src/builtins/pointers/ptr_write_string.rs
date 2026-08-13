@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     name: "ptr_write_string",
     area: Pointers,
-    params: [pointer: Mixed, string: Mixed],
+    params: [pointer: Ptr, string: Mixed],
     returns: Int,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

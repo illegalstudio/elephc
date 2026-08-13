@@ -76,6 +76,25 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
+    // A typed property with no default starts UNINITIALIZED, and an ordinary read of one is
+    // fatal in PHP. `??` is precisely the construct that must not raise there, so a property
+    // that can be in that state is read the way `isset()` reads it. Every other property keeps
+    // the ordinary path and its exact slot type.
+    if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        let object = lower_expr(ctx, object);
+        if property_can_be_uninitialized(ctx, object.value, property) {
+            return lower_initialized_property_value(ctx, object, property, value);
+        }
+        return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
+    }
+    // A typed STATIC property starts uninitialized the same way, and its guard lives in the
+    // backend rather than in an operation the lowering could branch on — so `??` needs its own
+    // probe here too. `S::$s ?? "d"` raised where PHP answers `d`.
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &value.kind {
+        if static_property_can_be_uninitialized(ctx, receiver, property) {
+            return lower_initialized_static_property_value(ctx, receiver, property, value);
+        }
+    }
     lower_expr(ctx, value)
 }
 

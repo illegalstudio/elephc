@@ -8,6 +8,27 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::ir::{ResourceCleanupKind, RuntimeFnId};
+
+/// The cleanup kind `opendir()` stamps into its boxed resource.
+///
+/// Read from `RuntimeFnId::resource_cleanup_kind` instead of written here, because the
+/// runtime emitter derives the presence of the matching `__rt_mixed_free_deep` arm from
+/// that same answer. Resolving it in a `const` makes the two agree at compile time: if the
+/// declaration is ever dropped, this fails to build rather than shipping a handle whose
+/// destructor is not in the binary.
+const OPENDIR_CLEANUP_KIND: ResourceCleanupKind = match RuntimeFnId::Opendir
+    .resource_cleanup_kind()
+{
+    Some(kind) => kind,
+    None => panic!("RuntimeFnId::Opendir boxes a kinded resource and must declare its kind"),
+};
+
+/// The cleanup kind `popen()` stamps into its boxed resource, resolved like the one above.
+const POPEN_CLEANUP_KIND: ResourceCleanupKind = match RuntimeFnId::Popen.resource_cleanup_kind() {
+    Some(kind) => kind,
+    None => panic!("RuntimeFnId::Popen boxes a kinded resource and must declare its kind"),
+};
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
 pub(crate) fn lower_disk_free_space(
@@ -192,7 +213,7 @@ pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "opendir path")?;
     abi::emit_call_label(ctx.emitter, "__rt_opendir");
-    box_stream_fd_or_false_result_kind(ctx, "opendir", 4);
+    box_stream_fd_or_false_result_kind(ctx, "opendir", OPENDIR_CLEANUP_KIND);
     store_if_result(ctx, inst)
 }
 
@@ -265,7 +286,7 @@ pub(crate) fn lower_popen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_popen");
-    box_stream_fd_or_false_result_kind(ctx, "popen", 3);
+    box_stream_fd_or_false_result_kind(ctx, "popen", POPEN_CLEANUP_KIND);
     store_if_result(ctx, inst)
 }
 
@@ -361,6 +382,7 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_file");
+    box_indexed_array_or_false_result(ctx);                                     // a failed read is a null result, which PHP reports as false
     store_if_result(ctx, inst)
 }
 

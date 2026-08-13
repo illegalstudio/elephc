@@ -835,19 +835,34 @@ mod tests {
     }
 
     /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
+    ///
+    /// The element type is what matters: a fallback that widened to `Mixed` would make the
+    /// backend read 8-byte slots as boxed cells. A builtin that can also FAIL carries its
+    /// false arm here as well, because the EIR fallback and the checker's declared type must
+    /// agree — where they disagree the program miscompiles instead of failing to build.
     #[test]
     fn array_runtime_fallbacks_preserve_backend_container_layout() {
+        let string_array = PhpType::Array(Box::new(PhpType::Str));
         for target in [
             crate::ir::RuntimeFnId::Explode,
-            crate::ir::RuntimeFnId::File,
             crate::ir::RuntimeFnId::Glob,
             crate::ir::RuntimeFnId::Scandir,
             crate::ir::RuntimeFnId::SplClasses,
         ] {
             assert_eq!(
                 target.fallback_result_type(&[], &PhpType::Mixed),
-                PhpType::Array(Box::new(PhpType::Str)),
+                string_array,
                 "{} must remain a concrete string array",
+                target.as_eir(),
+            );
+        }
+        // `file()` answers `false` for a read it could not perform, which is the only way a
+        // caller can tell a missing file from an empty one.
+        for target in [crate::ir::RuntimeFnId::File, crate::ir::RuntimeFnId::Fgetcsv] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Union(vec![string_array.clone(), PhpType::False]),
+                "{} must keep its string-array element type AND its false arm",
                 target.as_eir(),
             );
         }

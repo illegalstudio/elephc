@@ -272,21 +272,29 @@ echo $padded[1][0] . "|" . $padded[2][0];
 }
 
 /// Verifies that an inner array in array_unique output survives unset of the original.
-/// Fixture: src contains inner array twice and a separate element, run array_unique, unset src and inner, verify count and read values.
-/// Regression: ensures array_unique preserves GC alias for deduplicated inner arrays.
+/// Fixture: src holds the same inner array twice, run array_unique, unset src and inner, read
+/// the survivor through the deduplicated result.
+/// Regression: ensures array_unique preserves the GC alias for a deduplicated inner array.
+///
+/// The fixture used to add a THIRD, distinct inner array and assert two survivors. Reference
+/// PHP answers ONE there: `array_unique()` compares elements by their string rendering, and
+/// every array renders as `"Array"`, so distinct inner arrays collapse. elephc compares inner
+/// arrays by pointer instead — a separate divergence from this test's subject, which is the
+/// GC alias. Two copies of the SAME array are deduplicated identically by both, so the
+/// fixture no longer depends on the comparison rule.
 #[test]
 fn test_gc_array_unique_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
 $inner = [3];
-$src = [$inner, $inner, [4]];
+$src = [$inner, $inner];
 $uniq = array_unique($src);
 unset($src);
 unset($inner);
-echo count($uniq) . "|" . $uniq[0][0] . "|" . $uniq[1][0];
+echo count($uniq) . "|" . $uniq[0][0];
 "#,
     );
-    assert_eq!(out, "2|3|4");
+    assert_eq!(out, "1|3");
 }
 
 /// Verifies that an inner array extracted via array_splice (removed portion) survives unset of the source.

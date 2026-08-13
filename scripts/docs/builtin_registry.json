@@ -71,7 +71,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_callable_ptr",
@@ -1239,7 +1239,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "callable",
       "variadic": null
     },
     "slug": "__elephc_normalize_callable",
@@ -1664,7 +1664,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "__elephc_pdo_adapter_addr",
@@ -3609,7 +3609,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         }
       ],
       "return_type": "bool",
@@ -3708,7 +3708,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -3814,7 +3814,7 @@
           "default": null,
           "name": "pointer",
           "optional": false,
-          "type": "mixed"
+          "type": "pointer"
         },
         {
           "by_ref": false,
@@ -16073,7 +16073,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 92,
+      "codegen_line": 180,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -17672,7 +17672,7 @@
           "type": "string"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "fgetcsv",
@@ -17915,7 +17915,7 @@
           "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "file",
@@ -40106,7 +40106,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr",
@@ -40436,7 +40436,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_null",
@@ -40564,7 +40564,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "pointer",
       "variadic": null
     },
     "slug": "ptr_offset",

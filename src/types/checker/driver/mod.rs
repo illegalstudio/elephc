@@ -16,8 +16,13 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{traits::flatten_classes, TypeEnv};
 
+use super::builtin_class_gate::{
+    program_may_reference_fiber, program_may_reference_generator, program_may_reference_user_filter,
+    throwables_to_register,
+};
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
+    program_may_reference_datetime, program_may_reference_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -154,7 +159,22 @@ pub(super) fn check_types_impl(
             );
         }
     }
-    if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
+    // Both surface gates are pure functions of the program, and the throwable gate needs their
+    // answers: SPL container helpers throw five exceptions by id and the Reflection helpers throw
+    // ReflectionException, none of them naming a class any scan of the source can see. They are
+    // computed here and reused at their own injection sites below.
+    let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
+    let register_reflection = program_may_reference_reflection(program);
+    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
+    // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
+    if program_may_reference_fiber(program) {
+        wanted_throwables.insert("Fiber".to_string());
+        wanted_throwables.insert("FiberError".to_string());
+    }
+    if let Err(error) =
+        inject_builtin_throwables(&mut interface_map, &mut class_map, &wanted_throwables)
+    {
         errors.extend(error.flatten());
     }
     // The tz_prelude (injected upstream only when the program uses timezone
@@ -162,32 +182,75 @@ pub(super) fn check_types_impl(
     // three `DateTimeZone` introspection methods, which reference the elephc_tz
     // bridge and must not be added — and linked — for every DateTimeZone program.
     let uses_tz_introspection = checker.has_function_decl_folded("timezone_location_get");
-    inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
+    // Pay-for-use, on the same reasoning and with the same loud failure mode as the SPL and
+    // Reflection gates below: fifteen classes and an interface that the checker flattens,
+    // patches and validates for a program that never writes a date type, each class also
+    // claiming a slot in every dense `_class_*` metadata table — 76% of the type-check phase of
+    // a trivial program. `program_may_reference_datetime` carries the measurement.
+    // Gated at the call site rather than inside, because this injection has no redeclaration
+    // check to keep running — it inserts only names the program has not already declared.
+    let register_datetime = program_may_reference_datetime(program);
+    if register_datetime {
+        inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
+    }
     if let Err(error) = inject_builtin_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
-    // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval.
-    inject_builtin_date_period(&mut class_map);
-    if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
+    // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval,
+    // so it can only be registered when they are.
+    if register_datetime {
+        inject_builtin_date_period(&mut class_map);
+    }
+    // Pay-for-use like the families around it, but per-class rather than all-or-nothing: naming
+    // one of these registers it and its ancestors, and nothing else. Eight of the thirteen have
+    // no producer anywhere in elephc, so a program that never writes the name cannot reach them.
+    if let Err(error) =
+        inject_builtin_spl_exceptions(&mut interface_map, &mut class_map, &wanted_throwables)
+    {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
+    // A `yield` materializes a Generator no source line names; that, and spelling the type, are
+    // the only two routes to it. See `program_may_reference_generator`.
+    if let Err(error) = inject_builtin_iterators(
+        &mut interface_map,
+        &mut class_map,
+        program_may_reference_generator(program),
+    ) {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map) {
+    // Pay-for-use, because the checker's walk over these 41 classes is 27 ms — 54% of the
+    // type-check phase of a trivial program. See `program_may_reference_spl` for the measurement
+    // and for why under-detecting here is a readable compile error rather than a miscompile.
+    // The redeclaration check inside runs regardless of the decision. (`register_spl` is computed
+    // above, because the throwable gate needs it too.)
+    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map, register_spl)
+    {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_user_filter(&mut class_map) {
+    // PHP's only way to write a stream filter is a class extending this one, which spells the
+    // name; `stream_filter_register` is consulted as well.
+    if let Err(error) =
+        inject_builtin_user_filter(&mut class_map, program_may_reference_user_filter(program))
+    {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
-    {
+    // Pay-for-use, on the same reasoning and with the same loud failure mode as the SPL gate
+    // above: a program that never names a Reflection type should not pay for the checker to
+    // flatten, patch and validate fourteen of them. `program_may_reference_reflection` carries
+    // the measurement. The redeclaration check inside runs regardless of the decision.
+    // (`register_reflection` is computed above, because the throwable gate needs it too.)
+    if let Err(error) = inject_builtin_reflection(
+        &interface_map,
+        &mut class_map,
+        &declared_traits,
+        register_reflection,
+    ) {
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
@@ -211,6 +274,8 @@ pub(super) fn check_types_impl(
     // process. Interface ids are handed out in this order and are baked into the
     // generated assembly, so an unsorted walk makes two compilations of the SAME
     // source produce different output — which defeats any content-addressed cache.
+    // Nothing below depends on the order: `build_interface_info_recursive` pulls its own
+    // parents, so the walk decides numbering and nothing else.
     let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
     interface_names.sort();
     for interface_name in interface_names {
@@ -230,7 +295,8 @@ pub(super) fn check_types_impl(
     let mut building = HashSet::new();
     // Sorted for the same reason as `interface_names` above: class ids are assigned in
     // this walk order and end up as immediates and `.quad` values in the emitted
-    // assembly, so a HashMap-ordered walk is a reproducibility hole.
+    // assembly, so a HashMap-ordered walk is a reproducibility hole. They also reach the
+    // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
     for class_name in class_names {
@@ -287,6 +353,7 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
         &flattened_classes,
@@ -346,4 +413,73 @@ pub(super) fn check_types_impl(
     }
 
     Ok((checker, final_global_env))
+}
+
+/// Prints every class the checker registered, with its id, when `ELEPHC_CLASS_INVENTORY=1`.
+///
+/// The dense `_class_*` metadata tables are `max_class_id + 1` entries wide, and every id no
+/// emitted class claims costs an 8-byte `-2` sentinel in each of roughly twenty-five tables.
+/// Counting those slots in the emitted assembly says HOW MANY are wasted; only this says WHICH
+/// classes hold them, which is what decides whether a registration is worth gating.
+fn report_class_id_inventory(checker: &Checker) {
+    if std::env::var("ELEPHC_CLASS_INVENTORY").as_deref() != Ok("1") {
+        return;
+    }
+    let mut rows: Vec<(u64, &str)> = checker
+        .classes
+        .iter()
+        .map(|(name, class_info)| (class_info.class_id, name.as_str()))
+        .collect();
+    rows.sort();
+    eprintln!("class inventory: {} registered", rows.len());
+    for (class_id, name) in rows {
+        eprintln!("  {class_id:>3}  {name}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Class ids must not depend on HashMap iteration order.
+    ///
+    /// THIS TEST CANNOT BE WRITTEN AS "check the same source twice and compare". Rust seeds its
+    /// hasher once per PROCESS, so two checks inside one test observe the same iteration order
+    /// and agree whether or not the driver sorts — the bug this guards was only visible by
+    /// running the compiler binary twice. So it asserts the property directly instead: classes
+    /// with no inheritance between them take ids in sorted name order. Eight of them make an
+    /// accidental pass a 1-in-40320 event.
+    ///
+    /// Declared in reverse so that "ids follow declaration order" fails it too.
+    #[test]
+    fn unrelated_classes_take_ids_in_a_stable_order() {
+        let source = "<?php class Hotel {} class Golf {} class Foxtrot {} class Echo_ {} \
+                      class Delta {} class Charlie {} class Bravo {} class Alpha {}";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let checked = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Platform::MacOS,
+        )
+        .expect("check");
+
+        let mut declared: Vec<(u64, &str)> = [
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo_", "Foxtrot", "Golf", "Hotel",
+        ]
+        .iter()
+        .map(|name| {
+            let class_info = checked
+                .classes
+                .get(*name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            (class_info.class_id, *name)
+        })
+        .collect();
+        declared.sort();
+
+        let by_id: Vec<&str> = declared.iter().map(|(_, name)| *name).collect();
+        assert_eq!(
+            by_id,
+            vec!["Alpha", "Bravo", "Charlie", "Delta", "Echo_", "Foxtrot", "Golf", "Hotel"],
+            "class ids should follow sorted names, not hash or declaration order"
+        );
+    }
 }

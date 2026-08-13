@@ -300,6 +300,29 @@ pub(super) fn registry_builtin_result_type(
     resolve_registry_builtin_result_type(ctx, name, args, operands, span, checked)
 }
 
+/// Is a builtin's declared return type an acceptable stand-in for what the checker inferred?
+///
+/// Narrowing is fine in one direction only. A checked `int` falling back to a declared `mixed`
+/// costs precision: `mixed` is the universal boxed representation of a PHP *value*, and lowering
+/// knows how to carry any value in one. A checked `pointer` or `buffer` falling back to `mixed`
+/// is not a loss of precision but a change of REPRESENTATION — a raw descriptor is not a boxed
+/// cell — and codegen has no way to notice. Six builtins declared `mixed` while checking as
+/// `Pointer` or `Callable`, which stayed harmless only for as long as every one of their call
+/// sites could be found in the checker's per-span map; the day the PDO prelude stopped being
+/// parsed, none of them could be, and all 276 PDO tests failed at once.
+fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType>) -> bool {
+    let Some(checked) = checked else {
+        return true;
+    };
+    fn is_a_php_value(ty: &PhpType) -> bool {
+        !matches!(
+            ty,
+            PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Callable
+        )
+    }
+    is_a_php_value(checked) == is_a_php_value(declared)
+}
+
 /// Resolves a registry builtin's result type from its descriptor, its lowered operands, and the
 /// checker's result type for this very call when one is available.
 ///
@@ -315,6 +338,15 @@ pub(super) fn resolve_registry_builtin_result_type(
     checked: Option<PhpType>,
 ) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
+    debug_assert!(
+        declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref()),
+        "builtin `{name}` checks as {:?} but declares {:?}. Every path that cannot name this \
+         call — a callable dispatched at runtime, a span the checker never filed — falls back to \
+         the DECLARED type, so a declaration of a different representation is a miscompile \
+         waiting for one of them.",
+        checked,
+        def.return_type,
+    );
     let arg_types = operands
         .iter()
         .map(|operand| ctx.builder.value_php_type(*operand))

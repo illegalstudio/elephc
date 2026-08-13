@@ -15,6 +15,28 @@ pub(super) fn parse(source: &str) -> Program {
         crate::parser::parse(&tokens).expect("test source must parse")
     }
 
+    /// Renders one built declaration back to PHP.
+    ///
+    /// The assertions below were written against the rendered PHP these functions used to
+    /// splice, and they state reference-PHP facts (a key's presence, a baked figure, a key
+    /// ORDER) that are properties of the declaration, not of any particular formatting. Reading
+    /// them off the printed form keeps every one of those facts under test without a second
+    /// source of truth: `synthetic_class::print` is test-only and pins its own faithfulness
+    /// with a round trip.
+pub(super) fn rendered(declaration: Stmt) -> String {
+        crate::synthetic_class::print::print_program(&vec![declaration])
+    }
+
+    /// Renders a whole built declaration block back to PHP.
+pub(super) fn rendered_block(declarations: Program) -> String {
+        crate::synthetic_class::print::print_program(&declarations)
+    }
+
+    /// Renders one baked literal (a configuration array, a manifest path list) back to PHP.
+pub(super) fn rendered_expr(value: &Expr) -> String {
+        crate::synthetic_class::print::print_expr(value)
+    }
+
     /// Parses compiler-generated source with the internal source profile.
 pub(super) fn parse_internal(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("internal test source must tokenize");
@@ -29,7 +51,7 @@ pub(super) fn parse_internal(source: &str) -> Program {
     /// as the `$def` argument.
     #[test]
 pub(super) fn renders_parsable_php85_literal() {
-        let literal = render_configuration_literal(PhpVersion::Php85, &[]);
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php85, &[]));
         assert!(literal.contains("'opcache.jit' => 'disable'"));
         assert!(literal.contains("'opcache.memory_consumption' => 134217728"));
         assert!(literal.contains(
@@ -47,7 +69,7 @@ pub(super) fn renders_parsable_php85_literal() {
     /// The 8.2 literal flips the JIT defaults and drops the 8.5-only directive.
     #[test]
 pub(super) fn renders_php82_deltas() {
-        let literal = render_configuration_literal(PhpVersion::Php82, &[]);
+        let literal = rendered_expr(&configuration_expr(PhpVersion::Php82, &[]));
         assert!(literal.contains("'opcache.jit' => 'tracing'"));
         assert!(literal.contains("'opcache.jit_buffer_size' => 0"));
         // 8.2-only, and reporting-only ⇒ it carries the runtime env-override call.
@@ -74,7 +96,7 @@ pub(super) fn injects_when_called() {
         assert!(injected.len() > program.len());
     }
 
-    /// `render_reset_body` follows the compile-time SAPI: CLI disabled, web enabled,
+    /// The baked cache-enabled gate follows the compile-time SAPI: CLI disabled, web enabled,
     /// for every maintained version.
     #[test]
 pub(super) fn reset_body_follows_sapi() {
@@ -84,8 +106,8 @@ pub(super) fn reset_body_follows_sapi() {
             PhpVersion::Php84,
             PhpVersion::Php85,
         ] {
-            assert_eq!(render_reset_body(version, false, &[]), "false");
-            assert_eq!(render_reset_body(version, true, &[]), "true");
+            assert!(!cache_enabled(version, false, &[]));
+            assert!(cache_enabled(version, true, &[]));
         }
     }
 
@@ -125,7 +147,7 @@ pub(super) fn injection_is_per_function() {
     /// the derived `max_cached_keys`, and the default disabled-JIT sub-array).
     #[test]
 pub(super) fn renders_parsable_php85_status_web() {
-        let body = render_get_status_function(PhpVersion::Php85, true, &[], &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
         // Web SAPI bakes the enabled gate as `true === false` (never returns false).
         assert!(body.contains("if (true === false)"));
         // memory_usage invariant: 134217728 - 6291456 = 127926272.
@@ -165,7 +187,7 @@ pub(super) fn renders_parsable_php85_status_web() {
     /// function returns `false` before building the array; it still parses.
     #[test]
 pub(super) fn renders_php85_status_cli_disabled_gate() {
-        let body = render_get_status_function(PhpVersion::Php85, false, &[], &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php85, false, &[], &[], false, None));
         assert!(body.contains("if (false === false)"));
         let _ = parse(&format!("<?php {body}"));
     }
@@ -183,24 +205,18 @@ pub(super) fn jit_block(body: &str) -> String {
     /// byte-identical to what reference PHP 8.5.6 reports for its own default.
     #[test]
 pub(super) fn renders_php85_default_jit_all_zero() {
-        let body = render_get_status_function(PhpVersion::Php85, true, &[], &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
         assert_eq!(
             jit_block(&body),
-            "$status['jit'] = [\n        \
-             'enabled' => false,\n        \
-             'on' => false,\n        \
-             'kind' => 0,\n        \
-             'opt_level' => 0,\n        \
-             'opt_flags' => 0,\n        \
-             'buffer_size' => 0,\n        \
-             'buffer_free' => 0,\n    "
+            "$status['jit'] = ['enabled' => false, 'on' => false, 'kind' => 0, \
+             'opt_level' => 0, 'opt_flags' => 0, 'buffer_size' => 0, 'buffer_free' => 0"
         );
         let _ = parse(&format!("<?php {body}"));
     }
 
     /// Renders the jit block's seven values for readable assertions.
 pub(super) fn jit_values(version: PhpVersion, overrides: &[(String, String)]) -> String {
-        let body = render_get_status_function(version, true, &[], overrides, false, None);
+        let body = rendered(get_status_declaration(version, true, &[], overrides, false, None));
         let block = jit_block(&body);
         let field = |key: &str| {
             let at = block
@@ -291,7 +307,7 @@ pub(super) fn renders_php82_default_jit_tracing_under_clamp() {
             "false/false/5/5/0/0/0",
             "the disable default leaves the rejected value's residue visible"
         );
-        let body = render_get_status_function(PhpVersion::Php82, true, &[], &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php82, true, &[], &[], false, None));
         let _ = parse(&format!("<?php {body}"));
     }
 
@@ -311,7 +327,7 @@ pub(super) fn injects_get_status_per_function() {
     /// in the baked manifest. Both bodies parse; the empty manifest renders `[]`.
     #[test]
 pub(super) fn is_script_cached_bakes_gate_and_manifest() {
-        let cli = render_is_script_cached_function(PhpVersion::Php85, false, &[], &[]);
+        let cli = rendered(is_script_cached_declaration(PhpVersion::Php85, false, &[], &[]));
         assert!(cli.contains("if (false === false)"));
         assert!(cli.contains("in_array($path, [], true)"));
         let _ = parse(&format!("<?php {cli}"));
@@ -321,7 +337,7 @@ pub(super) fn is_script_cached_bakes_gate_and_manifest() {
             timestamp: 1_700_000_000,
             memory_consumption: 4_096,
         }];
-        let web = render_is_script_cached_function(PhpVersion::Php85, true, &entries, &[]);
+        let web = rendered(is_script_cached_declaration(PhpVersion::Php85, true, &entries, &[]));
         // Web enabled → the gate never fires, realpath membership is reached.
         assert!(web.contains("if (true === false)"));
         assert!(web.contains("$rp = realpath($filename)"));
@@ -341,12 +357,12 @@ pub(super) fn invalidate_bakes_sapi_gate_and_manifest() {
             memory_consumption: 4096,
         }];
 
-        let cli = render_invalidate_function(PhpVersion::Php85, false, &entries, &[], false);
+        let cli = rendered(invalidate_declaration(PhpVersion::Php85, false, &entries, &[], false));
         assert!(cli.contains("if (false === false)"));
         assert!(cli.contains("$rp = realpath($filename)"));
         let _ = parse(&format!("<?php {cli}"));
 
-        let web = render_invalidate_function(PhpVersion::Php85, true, &entries, &[], false);
+        let web = rendered(invalidate_declaration(PhpVersion::Php85, true, &entries, &[], false));
         // Web enabled → the gate never fires, the path resolution is reached.
         assert!(web.contains("if (true === false)"));
         assert!(web.contains("$rp = realpath($filename)"));
@@ -364,7 +380,7 @@ pub(super) fn invalidate_bakes_sapi_gate_and_manifest() {
     /// baked manifest (a member → `true`). Both bodies parse.
     #[test]
 pub(super) fn compile_file_bakes_sapi_gate_and_notice() {
-        let cli = render_compile_file_function(PhpVersion::Php85, false, &[], &[]);
+        let cli = rendered(compile_file_declaration(PhpVersion::Php85, false, &[], &[]));
         assert!(cli.contains("if (false === false)"));
         assert!(cli.contains(
             "Notice: Zend OPcache has not been properly started, can't compile file"
@@ -377,7 +393,7 @@ pub(super) fn compile_file_bakes_sapi_gate_and_notice() {
             timestamp: 1_700_000_000,
             memory_consumption: 4_096,
         }];
-        let web = render_compile_file_function(PhpVersion::Php85, true, &entries, &[]);
+        let web = rendered(compile_file_declaration(PhpVersion::Php85, true, &entries, &[]));
         assert!(web.contains("if (true === false)"));
         assert!(web.contains("$rp = realpath($filename)"));
         assert!(web.contains("in_array($path, ['/srv/app/main.php'], true)"));

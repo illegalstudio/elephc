@@ -60,6 +60,20 @@ pub enum TypeSpec {
     Mixed,
     /// PHP `void` (return position only).
     Void,
+    /// elephc `pointer` — a raw address, not a PHP type.
+    ///
+    /// Present because a declaration that cannot say what a builtin returns does not become
+    /// silent, it becomes WRONG: the five `Area::Pointers` builtins whose check hook returns
+    /// `PhpType::Pointer` had to declare `Mixed`, and every consumer that reads the declared
+    /// type rather than the checked one — `type_spec_to_php`, the generated docs, and the
+    /// result-type fallback lowering takes when it cannot identify a call — got `mixed` for an
+    /// address. See `crate::builtins::pointers::elephc_callable_ptr`.
+    Ptr,
+    /// PHP `callable`, as the owned runtime descriptor it lowers to.
+    ///
+    /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
+    /// representation is a descriptor and not a boxed cell, and had to declare `Mixed`.
+    Callable,
 }
 
 /// Describes the default value for an optional parameter at the `BuiltinSpec`

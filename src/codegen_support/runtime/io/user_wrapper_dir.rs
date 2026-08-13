@@ -25,12 +25,18 @@
 //!   result is normalized to a null pointer so `readdir()` boxes end-of-directory
 //!   as `false` (a real entry name is never empty).
 
+use super::MIN_WRAPPER_SCHEME_LEN;
+use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+/// Slot index of `dir_opendir`, which is also its bit position in the boxed-result mask.
+const VTABLE_DIR_OPENDIR_SLOT: usize = 19;
 /// Byte offset of `dir_opendir` in the per-class vtable (slot 19, 8 bytes each).
-const VTABLE_DIR_OPENDIR_OFFSET: usize = 19 * 8;
+const VTABLE_DIR_OPENDIR_OFFSET: usize = VTABLE_DIR_OPENDIR_SLOT * 8;
+/// Slot index of `dir_readdir`, which is also its bit position in the boxed-result mask.
+const DIR_READDIR_SLOT: usize = 20;
 /// Byte offset of `dir_readdir` in the per-class vtable (slot 20).
-const VTABLE_DIR_READDIR_OFFSET: usize = 20 * 8;
+const VTABLE_DIR_READDIR_OFFSET: usize = DIR_READDIR_SLOT * 8;
 /// Byte offset of `dir_closedir` in the per-class vtable (slot 21).
 const VTABLE_DIR_CLOSEDIR_OFFSET: usize = 21 * 8;
 /// Byte offset of `dir_rewinddir` in the per-class vtable (slot 22).
@@ -63,7 +69,7 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #24]");                                   // save the path length across the helper calls
 
     // -- scan the path for the "://" scheme separator (x1=ptr, x2=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwod_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x2");                                         // do enough bytes remain in the path?
@@ -123,6 +129,7 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable
+    emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
     emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_DIR_OPENDIR_OFFSET)); // load the dir_opendir method pointer (slot 19)
     emitter.instruction("cbz x11, __rt_uwod_fail");                             // class did not implement dir_opendir → false
 
@@ -131,7 +138,13 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // path ptr → string-arg pair
     emitter.instruction("ldr x2, [sp, #24]");                                   // path len → string-arg pair
     emitter.instruction("mov x3, #0");                                          // options = 0
+    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwod_boxed", VTABLE_DIR_OPENDIR_SLOT)); // an undeclared return type arrives boxed
     emitter.instruction("blr x11");                                             // invoke dir_opendir on the wrapper object
+    emitter.instruction("b __rt_uwod_called");                                  // the declared shape needs no conversion
+    emitter.label("__rt_uwod_boxed");
+    emitter.instruction("blr x11");                                             // invoke dir_opendir; x0 = owned Mixed cell
+    emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the boolean, reference released
+    emitter.label("__rt_uwod_called");
     emitter.instruction("cbz x0, __rt_uwod_fail");                              // dir_opendir returned false → free obj, false
 
     // -- success: allocate the first free slot in _user_wrapper_handles --
@@ -182,7 +195,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the path length across the helper calls
 
     // -- scan the path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwod_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the path?
@@ -246,6 +259,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
+    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_OPENDIR_OFFSET)); // load the dir_opendir method pointer (slot 19)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_opendir?
     emitter.instruction("jz __rt_uwod_fail_x86");                               // missing dir_opendir → free obj, false
@@ -255,7 +269,14 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // path ptr → string-arg pair
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("xor rcx, rcx");                                        // options = 0
+    emitter.instruction(&format!("bt r8, {}", VTABLE_DIR_OPENDIR_SLOT));        // an undeclared return type arrives boxed
+    emitter.instruction("jc __rt_uwod_boxed_x86");                              // the mask bit selects the boxed path
     emitter.instruction("call r11");                                            // invoke dir_opendir on the wrapper object
+    emitter.instruction("jmp __rt_uwod_called_x86");                            // the declared shape needs no conversion
+    emitter.label("__rt_uwod_boxed_x86");
+    emitter.instruction("call r11");                                            // invoke dir_opendir; rax = owned Mixed cell
+    emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
+    emitter.label("__rt_uwod_called_x86");
     emitter.instruction("test rax, rax");                                       // did dir_opendir return false?
     emitter.instruction("jz __rt_uwod_fail_x86");                               // dir_opendir returned false → free obj, false
 
@@ -309,7 +330,7 @@ pub fn emit_user_wrapper_dir_readdir(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_dir_readdir ---");
     emitter.label_global("__rt_user_wrapper_dir_readdir");
 
-    emitter.instruction("sub sp, sp, #16");                                     // helper frame for the wrapper dispatch
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame: saved regs, the boxed result, and the converted pair
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
@@ -324,21 +345,39 @@ pub fn emit_user_wrapper_dir_readdir(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
+    emitter.instruction(&format!("ldr x12, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
     emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_READDIR_OFFSET)); // load the dir_readdir method pointer (slot 20)
     emitter.instruction("cbz x11, __rt_uwrd_empty");                            // class did not implement dir_readdir → end of directory
 
-    // -- call dir_readdir($this) → returns string in x1/x2 --
+    // -- call dir_readdir($this); the result shape follows the method's return type --
+    emitter.instruction(&format!("tbnz x12, #{}, __rt_uwrd_boxed", DIR_READDIR_SLOT)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke dir_readdir on the wrapper object
     emitter.instruction("cbz x2, __rt_uwrd_empty");                             // empty name (len 0) is the end-of-directory sentinel
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the entry name in x1/x2
+
+    emitter.label("__rt_uwrd_boxed");
+    emitter.instruction("blr x11");                                             // invoke dir_readdir; x0 = owned Mixed cell
+    emitter.instruction("str x0, [sp, #16]");                                   // keep the boxed result across the conversion
+    emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = owned string; false unboxes to the (0,0) end sentinel
+    emitter.instruction("stp x1, x2, [sp, #24]");                               // save the converted pair across the box release
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed result the method handed us
+    emitter.instruction("cbz x0, __rt_uwrd_boxed_done");                        // a null box owns nothing to release
+    emitter.instruction("str xzr, [x0]");                                       // retag the box as an int: its payload now belongs to the pair above
+    emitter.instruction("bl __rt_mixed_free_deep");                             // release the box storage only, never the string being returned
+    emitter.label("__rt_uwrd_boxed_done");
+    emitter.instruction("ldp x1, x2, [sp, #24]");                               // restore the converted entry name
+    emitter.instruction("cbz x2, __rt_uwrd_empty");                             // zero length is the end-of-directory sentinel
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the entry name in x1/x2
 
     emitter.label("__rt_uwrd_empty");
     emitter.instruction("mov x1, #0");                                          // null pointer → readdir() boxes false
     emitter.instruction("mov x2, #0");                                          // zero length for the end-of-directory result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the end-of-directory result
 }
 
@@ -350,6 +389,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // slots for the boxed result and the converted pair
 
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
@@ -363,20 +403,46 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
+    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_READDIR_OFFSET)); // load the dir_readdir method pointer (slot 20)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_readdir?
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // missing dir_readdir → end of directory
 
-    // -- call dir_readdir($this) → returns string in rax/rdx --
+    // -- call dir_readdir($this); the result shape follows the method's return type --
+    emitter.instruction(&format!("bt r8, {}", DIR_READDIR_SLOT));               // does this class return a boxed `string|false`?
+    emitter.instruction("jc __rt_uwrd_boxed_x86");                              // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke dir_readdir on the wrapper object
     emitter.instruction("test rdx, rdx");                                       // empty name (len 0) is the end-of-directory sentinel
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // box end-of-directory as false
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the entry name in rax/rdx
+
+    emitter.label("__rt_uwrd_boxed_x86");
+    emitter.instruction("call r11");                                            // invoke dir_readdir; rax = owned Mixed cell
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the boxed result across the conversion
+    emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
+    emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the (0,0) end sentinel
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the converted pointer across the box release
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the converted length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed result the method handed us
+    emitter.instruction("test rax, rax");                                       // a null box owns nothing to release
+    emitter.instruction("jz __rt_uwrd_boxed_done_x86");                         // skip the release for a null box
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // retag the box as an int: its payload now belongs to the pair above
+    emitter.instruction("call __rt_mixed_free_deep");                           // release the box storage only, never the string being returned
+    emitter.label("__rt_uwrd_boxed_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the converted entry pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the converted entry length
+    emitter.instruction("test rdx, rdx");                                       // zero length is the end-of-directory sentinel
+    emitter.instruction("jz __rt_uwrd_empty_x86");                              // box end-of-directory as false
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the entry name in rax/rdx
 
     emitter.label("__rt_uwrd_empty_x86");
     emitter.instruction("xor eax, eax");                                        // null pointer → readdir() boxes false
     emitter.instruction("xor edx, edx");                                        // zero length for the end-of-directory result
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the end-of-directory result
 }
@@ -552,4 +618,76 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // false when the handle or method is absent
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return false
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    /// Emits `__rt_user_wrapper_dir_readdir` for one target.
+    fn emit_for(platform: Platform, arch: Arch) -> String {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_user_wrapper_dir_readdir(&mut emitter);
+        emitter.output()
+    }
+
+    /// Both result shapes are dispatched, on BOTH architectures.
+    ///
+    /// The behaviour tests for the manual's `dir_readdir(): string|false` only ever run on the
+    /// host architecture, and this repository has already had a runtime fix land on one target
+    /// and silently miss the other. What has to hold on each: the mask is read from the vtable,
+    /// the raw-pair path survives for a `: string` method, and the boxed path converts through
+    /// `__rt_mixed_cast_string` before releasing the cell.
+    #[test]
+    fn both_result_shapes_are_dispatched_on_both_architectures() {
+        for (platform, arch, boxed_label, retag) in [
+            (
+                Platform::MacOS,
+                Arch::AArch64,
+                "__rt_uwrd_boxed:\n",
+                "str xzr, [x0]\n",
+            ),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                "__rt_uwrd_boxed_x86:\n",
+                "mov QWORD PTR [rax], 0\n",
+            ),
+        ] {
+            let asm = emit_for(platform, arch);
+            assert!(
+                asm.contains(&format!("{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET))
+                    || asm.contains(&format!("+ {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)),
+                "{arch:?}: the boxed-result mask must be read from the vtable:\n{asm}"
+            );
+            assert!(
+                asm.contains(boxed_label),
+                "{arch:?}: the boxed-result path must be emitted:\n{asm}"
+            );
+            assert!(
+                asm.contains("__rt_mixed_cast_string"),
+                "{arch:?}: the boxed result must be converted, not read as a pair:\n{asm}"
+            );
+            assert!(
+                asm.contains(retag),
+                "{arch:?}: the cell must be retagged before release, or the released string is \
+                 the one being returned:\n{asm}"
+            );
+            let retag_at = asm.find(retag).expect("the retag was just asserted");
+            let free_at = asm
+                .find("__rt_mixed_free_deep")
+                .expect("the boxed path releases the cell");
+            assert!(
+                retag_at < free_at,
+                "{arch:?}: the retag must precede the release:\n{asm}"
+            );
+            assert!(
+                asm.contains("__rt_uwrd_empty"),
+                "{arch:?}: the end-of-directory result must survive:\n{asm}"
+            );
+        }
+    }
 }

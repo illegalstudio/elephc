@@ -39,6 +39,7 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     // -- read one line from fd --
     emitter.instruction("bl __rt_fgets");                                       // read line, x1=ptr, x2=len
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save line ptr and len
+    emitter.instruction("cbz x2, __rt_fgetcsv_eof");                            // nothing read at all is EOF, which PHP reports as false
 
     // -- create a new string array (capacity = 64 fields) --
     emitter.instruction("mov x0, #64");                                         // initial capacity of 64 elements
@@ -138,9 +139,15 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
 
     // -- restore frame and return --
+    emitter.label("__rt_fgetcsv_ret");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- end of file: a null result is what the caller boxes as PHP false --
+    emitter.label("__rt_fgetcsv_eof");
+    emitter.instruction("mov x0, #0");                                          // no array: the stream had nothing left to read
+    emitter.instruction("b __rt_fgetcsv_ret");                                  // share the common epilogue
 
     // -- comma found: push current field and start new one --
     emitter.label("__rt_fgetcsv_comma");
@@ -190,6 +197,8 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fgets");                                     // read one line from the stream helper and return it as a borrowed string slice in rax/rdx
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the borrowed line pointer across array allocation and field-persist helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the borrowed line length across array allocation and field-persist helper calls
+    emitter.instruction("test rdx, rdx");                                       // nothing read at all is EOF, which PHP reports as false
+    emitter.instruction("jz __rt_fgetcsv_eof_x86");                             // hand the caller a null result to box as false
 
     emitter.instruction("mov edi, 64");                                         // request an initial indexed-array capacity of 64 CSV fields
     emitter.instruction("mov esi, 16");                                         // request 16-byte payload slots because fgetcsv() stores string ptr/len pairs
@@ -265,9 +274,14 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_push_str");                            // append the current owned CSV field into the result string array
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the possibly grown result array pointer after appending the current field
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result string array once the final field has been appended
+    emitter.label("__rt_fgetcsv_ret_x86");
     emitter.instruction("add rsp, 80");                                         // release the CSV parser spill slots before returning the result array
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 CSV parser completes
     emitter.instruction("ret");                                                 // return the parsed CSV row as an indexed array of owned strings
+
+    emitter.label("__rt_fgetcsv_eof_x86");
+    emitter.instruction("xor eax, eax");                                        // no array: the stream had nothing left to read
+    emitter.instruction("jmp __rt_fgetcsv_ret_x86");                            // share the common epilogue
 
     emitter.label("__rt_fgetcsv_comma_x86");
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // preserve the current scan cursor across the field-persist and array-push helper calls

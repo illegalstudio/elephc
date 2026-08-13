@@ -70,6 +70,8 @@ pub mod pdo_prelude;
 
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
+/// Reachability pruning of injected prelude declarations.
+pub(crate) mod prelude_prune;
 /// Resolution of includes.
 pub mod resolver;
 /// Physical source-file classification and per-file language profiles.
@@ -81,6 +83,8 @@ pub mod strict_php;
 mod string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
+/// Rust builder for the synthetic PHP class surfaces the compiler injects itself.
+pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.

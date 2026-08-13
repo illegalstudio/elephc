@@ -26,6 +26,8 @@
 //!   whole URL to `StreamWrapper` path methods), plus the caller's extra int
 //!   arguments (`$mode`/`$options` for `mkdir`, `$options` for `rmdir`).
 
+use super::MIN_WRAPPER_SCHEME_LEN;
+use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits `__rt_user_wrapper_path_op(path_ptr, path_len, slot, a3, a4) -> 1/0`.
@@ -64,7 +66,7 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #48]");                                   // save the wrapper method's extra arg 4
 
     // -- scan the path for the "://" scheme separator (x0=ptr, x1=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwpo_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x1");                                         // do enough bytes remain in the path?
@@ -124,9 +126,11 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
+    emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the requested vtable slot index
     emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // load the requested method pointer from the vtable
     emitter.instruction("cbz x11, __rt_uwpo_false_obj");                        // class did not implement the method → false
+    emitter.instruction("lsr x13, x13, x9");                                    // the slot is a runtime argument: shift its mask bit to position 0
 
     // -- call method($this, path_ptr, path_len, a3, a4) → x0 = bool --
     emitter.instruction("ldr x0, [sp, #56]");                                   // $this = wrapper object
@@ -134,7 +138,13 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // path len → string-arg pair
     emitter.instruction("ldr x3, [sp, #40]");                                   // extra arg 3 (mode/options)
     emitter.instruction("ldr x4, [sp, #48]");                                   // extra arg 4 (options)
+    emitter.instruction("tbnz x13, #0, __rt_uwpo_boxed");                       // an undeclared return type arrives boxed
     emitter.instruction("blr x11");                                             // invoke the wrapper path method
+    emitter.instruction("b __rt_uwpo_called");                                  // the declared shape needs no conversion
+    emitter.label("__rt_uwpo_boxed");
+    emitter.instruction("blr x11");                                             // invoke the wrapper path method; x0 = owned Mixed cell
+    emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the boolean, reference released
+    emitter.label("__rt_uwpo_called");
     emitter.instruction("str x0, [sp, #40]");                                   // stash the bool result across the instance release
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free the throwaway wrapper instance
@@ -160,10 +170,11 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_user_wrapper_path_op");
 
     // Frame: [rbp-8] path ptr, [rbp-16] path len, [rbp-24] slot, [rbp-32] a3,
-    //   [rbp-40] a4, [rbp-48] obj. push rbp then sub rsp,48 keeps rsp aligned.
+    //   [rbp-40] a4, [rbp-48] obj, [rbp-56] boxed-result flag. push rbp then
+    //   sub rsp,64 keeps rsp aligned.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // spill slots for path/slot/args/obj
+    emitter.instruction("sub rsp, 64");                                         // spill slots for path/slot/args/obj/boxed flag
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the path pointer across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the path length across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the vtable slot index
@@ -173,7 +184,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // path length → scan bound register
 
     // -- scan the path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwpo_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the path?
@@ -238,6 +249,11 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the requested vtable slot index
+    emitter.instruction(&format!("mov r8, QWORD PTR [r10 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r10 is reused
+    emitter.instruction("mov rcx, r9");                                         // the slot is a runtime argument, so the shift count is too
+    emitter.instruction("shr r8, cl");                                          // shift the slot's mask bit to position 0
+    emitter.instruction("and r8, 1");                                           // keep only that bit
+    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // stash the boxed flag: r8 carries the fifth argument below
     emitter.instruction("mov r11, QWORD PTR [r10 + r9 * 8]");                   // load the requested method pointer from the vtable
     emitter.instruction("test r11, r11");                                       // class did not implement the method?
     emitter.instruction("jz __rt_uwpo_false_obj_x86");                          // missing method → false
@@ -248,7 +264,15 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // extra arg 3 (mode/options)
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // extra arg 4 (options)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the boxed flag (r9 carries no argument here)
+    emitter.instruction("test r9, r9");                                         // an undeclared return type arrives boxed
+    emitter.instruction("jnz __rt_uwpo_boxed_x86");                             // the mask bit selects the boxed path
     emitter.instruction("call r11");                                            // invoke the wrapper path method
+    emitter.instruction("jmp __rt_uwpo_called_x86");                            // the declared shape needs no conversion
+    emitter.label("__rt_uwpo_boxed_x86");
+    emitter.instruction("call r11");                                            // invoke the wrapper path method; rax = owned Mixed cell
+    emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
+    emitter.label("__rt_uwpo_called_x86");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // stash the bool result across the instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the throwaway wrapper instance
@@ -262,14 +286,16 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // false: no scheme / unknown class / missing method
 
     emitter.label("__rt_uwpo_ret_x86");
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("add rsp, 64");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bool result
 }
 
 /// Byte offset of the `rename` method pointer in the per-class user-wrapper
 /// vtable (slot 16 of `USER_WRAPPER_VTABLE_SLOTS`, 8 bytes per slot).
-const VTABLE_RENAME_OFFSET: usize = 16 * 8;
+const VTABLE_RENAME_SLOT: usize = 16;
+/// Byte offset of `rename` in the per-class vtable.
+const VTABLE_RENAME_OFFSET: usize = VTABLE_RENAME_SLOT * 8;
 
 /// Emits `__rt_user_wrapper_rename(from_ptr, from_len, to_ptr, to_len) -> 1/0`.
 ///
@@ -307,7 +333,7 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #40]");                                   // save the to-path length across the helper calls
 
     // -- scan the from-path for the "://" scheme separator (x0=ptr, x1=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwrn_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x1");                                         // do enough bytes remain in the from-path?
@@ -367,6 +393,7 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
+    emitter.instruction(&format!("ldr x13, [x10, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x10 is reused
     emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_RENAME_OFFSET)); // load the rename method pointer (slot 16)
     emitter.instruction("cbz x11, __rt_uwrn_false_obj");                        // class did not implement rename → false
 
@@ -376,7 +403,13 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // from len → first string-arg pair
     emitter.instruction("ldr x3, [sp, #32]");                                   // to ptr → second string-arg pair
     emitter.instruction("ldr x4, [sp, #40]");                                   // to len → second string-arg pair
+    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwrn_boxed", VTABLE_RENAME_SLOT)); // an undeclared return type arrives boxed
     emitter.instruction("blr x11");                                             // invoke the wrapper's rename method
+    emitter.instruction("b __rt_uwrn_called");                                  // the declared shape needs no conversion
+    emitter.label("__rt_uwrn_boxed");
+    emitter.instruction("blr x11");                                             // invoke rename; x0 = owned Mixed cell
+    emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the boolean, reference released
+    emitter.label("__rt_uwrn_called");
     emitter.instruction("str x0, [sp, #16]");                                   // stash the bool result across the instance release
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free the throwaway wrapper instance
@@ -414,7 +447,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // from-path length → scan bound register
 
     // -- scan the from-path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_uwrn_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the from-path?
@@ -478,6 +511,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
+    emitter.instruction(&format!("mov r9, QWORD PTR [r10 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r10 is reused
     emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_RENAME_OFFSET)); // load the rename method pointer (slot 16)
     emitter.instruction("test r11, r11");                                       // class did not implement rename?
     emitter.instruction("jz __rt_uwrn_false_obj_x86");                          // missing method → false
@@ -488,7 +522,14 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // from len → first string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // to ptr → second string-arg pair
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // to len → second string-arg pair
+    emitter.instruction(&format!("bt r9, {}", VTABLE_RENAME_SLOT));             // an undeclared return type arrives boxed
+    emitter.instruction("jc __rt_uwrn_boxed_x86");                              // the mask bit selects the boxed path
     emitter.instruction("call r11");                                            // invoke the wrapper's rename method
+    emitter.instruction("jmp __rt_uwrn_called_x86");                            // the declared shape needs no conversion
+    emitter.label("__rt_uwrn_boxed_x86");
+    emitter.instruction("call r11");                                            // invoke rename; rax = owned Mixed cell
+    emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
+    emitter.label("__rt_uwrn_called_x86");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the bool result across the instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the throwaway wrapper instance

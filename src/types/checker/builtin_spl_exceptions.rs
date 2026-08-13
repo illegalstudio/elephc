@@ -34,6 +34,15 @@ const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("UnexpectedValueException", "RuntimeException"),
 ];
 
+/// The hierarchy, for `builtin_throwable_gate` to check its own copy against.
+///
+/// The gate needs the parent EDGES to close a named exception over its ancestors, and a gate
+/// that closed over the wrong parents would hand the checker an incomplete chain to flatten.
+#[cfg(test)]
+pub(crate) fn hierarchy_for_gate() -> &'static [(&'static str, &'static str)] {
+    SPL_EXCEPTION_HIERARCHY
+}
+
 /// Injects SPL exception class declarations into the checker metadata.
 ///
 /// Inserts a flat class hierarchy for all standard SPL exception types
@@ -51,9 +60,13 @@ const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
 /// # Inputs
 /// - `interface_map`: maps interface names to declaration info; checked for conflicts.
 /// - `class_map`: maps class names to flattened class metadata; populated with SPL exceptions.
+/// - `wanted`: the names `builtin_throwable_gate` found the program able to reach. The
+///   REDECLARATION CHECK STILL RUNS OVER THE WHOLE HIERARCHY regardless, so a user class named
+///   `DomainException` is rejected exactly as before whether or not the gate wanted ours.
 pub(crate) fn inject_builtin_spl_exceptions(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    wanted: &std::collections::HashSet<String>,
 ) -> Result<(), CompileError> {
     for (name, _) in SPL_EXCEPTION_HIERARCHY {
         if *name == "RuntimeException" && class_map.contains_key(*name) {
@@ -68,7 +81,7 @@ pub(crate) fn inject_builtin_spl_exceptions(
     }
 
     for (name, parent) in SPL_EXCEPTION_HIERARCHY {
-        if class_map.contains_key(*name) {
+        if class_map.contains_key(*name) || !wanted.contains(*name) {
             continue;
         }
         class_map.insert(

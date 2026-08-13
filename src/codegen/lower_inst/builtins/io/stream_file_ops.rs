@@ -305,6 +305,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.emitter.instruction("mov rdi, rax");                                // pass the stream fd to the x86_64 fgetcsv runtime helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");
+    box_indexed_array_or_false_result(ctx);                                     // EOF is a null result, which PHP reports as false
     store_if_result(ctx, inst)
 }
 

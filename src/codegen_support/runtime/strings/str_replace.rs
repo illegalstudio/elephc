@@ -95,8 +95,8 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_str_replace_found");                         // full match found
     emitter.instruction("add x16, x13, x15");                                   // compute subject index = pos + match_idx
     emitter.instruction("ldrb w17, [x5, x16]");                                 // load subject byte at computed index
-    emitter.instruction("ldrb w18, [x1, x15]");                                 // load search byte at match index
-    emitter.instruction("cmp w17, w18");                                        // compare subject and search bytes
+    emitter.instruction("ldrb w9, [x1, x15]");                                  // load search byte (w9: x18 is reserved on Apple)
+    emitter.instruction("cmp w17, w9");                                         // compare subject and search bytes
     emitter.instruction("b.ne __rt_str_replace_copy_byte");                     // mismatch, just copy current byte
     emitter.instruction("add x15, x15, #1");                                    // advance match index
     emitter.instruction("b __rt_str_replace_match");                            // continue matching

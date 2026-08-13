@@ -16,6 +16,7 @@
 //!   against each `_user_wrappers` slot). It performs no instantiation and has
 //!   no side effects, so it is safe to call speculatively.
 
+use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits `__rt_path_is_wrapper(path_ptr, path_len) -> 1/0`.
@@ -34,7 +35,7 @@ pub fn emit_path_is_wrapper(emitter: &mut Emitter) {
     emitter.label_global("__rt_path_is_wrapper");
 
     // -- scan the path for the "://" scheme separator (x0=ptr, x1=len) --
-    emitter.instruction("mov x9, #0");                                          // scheme scan index
+    emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_piw_scan");
     emitter.instruction("add x10, x9, #3");                                     // need three bytes for the "://" marker
     emitter.instruction("cmp x10, x1");                                         // do enough bytes remain in the path?
@@ -100,7 +101,7 @@ fn emit_path_is_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // path length → scan bound register
 
     // -- scan the path for the "://" scheme separator (rax=ptr, rdx=len) --
-    emitter.instruction("xor r9, r9");                                          // scheme scan index
+    emitter.instruction(&format!("mov r9d, {}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
     emitter.label("__rt_piw_scan_x86");
     emitter.instruction("lea r10, [r9 + 3]");                                   // need three bytes for the "://" marker
     emitter.instruction("cmp r10, rdx");                                        // do enough bytes remain in the path?

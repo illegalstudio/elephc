@@ -60,16 +60,25 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 
 /// Validates the argument type and returns `Int`.
 ///
-/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union where every member
-/// is countable, or an Object that implements the `Countable` interface. Arity
+/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union with at least one
+/// countable member, or an Object that implements the `Countable` interface. Arity
 /// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
 /// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
 /// Returns a `CompileError` for non-countable types or non-Countable objects.
+///
+/// The union rule used to require EVERY member to be countable, which refused
+/// `count(fgetcsv($h))` and `count(file($p))` — the ordinary shape for a builtin returning
+/// `array|false`. That was not strictness for its own sake: it was standing in for the
+/// missing runtime `TypeError`, and relaxing it before the guard existed would have spread
+/// the silent zero instead of removing it (measured — `count($falseValue)` answered 0 where
+/// PHP is fatal). The guard now raises, so a union whose non-countable arm is taken behaves
+/// exactly like PHP. A union with NO countable member is still refused: that call cannot
+/// succeed, and a compile error beats a certain run-time fatal.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
+        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
             Ok(PhpType::Int)
         }
         PhpType::Object(class_name) => {

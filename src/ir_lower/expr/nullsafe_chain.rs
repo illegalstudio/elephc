@@ -12,7 +12,7 @@
 //! - Ordinary `->` method calls on real null receivers fatal before arguments,
 //!   matching PHP's observable evaluation order.
 
-use crate::ir::{BlockId, Op, Terminator};
+use crate::ir::{BlockId, Immediate, Op, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
@@ -20,8 +20,8 @@ use crate::types::PhpType;
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
-    lower_method_call_with_receiver, lower_property_get_from_value, store_value_into_temp,
-    take_owned_temp, value_is_definitely_null, value_is_nullable,
+    lower_method_call_with_receiver, lower_property_get_from_value, property_can_be_uninitialized,
+    store_value_into_temp, take_owned_temp, value_is_definitely_null, value_is_nullable,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -266,6 +266,16 @@ fn lower_nullsafe_postfix_segment(
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
+            // Under `??` (`warn_on_missing == false`) a typed property with no default must
+            // read as null rather than raise, exactly as `isset()` reads it. The chain already
+            // owns a "the answer is null" block for its nullsafe hops, so this reuses that
+            // rather than building a second merge: an uninitialized slot short-circuits the
+            // whole chain, which is what `$o?->p?->q ?? "d"` means.
+            if !warn_on_missing
+                && !guard_initialized_chain_property(ctx, current, null_block, property, expr)
+            {
+                return None;
+            }
             Some(lower_property_get_from_value(
                 ctx,
                 current,
@@ -335,6 +345,60 @@ fn lower_nullsafe_postfix_segment(
 }
 
 /// Branches to the chain-null block when a `?->` receiver is null.
+/// Sends the chain to its null block when `property` is a typed slot that is still
+/// uninitialized, instead of letting the read raise.
+///
+/// Always returns `true`: the divert is a CONDITIONAL branch, so the caller must go on lowering
+/// the segment for the initialized path. That differs from `guard_nullsafe_chain_receiver`, which
+/// returns `false` when it diverts UNCONDITIONALLY on a provably-null receiver. Only an UNTYPED
+/// property is left unprobed — it is plain null from the start and keeps its exact previous
+/// lowering. A default does not exempt a typed property, because `unset()` returns it to the
+/// uninitialized state whatever its default.
+fn guard_initialized_chain_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    current: LoweredValue,
+    null_block: BlockId,
+    property: &str,
+    expr: &Expr,
+) -> bool {
+    if !property_can_be_uninitialized(ctx, current.value, property) {
+        return true;
+    }
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![current.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    let continue_block = ctx
+        .builder
+        .create_named_block("nullsafe.chain.initialized", Vec::new());
+    // Diverting to the chain's null block skips every later segment, including whatever would
+    // have consumed this receiver — so an OWNING receiver has to be released on the way out,
+    // exactly as the null-receiver guard below does. `mk()?->p?->c ?? "none"` leaked one object
+    // per call without this.
+    let cleanup_block = ctx
+        .value_is_owning_temporary(current)
+        .then(|| ctx.builder.create_named_block("nullsafe.chain.uninit_cleanup", Vec::new()));
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: continue_block,
+        then_args: Vec::new(),
+        else_target: cleanup_block.unwrap_or(null_block),
+        else_args: Vec::new(),
+    });
+    if let Some(cleanup_block) = cleanup_block {
+        ctx.builder.position_at_end(cleanup_block);
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
+        branch_to(ctx, null_block);
+    }
+    ctx.builder.position_at_end(continue_block);
+    true
+}
+
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,

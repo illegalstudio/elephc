@@ -44,7 +44,15 @@ thread_local! {
 }
 
 /// Folds constant expressions to their compile-time values.
+///
+/// Also gives a CLI program the superglobals PHP's CLI SAPI would already have
+/// created. That is not folding, and it rides here for a reason spelled out in
+/// `superglobals::COMPILING_FOR_WEB`: this function is the last phase every one of
+/// the thirteen hand-rolled pipelines calls before the checker, so a semantic pass
+/// placed here cannot be forgotten by one of them. It runs FIRST so the literal it
+/// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
+    let program = crate::superglobals::seed_cli_populated_superglobals(program);
     program.into_iter().map(fold_stmt).collect()
 }
 

@@ -205,6 +205,64 @@ try {
     );
 }
 
+/// `??`, `isset()` and `empty()` must NOT hit the fatal above — PHP answers the default,
+/// `false` and `true` for an uninitialized typed static property without raising.
+///
+/// The instance path has branched on `Op::PropInitialized` for a while; the static guard is
+/// emitted straight into the read instead, so the lowering had nothing to branch on and all
+/// three constructs raised. `Op::StaticPropInitialized` is that missing operation. The
+/// resolution is exercised through every receiver form, because each resolves the declaring
+/// class differently: `Named::`, `self::`, `static::` and `parent::`. The private slot is here
+/// because the probe enforces visibility where the Reflection one it reuses does not.
+#[test]
+fn test_coalesce_isset_and_empty_suppress_an_uninitialized_typed_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static int $b;
+}
+class Kid extends Base {
+    public static int $k;
+    private static ?string $priv;
+
+    public static function viaSelf(): string { return self::$k ?? "d"; }
+    public static function viaStatic(): string { return static::$k ?? "d"; }
+    public static function viaParent(): string { return parent::$b ?? "d"; }
+    public static function viaPriv(): string { return self::$priv ?? "d"; }
+    public static function probe(): string { return isset(self::$k) ? "y" : "n"; }
+    public static function blank(): string { return empty(self::$k) ? "y" : "n"; }
+    public static function fill(): string { self::$k ??= 7; return (string) self::$k; }
+}
+echo Kid::$k ?? "d", Kid::viaSelf(), Kid::viaStatic(), Kid::viaParent(), Kid::viaPriv();
+echo "|", Kid::probe(), Kid::blank();
+echo "|", Kid::fill(), Kid::viaSelf(), Kid::probe(), Kid::blank();
+"#,
+    );
+    assert_eq!(out, "ddddd|ny|77yn");
+}
+
+/// The controls for the probe above. An INITIALIZED slot keeps its own value even when that
+/// value is falsy (`isset` true, `empty` true on `0`); a slot explicitly set to null and an
+/// UNTYPED slot are plain null from the start, so they never reach the probe and answer the
+/// way they always did.
+#[test]
+fn test_static_property_probe_leaves_initialized_and_untyped_slots_alone() {
+    let out = compile_and_run(
+        r#"<?php
+class Z {
+    public static int $zero;
+    public static ?string $nul = null;
+    public static $untyped;
+}
+Z::$zero = 0;
+echo Z::$zero ?? "d", isset(Z::$zero) ? "y" : "n", empty(Z::$zero) ? "y" : "n";
+echo "|", Z::$nul ?? "d", isset(Z::$nul) ? "y" : "n", empty(Z::$nul) ? "y" : "n";
+echo "|", Z::$untyped ?? "d", isset(Z::$untyped) ? "y" : "n", empty(Z::$untyped) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "0yy|dny|dny");
+}
+
 /// Verifies that accessing an uninitialized typed property and catching `Error`
 /// allows continued execution after the property is initialized (issue #339).
 #[test]

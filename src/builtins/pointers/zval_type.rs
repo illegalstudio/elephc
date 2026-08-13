@@ -14,7 +14,7 @@ use crate::types::PhpType;
 builtin! {
     name: "zval_type",
     area: Pointers,
-    params: [zval: Mixed],
+    params: [zval: Ptr],
     returns: Int,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

@@ -31,9 +31,13 @@ use super::Checker;
 ///
 /// # Errors
 /// Returns `CompileError` if `Generator` is already declared as an interface or class.
+/// `register` is `builtin_class_gate::program_may_reference_generator`. The REDECLARATION CHECK
+/// RUNS REGARDLESS, so `class Generator {}` in user code is rejected exactly as before whether or
+/// not the gate wanted ours.
 pub(crate) fn inject_builtin_iterators(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
+    register: bool,
 ) -> Result<(), CompileError> {
     let generator_key = php_symbol_key("Generator");
     if interface_map
@@ -47,6 +51,9 @@ pub(crate) fn inject_builtin_iterators(
             crate::span::Span::dummy(),
             "Cannot redeclare built-in class: Generator",
         ));
+    }
+    if !register {
+        return Ok(());
     }
 
     class_map.insert(

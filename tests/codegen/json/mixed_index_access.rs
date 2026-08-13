@@ -146,13 +146,27 @@ fn test_mixed_count_assoc() {
     assert_eq!(out, "3");
 }
 
-/// `count()` on a non-container Mixed payload returns 0 (PHP would emit a
-/// warning and return 1 in older versions / 0 in PHP 8+; elefant collapses
-/// to 0).
+/// `count()` on a non-container Mixed payload raises PHP 8's TypeError.
+///
+/// This asserted `0` and passed — which is what a divergence looks like once a test
+/// records it. Reference PHP has thrown here since 8.0; the quiet answer dates from the
+/// 7.2 warning and was never revisited. The message is php-src's own, and it names a
+/// boolean by its VALUE (`false given`, never `bool given`), so the arm is per-tag.
 #[test]
-fn test_mixed_count_scalar_is_zero() {
-    let out = compile_and_run(r#"<?php echo count(json_decode("42"));"#);
-    assert_eq!(out, "0");
+fn test_mixed_count_scalar_throws_php_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+        try {
+            echo count(json_decode("42"));
+        } catch (TypeError $e) {
+            echo $e->getMessage();
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "count(): Argument #1 ($value) must be of type Countable|array, int given"
+    );
 }
 
 /// Nested access with int key first, then string key: `arr[0]["x"]` on an

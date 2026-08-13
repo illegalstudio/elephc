@@ -29,15 +29,15 @@ pub(super) fn sample_manifest() -> Vec<ScriptEntry> {
     /// an empty manifest renders `[]`.
     #[test]
 pub(super) fn renders_manifest_paths_literal() {
-        let literal = render_manifest_paths_literal(&sample_manifest());
+        let literal = rendered_expr(&manifest_paths_expr(&sample_manifest()));
         assert_eq!(
             literal,
             "['/srv/app/index.php', '/srv/app/vendor/autoload_files/helpers.php']"
         );
         let _ = parse(&format!("<?php $h = {literal};"));
 
-        assert_eq!(render_manifest_paths_literal(&[]), "[]");
-        let _ = parse(&format!("<?php $h = {};", render_manifest_paths_literal(&[])));
+        assert_eq!(rendered_expr(&manifest_paths_expr(&[])), "[]");
+        let _ = parse(&format!("<?php $h = {};", rendered_expr(&manifest_paths_expr(&[]))));
     }
 
     /// The `scripts` map is keyed by full_path and each entry carries the exact 7-key shape,
@@ -49,7 +49,7 @@ pub(super) fn renders_manifest_paths_literal() {
     #[test]
 pub(super) fn renders_scripts_map_literal() {
         // revalidate_freq = 2 (the 8.5 directive default).
-        let map = render_scripts_map_literal(&sample_manifest(), 2, 80500);
+        let map = rendered_expr(&scripts_map_expr(&sample_manifest(), 2, 80500));
         // Keyed by full_path.
         assert!(map.contains("'/srv/app/index.php' => ["));
         assert!(map.contains("'full_path' => '/srv/app/index.php'"));
@@ -71,7 +71,7 @@ pub(super) fn renders_scripts_map_literal() {
         let _ = parse(&format!("<?php $s = {map};"));
 
         // Empty manifest → empty map.
-        assert_eq!(render_scripts_map_literal(&[], 2, 80500), "[]");
+        assert_eq!(rendered_expr(&scripts_map_expr(&[], 2, 80500)), "[]");
     }
 
     /// `opcache_get_status` bakes the manifest count into `num_cached_scripts` /
@@ -80,7 +80,7 @@ pub(super) fn renders_scripts_map_literal() {
     #[test]
 pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
         let manifest = sample_manifest();
-        let body = render_get_status_function(PhpVersion::Php85, true, &manifest, &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &[], false, None));
         // Two cached scripts / keys.
         assert!(body.contains("'num_cached_scripts' => 2"));
         assert!(body.contains("'num_cached_keys' => 2"));
@@ -102,7 +102,7 @@ pub(super) fn get_status_bakes_manifest_counts_and_scripts() {
     /// empty scripts map, and the untouched baseline memory figures.
     #[test]
 pub(super) fn get_status_empty_manifest_is_valid() {
-        let body = render_get_status_function(PhpVersion::Php85, true, &[], &[], false, None);
+        let body = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &[], false, None));
         assert!(body.contains("'num_cached_scripts' => 0"));
         assert!(body.contains("'num_cached_keys' => 0"));
         assert!(body.contains("$status['scripts'] = [];"));
@@ -121,7 +121,7 @@ pub(super) fn get_status_empty_manifest_is_valid() {
     /// `opcache.jit_buffer_size`, `opcache.preload`, …) still returns the bare literal.
     #[test]
 pub(super) fn renders_parsable_opcache_ini_helpers() {
-        let helpers = render_opcache_ini_helpers(PhpVersion::Php85, &[]);
+        let helpers = rendered_block(ini_helper_declarations(PhpVersion::Php85, &[]));
         // EXCLUDED directives keep the bare raw-string literal.
         assert!(helpers.contains("if ($option === 'opcache.enable') { return '1'; }"));
         assert!(helpers.contains("if ($option === 'opcache.memory_consumption') { return '128'; }"));
@@ -178,7 +178,7 @@ pub(super) fn rendered_ini_keys(helpers: &str) -> Vec<String> {
     /// list is asserted to be un-sorted on 8.5 to prove the sort is doing real work.
     #[test]
 pub(super) fn ini_keys_are_sorted_but_directive_table_is_not() {
-        let helpers = render_opcache_ini_helpers(PhpVersion::Php85, &[]);
+        let helpers = rendered_block(ini_helper_declarations(PhpVersion::Php85, &[]));
         let keys = rendered_ini_keys(&helpers);
 
         let registration: Vec<String> = opcache_directives(80500)
@@ -215,8 +215,8 @@ pub(super) fn ini_keys_are_sorted_but_directive_table_is_not() {
     /// extension must appear, and the canonical mixed-case spellings must NOT.
     #[test]
 pub(super) fn module_known_list_is_lowercased_core_extensions() {
-        let cli = render_ini_module_known(false);
-        let web = render_ini_module_known(true);
+        let cli = rendered(ini_module_known_declaration(false));
+        let web = rendered(ini_module_known_declaration(true));
 
         for name in crate::codegen::lower_inst::builtins::CORE_LOADED_EXTENSIONS {
             let lowered = name.to_ascii_lowercase();
@@ -261,7 +261,7 @@ pub(super) fn cli_ini_get_all_renders_filter_dispatch() {
     /// The 8.2 helpers flip the version-dependent raw strings (jit tracing, buffer 0).
     #[test]
 pub(super) fn opcache_ini_helpers_follow_version() {
-        let helpers = render_opcache_ini_helpers(PhpVersion::Php82, &[]);
+        let helpers = rendered_block(ini_helper_declarations(PhpVersion::Php82, &[]));
         assert!(helpers.contains("if ($option === 'opcache.jit') { return 'tracing'; }"));
         assert!(helpers.contains("if ($option === 'opcache.jit_buffer_size') { return '0'; }"));
         // 8.2-only directive is present in the dispatch, and is reporting-only ⇒ overridable.

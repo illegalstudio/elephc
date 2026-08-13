@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::RuntimeFeatures;
 
 
 /// Emits the `__rt_object_free_deep` runtime helper for ARM64.
@@ -22,9 +23,9 @@ use crate::codegen_support::abi;
 /// Output: none (x0 = 0 on return via `__rt_object_free_deep_done`)
 /// Clobbers: x0–x15, lr as needed for helper calls
 /// Special cases: Fiber (munmap stack), Generator (boxed Mixed fields), SPL types.
-pub fn emit_object_free_deep(emitter: &mut Emitter) {
+pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_object_free_deep_linux_x86_64(emitter);
+        emit_object_free_deep_linux_x86_64(emitter, features);
         return;
     }
 
@@ -71,6 +72,13 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     // of runtime-managed fields, not Mixed/array/string slots, so walking those bytes through
     // the generic property-tag descriptor would read garbage. Detect Fiber by class_id and skip
     // straight to the struct free after returning the heap-allocated stack.
+    //
+    // EMITTED ONLY WHEN THE PROGRAM HAS THE FIBER CLASS. This whole arm — and with it the
+    // `munmap` import that `__rt_fiber_free_stack` carries — used to be in every binary, to free
+    // a stack no Fiber had allocated because no Fiber could exist. When absent, a receiver simply
+    // continues into the Generator check with `x0` still holding the object pointer, which is
+    // exactly what the `b.ne` below did for every non-Fiber receiver.
+    if features.fiber {
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_class_id", 0); // x11 = compile-time class id of the built-in Fiber class
     emitter.instruction("cmp x10, x11");                                        // is the receiver a Fiber instance?
@@ -126,10 +134,16 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Fiber pointer one last time before the struct free
     emitter.instruction("b __rt_object_free_deep_struct");                      // skip the property-tag walk and free the Fiber struct itself
     emitter.label("__rt_object_free_deep_not_fiber");
+    }
 
     // -- Generator special case: a fiber-shaped coroutine object whose payload is
     // runtime-managed (coroutine stack + boxed Mixed fields), not PHP property
     // slots. Release the stack and every owned field, then free the struct. --
+    //
+    // Gated with the Fiber arm above, and it has to be: a Generator releases its coroutine stack
+    // through the SAME `__rt_fiber_free_stack`, so gating one without the other leaves the helper
+    // referenced and `munmap` imported.
+    if features.generator {
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_generator_class_id", 0); // x11 = compile-time class id of the built-in Generator class
     emitter.instruction("cmp x10, x11");                                        // is the receiver a Generator coroutine?
@@ -138,6 +152,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator pointer before the struct free
     emitter.instruction("b __rt_object_free_deep_struct");                      // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
+    }
 
     // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
@@ -278,7 +293,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
 /// Output: none (rax = 0 on return via `__rt_object_free_deep_done`)
 /// Clobbers: rax, r10, r11, rcx, r8, r9, and the x86_64 C call-clobbered set
 /// Special cases: Fiber, Generator, SPL doubly-linked-list, SplFixedArray.
-fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
+fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: object_free_deep ---");
     emitter.label_global("__rt_object_free_deep");
@@ -312,6 +327,11 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
 
     // -- Fiber special case: release the per-fiber stack before the standard struct free path --
+    // Gated exactly as the AArch64 arm above, on the same feature bit and over the same span:
+    // from the class_id load down to and including the `not_fiber` label, which nothing outside
+    // this arm branches to. When absent, `rax` still holds the object pointer reloaded after the
+    // destructor call, which is what the `jne` handed to the Generator check anyway.
+    if features.fiber {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_class_id", 0); // r11 = compile-time class id of the built-in Fiber class
     emitter.instruction("cmp r10, r11");                                        // is the receiver a Fiber instance?
@@ -361,10 +381,14 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     }
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // skip property-tag walking for runtime-managed Fiber payloads
     emitter.label("__rt_object_free_deep_not_fiber");
+    }
 
     // -- Generator special case: a fiber-shaped coroutine object whose payload is
     // runtime-managed (coroutine stack + boxed Mixed fields), not PHP property
     // slots. Release the stack and every owned field, then free the struct. --
+    // Gated with the Fiber arm above, and for the same reason: both release their stack through
+    // `__rt_fiber_free_stack`, so one alone keeps `munmap` imported.
+    if features.generator {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0); // r11 = compile-time class id of the built-in Generator class
     emitter.instruction("cmp r10, r11");                                        // is the receiver a Generator coroutine?
@@ -373,6 +397,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator pointer before the struct free
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
+    }
 
     // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
@@ -632,7 +657,7 @@ mod tests {
     #[test]
     fn test_object_free_deep_releases_callable_properties_aarch64() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
-        emit_object_free_deep(&mut emitter);
+        emit_object_free_deep(&mut emitter, RuntimeFeatures::all());
         let asm = emitter.output();
 
         assert!(asm.contains("cmp x15, #10\n"));
@@ -640,12 +665,67 @@ mod tests {
         assert!(asm.contains("bl __rt_callable_descriptor_release\n"));
     }
 
+    /// The stack-releasing arms appear only for a program that has the classes, and the guard has
+    /// to check BOTH directions: an "is it absent" assertion alone passes just as well when the
+    /// emitter is broken and emits nothing at all.
+    ///
+    /// Both arms are checked together because they share `__rt_fiber_free_stack`. Gating only the
+    /// Fiber one left `munmap` imported through the Generator one — measured, not assumed, and the
+    /// reason this test names both.
+    #[test]
+    fn the_stack_releasing_arms_follow_their_classes() {
+        for (platform, arch, fiber_branch, generator_branch) in [
+            (
+                Platform::MacOS,
+                Arch::AArch64,
+                "b.ne __rt_object_free_deep_not_fiber\n",
+                "b.ne __rt_object_free_deep_not_generator\n",
+            ),
+            (
+                Platform::Linux,
+                Arch::X86_64,
+                "jne __rt_object_free_deep_not_fiber\n",
+                "jne __rt_object_free_deep_not_generator\n",
+            ),
+        ] {
+            let mut with = Emitter::new(Target::new(platform, arch));
+            emit_object_free_deep(&mut with, RuntimeFeatures::all());
+            let with = with.output();
+            assert!(with.contains(fiber_branch), "{arch:?}: fiber arm must be emitted");
+            assert!(
+                with.contains(generator_branch),
+                "{arch:?}: generator arm must be emitted"
+            );
+            assert!(
+                with.contains("__rt_fiber_free_stack"),
+                "{arch:?}: the stack helper is reached from those arms"
+            );
+
+            let mut without = Emitter::new(Target::new(platform, arch));
+            emit_object_free_deep(&mut without, RuntimeFeatures::none());
+            let without = without.output();
+            assert!(!without.contains(fiber_branch), "{arch:?}: fiber arm must be gone");
+            assert!(
+                !without.contains(generator_branch),
+                "{arch:?}: generator arm must be gone"
+            );
+            assert!(
+                !without.contains("__rt_fiber_free_stack"),
+                "{arch:?}: nothing may still reach the stack helper, or munmap stays imported"
+            );
+            assert!(
+                without.contains("__rt_object_free_deep_struct"),
+                "{arch:?}: the ordinary free path must survive the gating"
+            );
+        }
+    }
+
     /// Verifies that x86_64 object destruction dispatches callable properties
     /// to the descriptor-aware release helper instead of the generic heap decref.
     #[test]
     fn test_object_free_deep_releases_callable_properties_x86_64() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
-        emit_object_free_deep(&mut emitter);
+        emit_object_free_deep(&mut emitter, RuntimeFeatures::all());
         let asm = emitter.output();
 
         assert!(asm.contains("cmp r8, 10\n"));

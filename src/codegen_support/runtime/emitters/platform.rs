@@ -93,6 +93,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_http_build_request(emitter);
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
+    io::emit_wrapper_unbox_int(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
@@ -106,6 +107,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_user_wrapper_fstat(emitter);
     io::emit_user_wrapper_url_stat(emitter);
     io::emit_user_wrapper_url_stat_field(emitter);
+    io::emit_stat_mode_access(emitter);
     io::emit_path_is_wrapper(emitter);
     io::emit_readfile_wrapper(emitter);
     io::emit_user_wrapper_path_op(emitter);

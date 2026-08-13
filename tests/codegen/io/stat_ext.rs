@@ -407,3 +407,32 @@ echo $info["size"];
     assert_eq!(out, "10");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `filesize()` and `filemtime()` on a missing path return a value at all, rather
+/// than whatever the stat buffer happened to contain.
+///
+/// The AArch64 helpers read `st_size`/`st_mtime` straight out of their stack buffer without
+/// testing the syscall result, so a missing path returned untouched stack: `filesize()`
+/// answered `int(4)` and `filemtime()` `int(8322009384)` — a stack address, not a timestamp.
+/// Every x86_64 helper in the same file already tested the result, which is why only one
+/// target was wrong.
+///
+/// The test asks TWICE around an intervening call, because the defect's signature is a value
+/// that tracks the caller's stack rather than one that is merely wrong: two identical calls
+/// with different stack state in between returned different numbers, and a single-call
+/// assertion could have been satisfied by whatever the first one happened to produce.
+#[test]
+fn test_stat_helpers_do_not_read_an_unfilled_buffer_for_a_missing_path() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$first = filesize("absent_stat_probe.txt");
+$mtime = filemtime("absent_stat_probe.txt");
+$pad = str_repeat("x", 512);
+echo strlen($pad) > 0 ? "" : "";
+$second = filesize("absent_stat_probe.txt");
+echo $first, "|", $mtime, "|", $second, "|", $first === $second ? "stable" : "varies";
+"#,
+    );
+    assert_eq!(out, "0|0|0|stable");
+    let _ = fs::remove_dir_all(&dir);
+}

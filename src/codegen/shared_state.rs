@@ -29,6 +29,15 @@ pub(crate) struct SharedCodegenState {
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     label_counter: usize,
+    /// Memoized "does this module share the Mixed string-context ladder", indexed by mode.
+    ///
+    /// The predicate counts sites across every body in the module and is consulted at EVERY
+    /// string context, so computing it per site is quadratic in module size. That is not
+    /// theoretical here: an `eval()` program emits close to a million lines of assembly, and
+    /// its sites would each rescan the whole instruction stream.
+    mixed_string_sharing: [Option<bool>; 2],
+    /// Memoized "does this module share the `count()` countable guard", for the same reason.
+    count_guard_sharing: Option<bool>,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -71,6 +80,26 @@ impl SharedCodegenState {
         let id = self.label_counter;
         self.label_counter += 1;
         id
+    }
+
+    /// Returns the memoized string-context sharing decision for one mode, if already computed.
+    pub(super) fn mixed_string_sharing(&self, mode_index: usize) -> Option<bool> {
+        self.mixed_string_sharing[mode_index]
+    }
+
+    /// Records the string-context sharing decision so later sites reuse it.
+    pub(super) fn set_mixed_string_sharing(&mut self, mode_index: usize, shares: bool) {
+        self.mixed_string_sharing[mode_index] = Some(shares);
+    }
+
+    /// Returns the memoized `count()` guard sharing decision, if already computed.
+    pub(super) fn count_guard_sharing(&self) -> Option<bool> {
+        self.count_guard_sharing
+    }
+
+    /// Records the `count()` guard sharing decision so later sites reuse it.
+    pub(super) fn set_count_guard_sharing(&mut self, shares: bool) {
+        self.count_guard_sharing = Some(shares);
     }
 
     /// Returns cached runtime string-callable cases for the requested specialization.

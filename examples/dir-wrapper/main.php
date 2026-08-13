@@ -19,10 +19,10 @@ class VirtualDir
         return true;
     }
 
-    public function dir_readdir(): string
+    public function dir_readdir(): string|false
     {
         if ($this->pos >= count($this->entries)) {
-            return ""; // empty string signals end-of-directory
+            return false; // false signals end-of-directory, as PHP documents
         }
         $name = $this->entries[$this->pos];
         $this->pos = $this->pos + 1;

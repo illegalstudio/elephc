@@ -123,12 +123,16 @@ echo $f->isTerminated() ? "T" : "t";
 }
 
 /// Verifies FiberError is a subclass of Error (catchable by Error, not Exception).
+///
+/// The FiberError is RAISED by the engine rather than constructed: reference PHP reserves the
+/// class for internal use, so the original `throw new FiberError("nope")` is refused there.
+/// Suspending outside a fiber is the shortest way to make the engine produce one.
 #[test]
 fn test_fiber_error_subclasses_error() {
     let out = compile_and_run(
         r#"<?php
 try {
-    throw new FiberError("nope");
+    Fiber::suspend(0);
 } catch (Exception $e) {
     echo "exception";
 } catch (Error $e) {
@@ -140,12 +144,14 @@ try {
 }
 
 /// Verifies FiberError is caught by its specific type before Exception.
+///
+/// Engine-raised for the same reason as the test above: `new FiberError(...)` is reserved.
 #[test]
 fn test_fiber_error_caught_by_specific_type() {
     let out = compile_and_run(
         r#"<?php
 try {
-    throw new FiberError("x");
+    Fiber::suspend(0);
 } catch (FiberError $e) {
     echo "fiber-err";
 } catch (Exception $e) {
@@ -156,7 +162,12 @@ try {
     assert_eq!(out, "fiber-err");
 }
 
-/// Verifies Fiber:: throw delivers a FiberError to a fiber's internal try/catch, and execution resumes after the catch block.
+/// Verifies `Fiber::throw()` delivers a throwable to a fiber's internal try/catch, and
+/// execution resumes after the catch block.
+///
+/// The delivered throwable is an `Exception` rather than a `FiberError`, which reference PHP
+/// reserves for internal use. Which class is delivered is incidental here — the test is about
+/// the delivery reaching the suspended fiber's handler — and the expected output is unchanged.
 #[test]
 fn test_fiber_throw_caught_by_internal_try_catch() {
     let out = compile_and_run(
@@ -166,7 +177,7 @@ $f = new Fiber(function(): void {
     try {
         Fiber::suspend(0);
         echo "X-not-reached";
-    } catch (FiberError $e) {
+    } catch (Exception $e) {
         echo "2";
     }
     echo "3";
@@ -174,7 +185,7 @@ $f = new Fiber(function(): void {
 echo "A";
 $f->start();
 echo "B";
-$f->throw(new FiberError("delivered"));
+$f->throw(new Exception("delivered"));
 echo "C";
 "#,
     );

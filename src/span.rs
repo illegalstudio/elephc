@@ -14,6 +14,16 @@
 //!   token and AST node, so its size directly sets the recursive parser's stack
 //!   frame growth (a 32-byte span overflowed 2 MiB test-thread stacks).
 
+/// The first line number handed out to synthetically built nodes.
+///
+/// Far above any plausible source file, so a synthetic span can never equal one the lexer
+/// produced. That matters because spans are used as MAP KEYS, not just as coordinates.
+const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
+
+/// Counts synthetic lines handed out this process. A compile is one process, so a given
+/// program always gets the same numbering.
+static NEXT_SYNTHETIC_LINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
 pub struct Span {
@@ -54,6 +64,58 @@ impl Span {
             end_line: 0,
             end_col: 0,
         }
+    }
+
+    /// A DISTINCT span for one synthetically built node.
+    ///
+    /// A span is not only a diagnostic coordinate: the checker records every builtin call's
+    /// inferred type in `CheckResult::builtin_call_types`, KEYED BY SPAN, and lowering reads it
+    /// back. Nodes that all carry `dummy()` therefore share one key, so the map cannot name an
+    /// individual call among them and lowering falls back to the builtin's DECLARED return type.
+    ///
+    /// That fallback used to be a miscompile: six builtins checked as `PhpType::Pointer` or
+    /// `PhpType::Callable` while declaring `mixed`, because `TypeSpec` had no variant for
+    /// either, so codegen got a boxed cell for a raw descriptor. `TypeSpec::Ptr` and
+    /// `TypeSpec::Callable` fixed that at the declaration, and it was measured: with `dummy()`
+    /// put back, all 276 PDO tests pass.
+    ///
+    /// Distinct spans remain because the assertion in `resolve_registry_builtin_result_type`
+    /// compares the declared and checked types, and can only do so where the checked one is
+    /// findable — under `dummy()` the map is skipped for every prelude call, and the next
+    /// mismatched declaration would go unwitnessed there.
+    ///
+    /// Lines start past `SYNTHETIC_LINE_BASE` so a synthetic node cannot collide with a node
+    /// from real source either, and the counter is per-process: one compile is one process, so
+    /// the numbering is stable for a given program.
+    pub fn synthetic() -> Self {
+        let line = SYNTHETIC_LINE_BASE
+            + NEXT_SYNTHETIC_LINE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self {
+            line,
+            col: 1,
+            end_line: line,
+            end_col: 1,
+        }
+    }
+
+    /// Does this span point at a place in the program's own source?
+    ///
+    /// Three things carry a span: real source, `dummy()`, and `synthetic()`. Passes that treat a
+    /// node as compiler-generated must ask this rather than testing `line == 0`, which was the
+    /// only spelling of "generated" before synthetic spans existed and now answers wrongly for
+    /// half of them.
+    pub fn is_from_source(self) -> bool {
+        self.line != 0 && self.line < SYNTHETIC_LINE_BASE
+    }
+
+    /// Can this span single out ONE node?
+    ///
+    /// A `dummy()` cannot: every node built without a source location shares it, so anything
+    /// keyed by it — `builtin_call_types`, `throw_access_sites`, `loop_storage_types`, the
+    /// call-type memo in loop-storage stabilisation — hands one node's entry to all the others.
+    /// A synthetic span can, which is the whole reason it exists.
+    pub fn identifies_a_node(self) -> bool {
+        self.line != 0
     }
 
     /// Returns true when the span covers a real extent (an end position past

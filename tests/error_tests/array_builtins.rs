@@ -284,6 +284,33 @@ fn test_error_isset_wrong_args() {
     expect_error("<?php isset();", "isset() takes at least 1 argument");
 }
 
+/// Verifies a builtin's by-reference parameter refuses an argument with no storage.
+///
+/// `array_walk([1,2], "f")` RAN here — printing `1 2 reached`, exit 0 — where reference PHP
+/// raises `Error: array_walk(): Argument #1 ($array) could not be passed by reference`. There
+/// is nowhere to write the modified array back to. The guard is one authority over every
+/// builtin that declares a by-reference parameter, not a per-builtin check: several builtins
+/// hand-rolled it, and the ones nobody wrote it for accepted silently.
+#[test]
+fn test_error_by_ref_builtin_parameter_refuses_a_value_with_no_storage() {
+    for (source, message) in [
+        (
+            r#"<?php function f($v) {} array_walk([1, 2], "f");"#,
+            "array_walk(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            "<?php sort([3, 1, 2]);",
+            "sort(): Argument #1 ($array) could not be passed by reference",
+        ),
+        (
+            "<?php array_push([1], 2);",
+            "array_push(): Argument #1 ($array) could not be passed by reference",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
 /// Verifies that error array unique wrong args.
 #[test]
 fn test_error_array_unique_wrong_args() {
@@ -804,12 +831,18 @@ fn test_error_array_multisort_wrong_args() {
     );
 }
 
-/// Verifies that array_multisort() rejects non-indexed-array arguments.
+/// Verifies that `array_multisort()` rejects a literal in one of its by-reference array
+/// positions, with php-src's own message.
+///
+/// Reference PHP ACCEPTS this exact call: `array_multisort($a, 5)` reads the `5` as a sort
+/// flag, which those positions also allow. elephc does not implement the scalar flag
+/// arguments, so it refuses — as it did before this message changed, under a wording of its
+/// own invention. The refusal is the pre-existing gap; only the diagnostic moved.
 #[test]
 fn test_error_array_multisort_non_array() {
     expect_error(
         "<?php $a = [1, 2]; array_multisort($a, 5);",
-        "array_multisort() arguments must be indexed arrays",
+        "array_multisort(): Argument #2 ($array2) could not be passed by reference",
     );
 }
 
@@ -999,6 +1032,6 @@ fn test_error_array_pointer_call_result_receiver() {
 fn test_error_array_pointer_literal_receiver() {
     expect_error(
         r#"<?php reset([1, 2, 3]);"#,
-        "reset() argument must be an array variable",
+        "reset(): Argument #1 ($array) could not be passed by reference",
     );
 }

@@ -279,6 +279,36 @@ echo implode(",", $q), "|", implode(",", $p);
     assert_eq!(out, "7,3,2,1,0|7,1,2,3,0");
 }
 
+/// Verifies the by-reference REFUSAL guard still accepts every place that has storage.
+///
+/// A builtin reaches its by-reference argument through the storage itself, so every form
+/// below compiles and runs — and all of them would have stopped compiling had the guard that
+/// refuses `array_push([1], 2)` reused the USER-function predicate. That one accepts only
+/// variables and array elements, because a user call writes its result back to a local SLOT
+/// and a property has none. The property and static-property cases are what pin the two
+/// predicates apart; the refusals themselves live in the error tests.
+#[test]
+fn test_by_ref_builtin_parameter_accepts_every_place_with_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public array $items = [3, 1];
+    public static array $shared = [2];
+    public function push(): void { array_push($this->items, 9); }
+}
+$b = new Box();
+$b->push();
+array_push(Box::$shared, 7);
+$local = [1];
+array_push($local, 4);
+$nested = [[1]];
+array_push($nested[0], 5);
+echo count($b->items), count(Box::$shared), count($local), count($nested[0]);
+"#,
+    );
+    assert_eq!(out, "3222");
+}
+
 /// The same growth requirement reached through a property receiver.
 #[test]
 fn test_array_unshift_on_instance_property_grows_before_prepending() {

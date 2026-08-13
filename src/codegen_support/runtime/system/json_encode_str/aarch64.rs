@@ -393,9 +393,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x0F");                                 // b1 & 0x0F → high 4 bits
     emitter.instruction("lsl w16, w16, #12");                                   // shift into bits 12..15
-    emitter.instruction("and w18, w15, #0x3F");                                 // b2 & 0x3F → middle 6 bits
-    emitter.instruction("lsl w18, w18, #6");                                    // shift into bits 6..11
-    emitter.instruction("orr w16, w16, w18");                                   // merge middle bits
+    emitter.instruction("and w9, w15, #0x3F");                                  // b2 & 0x3F (w9: x18 is reserved on Apple)
+    emitter.instruction("lsl w9, w9, #6");                                      // shift into bits 6..11
+    emitter.instruction("orr w16, w16, w9");                                    // merge middle bits
     emitter.instruction("and w17, w17, #0x3F");                                 // b3 & 0x3F → low 6 bits
     emitter.instruction("orr w16, w16, w17");                                   // assemble the codepoint in w16
     emitter.instruction("mov x12, #3");                                         // 3 source bytes consumed
@@ -422,40 +422,42 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("add x10, x13, #3");                                    // index of byte 4
-    emitter.instruction("ldrb w18, [x1, x10]");                                 // load b4
+    emitter.instruction("ldrb w9, [x1, x10]");                                  // load b4 (w9: x18 is reserved on Apple)
     // Validate b4 is a continuation byte.
-    emitter.instruction("sub w10, w18, #0x80");                                 // bias the byte so valid continuations land in 0..0x3F
+    emitter.instruction("sub w10, w9, #0x80");                                  // bias the byte so valid continuations land in 0..0x3F
     emitter.instruction("cmp w10, #0x40");                                      // is the byte outside the continuation range?
     emitter.instruction("b.hs __rt_json_str_utf8_malformed");                   // bad continuation → malformed
     emitter.instruction("and w16, w14, #0x07");                                 // b1 & 0x07 → top 3 bits
     emitter.instruction("lsl w16, w16, #18");                                   // shift into bits 18..20
-    emitter.instruction("and w19, w15, #0x3F");                                 // b2 & 0x3F → 6 bits
-    emitter.instruction("lsl w19, w19, #12");                                   // shift into bits 12..17
-    emitter.instruction("orr w16, w16, w19");                                   // merge bits 12..17
-    emitter.instruction("and w19, w17, #0x3F");                                 // b3 & 0x3F → 6 bits
-    emitter.instruction("lsl w19, w19, #6");                                    // shift into bits 6..11
-    emitter.instruction("orr w16, w16, w19");                                   // merge bits 6..11
-    emitter.instruction("and w18, w18, #0x3F");                                 // b4 & 0x3F → low 6 bits
-    emitter.instruction("orr w16, w16, w18");                                   // full 21-bit codepoint
+    // w3/w4/w5 are the scratch here, NOT w19/w20/w21: w19 caches the flag bitmask for
+    // the whole call, and w20/w21 belong to the caller (only x19 is saved).
+    emitter.instruction("and w3, w15, #0x3F");                                  // b2 & 0x3F → 6 bits
+    emitter.instruction("lsl w3, w3, #12");                                     // shift into bits 12..17
+    emitter.instruction("orr w16, w16, w3");                                    // merge bits 12..17
+    emitter.instruction("and w3, w17, #0x3F");                                  // b3 & 0x3F → 6 bits
+    emitter.instruction("lsl w3, w3, #6");                                      // shift into bits 6..11
+    emitter.instruction("orr w16, w16, w3");                                    // merge bits 6..11
+    emitter.instruction("and w9, w9, #0x3F");                                   // b4 & 0x3F → low 6 bits
+    emitter.instruction("orr w16, w16, w9");                                    // full 21-bit codepoint
     // Compute the surrogate pair: cp -= 0x10000; high = 0xD800 + (cp >> 10);
     // low = 0xDC00 + (cp & 0x3FF).
-    emitter.instruction("mov w20, #0x10000");                                   // 0x10000 base offset for surrogate pair maths
-    emitter.instruction("sub w16, w16, w20");                                   // cp -= 0x10000
-    emitter.instruction("lsr w19, w16, #10");                                   // (cp >> 10) → high surrogate index
-    emitter.instruction("mov w20, #0xD800");                                    // base of the high-surrogate range
-    emitter.instruction("add w19, w19, w20");                                   // high surrogate codepoint in w19
-    emitter.instruction("and w20, w16, #0x3FF");                                // (cp & 0x3FF) → low surrogate index
-    emitter.instruction("mov w21, #0xDC00");                                    // base of the low-surrogate range
-    emitter.instruction("add w20, w20, w21");                                   // low surrogate codepoint in w20
+    emitter.instruction("mov w4, #0x10000");                                    // 0x10000 base offset for surrogate pair maths
+    emitter.instruction("sub w16, w16, w4");                                    // cp -= 0x10000
+    emitter.instruction("lsr w3, w16, #10");                                    // (cp >> 10) → high surrogate index
+    emitter.instruction("mov w4, #0xD800");                                     // base of the high-surrogate range
+    emitter.instruction("add w3, w3, w4");                                      // high surrogate codepoint in w3
+    emitter.instruction("and w4, w16, #0x3FF");                                 // (cp & 0x3FF) → low surrogate index
+    emitter.instruction("mov w5, #0xDC00");                                     // base of the low-surrogate range
+    emitter.instruction("add w4, w4, w5");                                      // low surrogate codepoint in w4
 
     // Emit \uHHHH (high surrogate) — load write pos, run the emitter helper.
-    emitter.instruction("mov w16, w19");                                        // copy the high surrogate into the emitter input register
+    emitter.instruction("mov w16, w3");                                         // copy the high surrogate into the emitter input register
     emitter.instruction("str x13, [sp, #40]");                                  // checkpoint the source index in scratch slot 40 (sp+16 is the output start)
-    emitter.instruction("str x20, [sp, #32]");                                  // park the low-surrogate codepoint across the helper call (slot is otherwise free mid-loop)
+    emitter.instruction("str x4, [sp, #32]");                                   // park the low-surrogate codepoint across the helper call (slot is otherwise free mid-loop)
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload the running write pointer
     emitter.instruction("bl __rt_json_str_emit_u16");                           // emit \uHHHH for the high surrogate
-    emitter.instruction("ldr x20, [sp, #32]");                                  // restore the low-surrogate codepoint
-    emitter.instruction("mov w16, w20");                                        // pass the low surrogate to the emitter
+    emitter.instruction("ldr x4, [sp, #32]");                                   // restore the low-surrogate codepoint
+    emitter.instruction("mov w16, w4");                                         // pass the low surrogate to the emitter
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload the running write pointer (now past the high surrogate)
     emitter.instruction("bl __rt_json_str_emit_u16");                           // emit \uLLLL for the low surrogate
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index from scratch slot 40
@@ -637,7 +639,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n3_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift a..f up to ASCII range
     emitter.label("__rt_json_str_emit_u16_n3_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #2]");                                 // emit the digit
@@ -646,7 +648,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n2_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift a..f up to ASCII range
     emitter.label("__rt_json_str_emit_u16_n2_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #3]");                                 // emit the digit
@@ -655,7 +657,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n1_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift a..f up to ASCII range
     emitter.label("__rt_json_str_emit_u16_n1_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #4]");                                 // emit the digit
@@ -663,7 +665,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w16, #0xF");                                  // extract low nibble
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n0_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift a..f up to ASCII range
     emitter.label("__rt_json_str_emit_u16_n0_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #5]");                                 // emit the digit

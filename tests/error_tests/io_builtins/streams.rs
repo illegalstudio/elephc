@@ -30,6 +30,34 @@ fn test_error_fopen_wrong_args() {
     );
 }
 
+/// Verifies the `while` guard narrowing is dropped once the loop exits.
+///
+/// The loop leaves precisely when the guard is false, so after it the variable is back to
+/// `array|false` and a parameter declared `array` must refuse it. Without the restore the
+/// narrowed array type outlives the loop, this snippet COMPILES, and the emitted code reads
+/// a boxed `false` as an array — a silent wrong answer.
+///
+/// The witness is a typed parameter rather than `count()`, which is what this test used
+/// until `count()` learned to raise PHP's TypeError at run time: with the runtime guard in
+/// place, `count()` accepts a union with one countable member exactly as PHP does, so it can
+/// no longer tell the narrowed type from the union. Verified by sentinel mutation in both
+/// directions — dropping the restore makes this snippet compile, and a behavioural probe of
+/// the same loop does NOT distinguish the two (both raise the TypeError), which is why this
+/// stays an error test.
+#[test]
+fn test_error_while_guard_narrowing_does_not_outlive_the_loop() {
+    expect_error(
+        r#"<?php
+function takesArray(array $a): int { return count($a); }
+$h = fopen("x.csv", "r");
+while (($row = fgetcsv($h)) !== false) {
+}
+echo takesArray($row);
+"#,
+        "expects Array(Mixed), got Union([Array(Str), False])",
+    );
+}
+
 /// Verifies fclose() produces correct error when called with no arguments.
 #[test]
 fn test_error_fclose_wrong_args() {
@@ -131,7 +159,7 @@ fn test_error_flock_rejects_non_int_operation() {
 fn test_error_flock_would_block_requires_variable() {
     expect_error(
         r#"<?php flock(STDIN, LOCK_EX, 0);"#,
-        "flock() parameter $would_block must be passed a variable",
+        "flock(): Argument #3 ($would_block) could not be passed by reference",
     );
 }
 
@@ -454,7 +482,7 @@ fn test_error_fsockopen_wrong_args() {
 fn test_error_fsockopen_error_code_not_variable() {
     expect_error(
         r#"<?php fsockopen("127.0.0.1", 80, 0);"#,
-        "fsockopen() parameter $error_code must be passed a variable",
+        "fsockopen(): Argument #3 ($error_code) could not be passed by reference",
     );
 }
 
@@ -797,7 +825,7 @@ fn test_error_stream_socket_recvfrom_requires_resource() {
 fn test_error_stream_socket_recvfrom_address_not_variable() {
     expect_error(
         "<?php stream_socket_recvfrom(STDIN, 32, 0, \"literal\");",
-        "stream_socket_recvfrom() parameter $address must be passed a variable",
+        "stream_socket_recvfrom(): Argument #4 ($address) could not be passed by reference",
     );
 }
 
