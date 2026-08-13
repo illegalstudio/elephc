@@ -125,6 +125,11 @@ pub(crate) struct EasyEntry {
     /// `elephc_curl_easy_perform` reports the failure without overwriting
     /// `curl_errno()` (php-src surfaces the exception with `curl_errno() === 0`).
     /// Cleared at the start of every `elephc_curl_easy_perform`.
+    ///
+    /// ITS ONLY CONSUMER IS THAT ERRNO DECISION. Whether further callbacks are allowed to
+    /// run is decided by the PROCESS-WIDE flag in `crate::callbacks`, matching php-src's
+    /// global `EG(exception)` gate; keying that on this per-handle flag left it sticky on
+    /// the multi path, which never clears it.
     pub(crate) callback_threw: bool,
 }
 

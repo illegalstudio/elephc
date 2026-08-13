@@ -104,7 +104,11 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_easy_reset (reset every option on an easy handle)",
         IntResult::Boolean,
     );
-    emit_forwarder(
+    // Upkeep can put bytes on the wire (keepalive frames), so it can in principle reach a
+    // PHP callback; it gets the same re-raise hook as perform/pause so a throw from there
+    // could never be parked and forgotten. One instruction, and it removes a whole class
+    // of "which helpers can run PHP?" reasoning from future changes.
+    emit_forwarder_rethrowing(
         emitter,
         "__rt_curl_easy_upkeep",
         "_elephc_curl_easy_upkeep_fn",

@@ -165,6 +165,12 @@ final class CurlHandle {
     // user functions. Assigning over a slot (or `null`ing it) is also what releases the
     // previous callable, so re-setopt and `curl_reset()` need no explicit free.
     public array $__elephc_callbacks = [];
+    // Whether the ACTIVE write mode is PHP_CURL_USER. `__elephc_return_transfer` alone
+    // cannot answer that: php-src's third mode, PHP_CURL_STDOUT, has both flags false
+    // while the callable stays rooted (e.g. CURLOPT_RETURNTRANSFER set to *false* after a
+    // CURLOPT_WRITEFUNCTION). `curl_copy_handle()` needs the real mode to decide whether
+    // to re-register slot 0 on the duplicate.
+    public bool $__elephc_write_user = false;
 
     private function __construct() {}
 
@@ -278,6 +284,11 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         // callback's capture-or-stdout decision lives there.
         if ($option === 19913) {
             $handle->__elephc_return_transfer = (bool) $value;
+            // php-src keeps ONE write mode, so this ALWAYS deselects a previously
+            // installed CURLOPT_WRITEFUNCTION — to PHP_CURL_RETURN when true, and to
+            // PHP_CURL_STDOUT when false (the callable stays rooted either way). The
+            // bridge's own `write_user` flag is cleared by the same forwarded call.
+            $handle->__elephc_write_user = false;
             return __elephc_curl_easy_setopt_long($raw, $option, $value ? 1 : 0);
         }
         // CURLOPT_PRIVATE (10103) stores an arbitrary PHP value that
@@ -366,6 +377,7 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
             $handle->__elephc_callbacks[$slot] = null;
             if ($slot === 0) {
                 $handle->__elephc_return_transfer = false;
+                $handle->__elephc_write_user = false;
             }
             return __elephc_curl_easy_set_callback($raw, $slot, 0, $handle, 0);
         }
@@ -407,6 +419,7 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
             // callback installed last, `curl_exec()` returns `true` even when
             // CURLOPT_RETURNTRANSFER was set, and the body reaches only the callback.
             $handle->__elephc_return_transfer = false;
+            $handle->__elephc_write_user = true;
         }
         return true;
     }
@@ -881,6 +894,7 @@ function curl_reset(CurlHandle $handle): void {
     $raw = $handle->__elephc_handle;
     __elephc_curl_easy_reset($raw);
     $handle->__elephc_return_transfer = false;
+    $handle->__elephc_write_user = false;
     $handle->__elephc_private = false;
     // php-src's curl_reset() releases the handler callables too (measured against PHP
     // 8.4.20: a write callback installed before curl_reset() never fires afterwards).
@@ -909,6 +923,7 @@ function curl_copy_handle(CurlHandle $handle): CurlHandle {
     }
     $new = CurlHandle::__elephc_wrap($copy);
     $new->__elephc_return_transfer = $handle->__elephc_return_transfer;
+    $new->__elephc_write_user = $handle->__elephc_write_user;
     $new->__elephc_private = $handle->__elephc_private;
     // CALLBACKS ARE RE-REGISTERED, NEVER INHERITED. libcurl's `dupset` copies the
     // callback function pointers AND their CURLOPT_*DATA values, and every one of those
@@ -926,15 +941,16 @@ function curl_copy_handle(CurlHandle $handle): CurlHandle {
         }
         $slotIndex = (int) $slot;
         // THE WRITE SLOT IS ROOTED BUT NOT NECESSARILY ACTIVE. php-src keeps ONE write
-        // mode, so `CURLOPT_RETURNTRANSFER` set AFTER a `CURLOPT_WRITEFUNCTION` leaves the
-        // callable rooted while selecting PHP_CURL_RETURN — and the source handle here is
-        // in exactly that state whenever `__elephc_return_transfer` is true. Registering
-        // slot 0 on the copy regardless would re-select PHP_CURL_USER and desync the two
-        // sides: the bridge would call the callback AND, because installing a write
-        // callback clears `return_transfer`, `curl_exec()` on the copy would answer an
-        // empty capture. Copy the ROOT so a later `curl_setopt($copy, WRITEFUNCTION, …)`
-        // is not needed to get it back, but leave the registration off.
-        if ($slotIndex === 0 && $new->__elephc_return_transfer) {
+        // mode, so anything that selects PHP_CURL_RETURN or PHP_CURL_STDOUT after a
+        // `CURLOPT_WRITEFUNCTION` leaves the callable rooted but INACTIVE — both
+        // `CURLOPT_RETURNTRANSFER => true` and `=> false` do it. Registering slot 0 on the
+        // copy regardless would re-select PHP_CURL_USER and desync the two sides: the
+        // bridge would call the callback AND, because installing a write callback clears
+        // `return_transfer`, `curl_exec()` on the copy would answer an empty capture (or
+        // stop printing). The decision is therefore the ACTIVE MODE mirror, not
+        // `__elephc_return_transfer`, which cannot tell RETURN from STDOUT. Copy the ROOT
+        // so a later `curl_setopt($copy, WRITEFUNCTION, …)` is not needed, registration off.
+        if ($slotIndex === 0 && !$new->__elephc_write_user) {
             $new->__elephc_callbacks[0] = $callback;
             continue;
         }

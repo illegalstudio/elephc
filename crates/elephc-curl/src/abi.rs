@@ -368,6 +368,9 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
             };
             entry.body.clear();
             entry.callback_threw = false;
+            // Opens a fresh callback-throw scope: the process-wide gate that suppresses
+            // further callbacks after a throw must not survive into this transfer.
+            crate::callbacks::begin_transfer();
             // Zero the error buffer first: libcurl is not guaranteed to
             // write it on success (only documented to write it on error).
             entry.error_buf.iter_mut().for_each(|byte| *byte = 0);

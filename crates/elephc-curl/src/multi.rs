@@ -354,6 +354,11 @@ pub extern "C" fn elephc_curl_multi_perform(multi_id: i64) -> i64 {
             };
             entry.multi
         };
+        // Opens a fresh callback-throw scope, exactly as `elephc_curl_easy_perform` does.
+        // Without it the process-wide gate raised by a throw in an EARLIER
+        // `curl_multi_exec()` call would still be set here and would silently suppress
+        // every callback on every attached handle for the rest of the program.
+        crate::callbacks::begin_transfer();
         let mut running: c_int = 0;
         let code = unsafe { curl_multi_perform(multi, &mut running as *mut c_int) };
         record_errno(multi_id, code);

@@ -1101,6 +1101,108 @@ fn curl_callback_capturing_its_own_handle_leaks_the_session() {
     );
 }
 
+/// REVIEW FIX ROUND 2. The "no callback runs after a throw" gate must be scoped to ONE
+/// TRANSFER, not to the handle forever. Keying it on the per-handle flag left it sticky on
+/// the multi path — which never cleared it — so a handle whose callback threw during
+/// `curl_multi_exec()` had its callbacks silently disabled for the rest of the program:
+/// every later transfer aborted with `CURLE_WRITE_ERROR` and the callable was never
+/// invoked. php-src reuses such a handle normally.
+#[test]
+fn curl_handle_is_reusable_after_a_callback_threw_during_multi_exec() {
+    if skip_without_curl_native("curl_handle_is_reusable_after_a_callback_threw_during_multi_exec") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/a");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        function drive(CurlMultiHandle $mh): int {{
+            $running = 0;
+            do {{
+                $status = curl_multi_exec($mh, $running);
+                if ($running > 0) {{
+                    curl_multi_select($mh, 1.0);
+                }}
+            }} while ($running > 0 && $status === CURLM_OK);
+            return $status;
+        }}
+
+        $mh = curl_multi_init();
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data): int {{
+            throw new LogicException("multi-boom");
+        }});
+        curl_multi_add_handle($mh, $ch);
+        try {{
+            drive($mh);
+            echo "NOTHROW";
+        }} catch (LogicException $e) {{
+            echo "caught:", $e->getMessage();
+        }}
+        curl_multi_remove_handle($mh, $ch);
+
+        // SAME HANDLE, no curl_reset(): a fresh callable must fire again and the transfer
+        // must complete. This is the regression: the callback used to be dead forever.
+        $seen = '';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data) use (&$seen): int {{
+            $seen .= $data;
+            return strlen($data);
+        }});
+        curl_multi_add_handle($mh, $ch);
+        $status = drive($mh);
+        echo "|reuse:", $seen === '' ? "DEAD" : $seen;
+        echo "|", $status === CURLM_OK ? "ok" : "err";
+
+        // …and on the EASY interface too.
+        $seen2 = '';
+        curl_multi_remove_handle($mh, $ch);
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data) use (&$seen2): int {{
+            $seen2 .= $data;
+            return strlen($data);
+        }});
+        curl_exec($ch);
+        echo "|easy:", $seen2 === '' ? "DEAD" : $seen2, "|", curl_errno($ch);
+        "#
+    ));
+    assert_eq!(
+        out,
+        "caught:multi-boom|reuse:body-a|ok|easy:body-a|0"
+    );
+}
+
+/// REVIEW FIX ROUND 2 (STDOUT arm). `CURLOPT_RETURNTRANSFER => false` after a
+/// `CURLOPT_WRITEFUNCTION` selects php-src's third write mode, PHP_CURL_STDOUT, leaving the
+/// callable rooted but inactive. The copy must land in STDOUT mode too — deciding on
+/// `__elephc_return_transfer` alone could not tell RETURN from STDOUT, so the copy
+/// re-selected PHP_CURL_USER and the callback fired where php prints.
+#[test]
+fn curl_copy_handle_preserves_stdout_mode_over_a_rooted_write_callback() {
+    if skip_without_curl_native("curl_copy_handle_preserves_stdout_mode_over_a_rooted_write_callback")
+    {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $seen = '';
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data) use (&$seen): int {{
+            $seen .= $data;
+            return strlen($data);
+        }});
+        // Selects PHP_CURL_STDOUT: the callable stays rooted but stops being the sink.
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+        $copy = curl_copy_handle($ch);
+        $r = curl_exec($copy);
+        echo "|", $r === true ? "TRUE" : "X";
+        echo "|", $seen === '' ? "SILENT" : $seen;
+        "#
+    ));
+    // The body is printed by the copy (stdout mode) before the echoes.
+    assert_eq!(out, "hello-curl|TRUE|SILENT");
+}
+
 /// The callback options this wave deliberately did NOT implement stay honestly rejected:
 /// `curl_setopt()` answers `false` and emits PHP's unsupported-option warning rather than
 /// an inert `true` (locked decision 7).

@@ -220,33 +220,54 @@ unsafe fn invoke(
 static CALLBACK_THREW: AtomicBool = AtomicBool::new(false);
 
 /// Reads the slot at `index` for `id` out of the handle table and drops the guard.
-/// Returns `None` for an unknown id, an empty slot, or a transfer in which a callback has
-/// ALREADY thrown.
+/// Returns `None` for an unknown id, an empty slot, or a moment at which a PHP callback
+/// throw is already in flight.
 ///
-/// That last case is load-bearing. A write callback that throws aborts the transfer, but
-/// libcurl still runs its teardown — and with `CURLOPT_VERBOSE` on, teardown `infof()`
-/// calls reach the debug callback. Invoking PHP again there would run user code with the
-/// first exception still pending, and a `try/catch` inside that second callback would
-/// silently swallow it. Nothing is invoked after the first throw for the rest of the
-/// transfer.
+/// THAT LAST CASE IS GLOBAL, NOT PER-HANDLE, because php-src's is: `zend_call_function`
+/// refuses to call anything at all while `EG(exception)` is set, so once ANY curl callback
+/// has thrown, a callback on a DIFFERENT handle is refused too. Matching that shape is not
+/// pedantry — it is what makes the multi interface correct. Two easy handles on one multi:
+/// A's write callback throws, and B's callback (same `curl_multi_perform`) would otherwise
+/// still run with A's throwable parked; a `try/catch` inside B would clear it and A's
+/// exception would vanish. It also covers the single-handle case the guard was introduced
+/// for: libcurl's teardown after an aborted transfer still emits `CURLOPT_VERBOSE`
+/// `infof()` calls, which reach the debug callback.
 ///
-/// This is deliberately keyed on the per-handle flag rather than on `_exc_value`: see
-/// [`CALLBACK_THREW`] for why a pending `_exc_value` does NOT imply "a callback threw".
+/// The flag is scoped to ONE transfer, not to the handle: it is cleared when
+/// `elephc_curl_easy_perform`/`elephc_curl_multi_perform` starts and consumed by
+/// [`take_callback_threw`] when the runtime re-raises. An earlier version consulted the
+/// per-handle `EasyEntry::callback_threw` instead, which the multi path never cleared —
+/// so a handle whose callback threw during `curl_multi_exec()` had its callbacks disabled
+/// PERMANENTLY, silently failing every later transfer with `CURLE_WRITE_ERROR`.
+///
+/// Deliberately not keyed on `_exc_value`: see [`CALLBACK_THREW`] for why a pending
+/// `_exc_value` does NOT imply "a callback threw".
 ///
 /// Every trampoline starts here: the table lock must not be held across the PHP call.
 fn take_slot(id: i64, index: usize) -> Option<CallbackSlot> {
-    let guard = handles::lock_recover(handles::handles());
-    let entry = guard.get(&id)?;
-    if entry.callback_threw {
+    if CALLBACK_THREW.load(Ordering::SeqCst) {
         return None;
     }
+    let guard = handles::lock_recover(handles::handles());
+    let entry = guard.get(&id)?;
     let slot = entry.callbacks[index];
     slot.is_set().then_some(slot)
 }
 
-/// Records that a PHP callback threw: on the handle, so `elephc_curl_easy_perform` can
-/// report the failure without inventing a `CURLcode`, and process-wide, so the runtime
-/// knows it is allowed to re-raise the parked throwable.
+/// Opens a fresh callback-throw scope for a transfer that is about to start.
+///
+/// Called by `elephc_curl_easy_perform` and `elephc_curl_multi_perform`. The runtime's
+/// re-raise hook normally consumes the flag the moment either returns, so this is belt and
+/// braces — but it is what guarantees the flag can never wedge a later transfer if the
+/// bridge is ever driven without that hook.
+pub(crate) fn begin_transfer() {
+    CALLBACK_THREW.store(false, Ordering::SeqCst);
+}
+
+/// Records that a PHP callback threw: process-wide, which is what suppresses further
+/// callbacks (see [`take_slot`]) and authorizes the runtime to re-raise; and on the
+/// handle, whose flag exists only so `elephc_curl_easy_perform` can report the failure
+/// without inventing a `CURLcode`.
 fn mark_threw(id: i64) {
     CALLBACK_THREW.store(true, Ordering::SeqCst);
     let mut guard = handles::lock_recover(handles::handles());
