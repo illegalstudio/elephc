@@ -27,6 +27,7 @@ mod easy_init;
 mod easy_perform;
 mod easy_setopt;
 mod shared;
+mod warn_option;
 mod version;
 
 pub(crate) use easy_body::lower_curl_easy_body;
@@ -36,3 +37,4 @@ pub(crate) use easy_init::lower_curl_easy_init;
 pub(crate) use easy_perform::lower_curl_easy_perform;
 pub(crate) use easy_setopt::{lower_curl_easy_setopt_long, lower_curl_easy_setopt_str};
 pub(crate) use version::lower_curl_version;
+pub(crate) use warn_option::lower_curl_setopt_unsupported_warning;

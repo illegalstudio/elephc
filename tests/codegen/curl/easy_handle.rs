@@ -199,9 +199,9 @@ fn fresh_handle_reports_no_error() {
     assert_eq!(out, "0\n0\n");
 }
 
-/// `curl_setopt()` forwards a real libcurl option and reports acceptance, and rejects a
-/// value type this build cannot carry with PHP 8's `ValueError` rather than an inert
-/// `true` (locked decision 7).
+/// `curl_setopt()` forwards the options this build really supports and reports libcurl's
+/// own acceptance, and rejects a value type it cannot carry with PHP 8's `TypeError`
+/// (php-src raises a TypeError, not a ValueError, for a wrong-typed `$value`).
 #[test]
 fn curl_setopt_forwards_and_rejects_honestly() {
     if skip_without_curl_native("curl_setopt_forwards_and_rejects_honestly") {
@@ -216,12 +216,87 @@ fn curl_setopt_forwards_and_rejects_honestly() {
         try {
             curl_setopt($ch, 10002, [1, 2]);
             echo "accepted\n";
-        } catch (\ValueError $e) {
-            echo "rejected\n";
+        } catch (\TypeError $e) {
+            echo $e->getMessage(), "\n";
         }
         "#,
     );
-    assert_eq!(out, "url\ncapture\nfollow\nrejected\n");
+    assert_eq!(
+        out,
+        "url\ncapture\nfollow\n\
+         curl_setopt(): Argument #3 ($value) must be of type string|int|float|bool, array given\n"
+    );
+}
+
+/// An option in one of libcurl's POINTER ranges that this build does not support is
+/// rejected BEFORE it reaches libcurl: `curl_setopt()` answers `false` and emits PHP's
+/// warning (locked decision 7), rather than the inert `true` libcurl would have produced
+/// after being handed a PHP value as a `struct curl_slist *` / function pointer / blob.
+///
+/// This is a memory-safety regression test, not a politeness one. Every option here used
+/// to be forwarded verbatim: 10023 (`CURLOPT_HTTPHEADER`) had libcurl walk a PHP string
+/// as a linked list, 20011 (`CURLOPT_WRITEFUNCTION`) overwrote the bridge's own write
+/// callback with the address `1`, and 30000+/40000+ mis-read the argument as a
+/// `curl_off_t`/`struct curl_blob *`. The transfer at the end is what proves nothing was
+/// corrupted: the handle still performs and still reports its own error, so none of the
+/// rejected options reached libcurl's state.
+#[test]
+fn unsupported_pointer_range_options_are_rejected_before_libcurl() {
+    if skip_without_curl_native("unsupported_pointer_range_options_are_rejected_before_libcurl") {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        $ch = curl_init();
+        echo curl_setopt($ch, 10023, "Accept: text/plain") ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 20011, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 30005, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 40077, "blob") ? "accepted\n" : "rejected\n";
+        curl_setopt($ch, 10002, "file:///nonexistent-elephc-curl-probe");
+        curl_setopt($ch, 19913, true);
+        $body = curl_exec($ch);
+        echo ($body === false) ? "exec-false\n" : "exec-ok\n";
+        echo (curl_errno($ch) !== 0) ? "errno\n" : "no-errno\n";
+        "#,
+    );
+    assert_eq!(
+        output.stdout,
+        "rejected\nrejected\nrejected\nrejected\nexec-false\nerrno\n"
+    );
+    for option in ["10023", "20011", "30005", "40077"] {
+        assert!(
+            output.stderr.contains(&format!(
+                "Warning: curl_setopt(): Option {option} is not supported by this build"
+            )),
+            "each rejected option must warn; stderr was: {}",
+            output.stderr
+        );
+    }
+}
+
+/// An unknown option number BELOW libcurl's pointer ranges still forwards as a plain
+/// `long` and answers `false` from libcurl's own `CURLE_UNKNOWN_OPTION`, which is safe by
+/// construction: `setopt_long` never dereferences the value (libcurl 8.21.0
+/// `lib/setopt.c`). Pinning this keeps the range boundary from being widened into a blunt
+/// "reject everything unknown" that would break the long options that do work.
+#[test]
+fn unknown_long_options_forward_and_report_false() {
+    if skip_without_curl_native("unknown_long_options_forward_and_report_false") {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        $ch = curl_init();
+        echo curl_setopt($ch, 9998, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 52, 1) ? "accepted\n" : "rejected\n";
+        "#,
+    );
+    assert_eq!(output.stdout, "rejected\naccepted\n");
+    assert!(
+        !output.stderr.contains("is not supported by this build"),
+        "a forwarded long option must not raise the unsupported-option warning; stderr: {}",
+        output.stderr
+    );
 }
 
 /// A transfer against a closed loopback port fails honestly: `curl_exec()` returns

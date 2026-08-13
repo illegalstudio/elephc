@@ -462,6 +462,8 @@ pub enum RuntimeFnId {
     CurlEasyError,
     /// Reports the linked libcurl's `curl_version_info` data as a JSON blob.
     CurlVersion,
+    /// Raises PHP's warning for a `curl_setopt()` option this build cannot apply.
+    CurlSetoptUnsupportedWarning,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1373,6 +1375,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasyPerform
                 | RuntimeFnId::CurlEasySetoptLong
                 | RuntimeFnId::CurlEasySetoptStr
+                // A pure diagnostic: it returns nothing at all, so there is certainly no
+                // storage for the caller to keep an argument temporary alive for.
+                | RuntimeFnId::CurlSetoptUnsupportedWarning
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -1933,6 +1938,9 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlSetoptUnsupportedWarning => {
+                "__elephc_curl_setopt_unsupported_warning"
+            }
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",

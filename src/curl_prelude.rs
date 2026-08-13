@@ -51,6 +51,17 @@
 //! - `curl_version()` decodes the bridge's JSON blob through the ordinary `json_decode`
 //!   builtin instead of a bespoke array builder, so the array reflects the libcurl that
 //!   is actually linked AT RUN TIME rather than anything baked in at compile time.
+//! - `curl_setopt()` VALIDATES THE OPTION NUMBER BEFORE FORWARDING, because
+//!   `curl_easy_setopt` reads its variadic argument according to the option's numeric
+//!   RANGE — forwarding a PHP value into a pointer-typed range is a wild pointer, not
+//!   merely a wrong answer. See the comment above the function for the ranges and the
+//!   libcurl source that fixes them. An option this build cannot carry answers `false`
+//!   with a PHP warning (locked decision 7), never an inert `true`.
+//! - TWO SIGNATURES DIVERGE FROM php-src, both forced by checker limitations and both
+//!   documented at their declaration below: `curl_init()` returns a plain `CurlHandle`
+//!   and throws instead of returning `CurlHandle|false`, and `curl_version()` leaves its
+//!   return type undeclared instead of `array|false`. Runtime behaviour is otherwise
+//!   PHP's. `docs/php/curl.md` (Task 14) is where these reach users.
 
 mod detect;
 
@@ -84,6 +95,14 @@ final class CurlHandle {
     }
 }
 
+// DIVERGENCE FROM PHP: php-src declares `curl_init(): CurlHandle|false` and answers
+// `false` when libcurl cannot allocate a handle. elephc returns a plain `CurlHandle` and
+// THROWS instead, for the reason `src/image_prelude.rs` documents for `imagecreatefrom*`:
+// the checker neither accepts a `CurlHandle|false` argument where a `CurlHandle` is
+// expected nor narrows it after a `=== false` guard, so the union return would make the
+// standard `$ch = curl_init(); curl_setopt($ch, …);` flow a COMPILE ERROR. Failure here
+// means libcurl is out of memory, which no real program recovers from anyway. Error
+// handling uses try/catch. (docs/php/curl.md, Task 14, records this for users.)
 function curl_init(?string $url = null): CurlHandle {
     $raw = __elephc_curl_easy_init();
     if ($raw === false) {
@@ -95,19 +114,44 @@ function curl_init(?string $url = null): CurlHandle {
     return CurlHandle::__elephc_wrap($raw);
 }
 
+// OPTION NUMBERS ARE VALIDATED BEFORE ANYTHING REACHES libcurl, and that check is a
+// MEMORY-SAFETY boundary, not a politeness. `curl_easy_setopt` is variadic and picks how
+// to read its third argument PURELY FROM THE OPTION'S NUMERIC RANGE (libcurl 8.21.0,
+// lib/setopt.c, `Curl_vsetopt`): below 10000 it reads a `long`; 10000-19999 a `char *` or
+// a `struct curl_slist *`; 20000-29999 a function pointer; 30000-39999 a `curl_off_t`;
+// 40000+ a `struct curl_blob *`. Forwarding an integer into any of the pointer ranges
+// hands libcurl a wild pointer it will dereference — `curl_setopt($ch, 10023, "…")`
+// (CURLOPT_HTTPHEADER) would have libcurl walk a PHP string as a linked list, and
+// `curl_setopt($ch, 20011, 1)` (CURLOPT_WRITEFUNCTION) would overwrite the bridge's own
+// write callback with the address 1. libcurl accepts both and only crashes later, inside
+// curl_exec.
+//
+// So everything at or above 10000 is rejected unless it is explicitly supported, and the
+// two that are (CURLOPT_URL as a string, CURLOPT_RETURNTRANSFER as a PHP-only pseudo
+// option the bridge intercepts) are handled by name before the range check.
+//
+// Options BELOW 10000 forward as longs. That is safe by inspection of the same file:
+// `setopt_long` walks seven sub-handlers and returns CURLE_UNKNOWN_OPTION when none
+// claims the option, without ever dereferencing the value — so an unknown or nonsensical
+// long option answers `false` rather than corrupting anything.
 function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     $raw = $handle->__elephc_handle;
+    if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
+        $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
+        throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
+    }
     if ($option === 19913) {
         $handle->__elephc_return_transfer = (bool) $value;
         return __elephc_curl_easy_setopt_long($raw, $option, $value ? 1 : 0);
     }
-    if (is_string($value)) {
-        return __elephc_curl_easy_setopt_str($raw, $option, $value);
+    if ($option === 10002) {
+        return __elephc_curl_easy_setopt_str($raw, $option, (string) $value);
     }
-    if (is_int($value) || is_bool($value) || is_float($value)) {
-        return __elephc_curl_easy_setopt_long($raw, $option, (int) $value);
+    if ($option >= 10000) {
+        __elephc_curl_setopt_unsupported_warning($option);
+        return false;
     }
-    throw new \ValueError("curl_setopt(): Argument #3 (\$value) of type " . gettype($value) . " is not supported by this build for option " . $option);
+    return __elephc_curl_easy_setopt_long($raw, $option, (int) $value);
 }
 
 function curl_setopt_array(CurlHandle $handle, array $options): bool {
@@ -142,6 +186,14 @@ function curl_error(CurlHandle $handle): string {
 
 function curl_close(CurlHandle $handle): void {}
 
+// DIVERGENCE FROM PHP: php-src declares `curl_version(): array|false`. The RETURN VALUE
+// here is exactly that (an associative array, or `false`), but the return type is left
+// UNDECLARED, because declaring it changes the value. `array|false` checks as
+// `Union([Array(Mixed), False])`, whose array arm carries the INDEXED-list
+// representation; returning the decoded hash through it reinterprets the payload and
+// every string-keyed read comes back `NULL` (measured: `$v['version']` was `NULL` with
+// the declaration, `"8.21.0"` without). Undeclared keeps the runtime shape honest.
+// (docs/php/curl.md, Task 14, records this for users.)
 function curl_version() {
     $json = __elephc_curl_version();
     if ($json === "") {

@@ -569,6 +569,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // -- curl_setopt()'s unsupported-option warning, split around the option number --
+    // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
+    // two constants the bytes below are built from, so the message and the immediates
+    // cannot drift apart.
+    out.push_str(&format!(
+        ".globl _diag_curl_setopt_unsupported_prefix\n_diag_curl_setopt_unsupported_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _diag_curl_setopt_unsupported_suffix\n_diag_curl_setopt_unsupported_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_SUFFIX
+    ));
     // -- one complete message per foreach() argument type, shared with the helper emitter --
     // `__rt_warn_foreach_non_iterable` derives every `write()` length from the same table,
     // so the bytes here and the immediates there can never drift apart.

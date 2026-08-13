@@ -86,7 +86,11 @@ pub(crate) fn emit_curl_version(emitter: &mut Emitter) {
             );
             emit_call_entry(emitter);                                           // fill the buffer with the version JSON
 
-            emitter.instruction("cbz x0, __rt_curl_version_empty");             // the bridge could not fill the buffer
+            // `w0`, NOT `x0`: the bridge returns a C `int32_t` and AAPCS64 leaves the
+            // upper 32 bits of the return register unspecified. See `easy_error.rs` for
+            // the full reasoning; here a wrong branch would persist a blob length the
+            // buffer was never filled with.
+            emitter.instruction("cbz w0, __rt_curl_version_empty");             // the bridge could not fill the buffer
 
             emitter.instruction("ldr x2, [x29, #-16]");                         // reload the written byte length
 

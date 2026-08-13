@@ -62,7 +62,12 @@ pub(crate) fn emit_curl_easy_error(emitter: &mut Emitter) {
             );
             emit_call_entry(emitter);                                           // elephc_curl_easy_error(id, out, cap, &len)
 
-            emitter.instruction("cbz x0, __rt_curl_easy_error_empty");          // unknown id or oversized message -> empty string
+            // `w0`, NOT `x0`: the bridge returns a C `int32_t` and AAPCS64 leaves the
+            // upper 32 bits of the return register unspecified. Branching on the full
+            // 64-bit value could take the SUCCESS path on a failed call and then persist
+            // whatever length the out-parameter holds — an out-of-bounds read past this
+            // frame's 256-byte buffer straight into a PHP string.
+            emitter.instruction("cbz w0, __rt_curl_easy_error_empty");          // unknown id or oversized message -> empty string
 
             emitter.instruction(&format!("ldr x2, [sp, #{CURL_ERROR_SIZE}]"));  // reload the message length
 
