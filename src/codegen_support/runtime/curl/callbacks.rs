@@ -38,6 +38,13 @@
 //!   (measured: `CURLE_WRITE_ERROR`). `1` (READFUNCTION) copies a STRING return into the
 //!   bridge's `out_buf`, capped at `out_cap` — php-src's `MIN(size * nmemb, len)` — and
 //!   leaves `out_len` at `0` for any non-string return, which libcurl reads as EOF.
+//! - No PHP runs after the first throw of a transfer. That guard lives BRIDGE-side, in
+//!   `crate::callbacks::take_slot`, keyed on the handle's own `callback_threw` flag —
+//!   deliberately NOT on `_exc_value` at this adapter's entry. A non-null `_exc_value`
+//!   does not mean "a callback threw": a `curl_exec()` reached from a `finally` block
+//!   that is running with an unmatched throw still pending has one too, and refusing to
+//!   invoke there would break every callback in that program. The per-handle flag says
+//!   exactly what the guard needs to know.
 //! - Exception firewall: a compiled-PHP `throw` is a `longjmp`, and letting it cross this
 //!   boundary would abandon libcurl's own frames mid-transfer. The adapter pushes its own
 //!   `setjmp` handler record (the same 224-byte layout as the EIR try/catch slot) around
@@ -52,6 +59,8 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+
+use super::slots;
 
 // The firewall builds its handler record by hand and must match the layout the EIR
 // try/catch machinery and `__rt_throw_current` assume: next@0, survivor@8,
@@ -455,14 +464,29 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
 ///
 /// `__rt_curl_invoke_callback`'s firewall stops a `longjmp` at the libcurl boundary but
 /// keeps `_exc_value` set. The transfer then aborts through libcurl's own error path and
-/// unwinds its frames normally; this helper, called by `__rt_curl_easy_perform` and
-/// `__rt_curl_multi_exec` right after the bridge returns, is where the exception resumes
-/// its journey to the nearest PHP `catch`. Without it the throwable would sit in
-/// `_exc_value` and surface at some unrelated later throw site.
+/// unwinds its frames normally; this helper, called by `__rt_curl_easy_perform`,
+/// `__rt_curl_multi_exec` and `__rt_curl_easy_pause` right after the bridge returns, is
+/// where the exception resumes its journey to the nearest PHP `catch`.
 ///
-/// Preserves every register it does not name: it must be callable with the bridge's
-/// return value already live in the result register. Does not return when a throwable is
-/// pending (`__rt_throw_current` either `longjmp`s to a `catch` or reports and exits).
+/// THE DECISION IS THE BRIDGE'S FLAG, NOT `_exc_value`. An earlier version re-raised
+/// whenever `_exc_value` was non-null, which is wrong in both directions:
+///
+/// * FALSE POSITIVE. A `finally` block runs with an unmatched throw still pending. A
+///   `curl_exec()` inside that `finally` would have re-raised the unrelated exception the
+///   moment the transfer finished, truncating the rest of the `finally` — php runs it to
+///   the end and only then resumes the throw.
+/// * FALSE NEGATIVE. A callback whose own `try/catch` caught something clears
+///   `_exc_value`; a genuine callback throw would then never be resumed at all.
+///
+/// So the helper asks the bridge (`elephc_curl_take_callback_threw`, which reports AND
+/// clears) whether a callback actually threw during the transfer that just ended, and only
+/// then resumes. `_exc_value` is still checked as a second condition: the flag means "a
+/// firewall caught a `longjmp`", and re-raising with nothing pending would be a null throw.
+///
+/// Fails closed on a null bridge slot (returns without throwing) like every other curl
+/// helper. Preserves the caller's result register across the bridge call: it is invoked
+/// with `curl_exec()`'s own answer already live. Does not return when a throwable is
+/// resumed (`__rt_throw_current` either `longjmp`s to a `catch` or reports and exits).
 pub fn emit_curl_rethrow_pending(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: curl_rethrow_pending ---");
@@ -470,19 +494,84 @@ pub fn emit_curl_rethrow_pending(emitter: &mut Emitter) {
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0); // pending throwable, if any
-            emitter.instruction("cbz x9, __rt_curl_rethrow_pending_none"); // nothing pending → return
-            emitter.instruction("b __rt_throw_current"); // resume the throw (never returns)
+            emitter.instruction("sub sp, sp, #32");                              // frame: [0] = the caller's live result
+
+            emitter.instruction("stp x29, x30, [sp, #16]");                      // save frame pointer and return address
+
+            emitter.instruction("add x29, sp, #16");                             // establish the frame pointer
+
+            emitter.instruction("str x0, [sp, #0]");                             // preserve curl_exec()'s answer across the bridge call
+
+            slots::emit_load_entry_or_branch(
+                emitter,
+                "_elephc_curl_take_callback_threw_fn",
+                "__rt_curl_rethrow_pending_none",
+            );
+            slots::emit_call_entry(emitter);
+            emitter.instruction("cmp w0, #0");                                   // did a callback's firewall catch a longjmp?
+
+            emitter.instruction("b.eq __rt_curl_rethrow_pending_none");          // no → nothing to resume
+
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);        // the throwable the firewall parked
+
+            emitter.instruction("cbz x9, __rt_curl_rethrow_pending_none");       // flag set but nothing pending → never throw null
+
+            emitter.instruction("ldp x29, x30, [sp, #16]");                      // restore frame pointer and return address
+
+            emitter.instruction("add sp, sp, #32");                              // release the frame before the throw abandons it
+
+            emitter.instruction("b __rt_throw_current");                         // resume the throw (never returns)
+
             emitter.label("__rt_curl_rethrow_pending_none");
-            emitter.instruction("ret"); // no exception: leave the caller's result untouched
+            emitter.instruction("ldr x0, [sp, #0]");                             // hand the caller's own result back untouched
+
+            emitter.instruction("ldp x29, x30, [sp, #16]");                      // restore frame pointer and return address
+
+            emitter.instruction("add sp, sp, #32");                              // release the frame
+
+            emitter.instruction("ret");                                          // no exception: the caller's result is intact
+
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0); // pending throwable, if any
-            emitter.instruction("test r10, r10"); // is a throwable waiting?
-            emitter.instruction("jz __rt_curl_rethrow_pending_none_x86"); // no → return
-            emitter.instruction("jmp __rt_throw_current"); // resume the throw (never returns)
+            emitter.instruction("push rbp");                                     // preserve the caller frame pointer
+
+            emitter.instruction("mov rbp, rsp");                                 // establish the frame base
+
+            emitter.instruction("sub rsp, 16");                                  // keep the bridge call 16-byte aligned
+
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                 // preserve curl_exec()'s answer across the bridge call
+
+            slots::emit_load_entry_or_branch(
+                emitter,
+                "_elephc_curl_take_callback_threw_fn",
+                "__rt_curl_rethrow_pending_none_x86",
+            );
+            slots::emit_call_entry(emitter);
+            emitter.instruction("test eax, eax");                                // did a callback's firewall catch a longjmp?
+
+            emitter.instruction("jz __rt_curl_rethrow_pending_none_x86");        // no → nothing to resume
+
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);       // the throwable the firewall parked
+
+            emitter.instruction("test r10, r10");                                // is anything actually pending?
+
+            emitter.instruction("jz __rt_curl_rethrow_pending_none_x86");        // flag set but nothing pending → never throw null
+
+            emitter.instruction("mov rsp, rbp");                                 // release the frame before the throw abandons it
+
+            emitter.instruction("pop rbp");                                      // restore the caller frame pointer
+
+            emitter.instruction("jmp __rt_throw_current");                       // resume the throw (never returns)
+
             emitter.label("__rt_curl_rethrow_pending_none_x86");
-            emitter.instruction("ret"); // no exception: leave the caller's result untouched
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                 // hand the caller's own result back untouched
+
+            emitter.instruction("mov rsp, rbp");                                 // release the frame
+
+            emitter.instruction("pop rbp");                                      // restore the caller frame pointer
+
+            emitter.instruction("ret");                                          // no exception: the caller's result is intact
+
         }
     }
 }

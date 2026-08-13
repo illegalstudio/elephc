@@ -818,6 +818,289 @@ fn curl_upload_after_reset_and_after_clearing_the_read_callback_is_safe() {
     assert_eq!(out, "cleared:false|26|reset:false|26|alive");
 }
 
+/// REVIEW FIX (Critical 1). `curl_copy_handle()` must not resurrect a write callback that
+/// `CURLOPT_RETURNTRANSFER` had deselected on the source. php-src keeps one write mode, so
+/// a handle with WRITEFUNCTION-then-RETURNTRANSFER is in RETURN mode with the callable
+/// merely rooted; the copy has to start in RETURN mode too. Registering slot 0 anyway
+/// would both fire the callback AND (because installing a write callback clears
+/// `return_transfer`) make `curl_exec()` on the copy answer an empty capture.
+#[test]
+fn curl_copy_handle_preserves_returntransfer_over_a_rooted_write_callback() {
+    if skip_without_curl_native(
+        "curl_copy_handle_preserves_returntransfer_over_a_rooted_write_callback",
+    ) {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $seen = '';
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data) use (&$seen): int {{
+            $seen .= $data;
+            return strlen($data);
+        }});
+        // RETURNTRANSFER LAST: the write mode is RETURN, the callable is only rooted.
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $copy = curl_copy_handle($ch);
+        $body = curl_exec($copy);
+        echo $body === "hello-curl" ? "BODY" : json_encode($body);
+        echo "|", $seen === '' ? "SILENT" : $seen;
+        // And the source itself still behaves the same way afterwards.
+        $body2 = curl_exec($ch);
+        echo "|", $body2 === "hello-curl" ? "BODY" : json_encode($body2);
+        echo "|", $seen === '' ? "SILENT" : $seen;
+        "#
+    ));
+    assert_eq!(out, "BODY|SILENT|BODY|SILENT");
+}
+
+/// REVIEW FIX (Important 2, false-positive direction). `curl_exec()` inside a `finally`
+/// that is running with an unmatched throw pending must NOT re-raise that unrelated
+/// exception early: the whole `finally` runs, and the original throw resumes afterwards.
+/// Gating the re-raise on `_exc_value` instead of on the bridge's own "a callback threw"
+/// flag truncated the `finally` here.
+#[test]
+fn curl_exec_in_a_finally_does_not_re_raise_an_unrelated_pending_throw() {
+    if skip_without_curl_native("curl_exec_in_a_finally_does_not_re_raise_an_unrelated_pending_throw")
+    {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        function work(string $url): void {{
+            try {{
+                throw new RuntimeException("outer");
+            }} finally {{
+                $ch = curl_init($url);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                $body = curl_exec($ch);
+                echo "finally-start|", $body === "hello-curl" ? "BODY" : "X", "|";
+                echo "finally-end|";
+            }}
+        }}
+        try {{
+            work("{url}");
+            echo "NOTHROW";
+        }} catch (RuntimeException $e) {{
+            echo "caught:", $e->getMessage();
+        }}
+        "#
+    ));
+    assert_eq!(out, "finally-start|BODY|finally-end|caught:outer");
+}
+
+/// REVIEW FIX (Important 4). After a write callback throws, libcurl still runs its
+/// teardown — and with `CURLOPT_VERBOSE` on, teardown `infof()` calls reach the debug
+/// callback. Running PHP there would execute user code with the first exception still
+/// pending, and a `try/catch` inside that second callback would silently swallow it.
+/// Nothing is invoked after the first throw for the rest of the transfer.
+#[test]
+fn curl_no_callback_runs_after_the_first_throw_in_a_transfer() {
+    if skip_without_curl_native("curl_no_callback_runs_after_the_first_throw_in_a_transfer") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $debugRuns = 0;
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_VERBOSE, true);
+        curl_setopt($ch, CURLOPT_DEBUGFUNCTION, function (CurlHandle $ch, int $type, string $data) use (&$debugRuns): int {{
+            $debugRuns = $debugRuns + 1;
+            // A try/catch that actually CATCHES is what swallows the write callback's
+            // exception: catching clears the pending-throwable slot the firewall parked.
+            try {{
+                throw new LogicException("inner");
+            }} catch (LogicException $e) {{
+                $swallowed = 1;
+            }}
+            return 0;
+        }});
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data): int {{
+            throw new RuntimeException("write-boom");
+        }});
+        $before = 0;
+        try {{
+            curl_exec($ch);
+            echo "NOTHROW";
+        }} catch (RuntimeException $e) {{
+            echo "caught:", $e->getMessage();
+        }}
+        // The debug callback ran BEFORE the body arrived (request headers etc.), but must
+        // not have run again after the write callback threw.
+        echo "|debugRan=", $debugRuns > 0 ? "yes" : "no";
+        echo "|alive";
+        "#
+    ));
+    assert_eq!(out, "caught:write-boom|debugRan=yes|alive");
+}
+
+/// REVIEW FIX (Important 3). A fresh handle set to `CURLOPT_UPLOAD` with no PHP read
+/// callback must not fall through to libcurl's default `fread` on `CURLOPT_READDATA`,
+/// whose documented default is the PROCESS'S OWN STDIN. The read trampoline is now
+/// installed at `curl_init()` (as php-src installs its `curl_read`), not lazily on the
+/// first callback `curl_setopt()`.
+///
+/// WHAT THIS PINS is the asymmetry the fix removes: a FRESH handle and the SAME handle
+/// after `curl_reset()` must behave identically, because `curl_reset()` used to be the
+/// only path that installed the trampoline. Both now report end-of-data.
+///
+/// It does NOT execute the stdin leak itself. The codegen harness runs compiled binaries
+/// with stdin INHERITED and has no curl-capable stdin-piping variant, so a program that
+/// read the ambient stdin would either see whatever the test runner was given or block on
+/// a terminal — flaky either way. The leak is established by libcurl's documented default
+/// rather than by execution; see the fix report.
+#[test]
+fn curl_fresh_handle_upload_matches_post_reset_upload() {
+    if skip_without_curl_native("curl_fresh_handle_upload_matches_post_reset_upload") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // (a) never touched by any callback option
+        $fresh = curl_init("{url}");
+        curl_setopt($fresh, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($fresh, CURLOPT_UPLOAD, true);
+        curl_setopt($fresh, CURLOPT_INFILESIZE, 5);
+        $a = curl_exec($fresh);
+        echo "fresh:", $a === false ? "false" : "body", "|", curl_errno($fresh);
+
+        // (b) the same handle after a reset — must behave identically
+        curl_reset($fresh);
+        curl_setopt($fresh, CURLOPT_URL, "{url}");
+        curl_setopt($fresh, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($fresh, CURLOPT_UPLOAD, true);
+        curl_setopt($fresh, CURLOPT_INFILESIZE, 5);
+        $b = curl_exec($fresh);
+        echo "|reset:", $b === false ? "false" : "body", "|", curl_errno($fresh);
+
+        // (c) and a zero-length upload succeeds with an empty body on a fresh handle
+        $zero = curl_init("{url}");
+        curl_setopt($zero, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($zero, CURLOPT_UPLOAD, true);
+        curl_setopt($zero, CURLOPT_INFILESIZE, 0);
+        $c = curl_exec($zero);
+        echo "|zero:", strpos($c, "body=") !== false ? "empty" : "X", "|", curl_errno($zero);
+        "#
+    ));
+    // 26 = CURLE_READ_ERROR: end-of-data before the announced CURLOPT_INFILESIZE.
+    assert_eq!(out, "fresh:false|26|reset:false|26|zero:empty|0");
+}
+
+/// REVIEW FIX (Important 7). A callback throw must not leave a PREVIOUS transfer's
+/// `curl_errno()`/`curl_error()` visible on a reused handle: php-src reports `0` for a
+/// transfer that ended in a PHP exception, and `0` is what code inspecting the handle
+/// inside `catch` has to see.
+#[test]
+fn curl_callback_throw_clears_a_previous_transfers_error_state() {
+    if skip_without_curl_native("curl_callback_throw_clears_a_previous_transfers_error_state") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // First transfer fails for a real libcurl reason.
+        $ch = curl_init("http://127.0.0.1:1/");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        echo "first=", curl_errno($ch) !== 0 ? "err" : "ok";
+        echo "|msg=", strlen(curl_error($ch)) > 0 ? "set" : "empty";
+
+        // Same handle, now a callback throws: the old error must not survive.
+        curl_setopt($ch, CURLOPT_URL, "{url}");
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function (CurlHandle $ch, string $data): int {{
+            throw new RuntimeException("boom");
+        }});
+        try {{
+            curl_exec($ch);
+            echo "|NOTHROW";
+        }} catch (RuntimeException $e) {{
+            echo "|caught|errno=", curl_errno($ch), "|msg=", curl_error($ch) === "" ? "empty" : curl_error($ch);
+        }}
+        "#
+    ));
+    assert_eq!(out, "first=err|msg=set|caught|errno=0|msg=empty");
+}
+
+/// REVIEW FIX (Important 6) — PINS A KNOWN LIMITATION, NOT A GUARANTEE.
+///
+/// A callback that captures its own `CurlHandle` closes a reference cycle
+/// (`CurlHandle -> __elephc_callbacks -> Closure -> $ch`). elephc is refcount-only with no
+/// cycle collector, so the handle is never freed and its libcurl session lives until the
+/// process exits. php-src has the identical cycle and survives it only because Zend has a
+/// cycle collector.
+///
+/// The non-capturing shape is balanced apart from the one pre-existing
+/// `__elephc_normalize_callable` block per installed callable, so the DIFFERENCE between
+/// the two programs is the cycle's cost. UPDATE THIS TEST WHEN A CYCLE COLLECTOR LANDS:
+/// the capturing program should then leak no more than the non-capturing one.
+#[test]
+fn curl_callback_capturing_its_own_handle_leaks_the_session() {
+    if skip_without_curl_native("curl_callback_capturing_its_own_handle_leaks_the_session") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    // IDENTICAL closure shapes apart from the captured handle: no declared parameters (a
+    // declared parameter hits the separate, pre-existing invoker argument leak and would
+    // swamp the signal), same by-ref counter, same body.
+    let program = |capture: bool| {
+        let use_clause = if capture {
+            "use (&$total, $ch)"
+        } else {
+            "use (&$total)"
+        };
+        format!(
+            r#"<?php
+        function fetch(): void {{
+            $total = 0;
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function () {use_clause}: int {{
+                $total = $total + 1;
+                return 10;
+            }});
+            curl_exec($ch);
+            unset($ch);
+        }}
+        fetch();
+        fetch();
+        fetch();
+        echo "done";
+        "#
+        )
+    };
+
+    let plain = compile_and_run_with_gc_stats(&program(false));
+    assert_eq!(plain.stdout, "done");
+    let (plain_allocs, plain_frees) = parse_gc_stats(&plain.stderr);
+    let plain_leaked = plain_allocs as i64 - plain_frees as i64;
+
+    let capturing = compile_and_run_with_gc_stats(&program(true));
+    assert_eq!(capturing.stdout, "done");
+    let (cap_allocs, cap_frees) = parse_gc_stats(&capturing.stderr);
+    let cap_leaked = cap_allocs as i64 - cap_frees as i64;
+
+    // No exact number is asserted for the non-capturing shape: it carries pre-existing
+    // per-callable and by-ref-capture leaks that are not this task's and would make the
+    // pin a tripwire for unrelated work. The COMPARISON is the limitation being recorded.
+    assert!(
+        cap_leaked > plain_leaked,
+        "capturing $ch is expected to leak the whole libcurl session today (elephc is \
+         refcount-only, with no cycle collector): capturing leaked {cap_leaked}, \
+         non-capturing leaked {plain_leaked}. If this now fails because the two are \
+         equal, a cycle collector landed — delete this test and the limitation note at \
+         the callback-rooting site in src/curl_prelude.rs."
+    );
+}
+
 /// The callback options this wave deliberately did NOT implement stay honestly rejected:
 /// `curl_setopt()` answers `false` and emits PHP's unsupported-option warning rather than
 /// an inert `true` (locked decision 7).

@@ -384,6 +384,22 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         // Rooted only AFTER the bridge accepted it, and rooted before this function
         // returns: $normalized is a live local until then, so the descriptor cannot be
         // released between the two statements.
+        //
+        // LIMITATION — A CALLBACK THAT CAPTURES ITS OWN HANDLE LEAKS THE SESSION.
+        // This root closes a reference cycle whenever the installed closure captures the
+        // same CurlHandle it is installed on:
+        //     CurlHandle -> __elephc_callbacks -> Closure -> captured $ch -> CurlHandle
+        // elephc is refcount-only with no cycle collector, so that handle's refcount never
+        // reaches zero: the object is never freed, `curl_easy_cleanup()` never runs, and
+        // the libcurl session (with its socket and TLS state) lives until the process
+        // exits. php-src has the identical cycle and survives it only because Zend has a
+        // cycle collector. There is no fix at this layer — a weak root would let the
+        // descriptor die while libcurl still holds the pointer. WORKAROUND for programs
+        // that create many handles in a loop: do not `use ($ch)` in the callback (the
+        // callback already receives the handle as its first argument, which is what it is
+        // there for), or capture only what you need by value. Pinned by
+        // `curl_callback_capturing_its_own_handle_leaks_the_session` in
+        // tests/codegen/curl/callbacks.rs; see docs/php/curl.md (Task 14).
         $handle->__elephc_callbacks[$slot] = $normalized;
         if ($slot === 0) {
             // php-src keeps ONE write mode: installing CURLOPT_WRITEFUNCTION selects
@@ -908,9 +924,23 @@ function curl_copy_handle(CurlHandle $handle): CurlHandle {
         if ($callback === null) {
             continue;
         }
+        $slotIndex = (int) $slot;
+        // THE WRITE SLOT IS ROOTED BUT NOT NECESSARILY ACTIVE. php-src keeps ONE write
+        // mode, so `CURLOPT_RETURNTRANSFER` set AFTER a `CURLOPT_WRITEFUNCTION` leaves the
+        // callable rooted while selecting PHP_CURL_RETURN — and the source handle here is
+        // in exactly that state whenever `__elephc_return_transfer` is true. Registering
+        // slot 0 on the copy regardless would re-select PHP_CURL_USER and desync the two
+        // sides: the bridge would call the callback AND, because installing a write
+        // callback clears `return_transfer`, `curl_exec()` on the copy would answer an
+        // empty capture. Copy the ROOT so a later `curl_setopt($copy, WRITEFUNCTION, …)`
+        // is not needed to get it back, but leave the registration off.
+        if ($slotIndex === 0 && $new->__elephc_return_transfer) {
+            $new->__elephc_callbacks[0] = $callback;
+            continue;
+        }
         $descriptor = __elephc_callable_ptr($callback);
-        __elephc_curl_easy_set_callback($newRaw, (int) $slot, $descriptor, $new, $adapter);
-        $new->__elephc_callbacks[(int) $slot] = $callback;
+        __elephc_curl_easy_set_callback($newRaw, $slotIndex, $descriptor, $new, $adapter);
+        $new->__elephc_callbacks[$slotIndex] = $callback;
     }
     return $new;
 }

@@ -61,6 +61,10 @@ pub(crate) const CURL_ABI_SLOTS: &[(&str, &str)] = &[
         "elephc_curl_easy_set_callback",
         "_elephc_curl_easy_set_callback_fn",
     ),
+    (
+        "elephc_curl_take_callback_threw",
+        "_elephc_curl_take_callback_threw_fn",
+    ),
     ("elephc_curl_easy_reset", "_elephc_curl_easy_reset_fn"),
     ("elephc_curl_easy_pause", "_elephc_curl_easy_pause_fn"),
     ("elephc_curl_easy_upkeep", "_elephc_curl_easy_upkeep_fn"),

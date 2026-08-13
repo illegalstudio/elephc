@@ -134,10 +134,12 @@ pub(crate) struct EasyEntry {
 // the same handle at once": the mutex only serializes access to the TABLE
 // itself (insert/remove/lookup), not to an individual `EasyEntry`'s libcurl
 // calls for the full duration of one operation. `crate::abi::
-// elephc_curl_easy_perform` and `elephc_curl_easy_free` both deliberately
-// DROP the table lock before calling into libcurl (`curl_easy_perform`/
-// `curl_easy_cleanup`) — the write callback re-locks the table per chunk from
-// the same thread during `perform`, which would deadlock a non-reentrant
+// elephc_curl_easy_perform`, `elephc_curl_easy_pause` and
+// `elephc_curl_easy_free` all deliberately DROP the table lock before calling
+// into libcurl (`curl_easy_perform`/`curl_easy_pause`/`curl_easy_cleanup`) —
+// the write callback re-locks the table per chunk from the same thread during
+// `perform`, and `curl_easy_pause(CURLPAUSE_CONT)` flushes buffered data
+// through that same callback, so either would deadlock a non-reentrant
 // `Mutex` if the lock were held for the whole call. That means a `free(id)`
 // running concurrently with an in-flight `perform(id)` on the SAME id from a
 // DIFFERENT OS thread can run `curl_easy_cleanup` on the same `*mut CURL` a

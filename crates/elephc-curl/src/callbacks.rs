@@ -44,6 +44,7 @@
 //!   once `curl_easy_perform` has returned.
 
 use std::ffi::{c_char, c_int, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::easy::{self, CURL};
 use crate::handles::{self, EasyEntry};
@@ -201,24 +202,66 @@ unsafe fn invoke(
     (result, spec.out_len, spec.status != 0)
 }
 
+/// Set whenever a PHP callback's `longjmp` was caught by the adapter's firewall, and
+/// cleared by [`take_callback_threw`] once the runtime has consumed it.
+///
+/// THIS, NOT `_exc_value`, IS WHAT AUTHORIZES THE RUNTIME TO RE-RAISE. An earlier design
+/// had `__rt_curl_rethrow_pending` re-raise whenever `_exc_value` was non-null, which is
+/// wrong in both directions: a `curl_exec()` called from a `finally` block that is running
+/// with an unmatched throw still pending would re-raise that unrelated exception and
+/// truncate the `finally` (php runs it to the end), and a callback whose own `try/catch`
+/// cleared `_exc_value` would make a genuine callback throw vanish. A flag the bridge
+/// itself sets is the only signal that actually means "a callback threw during this
+/// transfer".
+///
+/// Process-wide rather than per-handle because the multi interface's re-raise site
+/// (`__rt_curl_multi_exec`) is handed a MULTI id and the flag is raised on an EASY one;
+/// compiled PHP is effectively single-threaded, so at most one transfer is in flight.
+static CALLBACK_THREW: AtomicBool = AtomicBool::new(false);
+
 /// Reads the slot at `index` for `id` out of the handle table and drops the guard.
-/// Returns `None` for an unknown id or an empty slot.
+/// Returns `None` for an unknown id, an empty slot, or a transfer in which a callback has
+/// ALREADY thrown.
+///
+/// That last case is load-bearing. A write callback that throws aborts the transfer, but
+/// libcurl still runs its teardown — and with `CURLOPT_VERBOSE` on, teardown `infof()`
+/// calls reach the debug callback. Invoking PHP again there would run user code with the
+/// first exception still pending, and a `try/catch` inside that second callback would
+/// silently swallow it. Nothing is invoked after the first throw for the rest of the
+/// transfer.
+///
+/// This is deliberately keyed on the per-handle flag rather than on `_exc_value`: see
+/// [`CALLBACK_THREW`] for why a pending `_exc_value` does NOT imply "a callback threw".
 ///
 /// Every trampoline starts here: the table lock must not be held across the PHP call.
 fn take_slot(id: i64, index: usize) -> Option<CallbackSlot> {
     let guard = handles::lock_recover(handles::handles());
     let entry = guard.get(&id)?;
+    if entry.callback_threw {
+        return None;
+    }
     let slot = entry.callbacks[index];
     slot.is_set().then_some(slot)
 }
 
-/// Records that a PHP callback threw, so `elephc_curl_easy_perform` leaves
-/// `curl_errno()` untouched (php-src surfaces the throw, not a `CURLcode`).
+/// Records that a PHP callback threw: on the handle, so `elephc_curl_easy_perform` can
+/// report the failure without inventing a `CURLcode`, and process-wide, so the runtime
+/// knows it is allowed to re-raise the parked throwable.
 fn mark_threw(id: i64) {
+    CALLBACK_THREW.store(true, Ordering::SeqCst);
     let mut guard = handles::lock_recover(handles::handles());
     if let Some(entry) = guard.get_mut(&id) {
         entry.callback_threw = true;
     }
+}
+
+/// Reports whether a PHP callback threw since the last time this was asked, clearing the
+/// flag. Called by `__rt_curl_rethrow_pending` right after `curl_easy_perform` /
+/// `curl_multi_perform` / `curl_easy_pause` returns; a `1` is what authorizes the runtime
+/// to resume the throw that the adapter's firewall parked.
+#[no_mangle]
+pub extern "C" fn elephc_curl_take_callback_threw() -> i32 {
+    handles::ffi_guard(0, || CALLBACK_THREW.swap(false, Ordering::SeqCst) as i32)
 }
 
 /// Runs the write/header PHP callback for `id` over `chunk` and returns what libcurl
@@ -431,6 +474,28 @@ unsafe extern "C" fn debug_callback(
     outcome.unwrap_or(0)
 }
 
+/// Installs the read trampoline and its `userdata` on `curl`. Called from
+/// `crate::abi::elephc_curl_easy_init` (and again from [`apply_registration`]) so that
+/// EVERY handle carries it from creation, exactly as `install_write_callback` does for the
+/// write side.
+///
+/// Installing it at creation is not tidiness, it is the fix for a real leak of the host's
+/// stdin: libcurl's DEFAULT read function is `fread` reading `CURLOPT_READDATA`, whose
+/// default is `stdin`. A fresh handle set to `CURLOPT_UPLOAD` with no PHP read callback
+/// would therefore upload the PROCESS'S OWN STANDARD INPUT — and behave differently from
+/// the very same handle after a `curl_reset()`, which used to be the only path that
+/// installed this trampoline. php-src has no such window: it installs its `curl_read` in
+/// `curl_init()`.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from `easy::init` belonging to `id`.
+pub(crate) unsafe fn install_read_callback(curl: *mut CURL, id: i64) {
+    let _ = easy::setopt_bytes_function(curl, CURLOPT_READFUNCTION, Some(read_callback));
+    // `CURLOPT_READDATA` is an opaque `void *` this crate controls both ends of: it is
+    // never dereferenced as a pointer, only cast back to the `i64` id it started as.
+    let _ = easy::setopt_ptr(curl, CURLOPT_READDATA, id as usize as *mut c_void);
+}
+
 /// Installs or removes the libcurl-side registration for `index` on `curl`, according
 /// to whether the handle's slots now hold a callable.
 ///
@@ -465,8 +530,7 @@ unsafe fn apply_registration(curl: *mut CURL, id: i64, slots: &[CallbackSlot; SL
     // end-of-data (`0`) whenever the slot is empty. That is also exactly what php-src
     // does: it installs `curl_read` unconditionally at handle creation, and `curl_read`
     // with no PHP callable and no `fp` returns `0`.
-    let _ = easy::setopt_bytes_function(curl, CURLOPT_READFUNCTION, Some(read_callback));
-    let _ = easy::setopt_ptr(curl, CURLOPT_READDATA, userdata);
+    install_read_callback(curl, id);
 
     if slots[SLOT_PROGRESS as usize].is_set() || slots[SLOT_XFERINFO as usize].is_set() {
         let _ = easy::setopt_xferinfo_function(

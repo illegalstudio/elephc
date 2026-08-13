@@ -28,8 +28,9 @@
 //!   `elephc-crypto`'s cipher ABI (`crates/elephc-crypto/src/cipher/abi.rs`).
 //! - **Caller contract — no concurrent calls on the same id.** The table
 //!   mutex (`crate::handles::handles`) only serializes access to the table
-//!   itself; `elephc_curl_easy_perform` and `elephc_curl_easy_free` both
-//!   deliberately drop that lock before calling into libcurl (see their own
+//!   itself; `elephc_curl_easy_perform`, `elephc_curl_easy_pause` and
+//!   `elephc_curl_easy_free` all deliberately drop that lock before calling
+//!   into libcurl (see their own
 //!   doc comments below for why), so it does NOT stop a `free(id)` on one
 //!   thread from running `curl_easy_cleanup` on the same `*mut CURL` while
 //!   another thread is still blocked inside `perform(id)` — a real
@@ -91,6 +92,11 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
         let mut entry = EasyEntry::new(curl, id);
         unsafe {
             php_layer::install_write_callback(curl, id);
+            // Installed from creation, not lazily on the first `curl_setopt()`: without it
+            // a fresh handle with `CURLOPT_UPLOAD` and no PHP read callback would upload
+            // the PROCESS'S OWN STDIN through libcurl's default `fread`/`CURLOPT_READDATA`
+            // pair. See `crate::callbacks::install_read_callback`.
+            crate::callbacks::install_read_callback(curl, id);
             // `error_buf`'s heap allocation address is stable across the
             // upcoming move into the handle table (moving a `Vec` only moves
             // its {ptr,len,cap} header, never reallocates), so handing
@@ -383,6 +389,14 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
             // reports `curl_errno() === 0` in exactly this case (measured on 8.4.20),
             // so the abort's own `CURLcode` is deliberately NOT recorded. The runtime
             // re-raises the pending throwable as soon as this returns.
+            //
+            // The error state is CLEARED rather than merely left alone: on a REUSED
+            // handle, "left alone" means the PREVIOUS transfer's `CURLcode` and message
+            // stay visible, so `curl_errno()` would answer e.g. 7 (couldn't connect) for
+            // a transfer that actually ended in a PHP exception. php-src reports 0 here,
+            // and 0 is what a caller inspecting the handle inside `catch` must see.
+            entry.last_errno = easy::CURLE_OK;
+            entry.last_error.clear();
             return 0;
         }
         entry.last_errno = code;
@@ -757,6 +771,7 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
         unsafe {
             php_layer::install_write_callback(entry.curl, id);
+            crate::callbacks::install_read_callback(entry.curl, id);
             easy::setopt_ptr(
                 entry.curl,
                 easy::CURLOPT_ERRORBUFFER,
@@ -771,14 +786,26 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
 /// `CURLcode` — which is what PHP's `curl_pause()` returns. An unknown id
 /// answers `CURLE_BAD_FUNCTION_ARGUMENT` (43) rather than `CURLE_OK`, so a
 /// caller cannot read "nothing happened" as success.
+///
+/// LIKE `elephc_curl_easy_perform`, THIS DROPS THE TABLE LOCK BEFORE CALLING LIBCURL.
+/// `CURLPAUSE_CONT` does not merely flip a flag: libcurl flushes whatever it buffered
+/// while paused, which runs the write trampoline, which re-locks this same table from this
+/// same thread. Holding the guard across `curl_easy_pause` was therefore a self-deadlock
+/// on a non-reentrant `Mutex` — and, once a PHP write callback is installed, it also runs
+/// compiled PHP, which may re-enter this crate on other handles. The same caller contract
+/// `elephc_curl_easy_perform` documents applies (no two `elephc_curl_*` calls for the same
+/// id concurrently).
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_pause(id: i64, bitmask: i32) -> i32 {
     handles::ffi_guard(CURLE_BAD_FUNCTION_ARGUMENT, || {
-        let guard = handles::lock_recover(handles::handles());
-        let Some(entry) = guard.get(&id) else {
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+        let curl = {
+            let guard = handles::lock_recover(handles::handles());
+            let Some(entry) = guard.get(&id) else {
+                return CURLE_BAD_FUNCTION_ARGUMENT;
+            };
+            entry.curl
         };
-        unsafe { easy::pause(entry.curl, bitmask as c_int) }
+        unsafe { easy::pause(curl, bitmask as c_int) }
     })
 }
 
@@ -883,6 +910,7 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
         entry.last_error = last_error;
         unsafe {
             php_layer::install_write_callback(copied, new_id);
+            crate::callbacks::install_read_callback(copied, new_id);
             easy::setopt_ptr(
                 copied,
                 easy::CURLOPT_ERRORBUFFER,

@@ -111,7 +111,11 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_easy_upkeep (run connection upkeep on an easy handle)",
         IntResult::Boolean,
     );
-    emit_forwarder(
+    // PAUSE IS THE THIRD RE-RAISING HELPER. `CURLPAUSE_CONT` does not merely flip a flag:
+    // libcurl flushes what it buffered while paused, which runs the write trampoline —
+    // which runs a PHP write callback, which can throw. Without the hook the throwable
+    // would be parked by the adapter's firewall and never resumed here.
+    emit_forwarder_rethrowing(
         emitter,
         "__rt_curl_easy_pause",
         "_elephc_curl_easy_pause_fn",
