@@ -16,10 +16,21 @@
 //!   leaked three blocks in every shape below; after it, each is balanced.
 //! - The loop counts are deliberately larger than one so a per-call leak cannot hide inside
 //!   the fixed startup allocations `--gc-stats` also reports.
-//! - EVERY MATERIALIZATION PATH IS COVERED, not just plain function calls: a direct call, an
-//!   instance method (receiver in a register), a static method, and a refcounted cell type
-//!   (`array`), because the four lowerings stage by-reference arguments through separate
-//!   code paths and only a per-path fixture proves each one releases its cell.
+//! - EVERY MATERIALIZATION PATH IS COVERED, and the routing was CHECKED rather than assumed
+//!   (an earlier version of this file claimed `$counter->bump($i)` exercised the
+//!   receiver-REGISTER lowering; it does not — a typed local receiver goes through the same
+//!   direct-call materializer a plain function does). The four stagers and the fixture that
+//!   genuinely reaches each one:
+//!
+//!   | materializer | fixture |
+//!   |---|---|
+//!   | direct call | `test_omitted_by_ref_default_arg_is_balanced` (and the method/static ones) |
+//!   | static method (hidden called-class id) | `test_omitted_by_ref_default_arg_on_static_method_is_balanced` |
+//!   | receiver REGISTER (`nested_call_reg`) | `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` — a `mixed`-typed receiver forces the register dispatch (verified in the emitted assembly: `mov x19, x1` for the receiver, with the cell pushed before it) |
+//!   | receiver LOCAL (`parent::m()`) | `test_omitted_by_ref_default_arg_on_parent_call_is_balanced` |
+//!
+//!   A refcounted cell type (`array`) has its own fixture too, because releasing the cell's
+//!   CONTENT is a separate step from releasing the cell.
 //! - Every expected stdout value is real `php` 8.5 output for the same source.
 
 use crate::support::{compile_and_run_with_gc_stats, compile_and_run_with_heap_debug, parse_gc_stats};
@@ -73,8 +84,11 @@ echo "done";
     );
 }
 
-/// An INSTANCE METHOD omitting the same argument: the receiver arrives in a register, which
-/// is its own materialization path with its own cell block.
+/// An INSTANCE METHOD on a typed local omitting the same argument. This routes through the
+/// DIRECT-CALL materializer (a statically resolved receiver needs no register dispatch), so
+/// it covers the ordinary method shape a user writes — see
+/// `test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced` for the receiver-register
+/// stager.
 #[test]
 fn test_omitted_by_ref_default_arg_on_instance_method_is_balanced() {
     assert_balanced(
@@ -153,5 +167,84 @@ function main(): void {
 main();
 "#,
         "7,7,100,6",
+    );
+}
+
+/// THE RECEIVER-REGISTER STAGER. A `mixed`-typed receiver cannot be dispatched statically, so
+/// the lowering unboxes it into the reserved callee-saved nested-call register and stages the
+/// arguments around it — including the caller-side cell for the omitted `int &$out = 1`.
+///
+/// It asserts the RETURN VALUE, not just the heap: `$this->base + $x` is only right if the
+/// receiver register survived the cell block. A cell block that clobbered it would enter the
+/// method with the cell's address as `$this` and read `base` out of the stack.
+#[test]
+fn test_omitted_by_ref_default_arg_on_mixed_receiver_is_balanced() {
+    assert_balanced(
+        r#"<?php
+final class Svc {
+    public int $base = 5;
+    public function run(int $x, int &$out = 1): int { $out = $x; return $this->base + $x; }
+}
+function call_it(mixed $o): int { return $o->run(2); }
+function main(): void {
+    $svc = new Svc();
+    $total = 0;
+    for ($i = 0; $i < 20; $i++) { $total += call_it($svc); }
+    echo $total;
+}
+main();
+"#,
+        "140",
+    );
+}
+
+/// THE RECEIVER-LOCAL STAGER: `parent::run()` from a child method, with the by-reference
+/// default omitted. `$this` comes from a local slot rather than a register, which is a third
+/// cell-block placement (the receiver is staged after the block, at its own offset).
+#[test]
+fn test_omitted_by_ref_default_arg_on_parent_call_is_balanced() {
+    assert_balanced(
+        r#"<?php
+class Base {
+    public int $base = 5;
+    public function run(int $x, int &$out = 1): int { $out = $x; return $this->base + $x; }
+}
+final class Child extends Base {
+    public function go(int $x): int { return parent::run($x); }
+}
+function main(): void {
+    $child = new Child();
+    $total = 0;
+    for ($i = 0; $i < 20; $i++) { $total += $child->go($i); }
+    echo $total;
+}
+main();
+"#,
+        "290",
+    );
+}
+
+/// A NULLABLE receiver (`$svc?->run($i)`) with the by-reference default omitted: the null
+/// check short-circuits, the non-null arm stages a cell, and the method still runs on the
+/// right object.
+#[test]
+fn test_omitted_by_ref_default_arg_on_nullsafe_call_is_balanced() {
+    assert_balanced(
+        r#"<?php
+final class Svc {
+    public int $base = 5;
+    public function run(int $x, int &$out = 1): int { $out = $x; return $this->base + $x; }
+}
+function pick(bool $yes): ?Svc { return $yes ? new Svc() : null; }
+function main(): void {
+    $hit = pick(true);
+    $miss = pick(false);
+    $total = 0;
+    for ($i = 0; $i < 20; $i++) { $total += $hit?->run($i); }
+    echo $total, ",", ($miss?->run(1) === null ? "null" : "?");
+}
+main();
+"#,
+        "290,null",
     );
 }

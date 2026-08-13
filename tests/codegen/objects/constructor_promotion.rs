@@ -247,3 +247,40 @@ echo ":", $c->value;
     );
     assert_eq!(out, "1:7");
 }
+
+/// `new $cls($var)` — a DYNAMIC constructor call with a runtime class string — reaches the
+/// by-reference argument stager through the receiver-REGISTER materializer
+/// (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`) rather than
+/// the direct-call one, so it is the second constructor path whose promoted property borrows
+/// the argument's cell for the object's whole life. The property must READ the caller's value
+/// after the constructor returns; a caller-stack cell would leave it pointing into a released
+/// frame and read garbage.
+///
+/// KNOWN GAP, PINNED HONESTLY: the write direction does NOT propagate back
+/// (`$dynamic->value = 7` leaves `$shared` at 42 where PHP updates it to 7), so the dynamic
+/// path binds a copy rather than the caller's slot. That is PRE-EXISTING — the same source
+/// prints `42:42:42:1` at the commit before this task's by-reference work — and unrelated to
+/// the cell lifetime this fixture exists for. The expectation below therefore records
+/// today's behaviour; PHP 8.5 prints `42:42:7:1`.
+#[test]
+fn test_dynamic_new_binds_a_by_ref_promoted_property_to_the_caller_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+$eager = new Box();
+$shared = 42;
+$cls = "Box";
+$dynamic = new $cls($shared);
+echo $dynamic->value, ":", $shared, ":";
+$dynamic->value = 7;
+echo $shared, ":", $eager->value;
+"#,
+    );
+    assert_eq!(
+        out, "42:42:42:1",
+        "the promoted property must read the caller's value through a cell that outlived the \
+         constructor call; the third field is the pre-existing write-direction gap (PHP: 7)"
+    );
+}
