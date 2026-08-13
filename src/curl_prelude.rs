@@ -103,13 +103,20 @@
 //!   `curl_setopt()`'s `mixed $value` in this whole file, handled before the scalar-type
 //!   guard (see the `if ($kind === 7)` branch below) and requiring an `elephc_curl_easy_
 //!   set_share()` bridge call rather than any of the three ordinary setters.
-//! - THE SHARE LIFETIME HAZARD is real and is closed at the BRIDGE, not here:
-//!   `crates/elephc-curl/src/share.rs`'s module doc carries the full argument for why
+//! - THE SHARE LIFETIME QUESTION ("does freeing `$sh` before `$ch` corrupt anything?") is
+//!   closed at the BRIDGE, not here, and the real answer is more mundane than a
+//!   use-after-free: `crates/elephc-curl/src/share.rs`'s module doc carries the full
+//!   argument. libcurl 8.21.0 REFCOUNTS a share (`CURLOPT_SHARE` increments it, an easy
+//!   handle's own close decrements it), so `curl_share_cleanup()` while an easy handle
+//!   still references it does not corrupt anything — it FAILS (`CURLSHE_IN_USE`) and frees
+//!   nothing, which is a silent PERMANENT LEAK if that failure is ignored, not a crash.
 //!   `curl_setopt($ch, CURLOPT_SHARE, $sh)` needs no PHP-level reference from `$ch` to
-//!   `$sh` the way `CurlMultiHandle::__elephc_attach()` takes one for an added easy
-//!   handle — freeing a share (`CurlShareHandle`'s Mixed cell teardown) detaches every
-//!   still-attached easy handle at the libcurl level BEFORE `curl_share_cleanup()` runs,
-//!   so no dangling `data->share` pointer can ever be read, regardless of `unset()` order.
+//!   `$sh` (the way `CurlMultiHandle::__elephc_attach()` takes one for an added easy
+//!   handle) because the BRIDGE keeps its own count of attached easy handles and DEFERS the
+//!   real `curl_share_cleanup()` call until that count reaches zero — mirroring, at the
+//!   bridge level, the real Zend GC reference php-src itself relies on to avoid the same
+//!   leak. `CurlShareHandle`'s Mixed cell teardown therefore never forcibly touches a live
+//!   easy handle's `CURLOPT_SHARE` at all; this holds regardless of `unset()` order.
 //! - `curl_share_init_persistent()` (PHP 8.5) IS PROCESS-LIFETIME, mirroring
 //!   `curl_multi_get_handles()`'s version gate (locked decision 8) but adding its own:
 //!   the underlying native share, once created, is NEVER freed by
@@ -911,20 +918,26 @@ function curl_multi_strerror(int $error_code): string {
 // shape is otherwise identical to `CurlHandle`'s: a private constructor, a static wrap
 // factory, an empty `__debugInfo()`, and a `__serialize()` that throws.
 //
-// THE LIFETIME HAZARD: libcurl requires a share object to outlive every easy handle that
-// has `CURLOPT_SHARE` pointed at it — for the WHOLE remaining life of that easy handle,
-// including its own eventual `curl_easy_cleanup()`, not merely "while a transfer using it
-// is in flight". `curl_setopt($ch, CURLOPT_SHARE, $sh)` (this file's `curl_setopt()`,
-// `$kind === 7` branch) therefore does NOT take a PHP-level reference from `$ch` to `$sh`
-// the way `CurlMultiHandle::__elephc_attach()` does for an added easy handle — the BRIDGE
-// is the source of truth instead. `crates/elephc-curl/src/share.rs`'s module doc carries
-// the full argument; in short, every share entry tracks which easy ids are attached to it,
-// and freeing a share (`__elephc_curl_share_free`, reached from this class's Mixed cell
-// teardown — there is deliberately no `__destruct`) detaches every one of them
-// (`CURLOPT_SHARE` -> null) BEFORE `curl_share_cleanup()` runs. A PHP program is therefore
-// free to `unset()` the share before the easy handles attached to it: the transfer already
-// run is unaffected, and any FUTURE transfer on those handles still succeeds (it simply
-// stops benefiting from the shared cache).
+// THE LIFETIME QUESTION: libcurl 8.21.0 REFCOUNTS a share (`CURLOPT_SHARE` increments it;
+// an easy handle's own close decrements it), so `curl_share_cleanup()` while an easy
+// handle still references it does NOT corrupt anything — it FAILS with `CURLSHE_IN_USE`
+// and frees nothing, a silent PERMANENT LEAK of the share (its DNS cache, cookie jar, TLS
+// session cache, connection pool) if that failure is ever ignored, not a use-after-free.
+// `curl_setopt($ch, CURLOPT_SHARE, $sh)` (this file's `curl_setopt()`, `$kind === 7`
+// branch) therefore does NOT take a PHP-level reference from `$ch` to `$sh` the way
+// `CurlMultiHandle::__elephc_attach()` does for an added easy handle — the BRIDGE is the
+// source of truth instead. `crates/elephc-curl/src/share.rs`'s module doc carries the full
+// argument; in short, every share entry tracks which easy ids are attached to it (its own
+// mirror of libcurl's refcount), and freeing a share while that list is non-empty
+// (`__elephc_curl_share_free`, reached from this class's Mixed cell teardown — there is
+// deliberately no `__destruct`) does NOT call `curl_share_cleanup()` yet: it DEFERS,
+// marking the entry pending, and the real cleanup finally runs once the LAST attached easy
+// handle detaches or is freed — mirroring, at the bridge level, the real Zend GC reference
+// php-src itself relies on. No attached easy handle's `CURLOPT_SHARE` is ever forcibly
+// cleared by this path. A PHP program is therefore free to `unset()` the share before the
+// easy handles attached to it: the transfer already run is unaffected, any FUTURE transfer
+// on those handles still succeeds (still genuinely sharing, until it too is freed), and the
+// native share is destroyed exactly once, only after every attachment has genuinely ended.
 final class CurlShareHandle {
     public mixed $__elephc_handle = null;
 

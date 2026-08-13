@@ -1,19 +1,25 @@
 //! Purpose:
 //! End-to-end fixtures for PHP's curl SHARE interface: `curl_share_init()`/`curl_setopt()`'s
 //! `CURLOPT_SHARE` attach point/`curl_share_setopt()`/`curl_share_errno()`/
-//! `curl_share_strerror()`/`curl_share_close()`, the SHARE-LIFETIME HAZARD (freeing a share
-//! before the easy handle attached to it must be safe, not a use-after-free), and PHP 8.5's
+//! `curl_share_strerror()`/`curl_share_close()`, the SHARE LIFETIME (freeing a share while
+//! an easy handle is still attached to it must be safe and must not leak — PHP-visible
+//! behaviour only; see `crates/elephc-curl/src/tests.rs::native_share` for the Rust-level
+//! tests that observe the DEFERRED `curl_share_cleanup()` outcome directly), and PHP 8.5's
 //! `curl_share_init_persistent()`.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests curl` through Rust's test harness.
 //!
 //! Key details:
-//! - THE LOAD-BEARING FIXTURE is `freeing_the_share_before_the_easy_handle_transfers_safely_
-//!   after`: it is the brief's own scenario, run against a REAL loopback transfer both
-//!   before and after the share is freed, under `--gc-stats` so a double-free or leak in
-//!   the detach-before-cleanup path shows up as an unbalanced heap rather than only as a
-//!   crash that might not reproduce every run.
+//! - libcurl 8.21.0 REFCOUNTS a share (`crates/elephc-curl/src/share.rs`'s module doc):
+//!   `curl_share_cleanup()` while an easy handle still references it fails
+//!   (`CURLSHE_IN_USE`) rather than corrupting anything, so an unhandled failure there is a
+//!   silent PERMANENT LEAK, not a use-after-free. The bridge closes that by DEFERRING the
+//!   real cleanup call until every attached easy handle has genuinely detached — this
+//!   crate's PHP-level fixtures below can only observe the FUNCTIONAL consequence (a
+//!   transfer still succeeding after `unset()`, and a balanced `--gc-stats` heap for the
+//!   PHP-visible Mixed cell); the deferred-cleanup outcome ITSELF (`CURLSHE_OK`, and only
+//!   after the last detach) is a bridge-internal fact only the Rust-level tests can probe.
 //! - No fixture reaches the public internet: every URL is the loopback fixture server's
 //!   ephemeral port (`/hello`), matching every other curl codegen fixture in this suite.
 //! - The DNS-share fixture (the brief's Step 1) deliberately asserts only that BOTH
@@ -169,14 +175,15 @@ fn curlopt_share_rejects_a_non_share_value() {
     );
 }
 
-/// THE LOAD-BEARING FIXTURE — the brief's own scenario and the review's stated #1 target.
-/// A share is attached to an easy handle via `CURLOPT_SHARE`, a real transfer runs, the
-/// share is then freed FIRST (`unset($sh)`) while the easy handle is still live, and a
-/// SECOND real transfer on that same easy handle must still succeed. If the bridge's
-/// detach-before-`curl_share_cleanup()` design were missing or wrong, the second transfer
-/// (or the easy handle's own eventual teardown) would touch freed memory. `--gc-stats`
-/// also asserts the heap is balanced: the share's Mixed cell must be freed exactly once,
-/// and freeing it must not double-release anything the easy handle still owns.
+/// THE BRIEF'S OWN SCENARIO. A share is attached to an easy handle via `CURLOPT_SHARE`, a
+/// real transfer runs, the share is then freed FIRST (`unset($sh)`) while the easy handle
+/// is still live, and a SECOND real transfer on that same easy handle must still succeed —
+/// now genuinely still sharing (the bridge DEFERS the real `curl_share_cleanup()` call
+/// rather than forcing it or forcing an unlink; `crates/elephc-curl/src/share.rs`'s module
+/// doc). `--gc-stats` asserts the PHP-visible heap is balanced (the share's Mixed cell
+/// freed exactly once); the bridge-internal fact that the underlying `curl_share_cleanup()`
+/// call itself is deferred and only later succeeds is not observable from PHP and is
+/// covered instead by `crate::tests::native_share`'s Rust-level tests.
 #[test]
 fn freeing_the_share_before_the_easy_handle_transfers_safely_after() {
     if skip_without_curl_native("freeing_the_share_before_the_easy_handle_transfers_safely_after")
@@ -241,11 +248,12 @@ fn freeing_the_easy_handle_before_the_share_is_also_balanced() {
     );
 }
 
-/// Re-attaching an easy handle to a DIFFERENT share must detach it from the FIRST one, so
-/// the first share's later free does not wrongly clear the easy handle's CURRENT
-/// (second) share — the re-attachment bookkeeping `elephc_curl_easy_set_share` documents.
-/// Balance under `--gc-stats` is what would catch a double-free if that bookkeeping were
-/// wrong (freeing share A would then double-clear share B's own attachment, or worse).
+/// Re-attaching an easy handle to a DIFFERENT share must detach it from the FIRST one (so
+/// the first share's own bookkeeping — and any deferred free waiting on it — does not keep
+/// waiting on an attachment that has already moved to the second share) — the
+/// re-attachment bookkeeping `elephc_curl_easy_set_share`/`detach_easy` document. Balance
+/// under `--gc-stats` is what would catch a leak or double-free if that bookkeeping were
+/// wrong.
 #[test]
 fn reattaching_to_a_different_share_detaches_from_the_first() {
     if skip_without_curl_native("reattaching_to_a_different_share_detaches_from_the_first") {
@@ -363,9 +371,13 @@ fn persistent_share_survives_unset_and_stays_usable() {
 /// explicitly clears `CURLOPT_SHARE` on the copy, the same "re-point rather than inherit"
 /// rule that function already applies to `WRITEDATA`/`ERRORBUFFER`. Proven here by freeing
 /// the share AFTER copying and confirming both the original and the copy still perform
-/// cleanly: if the copy had silently inherited a raw, untracked `CURLSH *` pointer, freeing
-/// the share (which only detaches ids in ITS OWN `attached` list) would leave the copy
-/// pointed at freed memory.
+/// cleanly: if the copy had silently inherited a raw, untracked `CURLSH *` reference, the
+/// bridge's `attached` list would UNDERCOUNT real attachments, so freeing the share once
+/// the ORIGINAL alone detaches would attempt the real `curl_share_cleanup()` while the
+/// copy still held a live libcurl-level reference — `CURLSHE_IN_USE`, not `CURLSHE_OK`
+/// (caught loudly by `crate::share::finish_share_cleanup`'s `debug_assert_eq!` at the
+/// bridge level; this PHP-level fixture only asserts the functional consequence, that both
+/// handles keep transferring cleanly).
 #[test]
 fn copy_handle_does_not_inherit_share_attachment() {
     if skip_without_curl_native("copy_handle_does_not_inherit_share_attachment") {
@@ -395,4 +407,52 @@ fn copy_handle_does_not_inherit_share_attachment() {
         "copying a share-attached handle must not leak or double-free: {}",
         output.stderr
     );
+}
+
+/// IMPORTANT-1 END-TO-END COVERAGE: a share attached to a MULTI-DRIVEN easy handle, freed
+/// (`unset($sh)`) before the multi loop has driven the transfer to completion — a shape
+/// only reachable through `curl_multi_exec()`, which is explicitly non-blocking and can
+/// leave a transfer genuinely in flight between PHP statements. The removed force-unlink
+/// design used to call `curl_setopt($ch, CURLOPT_SHARE, NULL)` synchronously from inside
+/// `unset($sh)`, regardless of whether the attached easy handle had a transfer running
+/// under the multi handle at that moment; the deferred design never touches a live easy
+/// handle's `CURLOPT_SHARE` at all, so this is safe by construction now. The deterministic,
+/// non-flaky version of this scenario (which also probes the actual `curl_share_cleanup()`
+/// outcome, not just the absence of a crash) lives at the Rust level:
+/// `crate::tests::native_share::share_freed_while_attached_via_multi_defers_cleanup_until_
+/// the_easy_is_freed`. This fixture exercises the SAME shape through the real compiled
+/// prelude/builtins/lowering path instead, asserting the functional outcome only.
+#[test]
+fn share_freed_while_multi_attached_still_completes_the_transfer() {
+    if skip_without_curl_native("share_freed_while_multi_attached_still_completes_the_transfer")
+    {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $sh = curl_share_init();
+        curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+        $mh = curl_multi_init();
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SHARE, $sh);
+        curl_multi_add_handle($mh, $ch);
+        // Free the share before the multi loop has run at all -- curl_multi_add_handle()
+        // alone does not start the transfer, so this is the earliest point a share can be
+        // freed while genuinely still attached to a multi-managed easy handle.
+        unset($sh);
+        $running = 0;
+        do {{
+            curl_multi_exec($mh, $running);
+            if ($running > 0) {{
+                curl_multi_select($mh, 1.0);
+            }}
+        }} while ($running > 0);
+        $body = curl_multi_getcontent($ch);
+        echo $body === "hello-curl" ? "ok\n" : "fail\n";
+        "#
+    ));
+    assert_eq!(out, "ok\n");
 }

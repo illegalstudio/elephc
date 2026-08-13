@@ -14,16 +14,18 @@
 //!   `curl_setopt()` option as far as PHP is concerned, even though its VALUE is an object
 //!   rather than a scalar and its bridge entry point therefore takes two handle ids
 //!   instead of one.
-//! - THE LIFETIME HAZARD THIS BUILTIN IS PART OF CLOSING: libcurl requires a share object
-//!   to outlive every easy handle attached to it, including through that easy handle's own
-//!   eventual `curl_easy_cleanup()` — freeing the share first is a real use-after-free
-//!   unless something detaches every attached easy handle first. `crates/elephc-curl/src/
-//!   share.rs`'s module doc carries the full argument; the short version is that the
-//!   BRIDGE, not this PHP-level call, is the source of truth: `elephc_curl_share_free`
-//!   walks every id this builtin's ABI entry point (`elephc_curl_easy_set_share`) has
-//!   recorded as attached and clears `CURLOPT_SHARE` on each before `curl_share_cleanup`,
-//!   so no PHP-side strong reference from `CurlHandle` to `CurlShareHandle` is needed on
-//!   top of it.
+//! - THE LIFETIME QUESTION THIS BUILTIN IS PART OF CLOSING: libcurl 8.21.0 REFCOUNTS a
+//!   share (a genuine `CURLOPT_SHARE` link increments it; an easy handle's own close
+//!   decrements it), so `curl_share_cleanup()` while an easy handle still references it
+//!   does not corrupt anything — it fails (`CURLSHE_IN_USE`) and frees nothing, a silent
+//!   PERMANENT LEAK if that failure is ignored, not a use-after-free. `crates/elephc-curl/
+//!   src/share.rs`'s module doc carries the full argument; the short version is that the
+//!   BRIDGE, not this PHP-level call, is the source of truth: every id this builtin's ABI
+//!   entry point (`elephc_curl_easy_set_share`) records as attached is this crate's own
+//!   mirror of libcurl's refcount, and `elephc_curl_share_free` DEFERS the real
+//!   `curl_share_cleanup()` call (never forcibly clearing any attached easy handle's
+//!   `CURLOPT_SHARE`) until that count reaches zero — so no PHP-side strong reference from
+//!   `CurlHandle` to `CurlShareHandle` is needed on top of it.
 
 builtin! {
     name: "__elephc_curl_easy_set_share",

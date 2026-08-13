@@ -849,26 +849,59 @@ mod native_multi {
 
 /// Purpose:
 /// The SHARE interface's real-libcurl tests: lifecycle, `curl_share_setopt()`'s three-way
-/// answer, the error surface, `CURLOPT_SHARE` attach/detach, and — the load-bearing one —
-/// that freeing a share BEFORE the easy handle attached to it is safe rather than a
-/// use-after-free, exactly the hazard this module's own doc comment argues about.
+/// answer, the error surface, `CURLOPT_SHARE` attach/detach, and — the discriminating
+/// ones — that freeing a share while it is still attached DEFERS the real
+/// `curl_share_cleanup()` call rather than either forcing it early (a permanent leak once
+/// libcurl refuses with `CURLSHE_IN_USE`) or forcing an unlink first (unsafe against an
+/// in-flight multi-driven transfer). See `crate::share`'s module doc for the full argument
+/// libcurl 8.21.0 supports: `CURLOPT_SHARE` REFCOUNTS, so an in-use share is never
+/// corrupted by an early `curl_share_cleanup()` — it is simply, silently, permanently
+/// leaked, which is the actual failure mode these tests observe via
+/// `crate::share::share_cleanup_result`.
 ///
 /// Called from:
 /// - `cargo test -p elephc-curl` through Rust's test harness, when `ELEPHC_CURL_LIB_DIR`
 ///   is set (see this module's header).
 #[cfg(elephc_curl_native)]
 mod native_share {
-    use crate::abi::{elephc_curl_easy_free, elephc_curl_easy_init};
+    use crate::abi::{
+        elephc_curl_easy_free, elephc_curl_easy_init, elephc_curl_easy_reset,
+        elephc_curl_easy_set_url, elephc_curl_easy_setopt_long,
+    };
+    use crate::multi::{
+        elephc_curl_multi_add, elephc_curl_multi_free, elephc_curl_multi_init,
+        elephc_curl_multi_perform,
+    };
+    use crate::php_layer::CURLOPT_RETURNTRANSFER;
     use crate::share::{
         elephc_curl_easy_set_share, elephc_curl_share_errno, elephc_curl_share_free,
         elephc_curl_share_init, elephc_curl_share_persistent_init, elephc_curl_share_setopt,
-        SHARE_SETOPT_APPLIED, SHARE_SETOPT_INVALID, SHARE_SETOPT_REFUSED,
+        share_cleanup_result, SHARE_SETOPT_APPLIED, SHARE_SETOPT_INVALID, SHARE_SETOPT_REFUSED,
     };
 
     /// `CURL_LOCK_DATA_DNS`, frozen at 3 in `scripts/docs/curl_surface.json`.
     const CURL_LOCK_DATA_DNS: i64 = 3;
     /// `CURLSHOPT_SHARE`, frozen at 1.
     const CURLSHOPT_SHARE: i64 = 1;
+    /// `CURLSHE_OK`, libcurl's success code for the share family.
+    const CURLSHE_OK: i32 = 0;
+
+    /// Writes a `file://` fixture and returns (directory, url), for a transfer that needs
+    /// no network — mirrors `native_multi`'s own helper of the same shape.
+    fn file_fixture(tag: &str, body: &[u8]) -> (std::path::PathBuf, String) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let suffix = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-curl-share-{tag}-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("body.txt");
+        std::fs::write(&path, body).unwrap();
+        let url = format!("file://{}", path.display());
+        (dir, url)
+    }
 
     /// Share ids are their own id space: allocated, positive, monotonic, never reused —
     /// exactly like the multi table's, independent of both it and the easy table.
@@ -921,16 +954,24 @@ mod native_share {
         elephc_curl_share_free(share);
     }
 
-    /// THE LOAD-BEARING TEST. A share is attached to an easy handle via
-    /// `elephc_curl_easy_set_share`, then the SHARE is freed FIRST — while the easy
-    /// handle is still live and never told to stop using it. If this module's detach-
-    /// before-cleanup design is wrong, the next libcurl call this test makes touches
-    /// freed memory (a real, if usually silent, use-after-free rather than a clean
-    /// crash) — running this repeatedly under a sanitizer or the OS allocator's own
-    /// debug checks is what would surface it. `elephc_curl_easy_free` on the now-
-    /// unshared easy handle afterwards must also succeed cleanly.
+    /// THE DISCRIMINATING TEST for the deferred-free design (Important 3). A share is
+    /// attached to an easy handle, then the SHARE is freed FIRST — while the easy handle
+    /// is still live and never told to stop using it — and the ACTUAL OUTCOME is observed
+    /// through `share_cleanup_result`, not merely inferred from the absence of a crash:
+    ///
+    /// - Immediately after `elephc_curl_share_free`, the real `curl_share_cleanup()` must
+    ///   NOT have run yet (`None`) — this is what distinguishes "deferred" from "forced
+    ///   early", and would fail if the old forced-cleanup-regardless-of-attachment code
+    ///   ever came back.
+    /// - Only once the LAST attachment drains (`elephc_curl_easy_free`, which detaches
+    ///   AFTER libcurl's own `curl_easy_cleanup()` has released its reference) does the
+    ///   deferred cleanup finally run, and it must succeed (`CURLSHE_OK`) — this is what
+    ///   would fail if the bridge's bookkeeping ever desynced from libcurl's real refcount
+    ///   (exactly what `elephc_curl_easy_reset`'s pre-fix bug did — see
+    ///   `reset_then_free_defers_cleanup_until_the_easy_detaches_or_frees` below for that
+    ///   scenario specifically).
     #[test]
-    fn freeing_the_share_before_the_easy_handle_is_safe() {
+    fn freeing_the_share_before_the_easy_handle_defers_cleanup_until_it_frees() {
         let share = elephc_curl_share_init();
         assert_eq!(
             elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
@@ -942,11 +983,160 @@ mod native_share {
 
         // Free the share WHILE the easy handle still has CURLOPT_SHARE pointed at it.
         elephc_curl_share_free(share);
+        assert_eq!(
+            share_cleanup_result(share),
+            None,
+            "curl_share_cleanup must NOT run while an easy handle is still attached"
+        );
 
-        // The easy handle must still be perfectly usable: freeing it now is the exact
-        // operation that would read through a dangling `data->share` pointer if this
-        // module's detach-before-cleanup design were missing or wrong.
+        // The easy handle must still be perfectly usable — no forced unlink ever touched
+        // its CURLOPT_SHARE, so this is an entirely ordinary free from libcurl's point of
+        // view, exactly as it would be for a handle that was never shared.
         elephc_curl_easy_free(easy);
+        assert_eq!(
+            share_cleanup_result(share),
+            Some(CURLSHE_OK),
+            "freeing the last attached easy handle must finally run the deferred \
+             curl_share_cleanup(), and it must succeed now that libcurl's own refcount is \
+             genuinely back to zero"
+        );
+    }
+
+    /// THE CRITICAL-1 REGRESSION TEST. `curl_easy_reset()` does not touch `data->share` at
+    /// all (pinned `lib/easy.c:1089`; `crate::share`'s module doc). This test proves the
+    /// bridge's OWN bookkeeping agrees: reset must NOT detach the share, so a share freed
+    /// afterward is STILL deferred (not cleaned up immediately with libcurl's real
+    /// reference still live), and only the easy handle's own eventual free finally
+    /// completes it, successfully.
+    ///
+    /// The bug this pins: an earlier version of `elephc_curl_easy_reset` called
+    /// `crate::share::detach_easy` here, believing (wrongly) that reset cleared
+    /// `CURLOPT_SHARE` at the libcurl level. That desynced the bridge's `attached` list
+    /// from libcurl's real internal refcount, so `elephc_curl_share_free` (finding
+    /// `attached` already — wrongly — empty) called `curl_share_cleanup()` immediately,
+    /// while the easy handle's real reference was still live: libcurl answered
+    /// `CURLSHE_IN_USE`, which the OLD code silently discarded (Critical 2) — a permanent,
+    /// invisible leak of the share for the rest of the process. Flip the assertions below
+    /// and you reproduce exactly that: `share_cleanup_result(share)` would already be
+    /// `Some(1)` (`CURLSHE_IN_USE`) right after `elephc_curl_share_free`, not `None`.
+    #[test]
+    fn reset_then_free_defers_cleanup_until_the_easy_detaches_or_frees() {
+        let (dir, url) = file_fixture("reset-then-free", b"share reset fixture\n");
+        let share = elephc_curl_share_init();
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED
+        );
+        let easy = elephc_curl_easy_init();
+        assert_eq!(unsafe { elephc_curl_easy_set_url(easy, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(easy, CURLOPT_RETURNTRANSFER, 1), 1);
+        assert_eq!(elephc_curl_easy_set_share(easy, share), 1);
+
+        // curl_reset() must leave the attachment exactly as it was: no bridge-level
+        // detach, matching libcurl's own untouched `data->share`. (It DOES reset
+        // CURLOPT_URL/RETURNTRANSFER along with every other real libcurl option — those
+        // are re-applied below, the same way a real PHP program re-configures a handle
+        // after `curl_reset()`; only CURLOPT_SHARE is special in never needing that.)
+        assert_eq!(elephc_curl_easy_reset(easy), 1);
+
+        // Freeing the share now must STILL defer: the easy handle is (correctly) still
+        // recorded as attached.
+        elephc_curl_share_free(share);
+        assert_eq!(
+            share_cleanup_result(share),
+            None,
+            "curl_reset() must not have desynced the bridge from libcurl's real attachment; \
+             a non-None result here means curl_share_cleanup ran while the easy handle was \
+             still genuinely attached (either CURLSHE_IN_USE — the leak Critical 1 reported \
+             — or, if it somehow answered CURLSHE_OK, a worse bookkeeping-vs-libcurl mismatch)"
+        );
+
+        // The reset handle must still transfer normally once its ordinary options are
+        // reapplied — it never lost its SHARE attachment, which is the one thing this
+        // fixture is actually probing.
+        assert_eq!(unsafe { elephc_curl_easy_set_url(easy, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(easy, CURLOPT_RETURNTRANSFER, 1), 1);
+        assert!(elephc_curl_easy_perform_ok(easy));
+
+        // Only NOW — the easy handle's own free — does the deferred cleanup complete.
+        elephc_curl_easy_free(easy);
+        assert_eq!(
+            share_cleanup_result(share),
+            Some(CURLSHE_OK),
+            "the deferred cleanup must finally run, successfully, once the easy handle \
+             that survived curl_reset() is itself freed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// THE IMPORTANT-1 REGRESSION TEST. `curl_multi_exec()` can leave a transfer genuinely
+    /// in flight between PHP statements (it is explicitly non-blocking), so freeing a
+    /// share attached to a multi-driven easy handle can happen while that transfer has not
+    /// finished. The OLD design force-unlinked `CURLOPT_SHARE` on every attached easy
+    /// handle from inside `elephc_curl_share_free`, regardless of whether it was mid-
+    /// transfer — a real hazard against `Curl_cpool`/connection-cache internals a live
+    /// non-blocking transfer could still be using. The deferred design never touches a
+    /// live easy handle's `CURLOPT_SHARE` at all, so this scenario is safe by construction
+    /// now: this test proves BOTH that the transfer still completes AND that the share is
+    /// only actually destroyed once the easy handle (and the multi handle, for good
+    /// measure) are freed afterward.
+    #[test]
+    fn share_freed_while_attached_via_multi_defers_cleanup_until_the_easy_is_freed() {
+        let (dir, url) = file_fixture("multi-in-flight", b"share multi fixture\n");
+        let share = elephc_curl_share_init();
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED
+        );
+        let multi = elephc_curl_multi_init();
+        let easy = elephc_curl_easy_init();
+        assert_eq!(unsafe { elephc_curl_easy_set_url(easy, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(easy, CURLOPT_RETURNTRANSFER, 1), 1);
+        assert_eq!(elephc_curl_easy_set_share(easy, share), 1);
+        assert_eq!(elephc_curl_multi_add(multi, easy), 0, "add must report CURLM_OK");
+
+        // Free the share BEFORE the transfer has been driven to completion at all — the
+        // multi handle has not even had `curl_multi_perform` called on it yet, so if a
+        // transfer were ever going to be genuinely "in flight" when a share is freed
+        // out from under it, an attached-but-not-yet-run easy handle is the earliest and
+        // least ambiguous point to prove the new design never reaches into it.
+        elephc_curl_share_free(share);
+        assert_eq!(share_cleanup_result(share), None, "must defer while multi-attached");
+
+        // Drive the transfer to completion. If the removed force-unlink code path were
+        // still here, THIS is where a live `CURLOPT_SHARE`-clearing setopt would have run
+        // underneath an active (even if not literally mid-read) multi-managed transfer.
+        let mut running = 1;
+        let mut guard = 0;
+        while running > 0 && guard < 1000 {
+            running = elephc_curl_multi_perform(multi) >> 32;
+            guard += 1;
+        }
+        assert_eq!(running, 0, "the transfer must finish even though its share was already 'freed'");
+        assert_eq!(
+            share_cleanup_result(share),
+            None,
+            "the share must still not be cleaned up: curl_multi_remove/free never touch \
+             CURLOPT_SHARE, matching real php-src, which only unshares via curl_setopt() or \
+             the easy handle's own destruction"
+        );
+
+        elephc_curl_multi_free(multi);
+        elephc_curl_easy_free(easy);
+        assert_eq!(
+            share_cleanup_result(share),
+            Some(CURLSHE_OK),
+            "freeing the last attached easy handle must finally run the deferred cleanup, \
+             successfully"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Small helper so the reset-then-free fixture above reads as one assertion rather
+    /// than a bare `elephc_curl_easy_perform` call whose return convention a reader would
+    /// have to look up.
+    fn elephc_curl_easy_perform_ok(id: i64) -> bool {
+        crate::abi::elephc_curl_easy_perform(id) == 1
     }
 
     /// Repeated calls with an EQUIVALENT (sorted/deduplicated) `CURL_LOCK_DATA_*` set
@@ -997,5 +1187,47 @@ mod native_share {
         elephc_curl_easy_free(easy);
         // A no-op, not a crash.
         elephc_curl_share_free(UNKNOWN);
+    }
+
+    /// A PENDING-FREE share id (no live PHP object could legitimately name one — see
+    /// `crate::share`'s module doc) is refused by every PHP-facing entry point exactly like
+    /// an unknown id, defensively. Not reachable from real PHP source, but cheap to pin
+    /// directly at the ABI level.
+    #[test]
+    fn pending_free_share_ids_are_treated_as_unknown() {
+        let share = elephc_curl_share_init();
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED
+        );
+        let attached = elephc_curl_easy_init();
+        assert_eq!(elephc_curl_easy_set_share(attached, share), 1);
+
+        // One attachment still live -> this must defer, leaving the id "pending" rather
+        // than removing it from the table outright.
+        elephc_curl_share_free(share);
+        assert_eq!(share_cleanup_result(share), None);
+
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_REFUSED,
+            "a pending-free share must not accept further setopt calls"
+        );
+        assert_eq!(
+            elephc_curl_share_errno(share),
+            CURLSHE_OK,
+            "a pending-free share answers CURLSHE_OK (unknown), not its stale last_errno"
+        );
+        let other = elephc_curl_easy_init();
+        assert_eq!(
+            elephc_curl_easy_set_share(other, share),
+            0,
+            "a pending-free share must refuse a NEW attachment"
+        );
+        elephc_curl_easy_free(other);
+
+        // Draining the real attachment must still complete the deferred cleanup normally.
+        elephc_curl_easy_free(attached);
+        assert_eq!(share_cleanup_result(share), Some(CURLSHE_OK));
     }
 }
