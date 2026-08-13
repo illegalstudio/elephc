@@ -899,14 +899,25 @@ mod native_mime {
         // MEASURED, not assumed: this pinned libcurl 8.21.0 build's `curl_mime_filedata`
         // DOES validate the file EAGERLY — it fails right here (a non-`CURLE_OK` return,
         // this field-setter answering `0`) for a path that does not exist, presumably
-        // because it stats the file immediately to compute the part's size. This is NOT a
-        // divergence from php-src: the brief notes php-src ALSO validates with
-        // `php_check_open_basedir`/`stat` at `curl_setopt()` time (`ext/curl/interface.c`'s
-        // `build_mime_structure_from_hash`), so elephc's `curl_setopt(..., POSTFIELDS,
-        // ['f' => new CURLFile($missingPath)])` failing immediately with `false` — never
-        // reaching `curl_exec()` at all — is the SAME shape PHP itself has, reached here
-        // through libcurl's own validation rather than a bespoke `stat()` call this bridge
-        // would otherwise have needed to add.
+        // because it stats the file immediately to compute the part's size.
+        //
+        // THIS **IS** A REAL DIVERGENCE FROM PHP, corrected here after review — an earlier
+        // version of this comment claimed otherwise and was wrong. php-src does NOT use
+        // `curl_mime_filedata()` at all: `ext/curl/interface.c`'s `build_mime_structure_
+        // from_hash` reads a `CURLFile`'s local file through `curl_mime_data_cb()`, a
+        // read/seek/free CALLBACK triple, so the failure for a missing file surfaces
+        // LAZILY, from inside that callback at `curl_exec()` time
+        // (`CURLE_ABORTED_BY_CALLBACK`, measured directly against a real PHP 8.4.20 —
+        // `curl_setopt()` itself answers `true`). `php_check_open_basedir()` runs during
+        // that same construction, but it is a NO-OP whenever `open_basedir` is unset (the
+        // common case, including every fixture in this tree), so it does not perform an
+        // eager existence check either. elephc's simpler `curl_mime_filedata()`-based
+        // design (no custom callback — that infrastructure is Task 12's, not this one's)
+        // fails EAGER, at `curl_setopt()` time, which is what this test pins: an honest,
+        // defensible, but DIFFERENT answer to "the file does not exist" than php-src's own.
+        // See `src/curl_prelude.rs`'s `__elephc_curl_build_multipart()` doc comment and
+        // `tests/codegen/curl/multipart.rs::missing_file_makes_curl_setopt_fail_eagerly`
+        // for where this divergence is stated for PHP-facing readers.
         assert_eq!(
             filedata_result, 0,
             "curl_mime_filedata must reject a path that does not exist"

@@ -407,11 +407,25 @@ class CURLStringFile {
 //                       never NUL-terminated, so an embedded NUL in the value survives)
 //   CURLFile        -> a FILE part read from disk at transfer time: NAME = the array key,
 //                       the part's data source = `$file->name` (`curl_mime_filedata`),
-//                       TYPE = `$file->mime` UNLESS IT IS EMPTY (php-src never guesses a
-//                       type it was not given — confirmed: a real `ext/curl` still sends
-//                       `Content-Type: application/octet-stream` for an unset mime, but
-//                       that is LIBCURL's own default for an unset file-part type, not a
-//                       value php-src ever computed or this prelude ever sets), FILENAME =
+//                       TYPE = `$file->mime`, OR THE LITERAL `"application/octet-stream"`
+//                       WHEN IT IS EMPTY — ALWAYS SET, NEVER SKIPPED. An earlier version of
+//                       this comment (and the code) claimed libcurl's own default for an
+//                       unset file-part type was `application/octet-stream` and skipped the
+//                       call when `$file->mime` was empty; that was WRONG and has been
+//                       corrected after review against the pinned libcurl 8.21.0 source:
+//                       `Curl_mime_prepare_headers` (`lib/mime.c`) SNIFFS an unset type from
+//                       the part's POSTED filename through a small extension table (`.gif`
+//                       `.jpg` `.jpeg` `.png` `.svg` `.txt` `.htm` `.html` `.pdf` `.xml`) and
+//                       only falls back to `application/octet-stream` when the extension is
+//                       not in that table — so `curl_file_create('/tmp/avatar.png')` with no
+//                       mime would have sent `image/png`, not `application/octet-stream`,
+//                       and the sniff keys off the POSTED name (`FIELD_FILENAME`), so even
+//                       changing only the postname would have changed the header. php-src
+//                       itself always calls `curl_mime_type()` with an explicit value —
+//                       `$file->mime` when set, the literal `"application/octet-stream"`
+//                       otherwise — which is exactly what this walker now does too, closing
+//                       the sniffing hole entirely rather than relying on libcurl's guess.
+//                       FILENAME =
 //                       `$file->postname` UNLESS IT IS EMPTY, in which case FILENAME IS
 //                       `$file->name` VERBATIM — the full path as given, NOT its
 //                       `basename()`. This looks like a mistake, and PHP users have
@@ -445,17 +459,22 @@ class CURLStringFile {
 // with the SAME kind of loud, honest rejection php-src gives it, just a different
 // exception class and message.
 //
-// DIVERGENCE FROM PHP: A NESTED ARRAY VALUE IS REFUSED, LOUDLY, rather than reproduced.
-// Measured directly against a real `ext/curl` (not assumed from the brief, which guessed
-// "REJECTS" — it does not): `['a' => ['x' => '1', 'y' => '2']]` sends TWO separate parts,
-// both named `"a"`, one per INNER array element's value (`1`, then `2`) — one level of
-// flattening, with the outer key repeated as every inner element's field name and the
-// inner keys discarded entirely; going one level deeper (`['a' => [['q' => 'deep']]]`)
-// stops recursing and instead raises PHP's ordinary `Warning: Array to string conversion`
-// and posts the literal string `"Array"`. Reproducing that exact shape — a surprising
-// corner of php-src's own implementation, not documented PHP behavior anyone is likely to
-// rely on — was judged not worth the complexity; a caller who nests an array here gets a
-// clear, loud `\TypeError` instead of a silently mangled request.
+// A NESTED ARRAY VALUE FLATTENS ONE LEVEL, matching php-src's own
+// `build_mime_structure_from_hash` — this is the STANDARD repeated-field idiom, deliberate
+// on php-src's part, not an accident this build should refuse. Measured directly against a
+// real `ext/curl` (not assumed from the brief, which guessed "REJECTS" — it does not):
+// `['a' => ['x' => '1', 'y' => '2']]` sends TWO separate parts, both named `"a"`, one per
+// INNER array element's value (`1`, then `2`) — the outer key repeated as every inner
+// element's field name, the inner KEYS discarded entirely (`x`/`y` never appear on the
+// wire). `__elephc_curl_build_multipart()` reproduces exactly this.
+//
+// DIVERGENCE FROM PHP, the one part of this shape still refused: going one level deeper
+// (`['a' => [['q' => 'deep']]]`) stops php-src's own recursion and instead raises its
+// ordinary `Warning: Array to string conversion`, posting the literal string `"Array"` for
+// that inner element. Reproducing that exact warn-and-mangle shape — a surprising corner
+// of php-src's own implementation, not documented PHP behavior anyone is likely to rely on
+// — was judged not worth the complexity; an inner element that is itself an array or
+// object gets a clear, loud `\TypeError` instead of a silently mangled request.
 //
 // `$raw` AND `$fields` ARE DECLARED `mixed`, ONLY BECAUSE OF THE CHECKER: the caller reaches
 // this from inside `curl_setopt()`'s `mixed $value`/local `$raw`, and elephc's checker does
@@ -487,10 +506,6 @@ function __elephc_curl_build_multipart(mixed $raw, mixed $fields): bool {
         return false;
     }
     foreach ($fields as $name => $value) {
-        if (!__elephc_curl_mime_add_part($raw)) {
-            __elephc_curl_mime_abort($raw);
-            return false;
-        }
         // `(string) $x . ""`, NOT `(string) $x`, AND BOUND TO A LOCAL BEFORE EVERY CALL
         // BELOW. A bare `(string) $mixed` cast handed straight to a function argument
         // leaks its temporary (measured with `--gc-stats`: one block per cast, unbounded
@@ -499,6 +514,46 @@ function __elephc_curl_build_multipart(mixed $raw, mixed $fields): bool {
         // codegen leaks as the "bind the property to a local" rule this module's header
         // documents.
         $nameRaw = (string) $name . "";
+        // A NESTED ARRAY VALUE FLATTENS ONE LEVEL, matching php-src's own
+        // `build_mime_structure_from_hash` exactly (measured, documented in full above this
+        // function): one part PER INNER ELEMENT, every one of them named with the SAME
+        // outer key — the standard repeated-field-name idiom (`<input name="tags[]">`'s
+        // wire shape, without the `[]` suffix). This runs BEFORE `__elephc_curl_mime_
+        // add_part()` for the outer item, deliberately: an array value needs zero, one, or
+        // many parts, never the single unconditional one every other value shape gets.
+        //
+        // DIVERGENCE FROM PHP, the one this function's header still documents: an INNER
+        // element that is itself an array or object is refused with a `\TypeError` rather
+        // than reproducing php-src's second-level behavior (an ordinary `Warning: Array to
+        // string conversion` and the literal string `"Array"` for a nested array; an
+        // object goes through the SAME refusal this walker already gives one at the outer
+        // level, for the identical uncatchable-cast safety reason).
+        if (is_array($value)) {
+            foreach ($value as $inner) {
+                if (is_array($inner) || is_object($inner)) {
+                    __elephc_curl_mime_abort($raw);
+                    throw new \TypeError("curl_setopt(): CURLOPT_POSTFIELDS nested array value must contain only scalars");
+                }
+                if (!__elephc_curl_mime_add_part($raw)) {
+                    __elephc_curl_mime_abort($raw);
+                    return false;
+                }
+                if (!__elephc_curl_mime_part_field($raw, 0, $nameRaw)) {
+                    __elephc_curl_mime_abort($raw);
+                    return false;
+                }
+                $innerRaw = (string) $inner . "";
+                if (!__elephc_curl_mime_part_field($raw, 1, $innerRaw)) {
+                    __elephc_curl_mime_abort($raw);
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!__elephc_curl_mime_add_part($raw)) {
+            __elephc_curl_mime_abort($raw);
+            return false;
+        }
         if (!__elephc_curl_mime_part_field($raw, 0, $nameRaw)) {
             __elephc_curl_mime_abort($raw);
             return false;
@@ -509,8 +564,13 @@ function __elephc_curl_build_multipart(mixed $raw, mixed $fields): bool {
                 __elephc_curl_mime_abort($raw);
                 return false;
             }
+            // ALWAYS SET, NEVER SKIPPED — see this function's header for why: libcurl
+            // sniffs an unset file-part type from the POSTED filename's extension, so
+            // skipping this call is not "no type", it is "whatever libcurl guesses from
+            // the name". `"application/octet-stream"` is php-src's own literal default.
             $mime = (string) $value->mime . "";
-            if ($mime !== "" && !__elephc_curl_mime_part_field($raw, 3, $mime)) {
+            $mimeType = $mime !== "" ? $mime : "application/octet-stream";
+            if (!__elephc_curl_mime_part_field($raw, 3, $mimeType)) {
                 __elephc_curl_mime_abort($raw);
                 return false;
             }
@@ -542,12 +602,10 @@ function __elephc_curl_build_multipart(mixed $raw, mixed $fields): bool {
             }
             continue;
         }
-        // DIVERGENCE FROM PHP, documented in full above this function: a nested array is
-        // refused rather than flattened the way a real `ext/curl` flattens it.
-        if (is_array($value)) {
-            __elephc_curl_mime_abort($raw);
-            throw new \TypeError("curl_setopt(): CURLOPT_POSTFIELDS array value must not be an array");
-        }
+        // `is_array($value)` NEEDS NO CHECK HERE: every array shape was already handled
+        // (and `continue`d past) above, before `__elephc_curl_mime_add_part()` ran for
+        // this iteration — this point is only ever reached for a scalar or an object.
+        //
         // DIVERGENCE FROM PHP, documented in full above this function: ANY object here is
         // refused BEFORE the `(string)` cast below ever runs, precisely so that cast never
         // has a chance to reach elephc's own uncatchable object-to-string fatal.
