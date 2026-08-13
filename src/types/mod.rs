@@ -20,6 +20,9 @@ mod array_storage;
 pub(crate) mod array_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// `ext/curl` integer constants (`CURLOPT_*`, `CURLINFO_*`, `CURLE_*`, `CURL_*`, ...),
+/// generated from the frozen `scripts/docs/curl_surface.json` surface.
+pub(crate) mod curl_constants;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
