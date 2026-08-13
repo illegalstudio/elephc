@@ -130,10 +130,15 @@
 //!   (`ext/curl/curl_file.stub.php`). `curl_setopt(..., CURLOPT_POSTFIELDS, $array)`'s
 //!   ARRAY FORM NOW POSTS REAL `multipart/form-data`, closing the divergence Task 8's
 //!   urlencoded stopgap documented: `__elephc_curl_build_multipart()` below walks the
-//!   array through `crates/elephc-curl/src/mime.rs`'s builder ABI field by field, and its
-//!   own comment records the one new divergence this introduces (a nested array value is
-//!   refused rather than reproducing a measured, surprising corner of php-src's own
-//!   flattening behavior) and the one FILE-NOT-FOUND divergence (elephc fails at
+//!   array through `crates/elephc-curl/src/mime.rs`'s builder ABI field by field. A NESTED
+//!   ARRAY VALUE FLATTENS ONE LEVEL — PHP PARITY, measured against a real `ext/curl`: one
+//!   part per inner element, all sharing the outer key as their field name, matching
+//!   php-src's own `build_mime_structure_from_hash` exactly. Its own comment records the
+//!   two divergences that remain: a DOUBLY-nested value (an inner element that is itself
+//!   an array) or an object inside a nested array is refused with a `\TypeError` instead
+//!   of reproducing php-src's own recursion limit — the array case is measured against a
+//!   real `ext/curl`, the object case is inferred from the same code path rather than
+//!   separately measured — and the one FILE-NOT-FOUND divergence (elephc fails at
 //!   `curl_setopt()` time via `curl_mime_filedata`'s own eager validation; php-src fails
 //!   later, at `curl_exec()`, via a custom read callback this build does not have).
 
