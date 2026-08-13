@@ -190,12 +190,18 @@ function curl_error(CurlHandle $handle): string {
     return __elephc_curl_easy_error($raw);
 }
 
-// `$_handle` (not `$handle`): the parameter is intentionally unused (the function is a
-// no-op), and `src/types/warnings/scope_usage.rs` only ignores unused-variable
-// warnings for names starting with `_` — noticed while smoke-testing Task 7's
-// `curl-get` example through the real CLI outside the codegen test harness, which
-// otherwise never surfaced this pre-existing warning.
-function curl_close(CurlHandle $_handle): void {}
+// KNOWN NOISE, NOT FIXED: `$handle` is unused (the function is a no-op) and the
+// checker (`src/types/warnings/scope_usage.rs`) has no per-parameter or per-prelude
+// exemption for that — only a leading `_` in the name suppresses it, which is not
+// available here because `$handle` is PHP-VISIBLE: `curl_close(handle: $ch)` is legal
+// PHP 8 named-argument syntax, and renaming the parameter would silently break it
+// (`src/types/signatures.rs` requires parameter names to stay coherent with php-src).
+// Compiling any program that calls `curl_close()` therefore prints a harmless
+// `Unused variable: $handle` warning from the injected prelude (verified: it appears
+// unconditionally when compiling through the real CLI, e.g. `elephc file.php
+// --emit-asm`, not gated behind any flag) — no codegen test caught this because none
+// of them assert on the FULL warning set, only on specific expected diagnostics.
+function curl_close(CurlHandle $handle): void {}
 
 // TASK 7 SCOPE: only `CURLINFO_HTTP_CODE` (2097154) is implemented. Every other option,
 // AND the no-`$option` associative-array form PHP documents, answer `false` — an honest

@@ -5,19 +5,26 @@
 // Running this example for real requires network access; like examples/http-stream/main.php
 // it still compiles and reports why nothing was fetched when the network is unavailable,
 // rather than crashing.
+//
+// This landing's protocol matrix includes https://, but the managed curl/OpenSSL recipe
+// does not yet bundle a CA trust store (no --with-ca-bundle/--with-ca-path), so an https://
+// transfer against a real certificate is not something this landing proves — it depends on
+// whatever CA paths happen to exist on the machine running the compiled binary. The
+// headline request below stays on plain http:// on purpose; HTTPS arrives with Task 8's
+// TLS wave, which is also where this example gets an https:// counterpart.
 
-$ch = curl_init("https://example.com/");
+$ch = curl_init("http://example.com/");
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 
 $body = curl_exec($ch);
 
 if ($body === false) {
-    echo "GET https://example.com/ failed: errno " . curl_errno($ch) . " (" . curl_error($ch) . ")\n";
+    echo "GET http://example.com/ failed: errno " . curl_errno($ch) . " (" . curl_error($ch) . ")\n";
 } else {
     // CURLINFO_HTTP_CODE is the one curl_getinfo() option elephc understands today
     // (Task 8 adds the rest of the CURLINFO_* surface).
     $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    echo "GET https://example.com/ -> HTTP " . $status . ", " . strlen($body) . " bytes\n";
+    echo "GET http://example.com/ -> HTTP " . $status . ", " . strlen($body) . " bytes\n";
 }
 
 // curl_close() is a no-op in PHP 8: curl sessions are CurlHandle OBJECTS, not resources, so
