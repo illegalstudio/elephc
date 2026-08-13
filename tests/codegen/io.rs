@@ -16,7 +16,7 @@ mod output_buffering;
 #[path = "io/files.rs"]
 mod files;
 #[path = "io/streams.rs"]
-mod streams;
+pub(crate) mod streams;
 #[path = "io/filesystem.rs"]
 mod filesystem;
 #[path = "io/misc.rs"]
