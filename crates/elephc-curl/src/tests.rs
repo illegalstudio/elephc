@@ -31,6 +31,173 @@
 //!   needing Task 7's HTTP fixture pattern yet — `file://` still drives the
 //!   exact same write-callback path HTTP does.
 
+/// Purpose:
+/// The wave-completeness ratchet for `curl_setopt()`: every `CURLOPT_*` in the frozen
+/// PHP surface is classified by `crate::options`, and every classification is one this
+/// build actually implements or one whose "unsupported" answer is documented. A new
+/// constant added to `scripts/docs/curl_surface.json` that nobody classified fails here.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness.
+///
+/// Key details:
+/// - THESE RUN WITHOUT NATIVE libcurl, unlike everything in `native` below: the option
+///   table is pure data, so the contract it encodes is checkable on any machine and in
+///   any CI job, which is exactly what makes it usable as a ratchet.
+/// - The frozen JSON is read from `CARGO_MANIFEST_DIR/../../scripts/docs/curl_surface.json`
+///   at test time rather than baked in with `include_str!`, so the test reports a missing
+///   file as a clear failure instead of failing to compile.
+#[cfg(test)]
+mod option_table {
+    use crate::options::{
+        option_kind, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER, KIND_SLIST,
+        KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
+    };
+
+    /// Loads the frozen curl surface the whole feature is generated from.
+    fn frozen_surface() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/docs/curl_surface.json");
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("frozen curl surface at {}: {e}", path.display()));
+        serde_json::from_slice(&bytes).expect("frozen curl surface must be valid JSON")
+    }
+
+    /// Binary search needs a sorted table, and two rows for the same option number would
+    /// make the classification depend on which one search happened to land on.
+    #[test]
+    fn option_table_is_sorted_and_unique() {
+        for window in OPTION_KINDS.windows(2) {
+            assert!(
+                window[0].0 < window[1].0,
+                "OPTION_KINDS must be strictly sorted by option number: {} then {}",
+                window[0].0,
+                window[1].0
+            );
+        }
+    }
+
+    /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the seven
+    /// kinds — never the `KIND_INVALID` that would make `curl_setopt()` raise
+    /// `ValueError` for a real PHP option.
+    #[test]
+    fn every_frozen_curlopt_is_classified() {
+        let surface = frozen_surface();
+        let constants = surface["constants"]
+            .as_object()
+            .expect("frozen surface must carry a constants map");
+        let mut unclassified = Vec::new();
+        for (name, value) in constants {
+            if !name.starts_with("CURLOPT_") {
+                continue;
+            }
+            let number = value.as_i64().expect("option values are integers");
+            let number = i32::try_from(number).expect("option numbers fit in an i32");
+            let kind = option_kind(number);
+            if kind == KIND_INVALID {
+                unclassified.push(format!("{name} ({number})"));
+            }
+            assert!(
+                (KIND_INVALID..=KIND_UNSUPPORTED).contains(&kind),
+                "{name} ({number}) has an out-of-range kind {kind}"
+            );
+        }
+        assert!(
+            unclassified.is_empty(),
+            "these frozen CURLOPT_* constants are neither implemented nor documented as \
+             unsupported — add them to crate::options: {unclassified:?}"
+        );
+    }
+
+    /// The classification MATCHES the frozen `option_kinds` bucket for every option,
+    /// except for the six rows `crate::options` documents as deliberate divergences. This
+    /// is the half of the ratchet that catches a *wrong* classification rather than a
+    /// missing one: silently marking a slist option as a string is the exact bug the
+    /// table exists to prevent, and it would pass the previous test.
+    #[test]
+    fn option_table_matches_the_frozen_surface() {
+        /// (constant name, expected kind here, the frozen bucket it diverges from), each
+        /// explained in `crate::options`' module doc. Keyed by NAME rather than number
+        /// because `CURLOPT_INFILE` and `CURLOPT_READDATA` share option 10009 while
+        /// sitting in different frozen buckets.
+        const DOCUMENTED_DIVERGENCES: &[(&str, i32, &str)] = &[
+            ("CURLOPT_HEADER", KIND_LONG, "php_layer"),
+            ("CURLOPT_INFILESIZE", KIND_LONG, "php_layer"),
+            ("CURLOPT_FILE", KIND_UNSUPPORTED, "php_layer"),
+            ("CURLOPT_INFILE", KIND_UNSUPPORTED, "php_layer"),
+            ("CURLOPT_WRITEHEADER", KIND_UNSUPPORTED, "php_layer"),
+            ("CURLOPT_STDERR", KIND_UNSUPPORTED, "php_layer"),
+            ("CURLOPT_PRIVATE", KIND_PHP_LAYER, "file"),
+            ("CURLOPT_SHARE", KIND_UNSUPPORTED, "file"),
+        ];
+
+        let surface = frozen_surface();
+        let constants = surface["constants"].as_object().expect("constants map");
+        let buckets = surface["option_kinds"]
+            .as_object()
+            .expect("frozen surface must carry an option_kinds map");
+        for (name, value) in constants {
+            if !name.starts_with("CURLOPT_") {
+                continue;
+            }
+            let number =
+                i32::try_from(value.as_i64().expect("integer option value")).expect("fits i32");
+            let bucket = buckets[name].as_str().expect("option_kinds values are strings");
+            let actual = option_kind(number);
+            if let Some(&(_, expected, from)) = DOCUMENTED_DIVERGENCES
+                .iter()
+                .find(|&&(divergent, _, _)| divergent == name.as_str())
+            {
+                assert_eq!(
+                    bucket, from,
+                    "{name} ({number}) is recorded as a documented divergence from {from:?}, \
+                     but the frozen surface now buckets it as {bucket:?}"
+                );
+                assert_eq!(actual, expected, "{name} ({number}) diverges to a different kind");
+                continue;
+            }
+            let expected = match bucket {
+                "long" => KIND_LONG,
+                "string" => KIND_STRING,
+                "slist" => KIND_SLIST,
+                "off_t" => KIND_OFF_T,
+                "php_layer" => KIND_PHP_LAYER,
+                "blob" | "callback" | "file" => KIND_UNSUPPORTED,
+                other => panic!("{name}: unknown frozen option kind {other:?}"),
+            };
+            assert_eq!(
+                actual, expected,
+                "{name} ({number}) is bucketed {bucket:?} in the frozen surface but \
+                 classified {actual} by crate::options"
+            );
+        }
+    }
+
+    /// An option number that is not a cURL option at all — including one that would
+    /// TRUNCATE onto a real option in a 32-bit parameter — classifies as `KIND_INVALID`,
+    /// which is what makes `curl_setopt()` raise php-src's `ValueError` for it.
+    #[test]
+    fn unknown_option_numbers_are_invalid() {
+        for number in [0, 1, 9998, 12_345, 25_000, 30_005, 40_077, i32::MAX, i32::MIN] {
+            assert_eq!(
+                option_kind(number),
+                KIND_INVALID,
+                "{number} must not classify as a real cURL option"
+            );
+        }
+        assert_eq!(
+            crate::abi::elephc_curl_option_kind(4_294_967_298),
+            KIND_INVALID,
+            "a value that truncates onto option 2 must not be classified as option 2"
+        );
+        assert_eq!(
+            crate::abi::elephc_curl_option_kind(2),
+            KIND_UNSUPPORTED,
+            "CURLINFO_HEADER_OUT is a real curl_setopt option php-src recognizes"
+        );
+    }
+}
+
 #[cfg(not(elephc_curl_native))]
 mod skipped {
     /// Reports why the real libcurl-linked tests below did not run, instead

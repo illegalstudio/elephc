@@ -46,6 +46,7 @@ pub(crate) const CURL_ABI_SLOTS: &[(&str, &str)] = &[
     ),
     ("elephc_curl_easy_free", "_elephc_curl_easy_free_fn"),
     ("elephc_curl_global_info", "_elephc_curl_global_info_fn"),
+    ("elephc_curl_option_kind", "_elephc_curl_option_kind_fn"),
 ];
 
 /// The scratch register each target uses to hold a loaded bridge entry pointer.

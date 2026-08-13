@@ -45,6 +45,7 @@ use std::ffi::{c_char, c_int, c_void, CString};
 
 use crate::easy;
 use crate::handles::{self, EasyEntry};
+use crate::options;
 use crate::php_layer;
 
 /// Returns the `elephc_curl` ABI version. v1 = the Task 3 surface described
@@ -52,6 +53,26 @@ use crate::php_layer;
 #[no_mangle]
 pub extern "C" fn elephc_curl_version_abi() -> i32 {
     1
+}
+
+/// Classifies a `curl_setopt()` option number: which setter (if any) can carry
+/// its value. See `crate::options` for the kind codes and for why this
+/// classification is a memory-safety boundary rather than a convenience.
+///
+/// This is the ONE curl entry point that touches no handle and no libcurl
+/// state: it is a pure lookup in the frozen option table, so the curl prelude
+/// can ask it before it has decided which setter to call.
+///
+/// `opt` is an `int64_t`, not an `int32_t`, ON PURPOSE: PHP integers are
+/// 64-bit, and a 32-bit parameter would let `curl_setopt($ch, 4294967298, …)`
+/// truncate onto option `2` and be classified as a real option. Anything
+/// outside `i32`'s range is simply not a cURL option, so it answers
+/// [`options::KIND_INVALID`] and the prelude raises php-src's `ValueError`.
+#[no_mangle]
+pub extern "C" fn elephc_curl_option_kind(opt: i64) -> i32 {
+    handles::ffi_guard(options::KIND_INVALID, || {
+        i32::try_from(opt).map_or(options::KIND_INVALID, options::option_kind)
+    })
 }
 
 /// Allocates a new libcurl easy handle, installs the write callback (see

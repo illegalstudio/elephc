@@ -92,6 +92,7 @@ mod tests {
         "__rt_curl_version",
         "__rt_curl_easy_free",
         "__rt_curl_warn_unsupported_option",
+        "__rt_curl_option_kind",
     ];
 
     /// Renders the shared runtime object's assembly for one supported target.

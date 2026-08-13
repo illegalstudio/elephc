@@ -228,30 +228,30 @@ fn curl_setopt_forwards_and_rejects_honestly() {
     );
 }
 
-/// An option in one of libcurl's POINTER ranges that this build does not support is
-/// rejected BEFORE it reaches libcurl: `curl_setopt()` answers `false` and emits PHP's
-/// warning (locked decision 7), rather than the inert `true` libcurl would have produced
-/// after being handed a PHP value as a `struct curl_slist *` / function pointer / blob.
+/// An option php-src RECOGNIZES but this build cannot carry is rejected BEFORE it
+/// reaches libcurl: `curl_setopt()` answers `false` and emits PHP's warning (locked
+/// decision 7), rather than the inert `true` libcurl would have produced after being
+/// handed a PHP value as a function pointer / `struct curl_blob *` / PHP stream.
 ///
 /// This is a memory-safety regression test, not a politeness one. Every option here used
-/// to be forwarded verbatim: 10023 (`CURLOPT_HTTPHEADER`) had libcurl walk a PHP string
-/// as a linked list, 20011 (`CURLOPT_WRITEFUNCTION`) overwrote the bridge's own write
-/// callback with the address `1`, and 30000+/40000+ mis-read the argument as a
-/// `curl_off_t`/`struct curl_blob *`. The transfer at the end is what proves nothing was
-/// corrupted: the handle still performs and still reports its own error, so none of the
-/// rejected options reached libcurl's state.
+/// to be forwarded verbatim: 20011 (`CURLOPT_WRITEFUNCTION`) overwrote the bridge's own
+/// write callback with the address `1`, and 40291 (`CURLOPT_SSLCERT_BLOB`) mis-read a PHP
+/// string as a `struct curl_blob *`. 10001 (`CURLOPT_FILE`) and 10100 (`CURLOPT_SHARE`)
+/// are the PHP-stream and share-handle options later tasks own. The transfer at the end
+/// is what proves nothing was corrupted: the handle still performs and still reports its
+/// own error, so none of the rejected options reached libcurl's state.
 #[test]
-fn unsupported_pointer_range_options_are_rejected_before_libcurl() {
-    if skip_without_curl_native("unsupported_pointer_range_options_are_rejected_before_libcurl") {
+fn unsupported_options_are_rejected_before_libcurl() {
+    if skip_without_curl_native("unsupported_options_are_rejected_before_libcurl") {
         return;
     }
     let output = compile_and_run_capture(
         r#"<?php
         $ch = curl_init();
-        echo curl_setopt($ch, 10023, "Accept: text/plain") ? "accepted\n" : "rejected\n";
         echo curl_setopt($ch, 20011, 1) ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 30005, 1) ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 40077, "blob") ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 40291, "blob") ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 10001, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 10100, 1) ? "accepted\n" : "rejected\n";
         curl_setopt($ch, 10002, "file:///nonexistent-elephc-curl-probe");
         curl_setopt($ch, 19913, true);
         $body = curl_exec($ch);
@@ -263,7 +263,7 @@ fn unsupported_pointer_range_options_are_rejected_before_libcurl() {
         output.stdout,
         "rejected\nrejected\nrejected\nrejected\nexec-false\nerrno\n"
     );
-    for option in ["10023", "20011", "30005", "40077"] {
+    for option in ["20011", "40291", "10001", "10100"] {
         assert!(
             output.stderr.contains(&format!(
                 "Warning: curl_setopt(): Option {option} is not supported by this build"
@@ -274,28 +274,38 @@ fn unsupported_pointer_range_options_are_rejected_before_libcurl() {
     }
 }
 
-/// An unknown option number BELOW libcurl's pointer ranges still forwards as a plain
-/// `long` and answers `false` from libcurl's own `CURLE_UNKNOWN_OPTION`, which is safe by
-/// construction: `setopt_long` never dereferences the value (libcurl 8.21.0
-/// `lib/setopt.c`). Pinning this keeps the range boundary from being widened into a blunt
-/// "reject everything unknown" that would break the long options that do work.
+/// An option number that is not a cURL option AT ALL raises php-src's own
+/// `ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option`, which
+/// is a DIFFERENT answer from the `false` + warning an unsupported-but-real option gets.
+///
+/// php-src's `_php_curl_setopt` ends its switch with exactly this
+/// `zend_argument_value_error(2, ...)`, so a program that mistypes an option number finds
+/// out immediately instead of watching a `false` it may not even check. The last case is
+/// the one a 32-bit option parameter would have got wrong: `4294967298` truncates onto
+/// option `2`, which IS a real option (`CURLINFO_HEADER_OUT`), and must still throw.
 #[test]
-fn unknown_long_options_forward_and_report_false() {
-    if skip_without_curl_native("unknown_long_options_forward_and_report_false") {
+fn invalid_option_numbers_raise_a_value_error() {
+    if skip_without_curl_native("invalid_option_numbers_raise_a_value_error") {
         return;
     }
-    let output = compile_and_run_capture(
+    let out = compile_and_run(
         r#"<?php
         $ch = curl_init();
-        echo curl_setopt($ch, 9998, 1) ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 52, 1) ? "accepted\n" : "rejected\n";
+        foreach ([9998, 30005, 40077, 4294967298] as $option) {
+            try {
+                curl_setopt($ch, $option, 1);
+                echo "accepted\n";
+            } catch (\ValueError $e) {
+                echo $e->getMessage(), "\n";
+            }
+        }
+        echo curl_setopt($ch, 52, 1) ? "follow\n" : "no-follow\n";
         "#,
     );
-    assert_eq!(output.stdout, "rejected\naccepted\n");
-    assert!(
-        !output.stderr.contains("is not supported by this build"),
-        "a forwarded long option must not raise the unsupported-option warning; stderr: {}",
-        output.stderr
+    let message = "curl_setopt(): Argument #2 ($option) is not a valid cURL option";
+    assert_eq!(
+        out,
+        format!("{message}\n{message}\n{message}\n{message}\nfollow\n")
     );
 }
 

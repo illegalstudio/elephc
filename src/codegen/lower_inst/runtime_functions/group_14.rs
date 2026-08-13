@@ -43,6 +43,9 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasySetoptStr => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_str(ctx, inst)
         }),
+        RuntimeFnId::CurlOptionKind => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_option_kind(ctx, inst)
+        }),
         RuntimeFnId::CurlSetoptUnsupportedWarning => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_setopt_unsupported_warning(
                 ctx, inst,

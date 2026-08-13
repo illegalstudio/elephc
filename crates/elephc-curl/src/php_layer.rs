@@ -35,15 +35,34 @@ use crate::handles::{self, EasyEntry};
 /// `php_only_options` list confirms this is never forwarded to libcurl.
 pub(crate) const CURLOPT_RETURNTRANSFER: i32 = 19913;
 
-/// Applies a `long`-valued `curl_setopt`. `CURLOPT_RETURNTRANSFER` flips
+/// The first `CURLOPTTYPE_OFF_T` option number. libcurl reads the variadic
+/// argument of every option at or above this (and below the blob base) as a
+/// `curl_off_t` rather than a `long` (libcurl 8.21.0, `lib/setopt.c`).
+pub(crate) const CURLOPTTYPE_OFF_T: i32 = 30_000;
+
+/// One past the last `CURLOPTTYPE_OFF_T` option number (`CURLOPTTYPE_BLOB`).
+pub(crate) const CURLOPTTYPE_BLOB: i32 = 40_000;
+
+/// Applies an integer-valued `curl_setopt`. `CURLOPT_RETURNTRANSFER` flips
 /// whether the write callback captures the body into `entry.body` instead of
 /// streaming it to stdout; it is handled entirely on the Rust side and never
 /// reaches libcurl. Every other option forwards to real `curl_easy_setopt`
 /// unchanged, returning whether libcurl accepted it.
+///
+/// An option in libcurl's `CURLOPTTYPE_OFF_T` range goes through
+/// `easy::setopt_off_t` rather than `easy::setopt_long`, so the variadic
+/// argument matches the type libcurl reads. The caller (the curl prelude,
+/// through `elephc_curl_option_kind`) has already refused every option this
+/// build cannot carry, so nothing outside the `long`/`off_t` ranges reaches
+/// here in a compiled program; the range check is what keeps that true even if
+/// a future caller forgets.
 pub(crate) fn apply_long_option(entry: &mut EasyEntry, opt: i32, value: i64) -> bool {
     if opt == CURLOPT_RETURNTRANSFER {
         entry.return_transfer = value != 0;
         return true;
+    }
+    if (CURLOPTTYPE_OFF_T..CURLOPTTYPE_BLOB).contains(&opt) {
+        return unsafe { easy::setopt_off_t(entry.curl, opt as c_int, value) == easy::CURLE_OK };
     }
     unsafe { easy::setopt_long(entry.curl, opt as c_int, value as c_long) == easy::CURLE_OK }
 }

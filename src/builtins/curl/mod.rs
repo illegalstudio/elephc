@@ -25,5 +25,6 @@ pub mod __elephc_curl_easy_init;
 pub mod __elephc_curl_easy_perform;
 pub mod __elephc_curl_easy_setopt_long;
 pub mod __elephc_curl_easy_setopt_str;
+pub mod __elephc_curl_option_kind;
 pub mod __elephc_curl_setopt_unsupported_warning;
 pub mod __elephc_curl_version;

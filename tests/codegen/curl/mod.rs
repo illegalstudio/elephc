@@ -14,4 +14,5 @@
 mod constants;
 mod easy_handle;
 mod easy_http;
+mod easy_options;
 mod http_fixture;

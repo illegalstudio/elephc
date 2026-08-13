@@ -467,6 +467,9 @@ pub enum RuntimeFnId {
     /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
     /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
     CurlEasyGetinfoLong,
+    /// Classifies a `curl_setopt()` option number against the bridge's frozen option
+    /// table, so the prelude can pick the setter that matches the option's C type.
+    CurlOptionKind,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1190,6 +1193,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
             | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlOptionKind
             | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1379,6 +1383,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasyPerform
                 | RuntimeFnId::CurlEasySetoptLong
                 | RuntimeFnId::CurlEasySetoptStr
+                // A pure table lookup: it hands back a small integer kind code and takes
+                // no handle at all, so there is no storage and nothing to alias.
+                | RuntimeFnId::CurlOptionKind
                 // A pure diagnostic: it returns nothing at all, so there is certainly no
                 // storage for the caller to keep an argument temporary alive for.
                 | RuntimeFnId::CurlSetoptUnsupportedWarning
@@ -1947,6 +1954,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
             RuntimeFnId::CurlSetoptUnsupportedWarning => {
                 "__elephc_curl_setopt_unsupported_warning"
             }

@@ -195,6 +195,21 @@ pub(crate) unsafe fn setopt_long(curl: *mut CURL, option: c_int, value: c_long) 
     curl_easy_setopt(curl, option, value)
 }
 
+/// Sets a `curl_off_t`-valued option (`CURLOPTTYPE_OFF_T`, option numbers
+/// 30000-39999).
+///
+/// This is a SEPARATE wrapper from [`setopt_long`] even though `c_long` and
+/// `curl_off_t` are both 64-bit on every target elephc ships for (all LP64):
+/// the variadic argument libcurl reads is typed `curl_off_t`, and naming that
+/// explicitly here is what keeps the option-kind table's `KIND_OFF_T` rows
+/// honest rather than relying on a coincidence of two typedefs.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_off_t(curl: *mut CURL, option: c_int, value: i64) -> CURLcode {
+    curl_easy_setopt(curl, option, value)
+}
+
 /// Sets a NUL-terminated string option (`CURLOPTTYPE_STRINGPOINT`). `value`
 /// must remain valid only for the duration of this call: libcurl copies
 /// string options internally.

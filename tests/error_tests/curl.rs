@@ -73,3 +73,24 @@ fn curl_exec_rejects_a_non_handle() {
 fn curl_init_rejects_a_non_string_url() {
     expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
 }
+
+/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a
+/// compile-time type error naming that class — the earliest point elephc can tell the
+/// difference, and the same guard every other `curl_*` wrapper carries.
+#[test]
+fn curl_setopt_rejects_wrong_handle_type() {
+    expect_curl_error(
+        r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#,
+        "CurlHandle",
+    );
+}
+
+/// `curl_getinfo()`'s handle parameter is typed the same way, so the wrong-handle
+/// diagnostic is not a `curl_setopt()`-only accident.
+#[test]
+fn curl_getinfo_rejects_wrong_handle_type() {
+    expect_curl_error(
+        r#"<?php curl_getinfo("nope");"#,
+        "CurlHandle",
+    );
+}

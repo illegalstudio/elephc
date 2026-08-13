@@ -51,12 +51,16 @@
 //! - `curl_version()` decodes the bridge's JSON blob through the ordinary `json_decode`
 //!   builtin instead of a bespoke array builder, so the array reflects the libcurl that
 //!   is actually linked AT RUN TIME rather than anything baked in at compile time.
-//! - `curl_setopt()` VALIDATES THE OPTION NUMBER BEFORE FORWARDING, because
+//! - `curl_setopt()` CLASSIFIES THE OPTION NUMBER BEFORE FORWARDING, because
 //!   `curl_easy_setopt` reads its variadic argument according to the option's numeric
 //!   RANGE — forwarding a PHP value into a pointer-typed range is a wild pointer, not
-//!   merely a wrong answer. See the comment above the function for the ranges and the
-//!   libcurl source that fixes them. An option this build cannot carry answers `false`
-//!   with a PHP warning (locked decision 7), never an inert `true`.
+//!   merely a wrong answer. The classification comes from the bridge's frozen option
+//!   table (`crates/elephc-curl/src/options.rs`) through
+//!   `__elephc_curl_option_kind()`; see the comment above the function for the kind
+//!   codes and the libcurl source that fixes the ranges. An option php-src does not
+//!   recognize at all raises php-src's own `ValueError`; one it recognizes that this
+//!   build cannot carry answers `false` with a PHP warning (locked decision 7), never an
+//!   inert `true`.
 //! - `curl_getinfo()` ONLY UNDERSTANDS `CURLINFO_HTTP_CODE` (2097154) today: the
 //!   `elephc_curl` bridge's `curl_getinfo()`-family ABI landed in Task 7 with exactly the
 //!   one entry point that test needed (`elephc_curl_easy_getinfo_long`), so every other
@@ -83,6 +87,7 @@ pub(crate) const CURL_PRELUDE_SRC: &str = r#"<?php
 final class CurlHandle {
     public mixed $__elephc_handle = null;
     public bool $__elephc_return_transfer = false;
+    public mixed $__elephc_private = false;
 
     private function __construct() {}
 
@@ -120,44 +125,80 @@ function curl_init(?string $url = null): CurlHandle {
     return CurlHandle::__elephc_wrap($raw);
 }
 
-// OPTION NUMBERS ARE VALIDATED BEFORE ANYTHING REACHES libcurl, and that check is a
+// OPTION NUMBERS ARE CLASSIFIED BEFORE ANYTHING REACHES libcurl, and that check is a
 // MEMORY-SAFETY boundary, not a politeness. `curl_easy_setopt` is variadic and picks how
 // to read its third argument PURELY FROM THE OPTION'S NUMERIC RANGE (libcurl 8.21.0,
 // lib/setopt.c, `Curl_vsetopt`): below 10000 it reads a `long`; 10000-19999 a `char *` or
 // a `struct curl_slist *`; 20000-29999 a function pointer; 30000-39999 a `curl_off_t`;
 // 40000+ a `struct curl_blob *`. Forwarding an integer into any of the pointer ranges
-// hands libcurl a wild pointer it will dereference — `curl_setopt($ch, 10023, "…")`
-// (CURLOPT_HTTPHEADER) would have libcurl walk a PHP string as a linked list, and
-// `curl_setopt($ch, 20011, 1)` (CURLOPT_WRITEFUNCTION) would overwrite the bridge's own
-// write callback with the address 1. libcurl accepts both and only crashes later, inside
-// curl_exec.
+// hands libcurl a wild pointer it will dereference — `curl_setopt($ch, 20011, 1)`
+// (CURLOPT_WRITEFUNCTION) would overwrite the bridge's own write callback with the
+// address 1. libcurl accepts it and only crashes later, inside curl_exec.
 //
-// So everything at or above 10000 is rejected unless it is explicitly supported, and the
-// two that are (CURLOPT_URL as a string, CURLOPT_RETURNTRANSFER as a PHP-only pseudo
-// option the bridge intercepts) are handled by name before the range check.
+// The RANGE alone is not enough to pick a setter, though: 10000-19999 holds both `char *`
+// and `struct curl_slist *` options, and only a table can tell them apart. That table is
+// `crates/elephc-curl/src/options.rs`, frozen from `scripts/docs/curl_surface.json`, and
+// `__elephc_curl_option_kind()` is how this function reads it. Its answer is one of:
 //
-// Options BELOW 10000 forward as longs. That is safe by inspection of the same file:
-// `setopt_long` walks seven sub-handlers and returns CURLE_UNKNOWN_OPTION when none
-// claims the option, without ever dereferencing the value — so an unknown or nonsensical
-// long option answers `false` rather than corrupting anything.
+//   0  not a cURL option at all      -> ValueError, exactly as php-src does
+//   1  long / bool / enum            -> __elephc_curl_easy_setopt_long
+//   2  string                        -> __elephc_curl_easy_setopt_str
+//   3  string list                   -> __elephc_curl_easy_setopt_slist (an array value)
+//   4  curl_off_t                    -> __elephc_curl_easy_setopt_long (the bridge widens)
+//   5  PHP-layer pseudo-option       -> handled in this prelude, libcurl never sees it
+//   6  real option, not carryable    -> false + PHP's warning (locked decision 7)
+//
+// THE 0-vs-6 SPLIT IS php-src's OWN. `_php_curl_setopt` (ext/curl/interface.c) ends its
+// switch with `zend_argument_value_error(2, "is not a valid cURL option")`, so an option
+// number php-src does not recognize THROWS; an option it recognizes but that fails at the
+// libcurl level merely returns `false`. Kind 6 is elephc's honest version of the second
+// case: the option is real PHP API surface, this build just cannot carry it (a blob, a
+// callback, a PHP stream, a share handle), so it answers `false` and says why.
 function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     $raw = $handle->__elephc_handle;
+    $kind = __elephc_curl_option_kind($option);
+    if ($kind === 0) {
+        throw new \ValueError("curl_setopt(): Argument #2 (\$option) is not a valid cURL option");
+    }
     if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
         $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
         throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
     }
-    if ($option === 19913) {
-        $handle->__elephc_return_transfer = (bool) $value;
-        return __elephc_curl_easy_setopt_long($raw, $option, $value ? 1 : 0);
+    if ($kind === 5) {
+        // CURLOPT_RETURNTRANSFER (19913) is mirrored onto the object because `curl_exec()`'s
+        // RETURN SHAPE depends on it, and forwarded to the bridge because the write
+        // callback's capture-or-stdout decision lives there.
+        if ($option === 19913) {
+            $handle->__elephc_return_transfer = (bool) $value;
+            return __elephc_curl_easy_setopt_long($raw, $option, $value ? 1 : 0);
+        }
+        // CURLOPT_PRIVATE (10103) stores an arbitrary PHP value that
+        // `curl_getinfo(..., CURLINFO_PRIVATE)` reads back verbatim. libcurl has its own
+        // `CURLOPT_PRIVATE`, but php-src never uses it: the value is a zval, so it lives
+        // on the PHP object here for the same reason.
+        if ($option === 10103) {
+            $handle->__elephc_private = $value;
+            return true;
+        }
+        // CURLOPT_SAFE_UPLOAD (-1) is always on and cannot be turned off, matching
+        // php-src's own `zend_value_error` for a falsy value.
+        if ($option === -1) {
+            if (!$value) {
+                throw new \ValueError("curl_setopt(): Disabling safe uploads is no longer supported");
+            }
+            return true;
+        }
+        // CURLOPT_BINARYTRANSFER (19914): a documented no-op in modern PHP.
+        return true;
     }
-    if ($option === 10002) {
+    if ($kind === 2) {
         return __elephc_curl_easy_setopt_str($raw, $option, (string) $value);
     }
-    if ($option >= 10000) {
-        __elephc_curl_setopt_unsupported_warning($option);
-        return false;
+    if ($kind === 1 || $kind === 4) {
+        return __elephc_curl_easy_setopt_long($raw, $option, (int) $value);
     }
-    return __elephc_curl_easy_setopt_long($raw, $option, (int) $value);
+    __elephc_curl_setopt_unsupported_warning($option);
+    return false;
 }
 
 function curl_setopt_array(CurlHandle $handle, array $options): bool {
@@ -220,6 +261,12 @@ function curl_close(CurlHandle $handle): void {}
 // everything else answers `false` before reaching the bridge at all.
 function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
     $raw = $handle->__elephc_handle;
+    // CURLINFO_PRIVATE (1048597) reads back the arbitrary PHP value CURLOPT_PRIVATE
+    // stored on the object; libcurl never held it, so it is answered before any bridge
+    // call. `false` on a handle that never set it, matching php-src.
+    if ($option === 1048597) {
+        return $handle->__elephc_private;
+    }
     if ($option === 2097154) {
         return __elephc_curl_easy_getinfo_long($raw, $option);
     }

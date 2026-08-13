@@ -1,25 +1,34 @@
 //! Purpose:
 //! A minimal loopback HTTP/1.0 server for `ext/curl` codegen fixtures: binds an ephemeral
-//! port, then serves `GET /hello` (`200`/`text/plain`/`hello-curl`) and `GET /status`
-//! (`204`) on a background thread for the rest of the test process. Mirrors
-//! `tests/codegen/io/streams.rs`'s `spawn_http_server` family (bind on port 0, accept-loop
-//! on a detached thread, drain the request through the blank line that ends the headers,
-//! write a close-framed HTTP/1.0 response) rather than introducing a second HTTP idiom.
+//! port, then serves `/hello` (`200`/`text/plain`/`hello-curl`), `/status` (`204`),
+//! `/redirect` (`302` to `/hello`) and `/echo` (a `200` whose body reports the method,
+//! headers and request body it received) on a background thread for the rest of the test
+//! process. Mirrors `tests/codegen/io/streams.rs`'s `spawn_http_server` family (bind on
+//! port 0, accept-loop on a detached thread, write a close-framed HTTP/1.0 response)
+//! rather than introducing a second HTTP idiom.
 //!
 //! Called from:
-//! - `tests/codegen/curl/easy_http.rs`.
+//! - `tests/codegen/curl/easy_http.rs`, `easy_options.rs`, `easy_info.rs`.
 //!
 //! Key details:
+//! - THE REQUEST BODY IS DRAINED, not just the headers. A `POST` fixture whose body the
+//!   server never reads makes the client see a connection reset instead of the response,
+//!   because closing a socket with unread data queued sends an RST. `Content-Length` is
+//!   parsed out of the headers and exactly that many further bytes are read before any
+//!   response is written.
+//! - `/echo` IS WHAT MAKES OPTION FIXTURES REAL. `curl_setopt()` returning `true` only
+//!   says libcurl accepted the option; the echo route reports the request that actually
+//!   went out, so a fixture can assert on the WIRE rather than on the setter's return
+//!   value. Header names are lowercased so assertions do not depend on libcurl's casing.
 //! - HTTP/1.0, connection-per-request, no keep-alive: every response either carries an
-//!   exact `Content-Length` (`/hello`) or is a bodyless `204` (`/status`), and the socket is
-//!   dropped right after, which is how every other loopback fixture in this codebase frames
-//!   a response for an HTTP/1.0 client (including libcurl).
-//! - TLS is explicitly out of scope here (`.superpowers/sdd/php-curl-family/task-7-brief.md`
-//!   points HTTPS at Task 8 Wave E's own fixture); this server is plaintext only.
-//! - The accept loop runs until the listener errors (which only happens if the test process
-//!   is tearing down), so one `LocalHttpServer` can serve more than one connection across a
-//!   test's lifetime. Nothing joins the thread — it is intentionally left running for the
-//!   rest of the process, the same shape `spawn_http_server` uses.
+//!   exact `Content-Length` or is a bodyless `204`, and the socket is dropped right after,
+//!   which is how every other loopback fixture in this codebase frames a response for an
+//!   HTTP/1.0 client (including libcurl).
+//! - TLS is explicitly out of scope here; Wave E's HTTPS fixture lives in `tls_fixture.rs`.
+//! - The accept loop runs until the listener errors (which only happens if the test
+//!   process is tearing down), so one `LocalHttpServer` can serve more than one connection
+//!   across a test's lifetime. Nothing joins the thread — it is intentionally left running
+//!   for the rest of the process, the same shape `spawn_http_server` uses.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -30,18 +39,16 @@ pub(crate) struct LocalHttpServer {
 }
 
 impl LocalHttpServer {
-    /// Binds `127.0.0.1:0` and starts serving `/hello` and `/status` on a background
-    /// thread.
+    /// Binds `127.0.0.1:0` and starts serving the fixture routes on a background thread.
     pub(crate) fn spawn_hello() -> Self {
-        let listener =
-            TcpListener::bind(("127.0.0.1", 0)).expect("curl http fixture: bind port");
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("curl http fixture: bind port");
         let port = listener
             .local_addr()
             .expect("curl http fixture: local addr")
             .port();
         std::thread::spawn(move || loop {
             match listener.accept() {
-                Ok((sock, _)) => serve_one(sock),
+                Ok((sock, _)) => serve_one(sock, port),
                 Err(_) => return,
             }
         });
@@ -54,43 +61,115 @@ impl LocalHttpServer {
     }
 }
 
-/// Reads one request up to the blank line ending the headers, then writes the matching
-/// canned response and drops the connection.
-fn serve_one(mut sock: TcpStream) {
-    let mut req = Vec::new();
-    let mut byte = [0u8; 1];
-    while sock.read(&mut byte).unwrap_or(0) == 1 {
-        req.push(byte[0]);
-        if req.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    match request_path(&req).as_deref() {
-        Some("/hello") => {
-            let body = b"hello-curl";
-            let header = format!(
-                "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
-                body.len()
-            );
-            let _ = sock.write_all(header.as_bytes());
-            let _ = sock.write_all(body);
-        }
-        Some("/status") => {
+/// One parsed request: its method, request-target, header lines, and body.
+struct Request {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// Reads one request (headers plus, when `Content-Length` says so, its body), then writes
+/// the matching canned response and drops the connection.
+fn serve_one(mut sock: TcpStream, port: u16) {
+    let Some(request) = read_request(&mut sock) else {
+        return;
+    };
+    match request.path.as_str() {
+        "/hello" => respond(&mut sock, 200, "OK", "text/plain", b"hello-curl", &[]),
+        "/status" => {
             let _ = sock.write_all(b"HTTP/1.0 204 No Content\r\n\r\n");
         }
-        _ => {
-            let _ = sock.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        "/redirect" => respond(
+            &mut sock,
+            302,
+            "Found",
+            "text/plain",
+            b"redirecting",
+            &[format!("Location: http://127.0.0.1:{port}/hello")],
+        ),
+        "/echo" => {
+            let mut body = format!("method={}\n", request.method);
+            for (name, value) in &request.headers {
+                body.push_str(&format!("{name}: {value}\n"));
+            }
+            body.push_str("body=");
+            body.push_str(&String::from_utf8_lossy(&request.body));
+            body.push('\n');
+            respond(&mut sock, 200, "OK", "text/plain", body.as_bytes(), &[]);
         }
+        _ => respond(&mut sock, 404, "Not Found", "text/plain", b"missing", &[]),
     }
 }
 
-/// Extracts the request-target from an HTTP request line (`GET /hello HTTP/1.1\r\n...`),
-/// ignoring any query string.
-fn request_path(req: &[u8]) -> Option<String> {
-    let line_end = req.iter().position(|&b| b == b'\r')?;
-    let line = std::str::from_utf8(&req[..line_end]).ok()?;
-    let mut parts = line.split(' ');
-    let _method = parts.next()?;
-    let target = parts.next()?;
-    Some(target.split('?').next().unwrap_or(target).to_string())
+/// Reads the request line, the headers, and exactly `Content-Length` body bytes.
+///
+/// Draining the body matters: dropping the socket with unread bytes still queued makes
+/// the kernel send an RST, which libcurl reports as a failed transfer instead of the
+/// response this fixture already wrote.
+fn read_request(sock: &mut TcpStream) -> Option<Request> {
+    let mut raw = Vec::new();
+    let mut byte = [0u8; 1];
+    while sock.read(&mut byte).unwrap_or(0) == 1 {
+        raw.push(byte[0]);
+        if raw.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let mut lines = text.split("\r\n");
+    let mut request_line = lines.next()?.split(' ');
+    let method = request_line.next()?.to_string();
+    let target = request_line.next()?;
+    let path = target.split('?').next().unwrap_or(target).to_string();
+
+    let mut headers = Vec::new();
+    let mut content_length = 0usize;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim().to_string();
+        if name == "content-length" {
+            content_length = value.parse().unwrap_or(0);
+        }
+        headers.push((name, value));
+    }
+
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 && sock.read_exact(&mut body).is_err() {
+        body.clear();
+    }
+    Some(Request {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+/// Writes a close-framed HTTP/1.0 response with an exact `Content-Length`.
+fn respond(
+    sock: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: &[u8],
+    extra_headers: &[String],
+) {
+    let mut header = format!(
+        "HTTP/1.0 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    for line in extra_headers {
+        header.push_str(line);
+        header.push_str("\r\n");
+    }
+    header.push_str("\r\n");
+    let _ = sock.write_all(header.as_bytes());
+    let _ = sock.write_all(body);
 }

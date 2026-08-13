@@ -1,8 +1,8 @@
 //! Purpose:
-//! Emits the four `__rt_curl_*` helpers whose whole job is to forward already-marshalled
-//! C arguments to one `elephc_curl` entry point and hand back its integer answer:
+//! Emits the `__rt_curl_*` helpers whose whole job is to forward already-marshalled C
+//! arguments to one `elephc_curl` entry point and hand back its integer answer:
 //! `__rt_curl_easy_setopt_long`, `__rt_curl_easy_setopt_str`, `__rt_curl_easy_perform`,
-//! and `__rt_curl_easy_errno`.
+//! `__rt_curl_option_kind`, and `__rt_curl_easy_errno`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::curl::emit_curl`.
@@ -18,8 +18,10 @@
 //!   the upper 32 bits of the return register unspecified. Three of these are booleans
 //!   and are zero-extended; `curl_errno` is a signed `CURLcode` and is sign-extended.
 //!   Skipping the extension leaves PHP comparing against garbage in the high half.
-//! - A null slot answers `0` for all four: `false` for the three booleans and `CURLE_OK`
-//!   for `curl_errno`, i.e. "nothing happened", never a fabricated success.
+//! - A null slot answers `0` for all of them: `false` for the booleans, `CURLE_OK` for
+//!   `curl_errno`, and `KIND_INVALID` for `curl_option_kind`, i.e. "nothing happened",
+//!   never a fabricated success. `KIND_INVALID` makes the prelude raise `ValueError`,
+//!   which is the loudest of the three and the right answer for a missing bridge.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -38,7 +40,7 @@ enum IntResult {
     CurlCode,
 }
 
-/// Emits all four forwarding helpers for the target.
+/// Emits every forwarding helper for the target.
 pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
     emit_forwarder(
         emitter,
@@ -59,6 +61,13 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "__rt_curl_easy_perform",
         "_elephc_curl_easy_perform_fn",
         "curl_easy_perform (run the configured transfer)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_option_kind",
+        "_elephc_curl_option_kind_fn",
+        "curl_option_kind (classify a curl_setopt option number)",
         IntResult::Boolean,
     );
     emit_forwarder(

@@ -29,6 +29,7 @@
 mod abi;
 mod easy;
 mod handles;
+mod options;
 mod php_layer;
 
 #[cfg(test)]
