@@ -11,6 +11,11 @@
 //! - A slot is immutable when it is a read-only incoming parameter/main `$argc`, or has
 //!   exactly one entry-block store that dominates every load. The entry must have no
 //!   predecessor, proving that the store executes once rather than once per loop iteration.
+//! - A SLOT PASSED BY REFERENCE IS EXCLUDED (`super::by_ref_alias`), because the callee
+//!   writes it through the alias with no `store_local` in this function to count. Skipping
+//!   that check made every `do { f($x); … } while ($n > 0);` whose `$n` is a by-reference
+//!   out-parameter run its body exactly once: the load was called pure, so LICM hoisted the
+//!   loop condition into the preheader.
 
 use std::collections::HashSet;
 
@@ -108,6 +113,20 @@ fn immutable_integer_slots(
     candidates: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
     let mut eligible = candidates.clone();
+
+    // A SLOT PASSED BY REFERENCE IS NOT IMMUTABLE, and nothing else here can tell:
+    // a by-reference argument is lowered as a plain `load_local` whose result the
+    // call consumes, and codegen turns that into the slot's ADDRESS, so the callee
+    // writes the caller's slot with no `store_local` anywhere in this function. The
+    // store-counting below therefore sees "one entry store, never written again" and
+    // marks the load pure — after which LICM legitimately hoists it out of the loop
+    // that reads it. Measured: `$n = 0; do { f($m, $n); $c++; } while ($n > 0);` ran
+    // its body exactly once because the whole `$n > 0` compare was evaluated in the
+    // preheader. `super::by_ref_alias` is the shared judgement, also used by dead
+    // store elimination for the same aliasing reason.
+    for slot in super::by_ref_alias::address_escaping_slots(function) {
+        eligible.remove(&slot);
+    }
 
     let mut loads: Vec<Vec<InstId>> = vec![Vec::new(); function.locals.len()];
     let mut stores: Vec<Vec<InstId>> = vec![Vec::new(); function.locals.len()];

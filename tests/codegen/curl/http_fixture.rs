@@ -82,6 +82,11 @@ fn serve_one(mut sock: TcpStream, port: u16) {
     };
     match request.path.as_str() {
         "/hello" => respond(&mut sock, 200, "OK", Some("text/plain"), b"hello-curl", &[]),
+        // Two distinct bodies for the multi-interface fixtures: a parallel transfer is
+        // only proven if each handle comes back with ITS OWN body, which a single shared
+        // route could not show.
+        "/a" => respond(&mut sock, 200, "OK", Some("text/plain"), b"body-a", &[]),
+        "/b" => respond(&mut sock, 200, "OK", Some("text/plain"), b"body-b", &[]),
         // Deliberately no `Content-Type`, so `CURLINFO_CONTENT_TYPE` is a NULL `char *`.
         "/notype" => respond(&mut sock, 200, "OK", None, b"typeless", &[]),
         "/status" => {

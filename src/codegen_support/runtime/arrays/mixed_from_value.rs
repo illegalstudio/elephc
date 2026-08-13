@@ -110,6 +110,8 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // eval hashing must not shift the ids the host program's fopen() reports
     emitter.instruction("cmp x2, #6");                                          // resource kind 6 = a libcurl easy handle
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp x2, #7");                                          // resource kind 7 = a libcurl multi handle
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlMultiHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
     emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
@@ -194,6 +196,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // eval hashing must not shift the ids the host program's fopen() reports
     emitter.instruction("cmp QWORD PTR [rbp - 24], 6");                         // resource kind 6 = a libcurl easy handle
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 7");                         // resource kind 7 = a libcurl multi handle
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlMultiHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
     emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
@@ -244,8 +248,8 @@ mod tests {
         emitter.output()
     }
 
-    /// Pins ALL THREE object-backed exclusions in the tag-9 arm, as exact multi-line
-    /// sequences: the two hash contexts and the libcurl easy handle.
+    /// Pins ALL FOUR object-backed exclusions in the tag-9 arm, as exact multi-line
+    /// sequences: the two hash contexts and the two libcurl handles (easy and multi).
     ///
     /// WHY THE WHOLE SEQUENCE AND NOT A SUBSTRING. `contains("cmp x2, #5")` is satisfied
     /// by `cmp x2, #50`, and `contains("cmp x2, #2")` by the `#2` inside `#24` — a pin
@@ -254,8 +258,8 @@ mod tests {
     /// either half is deleted, reordered, or pointed at a different label.
     ///
     /// Nothing pinned kind 2 on either target before this module existed, which is how
-    /// the exclusion could have been dropped unnoticed; kinds 5 and 6 were added beside
-    /// it and all three are asserted here so none can regress alone.
+    /// the exclusion could have been dropped unnoticed; kinds 5, 6 and 7 were added
+    /// beside it and all four are asserted here so none can regress alone.
     #[test]
     fn aarch64_excludes_object_backed_kinds_from_resource_id_binding() {
         let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
@@ -268,6 +272,8 @@ mod tests {
                  \x20   b.eq __rt_mixed_from_value_alloc\n\
                  \x20   cmp x2, #6\n\
                  \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   cmp x2, #7\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
                  \x20   mov x0, x1\n\
                  \x20   bl __rt_resource_id_of\n"
             ),
@@ -275,7 +281,7 @@ mod tests {
         );
     }
 
-    /// Pins the same three exclusions on x86_64.
+    /// Pins the same four exclusions on x86_64.
     ///
     /// Separate emitters, separate arms: forgetting one target is the default way this
     /// change goes wrong, and an aarch64-only pin would not notice.
@@ -290,6 +296,8 @@ mod tests {
                  \x20   cmp QWORD PTR [rbp - 24], 5\n\
                  \x20   je __rt_mixed_from_value_alloc\n\
                  \x20   cmp QWORD PTR [rbp - 24], 6\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   cmp QWORD PTR [rbp - 24], 7\n\
                  \x20   je __rt_mixed_from_value_alloc\n\
                  \x20   mov rax, QWORD PTR [rbp - 16]\n\
                  \x20   call __rt_resource_id_of\n"
@@ -315,7 +323,7 @@ mod tests {
             ),
         ] {
             let asm = emit_for(target);
-            for kind in [2, 5, 6] {
+            for kind in [2, 5, 6, 7] {
                 assert!(
                     asm.contains(&format!("    cmp {kind_operand}, {}{kind}\n", sigil(target))),
                     "kind {kind} exclusion must compare the resource kind word\n{asm}"

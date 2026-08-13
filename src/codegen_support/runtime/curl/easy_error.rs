@@ -58,7 +58,7 @@ pub(crate) fn emit_curl_strerror(emitter: &mut Emitter) {
 }
 
 /// Emits one message-copying helper: stack buffer, one bridge call, `__rt_str_persist`.
-fn emit_message_copier(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
+pub(super) fn emit_message_copier(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
     // 256-byte message buffer + an 8-byte length out-parameter + the 16-byte frame,
     // rounded to the 16-byte stack alignment both ABIs require.
     let frame = CURL_ERROR_SIZE + 32;

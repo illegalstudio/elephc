@@ -29,6 +29,7 @@ mod easy_perform;
 mod easy_setopt;
 mod easy_setopt_slist;
 mod lifecycle;
+mod multi;
 mod option_kind;
 mod shared;
 mod str_op;
@@ -47,7 +48,14 @@ pub(crate) use lifecycle::{
     lower_curl_easy_copy, lower_curl_easy_pause, lower_curl_easy_reset, lower_curl_easy_upkeep,
     lower_curl_strerror,
 };
+pub(crate) use multi::{
+    lower_curl_easy_id, lower_curl_multi_add, lower_curl_multi_errno, lower_curl_multi_exec,
+    lower_curl_multi_info_read, lower_curl_multi_init, lower_curl_multi_remove,
+    lower_curl_multi_select, lower_curl_multi_setopt, lower_curl_multi_strerror,
+};
 pub(crate) use option_kind::lower_curl_option_kind;
 pub(crate) use str_op::lower_curl_easy_str_op;
 pub(crate) use version::lower_curl_version;
-pub(crate) use warn_option::lower_curl_setopt_unsupported_warning;
+pub(crate) use warn_option::{
+    lower_curl_multi_setopt_unsupported_warning, lower_curl_setopt_unsupported_warning,
+};

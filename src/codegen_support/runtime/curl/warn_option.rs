@@ -27,16 +27,50 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
-    CURL_SETOPT_UNSUPPORTED_PREFIX, CURL_SETOPT_UNSUPPORTED_SUFFIX,
+    CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX, CURL_SETOPT_UNSUPPORTED_PREFIX,
+    CURL_SETOPT_UNSUPPORTED_SUFFIX,
 };
 
 /// `__rt_curl_warn_unsupported_option` — in: the option number in `x0`/`rax`. Out: nothing.
 pub(crate) fn emit_curl_warn_unsupported_option(emitter: &mut Emitter) {
-    let prefix_len = CURL_SETOPT_UNSUPPORTED_PREFIX.len();
+    emit_unsupported_option_warning(
+        emitter,
+        "__rt_curl_warn_unsupported_option",
+        "curl_setopt unsupported-option warning",
+        "_diag_curl_setopt_unsupported_prefix",
+        CURL_SETOPT_UNSUPPORTED_PREFIX.len(),
+    );
+}
+
+/// `__rt_curl_multi_warn_unsupported_option` — the same warning for `curl_multi_setopt()`.
+///
+/// IT IS A SEPARATE HELPER ONLY BECAUSE THE FUNCTION NAME IN THE MESSAGE IS PART OF THE
+/// DIAGNOSTIC. PHP names the function that refused the option, and a `curl_multi_setopt()`
+/// call that printed `curl_setopt():` would send a reader looking at the wrong call. Only
+/// the prefix string differs; the option number and the shared suffix are the same.
+pub(crate) fn emit_curl_multi_warn_unsupported_option(emitter: &mut Emitter) {
+    emit_unsupported_option_warning(
+        emitter,
+        "__rt_curl_multi_warn_unsupported_option",
+        "curl_multi_setopt unsupported-option warning",
+        "_diag_curl_multi_setopt_unsupported_prefix",
+        CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX.len(),
+    );
+}
+
+/// Emits one unsupported-option warning helper: prefix, the option number formatted
+/// through `__rt_itoa`, then the shared suffix — all through `__rt_diag_warning`.
+fn emit_unsupported_option_warning(
+    emitter: &mut Emitter,
+    label: &str,
+    description: &str,
+    prefix_symbol: &str,
+    prefix_len: usize,
+) {
     let suffix_len = CURL_SETOPT_UNSUPPORTED_SUFFIX.len();
     emitter.blank();
-    emitter.comment("--- runtime: curl_setopt unsupported-option warning ---");
-    emitter.label_global("__rt_curl_warn_unsupported_option");
+    emitter.comment(&format!("--- runtime: {description} ---"));
+    emitter.label_global(label);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("sub sp, sp, #48");                             // saved option, concat cursor, and frame linkage
@@ -52,7 +86,7 @@ pub(crate) fn emit_curl_warn_unsupported_option(emitter: &mut Emitter) {
 
             emitter.instruction("str x10, [sp, #8]");                           // preserve the concat cursor across itoa
 
-            abi::emit_symbol_address(emitter, "x1", "_diag_curl_setopt_unsupported_prefix");
+            abi::emit_symbol_address(emitter, "x1", prefix_symbol);
             emitter.instruction(&format!("mov x2, #{prefix_len}"));             // pass the warning prefix length
 
             abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the warning prefix
@@ -93,7 +127,7 @@ pub(crate) fn emit_curl_warn_unsupported_option(emitter: &mut Emitter) {
 
             emitter.instruction("mov QWORD PTR [rbp - 16], r10");               // preserve the concat cursor across itoa
 
-            abi::emit_symbol_address(emitter, "rdi", "_diag_curl_setopt_unsupported_prefix");
+            abi::emit_symbol_address(emitter, "rdi", prefix_symbol);
             emitter.instruction(&format!("mov esi, {prefix_len}"));             // pass the warning prefix length
 
             abi::emit_call_label(emitter, "__rt_diag_warning");                 // emit or suppress the warning prefix

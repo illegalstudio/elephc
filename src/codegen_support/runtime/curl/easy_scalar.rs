@@ -33,11 +33,16 @@ use super::slots::{
 
 /// How a helper widens the C `int32_t` its bridge entry point returns.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum IntResult {
+pub(super) enum IntResult {
     /// A `0`/`1` acceptance flag.
     Boolean,
-    /// A signed `CURLcode`.
+    /// A signed `CURLcode`/`CURLMcode`, or any other small signed answer
+    /// (`curl_multi_select()`'s `-1`, `curl_multi_setopt()`'s three-way code).
     CurlCode,
+    /// A full `int64_t` the bridge already built as a PHP integer — no widening
+    /// at all, because there is no upper half to fix up. `elephc_curl_multi_perform`'s
+    /// packed (running, code) answer is the only one of these.
+    Wide,
 }
 
 /// Emits every forwarding helper for the target.
@@ -109,7 +114,7 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
 
 /// Emits one forwarding helper: probe the slot, call it with the arguments already in the
 /// C argument registers, widen the answer, return. `0` when the slot is null.
-fn emit_forwarder(
+pub(super) fn emit_forwarder(
     emitter: &mut Emitter,
     label: &str,
     slot: &str,
@@ -135,6 +140,7 @@ fn emit_forwarder(
             match result {
                 IntResult::Boolean => emit_zero_extend_int_result(emitter),
                 IntResult::CurlCode => emit_sign_extend_int_result(emitter),
+                IntResult::Wide => {}
             }
             emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
 
@@ -167,6 +173,7 @@ fn emit_forwarder(
             match result {
                 IntResult::Boolean => emit_zero_extend_int_result(emitter),
                 IntResult::CurlCode => emit_sign_extend_int_result(emitter),
+                IntResult::Wide => {}
             }
             emitter.instruction("mov rsp, rbp");                                // release the frame
 

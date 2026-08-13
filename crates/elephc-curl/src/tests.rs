@@ -198,6 +198,84 @@ mod option_table {
     }
 }
 
+/// Purpose:
+/// The `curl_multi_setopt()` half of the option ratchet: every `CURLMOPT_*` in the frozen
+/// PHP surface is classified by `crate::multi`, and every classification matches the
+/// frozen bucket. A new `CURLMOPT_*` constant nobody classified fails here.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness.
+///
+/// Key details:
+/// - Runs WITHOUT native libcurl, like its easy sibling: the table is pure data.
+/// - `CURLMOPT_PUSHFUNCTION` is the one documented divergence — the frozen surface buckets
+///   it as `callback`, which php-src supports and this build cannot (Task 12), so it is
+///   classified `unsupported` (`false` + PHP's warning, locked decision 7).
+#[cfg(test)]
+mod multi_option_table {
+    use crate::multi::{
+        multi_option_kind, MULTI_OPTION_INVALID, MULTI_OPTION_LONG, MULTI_OPTION_OFF_T,
+        MULTI_OPTION_UNSUPPORTED,
+    };
+
+    /// Loads the frozen curl surface the whole feature is generated from.
+    fn frozen_surface() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/docs/curl_surface.json");
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("frozen curl surface at {}: {e}", path.display()));
+        serde_json::from_slice(&bytes).expect("frozen curl surface must be valid JSON")
+    }
+
+    /// Every `CURLMOPT_*` PHP exposes is classified, and as the kind the frozen bucket
+    /// names — with `PUSHFUNCTION`'s documented divergence spelled out.
+    #[test]
+    fn multi_option_table_matches_the_frozen_surface() {
+        let surface = frozen_surface();
+        let constants = surface["constants"].as_object().expect("constants map");
+        let buckets = surface["option_kinds"]
+            .as_object()
+            .expect("frozen surface must carry an option_kinds map");
+        let mut seen = 0;
+        for (name, value) in constants {
+            if !name.starts_with("CURLMOPT_") {
+                continue;
+            }
+            seen += 1;
+            let number = value.as_i64().expect("integer option value");
+            let bucket = buckets[name].as_str().expect("option_kinds values are strings");
+            let expected = match bucket {
+                "long" => MULTI_OPTION_LONG,
+                "off_t" => MULTI_OPTION_OFF_T,
+                // A real php-src option this build cannot carry: it needs Task 12's
+                // callback infrastructure, so it answers `false` plus PHP's warning.
+                "callback" => MULTI_OPTION_UNSUPPORTED,
+                other => panic!("{name} has unclassified frozen bucket {other:?}"),
+            };
+            assert_eq!(
+                multi_option_kind(number),
+                expected,
+                "{name} ({number}) must be classified as the frozen surface's {bucket:?}"
+            );
+        }
+        assert!(seen >= 9, "the frozen surface must still carry the CURLMOPT_* family");
+    }
+
+    /// A number that is not a `CURLMOPT_*` at all is INVALID, which is what makes the
+    /// prelude raise php-src's `ValueError` instead of forwarding it to a variadic
+    /// `curl_multi_setopt` that would read it as whatever its range implies.
+    #[test]
+    fn unknown_multi_options_are_invalid() {
+        for opt in [0, 1, 2, 4, 5, 9, 999_999, -1, i64::from(i32::MAX) + 1] {
+            assert_eq!(
+                multi_option_kind(opt),
+                MULTI_OPTION_INVALID,
+                "{opt} is not a cURL multi option"
+            );
+        }
+    }
+}
+
 #[cfg(not(elephc_curl_native))]
 mod skipped {
     /// Reports why the real libcurl-linked tests below did not run, instead
@@ -482,5 +560,231 @@ mod native {
         let ok = unsafe { elephc_curl_easy_getinfo_long(-999, CURLINFO_RESPONSE_CODE, &mut value) };
         assert_eq!(ok, 0);
         assert_eq!(value, -1);
+    }
+}
+
+/// Purpose:
+/// The MULTI interface's real-libcurl tests: lifecycle, attach/detach, a `file://` transfer
+/// driven to completion through `curl_multi_perform`, the completion queue's parked fields,
+/// and the error surface.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness, when `ELEPHC_CURL_LIB_DIR` is
+///   set (see this module's header).
+///
+/// Key details:
+/// - `file://` again, for the same reason the easy tests use it: no network, and the same
+///   write-callback path an HTTP transfer takes.
+/// - The completion queue is read through the same one-field-per-call protocol the prelude
+///   uses, so these tests pin the ABI shape the compiled PHP actually calls.
+#[cfg(elephc_curl_native)]
+mod native_multi {
+    use crate::abi::{
+        elephc_curl_easy_free, elephc_curl_easy_init, elephc_curl_easy_set_url,
+        elephc_curl_easy_setopt_long, elephc_curl_easy_take_body,
+    };
+    use crate::multi::{
+        elephc_curl_multi_add, elephc_curl_multi_errno, elephc_curl_multi_free,
+        elephc_curl_multi_info_read, elephc_curl_multi_init, elephc_curl_multi_perform,
+        elephc_curl_multi_remove, elephc_curl_multi_select, elephc_curl_multi_setopt,
+        elephc_curl_multi_strerror, INFO_FIELD_ADVANCE, INFO_FIELD_EASY_ID, INFO_FIELD_MSG,
+        INFO_FIELD_QUEUED, INFO_FIELD_RESULT, MULTI_SETOPT_APPLIED, MULTI_SETOPT_INVALID,
+        MULTI_SETOPT_UNSUPPORTED,
+    };
+    use crate::php_layer::CURLOPT_RETURNTRANSFER;
+
+    /// Writes a `file://` fixture and returns (directory, url), for a transfer that needs
+    /// no network.
+    fn file_fixture(tag: &str, body: &[u8]) -> (std::path::PathBuf, String) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let suffix = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-curl-multi-{tag}-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("body.txt");
+        std::fs::write(&path, body).unwrap();
+        let url = format!("file://{}", path.display());
+        (dir, url)
+    }
+
+    /// Multi ids are their OWN id space: allocated, positive, monotonic, and never reused,
+    /// exactly like the easy table's but independent of it.
+    #[test]
+    fn multi_init_and_free_allocate_independent_ids() {
+        let a = elephc_curl_multi_init();
+        let b = elephc_curl_multi_init();
+        assert_ne!(a, 0, "curl_multi_init should succeed with real libcurl linked");
+        assert_ne!(b, 0);
+        assert!(b > a, "multi ids are monotonic");
+        assert_eq!(elephc_curl_multi_errno(a), 0, "a fresh multi handle reports CURLM_OK");
+        elephc_curl_multi_free(a);
+        elephc_curl_multi_free(b);
+        // Freeing twice is a no-op rather than a double `curl_multi_cleanup`: ids are
+        // never reused, so a stale id can only ever miss the table.
+        elephc_curl_multi_free(a);
+        assert_eq!(elephc_curl_multi_errno(a), 1, "an unknown id reports CURLM_BAD_HANDLE");
+    }
+
+    /// Attach, drive to completion, read the queue, detach: the whole multi cycle against a
+    /// `file://` fixture, through exactly the calls the prelude makes.
+    #[test]
+    fn multi_perform_runs_a_transfer_and_queues_its_completion() {
+        let (dir, url) = file_fixture("perform", b"multi fixture body\n");
+        let multi = elephc_curl_multi_init();
+        let easy = elephc_curl_easy_init();
+        assert_ne!(multi, 0);
+        assert_ne!(easy, 0);
+        assert_eq!(unsafe { elephc_curl_easy_set_url(easy, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(easy, CURLOPT_RETURNTRANSFER, 1), 1);
+
+        assert_eq!(elephc_curl_multi_add(multi, easy), 0, "add must report CURLM_OK");
+        // A second add of the same handle is CURLM_ADDED_ALREADY (7), not a silent success.
+        assert_eq!(elephc_curl_multi_add(multi, easy), 7);
+        assert_eq!(elephc_curl_multi_errno(multi), 7, "errno tracks the last operation");
+
+        let mut running = 1;
+        let mut guard = 0;
+        while running > 0 && guard < 1000 {
+            let packed = elephc_curl_multi_perform(multi);
+            let code = (packed & 0xFFFF_FFFF) as u32 as i32;
+            assert_eq!(code, 0, "perform must report CURLM_OK");
+            running = packed >> 32;
+            if running > 0 {
+                elephc_curl_multi_select(multi, 50);
+            }
+            guard += 1;
+        }
+        assert_eq!(running, 0, "the transfer must finish");
+
+        assert_eq!(
+            elephc_curl_multi_info_read(multi, INFO_FIELD_ADVANCE),
+            1,
+            "a completed transfer must queue one message"
+        );
+        assert_eq!(elephc_curl_multi_info_read(multi, INFO_FIELD_MSG), 1, "CURLMSG_DONE");
+        assert_eq!(elephc_curl_multi_info_read(multi, INFO_FIELD_RESULT), 0, "CURLE_OK");
+        assert_eq!(
+            elephc_curl_multi_info_read(multi, INFO_FIELD_EASY_ID),
+            easy,
+            "the message must name the easy handle's own bridge id"
+        );
+        assert_eq!(elephc_curl_multi_info_read(multi, INFO_FIELD_QUEUED), 0);
+        assert_eq!(
+            elephc_curl_multi_info_read(multi, INFO_FIELD_ADVANCE),
+            0,
+            "the queue is drained after one message"
+        );
+
+        let mut body_ptr: *mut u8 = std::ptr::null_mut();
+        let mut body_len = 0usize;
+        assert_eq!(unsafe { elephc_curl_easy_take_body(easy, &mut body_ptr, &mut body_len) }, 1);
+        let body = unsafe { std::slice::from_raw_parts(body_ptr, body_len) }.to_vec();
+        assert_eq!(body, b"multi fixture body\n");
+        // READING THE BODY DOES NOT CONSUME IT (php-src's `RETURN_STR_COPY`), which is what
+        // makes a second `curl_multi_getcontent()` answer the same bytes.
+        let mut second_ptr: *mut u8 = std::ptr::null_mut();
+        let mut second_len = 0usize;
+        assert_eq!(unsafe { elephc_curl_easy_take_body(easy, &mut second_ptr, &mut second_len) }, 1);
+        assert_eq!(second_len, body_len, "the capture buffer survives being read");
+
+        assert_eq!(elephc_curl_multi_remove(multi, easy), 0);
+        elephc_curl_multi_free(multi);
+        elephc_curl_easy_free(easy);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `curl_multi_add_handle` CLEARS the easy handle's capture buffer, mirroring php-src's
+    /// `_php_curl_cleanup_handle`: without it a handle reused across two multi runs would
+    /// report both bodies concatenated.
+    #[test]
+    fn multi_add_resets_the_capture_buffer() {
+        let (dir, url) = file_fixture("reset", b"first\n");
+        let multi = elephc_curl_multi_init();
+        let easy = elephc_curl_easy_init();
+        assert_eq!(unsafe { elephc_curl_easy_set_url(easy, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(easy, CURLOPT_RETURNTRANSFER, 1), 1);
+        assert_eq!(elephc_curl_multi_add(multi, easy), 0);
+        let mut running = 1;
+        let mut guard = 0;
+        while running > 0 && guard < 1000 {
+            running = elephc_curl_multi_perform(multi) >> 32;
+            guard += 1;
+        }
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len = 0usize;
+        assert_eq!(unsafe { elephc_curl_easy_take_body(easy, &mut ptr, &mut len) }, 1);
+        assert_eq!(len, b"first\n".len());
+
+        assert_eq!(elephc_curl_multi_remove(multi, easy), 0);
+        assert_eq!(elephc_curl_multi_add(multi, easy), 0, "re-adding must succeed");
+        let mut ptr2: *mut u8 = std::ptr::null_mut();
+        let mut len2 = 1usize;
+        assert_eq!(unsafe { elephc_curl_easy_take_body(easy, &mut ptr2, &mut len2) }, 1);
+        assert_eq!(len2, 0, "add_handle must clear the previous run's captured body");
+
+        elephc_curl_multi_free(multi);
+        elephc_curl_easy_free(easy);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `curl_multi_setopt`'s three-way answer, and the `CURLMcode` message space (which is
+    /// NOT `CURLcode`'s).
+    #[test]
+    fn multi_setopt_and_strerror_report_the_multi_space() {
+        let multi = elephc_curl_multi_init();
+        assert_eq!(
+            elephc_curl_multi_setopt(multi, 6, 4),
+            MULTI_SETOPT_APPLIED,
+            "CURLMOPT_MAXCONNECTS is a real long option"
+        );
+        assert_eq!(
+            elephc_curl_multi_setopt(multi, 30_009, 1024),
+            MULTI_SETOPT_APPLIED,
+            "CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE is a real off_t option"
+        );
+        assert_eq!(
+            elephc_curl_multi_setopt(multi, 20_014, 1),
+            MULTI_SETOPT_UNSUPPORTED,
+            "CURLMOPT_PUSHFUNCTION is a callback this build cannot carry"
+        );
+        assert_eq!(
+            elephc_curl_multi_setopt(multi, 999_999, 1),
+            MULTI_SETOPT_INVALID,
+            "an unknown option is not a cURL multi option at all"
+        );
+
+        let mut buf = vec![0u8; 256];
+        let mut len = 0usize;
+        assert_eq!(
+            unsafe { elephc_curl_multi_strerror(7, buf.as_mut_ptr(), buf.len(), &mut len) },
+            1
+        );
+        let message = String::from_utf8_lossy(&buf[..len]).into_owned();
+        assert!(
+            message.contains("already added"),
+            "CURLM_ADDED_ALREADY's own message, not CURLcode 7's: {message}"
+        );
+        elephc_curl_multi_free(multi);
+    }
+
+    /// Every per-handle multi entry point answers its documented failure value for an
+    /// unknown id — never a value a caller could read as success.
+    #[test]
+    fn unknown_multi_ids_fail_closed() {
+        const UNKNOWN: i64 = -999;
+        assert_eq!(elephc_curl_multi_add(UNKNOWN, -998), 1, "CURLM_BAD_HANDLE");
+        assert_eq!(elephc_curl_multi_remove(UNKNOWN, -998), 1);
+        assert_eq!(elephc_curl_multi_perform(UNKNOWN) & 0xFFFF_FFFF, 1);
+        assert_eq!(elephc_curl_multi_select(UNKNOWN, 0), -1);
+        assert_eq!(elephc_curl_multi_info_read(UNKNOWN, INFO_FIELD_ADVANCE), 0);
+        assert_eq!(elephc_curl_multi_errno(UNKNOWN), 1);
+        assert_eq!(
+            elephc_curl_multi_setopt(UNKNOWN, 6, 1),
+            MULTI_SETOPT_UNSUPPORTED,
+            "a real option on an unknown handle is a failed apply, not a ValueError"
+        );
     }
 }

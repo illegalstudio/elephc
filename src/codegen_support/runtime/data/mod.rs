@@ -69,6 +69,10 @@ pub(crate) const OB_NTC_G_GET_FLUSH: &str =
 /// and the split lets `__rt_curl_warn_unsupported_option` format the option number
 /// between the two halves through the shared `__rt_itoa`.
 pub(crate) const CURL_SETOPT_UNSUPPORTED_PREFIX: &str = "Warning: curl_setopt(): Option ";
+/// The `curl_multi_setopt()` half of the same warning. A SEPARATE STRING because PHP names
+/// the function that refused the option, and the multi interface is a different function.
+pub(crate) const CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX: &str =
+    "Warning: curl_multi_setopt(): Option ";
 /// The half after the option number. See [`CURL_SETOPT_UNSUPPORTED_PREFIX`].
 pub(crate) const CURL_SETOPT_UNSUPPORTED_SUFFIX: &str =
     " is not supported by this build\n";

@@ -304,10 +304,19 @@ pub(crate) fn compile(config: CliConfig) {
     // `-lelephc_curl`, and never require the managed native `curl` package. Runs after
     // the hash prelude (both are order-independent declaration-only preludes) and before
     // name resolution so a namespaced caller resolves to it. `--with-curl` forces the
-    // injection for a program that only reaches curl dynamically.
+    // injection for a program that only reaches curl dynamically. The version selects the
+    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only (locked decision 8).
     crate::progress::phase("curl-prelude");
     let phase_started = Instant::now();
-    let ast = crate::curl_prelude::inject_if_used(ast, with_crates.contains("curl"));
+    let ast = if php_version == crate::php_version::PhpVersion::default() {
+        crate::curl_prelude::inject_if_used(ast, with_crates.contains("curl"))
+    } else {
+        crate::curl_prelude::inject_if_used_for_version(
+            ast,
+            with_crates.contains("curl"),
+            php_version,
+        )
+    };
     timings.record_since("curl-prelude", phase_started);
 
     crate::progress::phase("web-prelude");

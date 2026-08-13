@@ -78,6 +78,41 @@ pub(super) fn lower(
         RuntimeFnId::CurlVersion => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_version(ctx, inst)
         }),
+        RuntimeFnId::CurlEasyId => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_id(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiInit => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_init(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiAdd => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_add(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiRemove => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_remove(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiExec => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_exec(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiSelect => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_select(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiInfoRead => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_info_read(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiSetopt => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_setopt(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiErrno => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_errno(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiStrerror => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_strerror(ctx, inst)
+        }),
+        RuntimeFnId::CurlMultiSetoptUnsupportedWarning => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_multi_setopt_unsupported_warning(
+                ctx, inst,
+            )
+        }),
         _ => None,
     }
 }

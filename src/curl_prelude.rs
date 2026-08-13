@@ -1,11 +1,12 @@
 //! Purpose:
-//! PHP's `ext/curl` easy-handle surface — the `CurlHandle` class plus the
-//! `curl_init` / `curl_setopt` / `curl_setopt_array` / `curl_exec` / `curl_getinfo` /
-//! `curl_close` / `curl_errno` / `curl_error` / `curl_version` functions — implemented in
-//! elephc-PHP on top of the internal `__elephc_curl_*` builtins. PHP 8 models a session as
-//! an OBJECT (`CurlHandle`), not a resource, and this prelude is what makes `curl_init()`
-//! return a real object that `is_object`, `get_class`, `instanceof`, and `var_dump` all
-//! agree about.
+//! PHP's `ext/curl` surface in elephc-PHP: the `CurlHandle` class plus the easy-handle
+//! functions (`curl_init` / `curl_setopt` / `curl_setopt_array` / `curl_exec` /
+//! `curl_getinfo` / `curl_close` / `curl_errno` / `curl_error` / `curl_version` / …), and
+//! the `CurlMultiHandle` class plus the whole `curl_multi_*` family, implemented on top of
+//! the internal `__elephc_curl_*` builtins. PHP 8 models a session as an OBJECT
+//! (`CurlHandle`, `CurlMultiHandle`), not a resource, and this prelude is what makes
+//! `curl_init()`/`curl_multi_init()` return real objects that `is_object`, `get_class`,
+//! `instanceof`, and `var_dump` all agree about.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`,
@@ -77,6 +78,22 @@
 //!   instead of `array|false`. `curl_strerror()` returns `string` rather than `?string`,
 //!   which is not a limitation but a value that is never null. Runtime behaviour is
 //!   otherwise PHP's. `docs/php/curl.md` (Task 14) is where these reach users.
+//! - THE MULTI INTERFACE ADDS FOUR MORE DIVERGENCES OF THE SAME FAMILY, all in Task 9's
+//!   surface and all documented at their declarations: `curl_multi_info_read()` leaves its
+//!   return type undeclared instead of `array|false` (declaring the union makes a
+//!   `$info === false` guard answer TRUE for a real array once the same variable is later
+//!   indexed — measured, the exact shape `curl_version()` documents); and
+//!   `curl_multi_add_handle()`/`curl_multi_remove_handle()`/`curl_multi_getcontent()` take
+//!   `mixed $handle` instead of `CurlHandle $handle`, with a runtime `instanceof` guard
+//!   that raises php-src's own `TypeError`. That last one is a BACKEND limitation rather
+//!   than a checker one: an object that reaches the caller as a `mixed` — which every
+//!   handle read out of `curl_multi_info_read()`'s array or `curl_multi_get_handles()`'s
+//!   list necessarily is — arrives at a TYPED object parameter as the boxed Mixed cell, so
+//!   the callee reads the cell's header where the object's slots should be and
+//!   `$handle->__elephc_handle` comes back `null`. A `mixed` parameter receives the object
+//!   itself. Without this, `curl_multi_getcontent($info['handle'])` — the canonical PHP
+//!   multi loop — would be a compile error, or, written with the `instanceof` narrowing
+//!   the checker accepts, a SILENTLY WRONG answer.
 
 mod detect;
 
@@ -570,10 +587,288 @@ function curl_version() {
     }
     return $decoded;
 }
+
+// THE MULTI HANDLE CARRIES AN IDENTITY MAP, AND THAT IS THE WHOLE DESIGN OF THIS CLASS.
+//
+// `curl_multi_info_read()` must hand back the SAME `CurlHandle` OBJECT that was added
+// (php-src's `_php_curl_multi_find_easy_handle`, so `$info['handle'] === $ch` is true),
+// and `curl_multi_get_handles()` must list those objects in add order. libcurl, and
+// therefore the bridge, only ever speaks in native handle ids — so SOMETHING has to
+// remember which PHP object each id belongs to, and that something has to be on the PHP
+// side, because only PHP can hold a PHP object.
+//
+// WRAPPING A FRESH `CurlHandle` AROUND A REPORTED ID WOULD BE A DOUBLE FREE. The
+// `CurlHandle` object's Mixed handle cell OWNS the native handle (resource kind 6 ->
+// `curl_easy_cleanup`), so two objects built around one id would each release it: the
+// second release would run `curl_easy_cleanup` on freed memory. The map exists so no
+// second object is ever minted.
+//
+// THE MAP IS ALSO WHAT KEEPS AN ATTACHED HANDLE ALIVE. `$__elephc_handles` holds ordinary
+// PHP references, so `unset($ch)` while the handle is attached does NOT tear the native
+// handle down — the multi handle still references the object. That mirrors php-src, which
+// takes a real reference (`Z_ADDREF_P`) on every added handle for exactly this reason: a
+// multi handle driving a transfer through a freed easy handle would be a use-after-free.
+//
+// IT IS TWO PARALLEL LISTS, NOT ONE `[$id => $object]` HASH, because removing a handle
+// would then need `unset($this->__elephc_ids[$id])`, and unsetting an element of an array
+// held in a declared property is not a shape this compiler lowers. Two positionally
+// aligned lists rebuild cleanly and keep add order for free, which is what
+// `curl_multi_get_handles()` needs anyway.
+final class CurlMultiHandle {
+    public mixed $__elephc_handle = null;
+    public array $__elephc_ids = [];
+    public array $__elephc_handles = [];
+
+    private function __construct() {}
+
+    public static function __elephc_wrap(mixed $raw): CurlMultiHandle {
+        $h = new self();
+        $h->__elephc_handle = $raw;
+        return $h;
+    }
+
+    // `mixed $handle`, NOT `CurlHandle $handle`, and that is FORCED BY THE BACKEND, not a
+    // looseness: a value that reached the caller as a `mixed` (an array element, e.g.
+    // `$info['handle']`) and is then passed to a TYPED object parameter arrives as the
+    // boxed Mixed cell rather than the object, so every property read inside the callee
+    // reads the cell's header instead of the object's slots. Measured: a `CurlHandle`
+    // whose `$__elephc_handle` is a live resource reads back as `null` through a typed
+    // parameter and as the resource through a `mixed` one. The runtime guard at each
+    // public entry point below is what keeps the type honest.
+    public function __elephc_attach(int $id, mixed $handle): void {
+        $this->__elephc_ids[] = $id;
+        $this->__elephc_handles[] = $handle;
+    }
+
+    public function __elephc_detach(int $id): void {
+        $ids = [];
+        $handles = [];
+        $count = count($this->__elephc_ids);
+        for ($i = 0; $i < $count; $i++) {
+            if ($this->__elephc_ids[$i] === $id) {
+                continue;
+            }
+            $ids[] = $this->__elephc_ids[$i];
+            $handles[] = $this->__elephc_handles[$i];
+        }
+        $this->__elephc_ids = $ids;
+        $this->__elephc_handles = $handles;
+    }
+
+    // `mixed`, not `?CurlHandle`: the caller (`curl_multi_info_read()`) puts the answer
+    // straight into a PHP array, and a nullable class return would have to be narrowed
+    // before it could be used at all.
+    public function __elephc_lookup(int $id): mixed {
+        $count = count($this->__elephc_ids);
+        for ($i = 0; $i < $count; $i++) {
+            if ($this->__elephc_ids[$i] === $id) {
+                return $this->__elephc_handles[$i];
+            }
+        }
+        return null;
+    }
+
+    public function __debugInfo(): array {
+        return [];
+    }
+
+    public function __serialize(): array {
+        throw new \Exception("Serialization of 'CurlMultiHandle' is not allowed");
+    }
+}
+
+// php-src declares `curl_multi_init(): CurlMultiHandle` with NO `false` arm — libcurl
+// failing to allocate is not something it models — so the allocation failure the bridge
+// can still report becomes a thrown `RuntimeException` here rather than a return value
+// PHP's own signature does not have.
+function curl_multi_init(): CurlMultiHandle {
+    $raw = __elephc_curl_multi_init();
+    if ($raw === false) {
+        throw new \RuntimeException("curl_multi_init(): libcurl could not allocate a multi handle");
+    }
+    return CurlMultiHandle::__elephc_wrap($raw);
+}
+
+// The bookkeeping happens ONLY on `CURLM_OK`, so a refused attach (`CURLM_ADDED_ALREADY`
+// when the handle is already on this or another multi handle) leaves the map exactly as
+// it was — otherwise `curl_multi_get_handles()` would list a handle libcurl never took.
+function curl_multi_add_handle(CurlMultiHandle $multi_handle, mixed $handle): int {
+    if (!($handle instanceof CurlHandle)) {
+        $given = is_object($handle) ? get_class($handle) : (is_null($handle) ? "null" : gettype($handle));
+        throw new \TypeError("curl_multi_add_handle(): Argument #2 (\$handle) must be of type CurlHandle, " . $given . " given");
+    }
+    $multiRaw = $multi_handle->__elephc_handle;
+    $easyRaw = $handle->__elephc_handle;
+    $code = __elephc_curl_multi_add($multiRaw, $easyRaw);
+    if ($code === 0) {
+        $id = __elephc_curl_easy_id($easyRaw);
+        $multi_handle->__elephc_attach($id, $handle);
+    }
+    return $code;
+}
+
+function curl_multi_remove_handle(CurlMultiHandle $multi_handle, mixed $handle): int {
+    if (!($handle instanceof CurlHandle)) {
+        $given = is_object($handle) ? get_class($handle) : (is_null($handle) ? "null" : gettype($handle));
+        throw new \TypeError("curl_multi_remove_handle(): Argument #2 (\$handle) must be of type CurlHandle, " . $given . " given");
+    }
+    $multiRaw = $multi_handle->__elephc_handle;
+    $easyRaw = $handle->__elephc_handle;
+    $code = __elephc_curl_multi_remove($multiRaw, $easyRaw);
+    if ($code === 0) {
+        $id = __elephc_curl_easy_id($easyRaw);
+        $multi_handle->__elephc_detach($id);
+    }
+    return $code;
+}
+
+// `$still_running` IS A REQUIRED BY-REFERENCE PARAMETER, exactly as in php-src, and the
+// bridge returns BOTH of this function's outputs packed into one integer so it can be:
+// the still-running count occupies the high 32 bits and the `CURLMcode` the low 32
+// (`crates/elephc-curl/src/multi.rs`). Unpacking here rather than in C keeps the
+// by-reference write an ordinary PHP assignment.
+//
+// THE LOW HALF IS SIGN-EXTENDED BY HAND because a `CURLMcode` can be negative
+// (`CURLM_CALL_MULTI_PERFORM` is `-1`) and the packing carries it as an unsigned 32-bit
+// field; without this, `-1` would surface as `4294967295`.
+function curl_multi_exec(CurlMultiHandle $multi_handle, int &$still_running): int {
+    $raw = $multi_handle->__elephc_handle;
+    $packed = __elephc_curl_multi_exec($raw);
+    $still_running = ($packed >> 32) & 4294967295;
+    $code = $packed & 4294967295;
+    if ($code >= 2147483648) {
+        $code -= 4294967296;
+    }
+    return $code;
+}
+
+// php-src converts the `float $timeout` (seconds) to libcurl's millisecond timeout with a
+// plain `(int)(timeout * 1000.0)` cast, and so does this — including for a negative or
+// zero timeout, which libcurl reads as "return immediately".
+function curl_multi_select(CurlMultiHandle $multi_handle, float $timeout = 1.0): int {
+    $raw = $multi_handle->__elephc_handle;
+    $milliseconds = (int) ($timeout * 1000.0);
+    return __elephc_curl_multi_select($raw, $milliseconds);
+}
+
+// DIVERGENCE FROM PHP: php-src declares `curl_multi_info_read(...): array|false`. The
+// RETURN VALUE here is exactly that, but the return TYPE is left undeclared, for the same
+// measured reason `curl_version()` leaves its own undeclared: with `array|false` declared,
+// a caller that writes the documented loop —
+//
+//     while (true) { $info = curl_multi_info_read($mh, $q); if ($info === false) break; …$info['msg']… }
+//
+// takes the `=== false` branch on the FIRST iteration even though a real array was
+// returned, because indexing `$info` later in the loop types its slot as an array and the
+// union value is reinterpreted through that representation. Undeclared keeps the runtime
+// value honest and the loop working.
+//
+// `$queued_messages` IS AN OPTIONAL BY-REFERENCE PARAMETER, matching php-src, and it is
+// LEFT UNTOUCHED when the queue is empty — php-src returns `false` before it reaches its
+// own `ZEND_TRY_ASSIGN_REF_LONG`, so a caller's variable keeps whatever it held.
+//
+// THE `handle` KEY IS OMITTED WHEN THE OBJECT CANNOT BE FOUND, which is also php-src's
+// behaviour (`_php_curl_multi_find_easy_handle` returning NULL simply adds no key): the
+// alternative would be minting a second `CurlHandle` around the same native handle, which
+// would double-free it. See `CurlMultiHandle`'s comment for the whole ownership argument.
+function curl_multi_info_read(CurlMultiHandle $multi_handle, int &$queued_messages = null) {
+    $raw = $multi_handle->__elephc_handle;
+    if (__elephc_curl_multi_info_read($raw, 0) !== 1) {
+        return false;
+    }
+    $queued_messages = __elephc_curl_multi_info_read($raw, 4);
+    $msg = __elephc_curl_multi_info_read($raw, 1);
+    $result = __elephc_curl_multi_info_read($raw, 2);
+    $easyId = __elephc_curl_multi_info_read($raw, 3);
+    $handle = $multi_handle->__elephc_lookup($easyId);
+    if ($handle === null) {
+        return ["msg" => $msg, "result" => $result];
+    }
+    return ["msg" => $msg, "result" => $result, "handle" => $handle];
+}
+
+// KNOWN NOISE, NOT FIXED: `$multi_handle` is unused, for the same reason `curl_close()`'s
+// `$handle` is (see its comment) — the function is a no-op in PHP 8 and the parameter name
+// is PHP-visible named-argument surface that cannot be renamed to `_multi_handle`.
+function curl_multi_close(CurlMultiHandle $multi_handle): void {}
+
+// `curl_multi_getcontent()` READS THE CAPTURE BUFFER WITHOUT CONSUMING IT, because
+// php-src's `RETURN_STR_COPY(ch->handlers.write->buf.s)` copies and leaves the buffer in
+// place: calling it twice answers the same body twice. The buffer is reset where php-src
+// resets it — at the start of the next transfer, and on `curl_multi_add_handle()`.
+//
+// `null` (NOT `""`) FOR A HANDLE WITHOUT `CURLOPT_RETURNTRANSFER`, matching php-src's own
+// `RETURN_NULL()` for a handle whose write method is not `PHP_CURL_RETURN`. The two are
+// genuinely different answers: `""` means "captured nothing", `null` means "was never
+// capturing".
+function curl_multi_getcontent(mixed $handle): ?string {
+    if (!($handle instanceof CurlHandle)) {
+        $given = is_object($handle) ? get_class($handle) : (is_null($handle) ? "null" : gettype($handle));
+        throw new \TypeError("curl_multi_getcontent(): Argument #1 (\$handle) must be of type CurlHandle, " . $given . " given");
+    }
+    if (!$handle->__elephc_return_transfer) {
+        return null;
+    }
+    $raw = $handle->__elephc_handle;
+    $body = __elephc_curl_easy_body($raw);
+    return $body;
+}
+
+// The `CURLMOPT_*` numbers are classified INSIDE THE BRIDGE
+// (`crates/elephc-curl/src/multi.rs`), not here, for the same memory-safety reason
+// `curl_setopt()` consults the easy option table: `curl_multi_setopt` is variadic and
+// reads its third argument from the option's numeric range, so handing a PHP integer to
+// `CURLMOPT_PUSHFUNCTION` (20014) would install it as a function pointer. The answer is
+// three-way: `1` applied, `0` recognized but not carryable by this build (`false` plus
+// PHP's warning, locked decision 7), `-1` not a cURL multi option at all (php-src's own
+// `ValueError`).
+function curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, mixed $value): bool {
+    $raw = $multi_handle->__elephc_handle;
+    if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
+        $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
+        throw new \TypeError("curl_multi_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
+    }
+    $applied = __elephc_curl_multi_setopt($raw, $option, (int) $value);
+    if ($applied === -1) {
+        throw new \ValueError("curl_multi_setopt(): Argument #2 (\$option) is not a valid cURL multi option");
+    }
+    if ($applied === 0) {
+        __elephc_curl_multi_setopt_unsupported_warning($option);
+        return false;
+    }
+    return true;
+}
+
+function curl_multi_errno(CurlMultiHandle $multi_handle): int {
+    $raw = $multi_handle->__elephc_handle;
+    return __elephc_curl_multi_errno($raw);
+}
+
+// DIVERGENCE FROM PHP, the same one `curl_strerror()` documents: php-src declares
+// `?string` and answers `null` only for a null pointer libcurl never returns. The message
+// is bound to a local before it is returned for the leak reason this module's header
+// explains.
+function curl_multi_strerror(int $error_code): string {
+    $message = __elephc_curl_multi_strerror($error_code);
+    return $message;
+}
+// -- elephc PHP >= 8.5 curl_multi_get_handles begin --
+// PHP 8.5 ONLY (locked decision 8): 8.2-8.4 have no `curl_multi_get_handles`, and a
+// program compiled with `--php-version 8.4` must see an "undefined function" error for it,
+// exactly as those runtimes do. The block markers are what
+// `prelude_source_for_version` strips; `src/pdo_prelude.rs` uses the identical mechanism.
+//
+// The handles come back IN ADD ORDER and are the same objects that were added — the map
+// this file's `CurlMultiHandle` comment describes is the whole reason that is possible.
+function curl_multi_get_handles(CurlMultiHandle $multi_handle): array {
+    $handles = $multi_handle->__elephc_handles;
+    return $handles;
+}
+// -- elephc PHP >= 8.5 curl_multi_get_handles end --
 "#;
 
 /// Injects the curl prelude when the program references the `ext/curl` surface, leaving
-/// every other program untouched.
+/// every other program untouched, for the DEFAULT PHP compatibility version.
 ///
 /// `force` comes from an explicit opt-in (`--with-curl`, and the codegen harness);
 /// otherwise the decision is `detect::program_uses_curl`. The prelude carries only
@@ -582,11 +877,121 @@ pub fn inject_if_used(
     program: crate::parser::ast::Program,
     force: bool,
 ) -> crate::parser::ast::Program {
+    inject_if_used_for_version(program, force, crate::php_version::PhpVersion::default())
+}
+
+/// Injects the curl prelude generated for an explicit PHP compatibility version.
+///
+/// The curl surface is not the same in every supported PHP: `curl_multi_get_handles()`
+/// exists only from 8.5 (locked decision 8), so compiling with `--php-version 8.4` must
+/// leave it undeclared and let the call fail as "undefined function", the way that runtime
+/// would. The version-specific parts of the source are fenced with
+/// `// -- elephc PHP >= <version> … begin/end --` markers and removed by
+/// [`prelude_source_for_version`], the same mechanism `crate::pdo_prelude` uses.
+pub fn inject_if_used_for_version(
+    program: crate::parser::ast::Program,
+    force: bool,
+    php_version: crate::php_version::PhpVersion,
+) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_curl(&program) {
         return program;
     }
-    let tokens = crate::lexer::tokenize(CURL_PRELUDE_SRC).expect("curl prelude must tokenize");
+    let source = prelude_source_for_version(php_version);
+    let tokens = crate::lexer::tokenize(source.as_ref()).expect("curl prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("curl prelude must parse");
     combined.extend(program);
     combined
+}
+
+/// Returns the curl prelude source for one PHP compatibility version: the full text for
+/// 8.5 and later, with each later-than-`php_version` block removed otherwise.
+fn prelude_source_for_version(
+    php_version: crate::php_version::PhpVersion,
+) -> std::borrow::Cow<'static, str> {
+    if php_version >= crate::php_version::PhpVersion::Php85 {
+        return std::borrow::Cow::Borrowed(CURL_PRELUDE_SRC);
+    }
+    let mut source = CURL_PRELUDE_SRC.to_owned();
+    remove_version_block(
+        &mut source,
+        "// -- elephc PHP >= 8.5 curl_multi_get_handles begin --",
+        "// -- elephc PHP >= 8.5 curl_multi_get_handles end --",
+    );
+    std::borrow::Cow::Owned(source)
+}
+
+/// Removes one `begin`/`end`-fenced block (markers included) from the prelude source.
+///
+/// A MISSING MARKER PANICS rather than silently leaving the block in: the whole point of
+/// the fence is that an 8.4 build cannot declare an 8.5 function, and a marker renamed by
+/// an unrelated edit would break that quietly. Mirrors `pdo_prelude::remove_version_block`.
+fn remove_version_block(source: &mut String, begin: &str, end: &str) {
+    let start = source
+        .find(begin)
+        .unwrap_or_else(|| panic!("missing curl prelude version-gate marker: {begin}"));
+    let relative_end = source[start..]
+        .find(end)
+        .unwrap_or_else(|| panic!("missing curl prelude version-gate marker: {end}"));
+    let mut finish = start + relative_end + end.len();
+    if source.as_bytes().get(finish) == Some(&b'\n') {
+        finish += 1;
+    }
+    source.replace_range(start..finish, "");
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    use crate::php_version::PhpVersion;
+
+    /// 8.5 (elephc's default) declares `curl_multi_get_handles()`; every earlier profile
+    /// must not, because those runtimes do not have the function at all.
+    #[test]
+    fn curl_multi_get_handles_is_php_85_only() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            let declared = source.contains("function curl_multi_get_handles(");
+            assert_eq!(
+                declared,
+                version >= PhpVersion::Php85,
+                "curl_multi_get_handles must be declared exactly for PHP >= 8.5, not {version}"
+            );
+        }
+    }
+
+    /// Stripping the 8.5 block must not take any of the version-independent multi surface
+    /// with it — the failure mode of a mis-placed end marker.
+    #[test]
+    fn every_version_keeps_the_version_independent_multi_surface() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            for declaration in [
+                "final class CurlMultiHandle {",
+                "function curl_multi_init(): CurlMultiHandle {",
+                "function curl_multi_add_handle(",
+                "function curl_multi_exec(",
+                "function curl_multi_info_read(",
+                "function curl_multi_getcontent(",
+                "function curl_multi_strerror(",
+            ] {
+                assert!(
+                    source.contains(declaration),
+                    "{version} must keep {declaration}"
+                );
+            }
+        }
+    }
+
+    /// The gated source still tokenizes and parses on every profile: a stripped block that
+    /// left an unbalanced brace would otherwise only fail when a user compiled for 8.4.
+    #[test]
+    fn every_version_parses() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            let tokens = crate::lexer::tokenize(source.as_ref())
+                .unwrap_or_else(|e| panic!("{version} curl prelude must tokenize: {e:?}"));
+            crate::parser::parse_internal(&tokens)
+                .unwrap_or_else(|e| panic!("{version} curl prelude must parse: {e:?}"));
+        }
+    }
 }

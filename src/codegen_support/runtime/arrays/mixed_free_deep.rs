@@ -136,6 +136,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource_curl");             // CurlHandle needs curl_easy_cleanup via the elephc_curl bridge
 
+    emitter.instruction("cmp x9, #7");                                          // is the resource a libcurl multi handle?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_curl_multi");       // CurlMultiHandle needs curl_multi_cleanup via the elephc_curl bridge
+
     emitter.instruction("b __rt_mixed_free_deep_box");                          // unknown resource kind, free the box without destructor
 
 
@@ -196,6 +200,14 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the libcurl handle id from the low payload word
 
     emitter.instruction("bl __rt_curl_easy_free");                              // release the easy handle through the indirect curl slot
+
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the handle
+
+
+    emitter.label("__rt_mixed_free_deep_resource_curl_multi");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the libcurl multi handle id from the low payload word
+
+    emitter.instruction("bl __rt_curl_multi_free");                             // release the multi handle through the indirect curl slot
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the handle
 
@@ -317,6 +329,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("je __rt_mixed_free_deep_resource_curl");               // CurlHandle needs curl_easy_cleanup via the elephc_curl bridge
 
+    emitter.instruction("cmp r9, 7");                                           // is the resource a libcurl multi handle?
+
+    emitter.instruction("je __rt_mixed_free_deep_resource_curl_multi");         // CurlMultiHandle needs curl_multi_cleanup via the elephc_curl bridge
+
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // unknown resource kind, free the box without destructor
 
 
@@ -372,6 +388,14 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the libcurl handle id from the low payload word
 
     emitter.instruction("call __rt_curl_easy_free");                            // release the easy handle through the indirect curl slot
+
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
+
+
+    emitter.label("__rt_mixed_free_deep_resource_curl_multi");
+    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the libcurl multi handle id from the low payload word
+
+    emitter.instruction("call __rt_curl_multi_free");                           // release the multi handle through the indirect curl slot
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
 

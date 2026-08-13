@@ -578,6 +578,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_PREFIX
     ));
     out.push_str(&format!(
+        ".globl _diag_curl_multi_setopt_unsupported_prefix\n_diag_curl_multi_setopt_unsupported_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::data::CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX
+    ));
+    out.push_str(&format!(
         ".globl _diag_curl_setopt_unsupported_suffix\n_diag_curl_setopt_unsupported_suffix:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::data::CURL_SETOPT_UNSUPPORTED_SUFFIX
     ));

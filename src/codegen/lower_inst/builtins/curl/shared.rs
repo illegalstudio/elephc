@@ -66,6 +66,22 @@ pub(super) fn load_handle_to_first_arg(
     Ok(())
 }
 
+/// Unboxes the handle operand at `index` into the INTEGER RESULT REGISTER and leaves it
+/// there, for a lowering that has to stage it (a second handle argument) rather than use
+/// it as the first C argument straight away.
+///
+/// Same guard as [`load_handle_to_first_arg`]: anything that is not a tag-9 Mixed cell
+/// raises PHP's TypeError rather than reaching the bridge as a wild id.
+pub(super) fn load_handle_to_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    index: usize,
+    name: &str,
+) -> Result<()> {
+    let handle = expect_operand(inst, index)?;
+    super::super::io::load_stream_fd_to_result(ctx, handle, name)
+}
+
 /// Verifies a curl lowering received exactly `expected` operands.
 pub(super) fn ensure_curl_arg_count(
     inst: &Instruction,

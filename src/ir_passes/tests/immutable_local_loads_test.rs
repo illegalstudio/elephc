@@ -7,6 +7,9 @@
 //! Key details:
 //! - Covers read-only `$argc`, one dominating entry store, multiple writes,
 //!   non-entry stores, by-reference parameters, and alias metadata that reject purity.
+//! - Also covers the slot a CALLEE writes through a by-reference argument alias: it has
+//!   exactly one entry store in this function and would otherwise pass the immutability
+//!   proof, after which LICM hoists the loop condition reading it out of the loop.
 
 use crate::ir::{
     validate_function, Builder, DataPool, Function, FunctionParam, Immediate, IrType, LocalKind,
@@ -195,4 +198,60 @@ fn rejects_reference_alias_metadata() {
 
     assert!(!classify(&mut function));
     assert_eq!(function.instructions[3].effects, Op::LoadLocal.default_effects());
+}
+
+/// A LOCAL PASSED BY REFERENCE IS NEVER IMMUTABLE, even though this function stores it
+/// exactly once, in the entry, before every load: the callee writes the caller's slot
+/// through the argument alias, and no `store_local` here records that.
+///
+/// This is the shape PHP's own `curl_multi_exec()` loop is written in —
+/// `$n = 0; do { f($h, $n); … } while ($n > 0);` — and calling the load pure let LICM
+/// hoist the whole `$n > 0` compare into the preheader, so the loop ran exactly once.
+#[test]
+fn rejects_a_slot_written_through_a_by_reference_argument() {
+    let mut data = DataPool::default();
+    let callee = data.intern_function_name("step");
+    let mut function = Function::new("by_ref_arg".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("running".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_i64(0);
+        builder.emit_store_local(slot, seed);
+        // The by-reference argument: an ordinary load whose RESULT the call consumes.
+        // Codegen turns that value back into the slot's address.
+        let alias = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder
+            .emit(
+                Op::Call,
+                vec![alias],
+                Some(Immediate::Data(callee)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .unwrap();
+        // The loop condition's read of the same slot, which must stay effectful.
+        let observed = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return { value: Some(observed) });
+    }
+
+    assert!(!classify(&mut function), "a by-ref-aliased slot is not immutable");
+    for inst in &function.instructions {
+        if inst.op == Op::LoadLocal {
+            assert_eq!(
+                inst.effects,
+                Op::LoadLocal.default_effects(),
+                "loads of a by-ref-aliased slot must stay effectful"
+            );
+        }
+    }
+    assert!(validate_function(&function).is_ok());
 }

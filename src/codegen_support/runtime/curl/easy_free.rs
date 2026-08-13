@@ -28,9 +28,25 @@ use super::slots::{emit_call_entry, emit_load_entry_or_branch};
 
 /// `__rt_curl_easy_free` — in: handle id in `x0`/`rdi`. Out: nothing.
 pub(crate) fn emit_curl_easy_free(emitter: &mut Emitter) {
+    emit_free_helper(
+        emitter,
+        "__rt_curl_easy_free",
+        "_elephc_curl_easy_free_fn",
+        "curl_easy_free (release a libcurl easy handle)",
+    );
+}
+
+/// Emits one handle destructor: skip a `0` payload, probe the slot, call it.
+///
+/// The multi handle's destructor (`super::multi`) is the SAME code with a different
+/// slot, and for the same reason: its Mixed cell is the only owner of the native
+/// handle, so exactly one release path may exist.
+pub(super) fn emit_free_helper(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
+    let done = format!("{label}_done");
+    let done_x86 = format!("{label}_done_x86");
     emitter.blank();
-    emitter.comment("--- runtime: curl_easy_free (release a libcurl easy handle) ---");
-    emitter.label_global("__rt_curl_easy_free");
+    emitter.comment(&format!("--- runtime: {description} ---"));
+    emitter.label_global(label);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("sub sp, sp, #16");                             // frame to preserve the link register across the call
@@ -39,16 +55,12 @@ pub(crate) fn emit_curl_easy_free(emitter: &mut Emitter) {
 
             emitter.instruction("mov x29, sp");                                 // set the frame pointer
 
-            emitter.instruction("cbz x0, __rt_curl_easy_free_done");            // id 0 never names a live handle
+            emitter.instruction(&format!("cbz x0, {done}"));                    // id 0 never names a live handle
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_free_fn",
-                "__rt_curl_easy_free_done",
-            );
-            emit_call_entry(emitter);                                           // elephc_curl_easy_free(id) — curl_easy_cleanup
+            emit_load_entry_or_branch(emitter, slot, &done);
+            emit_call_entry(emitter);                                           // elephc_curl_*_free(id) — curl_*_cleanup
 
-            emitter.label("__rt_curl_easy_free_done");
+            emitter.label(&done);
             emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
 
             emitter.instruction("add sp, sp, #16");                             // release the frame
@@ -65,16 +77,12 @@ pub(crate) fn emit_curl_easy_free(emitter: &mut Emitter) {
 
             emitter.instruction("test rdi, rdi");                               // id 0 never names a live handle
 
-            emitter.instruction("jz __rt_curl_easy_free_done_x86");             // skip the release for a malformed cell
+            emitter.instruction(&format!("jz {done_x86}"));                     // skip the release for a malformed cell
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_free_fn",
-                "__rt_curl_easy_free_done_x86",
-            );
-            emit_call_entry(emitter);                                           // elephc_curl_easy_free(id) — curl_easy_cleanup
+            emit_load_entry_or_branch(emitter, slot, &done_x86);
+            emit_call_entry(emitter);                                           // elephc_curl_*_free(id) — curl_*_cleanup
 
-            emitter.label("__rt_curl_easy_free_done_x86");
+            emitter.label(&done_x86);
             emitter.instruction("mov rsp, rbp");                                // release the frame
 
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer

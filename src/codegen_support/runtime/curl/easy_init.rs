@@ -40,6 +40,7 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
         "__rt_curl_easy_init",
         "_elephc_curl_easy_init_fn",
         "curl_easy_init (allocate a libcurl easy handle)",
+        CURL_EASY_RESOURCE_KIND,
     );
 }
 
@@ -51,13 +52,25 @@ pub(crate) fn emit_curl_easy_copy(emitter: &mut Emitter) {
         "__rt_curl_easy_copy",
         "_elephc_curl_easy_duphandle_fn",
         "curl_easy_copy (duplicate a libcurl easy handle)",
+        CURL_EASY_RESOURCE_KIND,
     );
 }
 
+/// The `__rt_mixed_free_deep` resource kind that owns a libcurl EASY handle
+/// (`CurlHandle`). Kind 7 is its multi sibling — see `super::multi`.
+pub(super) const CURL_EASY_RESOURCE_KIND: u8 = 6;
+
 /// Emits one handle-producing helper: probe the slot, call it with whatever the caller
-/// left in the C argument registers, box the returned `i64` id as a resource-kind-6 Mixed
-/// cell, and answer boxed PHP `false` for id `0`.
-fn emit_handle_producer(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
+/// left in the C argument registers, box the returned `i64` id as a Mixed cell of
+/// resource `kind` (6 = `CurlHandle`, 7 = `CurlMultiHandle`), and answer boxed PHP
+/// `false` for id `0`.
+pub(super) fn emit_handle_producer(
+    emitter: &mut Emitter,
+    label: &str,
+    slot: &str,
+    description: &str,
+    kind: u8,
+) {
     let false_label = format!("{label}_false");
     let false_label_x86 = format!("{label}_false_x86");
     emitter.blank();
@@ -78,7 +91,7 @@ fn emit_handle_producer(emitter: &mut Emitter, label: &str, slot: &str, descript
 
             emitter.instruction("mov x1, x0");                                  // Mixed payload = the bridge handle id
 
-            emitter.instruction("mov x2, #6");                                  // resource kind 6 = CurlHandle (high payload word)
+            emitter.instruction(&format!("mov x2, #{kind}"));                   // resource kind 6 = CurlHandle, 7 = CurlMultiHandle (high payload word)
 
             emitter.instruction("mov x0, #9");                                  // runtime tag 9 = resource
 
@@ -122,7 +135,7 @@ fn emit_handle_producer(emitter: &mut Emitter, label: &str, slot: &str, descript
 
             emitter.instruction("mov rdi, rax");                                // Mixed payload = the bridge handle id
 
-            emitter.instruction("mov esi, 6");                                  // resource kind 6 = CurlHandle (high payload word)
+            emitter.instruction(&format!("mov esi, {kind}"));                   // resource kind 6 = CurlHandle, 7 = CurlMultiHandle (high payload word)
 
             emitter.instruction("mov eax, 9");                                  // runtime tag 9 = resource
 

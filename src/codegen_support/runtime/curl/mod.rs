@@ -32,6 +32,7 @@ mod easy_free;
 mod easy_getinfo;
 mod easy_init;
 mod easy_scalar;
+mod multi;
 pub(crate) mod slots;
 mod str_op;
 mod version;
@@ -45,7 +46,9 @@ pub(crate) use easy_init::{emit_curl_easy_copy, emit_curl_easy_init};
 pub(crate) use easy_scalar::emit_curl_easy_scalar_helpers;
 pub(crate) use str_op::emit_curl_easy_str_op;
 pub(crate) use version::emit_curl_version;
-pub(crate) use warn_option::emit_curl_warn_unsupported_option;
+pub(crate) use warn_option::{
+    emit_curl_multi_warn_unsupported_option, emit_curl_warn_unsupported_option,
+};
 
 /// Emits every `__rt_curl_*` helper for the target.
 pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
@@ -61,6 +64,8 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_version(emitter);
     emit_curl_easy_free(emitter);
     emit_curl_warn_unsupported_option(emitter);
+    emit_curl_multi_warn_unsupported_option(emitter);
+    multi::emit_curl_multi(emitter);
 }
 
 #[cfg(test)]
@@ -107,6 +112,17 @@ mod tests {
         "__rt_curl_easy_free",
         "__rt_curl_warn_unsupported_option",
         "__rt_curl_option_kind",
+        "__rt_curl_multi_init",
+        "__rt_curl_multi_add",
+        "__rt_curl_multi_remove",
+        "__rt_curl_multi_exec",
+        "__rt_curl_multi_select",
+        "__rt_curl_multi_info_read",
+        "__rt_curl_multi_setopt",
+        "__rt_curl_multi_errno",
+        "__rt_curl_multi_strerror",
+        "__rt_curl_multi_free",
+        "__rt_curl_multi_warn_unsupported_option",
     ];
 
     /// Renders the shared runtime object's assembly for one supported target.
@@ -193,6 +209,7 @@ mod tests {
             "__rt_curl_easy_getinfo_double",
             "__rt_curl_easy_str_op",
             "__rt_curl_version",
+            "__rt_curl_multi_strerror",
         ] {
             for target_name in ["macos-aarch64", "linux-aarch64"] {
                 let asm = runtime_for(target_name);
@@ -248,40 +265,55 @@ mod tests {
         }
     }
 
-    /// `__rt_mixed_free_deep` routes resource kind 6 to the curl destructor, which is what
-    /// makes a `CurlHandle` object's teardown release its libcurl handle.
+    /// `__rt_mixed_free_deep` routes resource kind 6 to the EASY destructor and kind 7 to
+    /// the MULTI one, which is what makes a `CurlHandle`/`CurlMultiHandle` object's
+    /// teardown release its libcurl handle.
     ///
     /// The branch target is matched by NAME rather than as a whole line, because local
     /// labels carry a platform-specific prefix (`L...` on macOS) that is not part of the
     /// contract being pinned.
     #[test]
-    fn mixed_free_deep_routes_kind_six_to_the_curl_destructor() {
-        for (target_name, compare, mnemonic) in [
-            ("macos-aarch64", "cmp x9, #6", "b.eq"),
-            ("linux-aarch64", "cmp x9, #6", "b.eq"),
-            ("linux-x86_64", "cmp r9, 6", "je"),
+    fn mixed_free_deep_routes_the_curl_kinds_to_their_destructors() {
+        for (target_name, mnemonic, easy_compare, multi_compare) in [
+            ("macos-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7"),
+            ("linux-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7"),
+            ("linux-x86_64", "je", "cmp r9, 6", "cmp r9, 7"),
         ] {
             let asm = runtime_for(target_name);
-            assert!(
-                asm.contains(&format!("    {compare}\n")),
-                "{target_name} must test the resource kind against 6"
-            );
-            assert!(
-                asm.lines().any(|line| {
-                    let line = line.trim();
-                    line.starts_with(&format!("{mnemonic} "))
-                        && line.ends_with("__rt_mixed_free_deep_resource_curl")
-                }),
-                "{target_name} must branch to the curl destructor arm"
-            );
-            assert!(
-                asm.contains("__rt_mixed_free_deep_resource_curl:\n"),
-                "{target_name} must define the curl destructor arm"
-            );
-            assert!(
-                asm.lines().any(|line| line.trim().ends_with("__rt_curl_easy_free")),
-                "{target_name} curl destructor arm must call __rt_curl_easy_free"
-            );
+            for (compare, arm, destructor, kind) in [
+                (
+                    easy_compare,
+                    "__rt_mixed_free_deep_resource_curl",
+                    "__rt_curl_easy_free",
+                    6,
+                ),
+                (
+                    multi_compare,
+                    "__rt_mixed_free_deep_resource_curl_multi",
+                    "__rt_curl_multi_free",
+                    7,
+                ),
+            ] {
+                assert!(
+                    asm.contains(&format!("    {compare}\n")),
+                    "{target_name} must test the resource kind against {kind}"
+                );
+                assert!(
+                    asm.lines().any(|line| {
+                        let line = line.trim();
+                        line.starts_with(&format!("{mnemonic} ")) && line.ends_with(arm)
+                    }),
+                    "{target_name} must branch to {arm}"
+                );
+                assert!(
+                    asm.contains(&format!("{arm}:\n")),
+                    "{target_name} must define {arm}"
+                );
+                assert!(
+                    asm.lines().any(|line| line.trim().ends_with(destructor)),
+                    "{target_name} destructor arm must call {destructor}"
+                );
+            }
         }
     }
 }

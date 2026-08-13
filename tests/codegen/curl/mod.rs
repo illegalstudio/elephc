@@ -17,4 +17,5 @@ mod easy_http;
 mod easy_options;
 mod easy_tls;
 mod http_fixture;
+mod multi;
 mod tls_fixture;

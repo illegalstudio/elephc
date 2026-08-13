@@ -488,6 +488,31 @@ pub enum RuntimeFnId {
     /// Classifies a `curl_setopt()` option number against the bridge's frozen option
     /// table, so the prelude can pick the setter that matches the option's C type.
     CurlOptionKind,
+    /// Reads an easy handle's own bridge id out of its boxed Mixed cell, so the
+    /// `CurlMultiHandle` object can key its PHP-side id -> `CurlHandle` map on it.
+    CurlEasyId,
+    /// Allocates a libcurl multi handle and boxes it as a resource-kind-7 Mixed cell.
+    CurlMultiInit,
+    /// Attaches an easy handle to a multi handle, answering a `CURLMcode`.
+    CurlMultiAdd,
+    /// Detaches an easy handle from a multi handle, answering a `CURLMcode`.
+    CurlMultiRemove,
+    /// Drives a multi handle's attached transfers, answering the still-running count
+    /// and the `CURLMcode` packed into one integer.
+    CurlMultiExec,
+    /// Waits for a multi handle's attached transfers to become ready, answering the
+    /// number of ready descriptors (or `-1`).
+    CurlMultiSelect,
+    /// Reads one field of a multi handle's completion queue (`curl_multi_info_read()`).
+    CurlMultiInfoRead,
+    /// Applies an integer-valued `CURLMOPT_*` option to a multi handle.
+    CurlMultiSetopt,
+    /// Reports the `CURLMcode` from a multi handle's most recent operation.
+    CurlMultiErrno,
+    /// Reports libcurl's human-readable message for a `CURLMcode`.
+    CurlMultiStrerror,
+    /// Raises PHP's warning for a `CURLMOPT_*` option this build cannot apply.
+    CurlMultiSetoptUnsupportedWarning,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1220,6 +1245,16 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasySetoptSlist
             | RuntimeFnId::CurlEasySetoptStr
             | RuntimeFnId::CurlOptionKind
+            | RuntimeFnId::CurlEasyId
+            | RuntimeFnId::CurlMultiInit
+            | RuntimeFnId::CurlMultiAdd
+            | RuntimeFnId::CurlMultiRemove
+            | RuntimeFnId::CurlMultiExec
+            | RuntimeFnId::CurlMultiSelect
+            | RuntimeFnId::CurlMultiInfoRead
+            | RuntimeFnId::CurlMultiSetopt
+            | RuntimeFnId::CurlMultiErrno
+            | RuntimeFnId::CurlMultiStrerror
             | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1421,6 +1456,20 @@ impl RuntimeFnId {
                 // A pure diagnostic: it returns nothing at all, so there is certainly no
                 // storage for the caller to keep an argument temporary alive for.
                 | RuntimeFnId::CurlSetoptUnsupportedWarning
+                | RuntimeFnId::CurlMultiSetoptUnsupportedWarning
+                // Every multi operation below hands back a raw machine integer — a
+                // `CURLMcode`, a ready-descriptor count, a packed (running, code) pair, or
+                // one completion-queue field — never storage. `CurlEasyId` merely unboxes
+                // the id the handle cell already carries, which is the purest case of all:
+                // it allocates nothing and reads no bridge state.
+                | RuntimeFnId::CurlEasyId
+                | RuntimeFnId::CurlMultiAdd
+                | RuntimeFnId::CurlMultiRemove
+                | RuntimeFnId::CurlMultiExec
+                | RuntimeFnId::CurlMultiSelect
+                | RuntimeFnId::CurlMultiInfoRead
+                | RuntimeFnId::CurlMultiSetopt
+                | RuntimeFnId::CurlMultiErrno
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -1513,6 +1562,12 @@ impl RuntimeFnId {
                 // boxed by `__rt_mixed_from_value`, which persists the string, so the
                 // cell handed back owns storage no argument shares.
                 | RuntimeFnId::CurlEasyStrOp
+                // `curl_multi_init()` boxes a brand-new resource-kind-7 Mixed cell (there
+                // is no argument to alias) and `curl_multi_strerror()` copies libcurl's
+                // `'static` `CURLMcode` text into an owned string, exactly as their easy
+                // siblings above do.
+                | RuntimeFnId::CurlMultiInit
+                | RuntimeFnId::CurlMultiStrerror
                 | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
@@ -2007,6 +2062,19 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
             RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
+            RuntimeFnId::CurlEasyId => "__elephc_curl_easy_id",
+            RuntimeFnId::CurlMultiInit => "__elephc_curl_multi_init",
+            RuntimeFnId::CurlMultiAdd => "__elephc_curl_multi_add",
+            RuntimeFnId::CurlMultiRemove => "__elephc_curl_multi_remove",
+            RuntimeFnId::CurlMultiExec => "__elephc_curl_multi_exec",
+            RuntimeFnId::CurlMultiSelect => "__elephc_curl_multi_select",
+            RuntimeFnId::CurlMultiInfoRead => "__elephc_curl_multi_info_read",
+            RuntimeFnId::CurlMultiSetopt => "__elephc_curl_multi_setopt",
+            RuntimeFnId::CurlMultiErrno => "__elephc_curl_multi_errno",
+            RuntimeFnId::CurlMultiStrerror => "__elephc_curl_multi_strerror",
+            RuntimeFnId::CurlMultiSetoptUnsupportedWarning => {
+                "__elephc_curl_multi_setopt_unsupported_warning"
+            }
             RuntimeFnId::CurlSetoptUnsupportedWarning => {
                 "__elephc_curl_setopt_unsupported_warning"
             }

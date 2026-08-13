@@ -510,14 +510,22 @@ pub unsafe extern "C" fn elephc_curl_easy_take_scratch(
     })
 }
 
-/// Transfers ownership of the RETURNTRANSFER-captured body to the caller:
-/// writes a pointer/length pair through `ptr`/`len`. The returned pointer
-/// stays valid until the next `elephc-curl` call that touches this `id`
-/// (`elephc_curl_easy_take_body` again, `elephc_curl_easy_perform`, or
-/// `elephc_curl_easy_free`) — the same "borrowed until overwritten"
-/// convention `elephc-pdo`'s `store_bytes`/`elephc-image`'s `out_cell` use;
-/// the caller is expected to copy the bytes out immediately. Returns `0` for
-/// an unknown id.
+/// Publishes the RETURNTRANSFER-captured body as a pointer/length pair through
+/// `ptr`/`len`. The returned pointer stays valid until the next `elephc-curl`
+/// call that touches this `id` (`elephc_curl_easy_take_body` again,
+/// `elephc_curl_easy_perform`, or `elephc_curl_easy_free`) — the same
+/// "borrowed until overwritten" convention `elephc-pdo`'s
+/// `store_bytes`/`elephc-image`'s `out_cell` use; the caller is expected to copy
+/// the bytes out immediately. Returns `0` for an unknown id.
+///
+/// READING THE BODY DOES NOT CONSUME IT, and that is php-src's semantics rather
+/// than an accident: both `curl_exec()` (with `RETURNTRANSFER`) and
+/// `curl_multi_getcontent()` end in `RETURN_STR_COPY(ch->handlers.write->buf.s)`,
+/// which copies the buffer and leaves it in place, so calling
+/// `curl_multi_getcontent()` twice answers the same body twice. The capture
+/// buffer is reset where php-src resets it instead: at the start of every
+/// `elephc_curl_easy_perform`, and in `elephc_curl_multi_add` (php-src's
+/// `_php_curl_cleanup_handle` on `curl_multi_add_handle`).
 ///
 /// # Safety
 /// `ptr` and `len` must be valid for a write when non-null.
@@ -533,7 +541,10 @@ pub unsafe extern "C" fn elephc_curl_easy_take_body(
             write_out_len(len, 0);
             return 0;
         };
-        entry.taken_body = std::mem::take(&mut entry.body);
+        // A COPY, not a move: see this function's doc comment — php-src hands
+        // the body back without clearing the capture buffer, so a second
+        // `curl_multi_getcontent()` must see the same bytes.
+        entry.taken_body = entry.body.clone();
         write_out_len(len, entry.taken_body.len());
         if !ptr.is_null() {
             unsafe {
@@ -636,10 +647,12 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
 /// APPLICATION-owned. So a copy that inherited the pointer would be reading a
 /// list this bridge owns and frees on the SOURCE's behalf:
 ///
-///     $a = curl_init(...); curl_setopt($a, CURLOPT_HTTPHEADER, [...]);
-///     $b = curl_copy_handle($a);
-///     unset($a);            // EasyEntry::free_slists frees the list
-///     curl_exec($b);        // libcurl walks freed memory
+/// ```text
+/// $a = curl_init(...); curl_setopt($a, CURLOPT_HTTPHEADER, [...]);
+/// $b = curl_copy_handle($a);
+/// unset($a);            // EasyEntry::free_slists frees the list
+/// curl_exec($b);        // libcurl walks freed memory
+/// ```
 ///
 /// `curl_reset($a)` and simply setting `CURLOPT_HTTPHEADER` on `$a` again reach
 /// the same dangling read. Copying the bridge's own map would be worse still —
@@ -908,7 +921,12 @@ unsafe fn write_out_len(ptr: *mut usize, value: usize) {
 /// # Safety
 /// `out_ptr` must be valid for `out_cap` bytes when non-null. `out_len` must
 /// be valid for a write when non-null.
-unsafe fn publish_bytes(bytes: &[u8], out_ptr: *mut u8, out_cap: usize, out_len: *mut usize) -> i32 {
+pub(crate) unsafe fn publish_bytes(
+    bytes: &[u8],
+    out_ptr: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
     unsafe {
         write_out_len(out_len, bytes.len());
     }
