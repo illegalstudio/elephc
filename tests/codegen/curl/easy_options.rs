@@ -170,9 +170,20 @@ fn wave_a_private_round_trips_through_getinfo() {
         echo curl_getinfo($ch, CURLINFO_PRIVATE) === false ? "unset\n" : "set\n";
         curl_setopt($ch, CURLOPT_PRIVATE, "request-42");
         echo curl_getinfo($ch, CURLINFO_PRIVATE), "\n";
+        // php-src `ZVAL_COPY`s whatever it is handed here, so an ARRAY is legal and reads
+        // back verbatim. The scalar type guard the other options need must not apply.
+        echo curl_setopt($ch, CURLOPT_PRIVATE, ["a", "b"]) ? "array-ok\n" : "array-refused\n";
+        $stored = curl_getinfo($ch, CURLINFO_PRIVATE);
+        echo is_array($stored) ? "array\n" : "not-array\n";
+        echo $stored[1], "\n";
+        echo curl_setopt($ch, CURLOPT_PRIVATE, null) ? "null-ok\n" : "null-refused\n";
+        echo curl_getinfo($ch, CURLINFO_PRIVATE) === null ? "null\n" : "not-null\n";
         "#,
     );
-    assert_eq!(out, "unset\nrequest-42\n");
+    assert_eq!(
+        out,
+        "unset\nrequest-42\narray-ok\narray\nb\nnull-ok\nnull\n"
+    );
 }
 
 /// `CURLOPT_SAFE_UPLOAD` is always on: setting it `true` is a no-op that succeeds, and
@@ -671,6 +682,61 @@ fn wave_d_copy_handle_duplicates_both_layers() {
     );
 }
 
+/// REGRESSION: a copied handle must own its own `curl_slist` options, so it stays usable
+/// after everything that frees the ORIGINAL's lists — the original being destroyed, the
+/// original being reset, and the original's list option being replaced.
+///
+/// `curl_easy_duphandle` does NOT duplicate slist options: `dupset` (libcurl 8.21.0,
+/// `lib/easy.c`) shallow-copies `src->set` and then re-duplicates only strings, blobs,
+/// `COPYPOSTFIELDS` and mime, so every `struct curl_slist *` is SHARED. A copy that
+/// inherited the pointer read freed memory the moment this bridge released the source's
+/// list — a use-after-free, not a lost header. Each of the three transfers below is one of
+/// the three ways to reach it, and all three assert the headers really arrived on the wire
+/// (a copy whose option had merely been cleared would still transfer, just without them).
+#[test]
+fn wave_d_copied_handle_owns_its_slists() {
+    if skip_without_curl_native("wave_d_copied_handle_owns_its_slists") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // 1. the original is DESTROYED before the copy transfers.
+        $a = curl_init("{url}");
+        curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($a, CURLOPT_HTTPHEADER, ["X-Owned: one", "X-Second: two"]);
+        $b = curl_copy_handle($a);
+        unset($a);
+        $body = curl_exec($b);
+        echo $body === false ? "failed" : "ok", "\n";
+        echo str_contains($body, "x-owned: one") ? "h1\n" : "no-h1\n";
+        echo str_contains($body, "x-second: two") ? "h2\n" : "no-h2\n";
+
+        // 2. the original is RESET before the copy transfers.
+        $c = curl_init("{url}");
+        curl_setopt($c, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($c, CURLOPT_HTTPHEADER, ["X-Reset: three"]);
+        $d = curl_copy_handle($c);
+        curl_reset($c);
+        $body2 = curl_exec($d);
+        echo str_contains($body2, "x-reset: three") ? "h3\n" : "no-h3\n";
+
+        // 3. the original's list option is REPLACED before the copy transfers, which frees
+        //    the list the copy would otherwise still be pointing at.
+        $e = curl_init("{url}");
+        curl_setopt($e, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($e, CURLOPT_HTTPHEADER, ["X-Old: four"]);
+        $f = curl_copy_handle($e);
+        curl_setopt($e, CURLOPT_HTTPHEADER, ["X-New: five"]);
+        $body3 = curl_exec($f);
+        echo str_contains($body3, "x-old: four") ? "h4\n" : "no-h4\n";
+        echo str_contains($body3, "x-new") ? "leaked-new\n" : "isolated\n";
+        "#
+    ));
+    assert_eq!(out, "ok\nh1\nh2\nh3\nh4\nisolated\n");
+}
+
 /// Wave D: `curl_escape()` / `curl_unescape()` are libcurl's own percent-encoders, not
 /// PHP's `urlencode()` — a space becomes `%20`, never `+` — and they round-trip.
 #[test]
@@ -756,4 +822,44 @@ fn wave_d_lifecycle_calls_do_not_leak() {
     assert_eq!(output.stdout, "200200200\n");
     let (allocs, frees) = parse_gc_stats(&output.stderr);
     assert_eq!(allocs, frees, "Wave D lifecycle calls must not leak or double-free");
+}
+
+/// A string info field libcurl answers with a NULL `char *` is `false` in the typed
+/// `curl_getinfo($ch, CURLINFO_*)` form and `null` under `content_type` in the array form
+/// — php-src's two answers, and neither is `""`.
+///
+/// `/notype` responds without a `Content-Type` header, which is the ordinary way to reach
+/// a NULL info pointer. The `/hello` half of the test is what keeps the distinction
+/// meaningful: the same two reads carry a real value there, so a build that answered
+/// `false`/`null` unconditionally would fail here too.
+#[test]
+fn wave_c_null_string_info_is_false_and_null_not_empty() {
+    if skip_without_curl_native("wave_c_null_string_info_is_false_and_null_not_empty") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let typeless = server.url("/notype");
+    let typed = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $none = curl_init("{typeless}");
+        curl_setopt($none, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($none);
+        $value = curl_getinfo($none, CURLINFO_CONTENT_TYPE);
+        echo $value === false ? "typed-false\n" : ($value === "" ? "typed-empty\n" : "typed-value\n");
+        $info = curl_getinfo($none);
+        echo array_key_exists('content_type', $info) ? "key\n" : "no-key\n";
+        echo $info['content_type'] === null ? "array-null\n" : "array-not-null\n";
+
+        $some = curl_init("{typed}");
+        curl_setopt($some, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($some);
+        echo curl_getinfo($some, CURLINFO_CONTENT_TYPE), "\n";
+        echo curl_getinfo($some)['content_type'], "\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        "typed-false\nkey\narray-null\ntext/plain\ntext/plain\n"
+    );
 }

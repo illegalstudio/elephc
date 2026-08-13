@@ -531,13 +531,20 @@ pub(crate) unsafe fn getinfo_double(curl: *mut CURL, info: c_int) -> Option<f64>
 }
 
 /// Reads a `char *`-typed `curl_easy_getinfo` field into an owned byte vector.
-/// A field libcurl reports as NULL (never set for this transfer) answers an
-/// EMPTY vector rather than `None`, matching PHP's own `""` for those keys;
-/// `None` means the type mask was wrong or libcurl itself failed.
+///
+/// THE TWO "NO VALUE" CASES ARE DIFFERENT AND BOTH MATTER, which is why the
+/// result is doubly optional:
+/// - `None` — the type mask was wrong, or libcurl itself reported a failure.
+/// - `Some(None)` — libcurl succeeded and handed back a NULL `char *`, i.e. this
+///   transfer has no value for the field. php-src answers `false` for that in the
+///   typed `curl_getinfo($ch, CURLINFO_*)` form and an explicit `null` for
+///   `content_type` in the array form, so collapsing it into an empty string
+///   would report a value PHP never reports.
+/// - `Some(Some(bytes))` — a real value, possibly legitimately empty.
 ///
 /// # Safety
 /// `curl` must be a still-live pointer from [`init`].
-pub(crate) unsafe fn getinfo_str(curl: *mut CURL, info: c_int) -> Option<Vec<u8>> {
+pub(crate) unsafe fn getinfo_str(curl: *mut CURL, info: c_int) -> Option<Option<Vec<u8>>> {
     if info & CURLINFO_TYPEMASK != CURLINFO_STRING {
         return None;
     }
@@ -547,9 +554,11 @@ pub(crate) unsafe fn getinfo_str(curl: *mut CURL, info: c_int) -> Option<Vec<u8>
         return None;
     }
     if value.is_null() {
-        return Some(Vec::new());
+        return Some(None);
     }
-    Some(std::ffi::CStr::from_ptr(value).to_bytes().to_vec())
+    Some(Some(
+        std::ffi::CStr::from_ptr(value).to_bytes().to_vec(),
+    ))
 }
 
 /// Reads a `struct curl_slist *`-typed `curl_easy_getinfo` field
@@ -609,9 +618,14 @@ pub(crate) unsafe fn getinfo_certinfo(curl: *mut CURL) -> Option<Vec<Vec<Vec<u8>
 
 /// Walks a `struct curl_slist` into owned byte vectors without freeing it.
 ///
+/// Also used by `crate::abi::elephc_curl_easy_duphandle` to REBUILD a handle's list
+/// options for the copy: `curl_easy_duphandle` shares them rather than duplicating them
+/// (libcurl 8.21.0, `lib/easy.c`'s `dupset` — `dst->set = src->set` carries every
+/// `struct curl_slist *` across verbatim), so the copy needs lists of its own.
+///
 /// # Safety
 /// `list` must be null or a valid libcurl slist for the duration of the call.
-unsafe fn read_slist(list: *mut CurlSlist) -> Vec<Vec<u8>> {
+pub(crate) unsafe fn read_slist(list: *mut CurlSlist) -> Vec<Vec<u8>> {
     // `struct curl_slist { char *data; struct curl_slist *next; }` — two
     // pointers, in that order, in every libcurl release. Read through a local
     // `#[repr(C)]` mirror rather than by pointer arithmetic so the layout is

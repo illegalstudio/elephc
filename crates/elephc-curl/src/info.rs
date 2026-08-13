@@ -120,18 +120,40 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
     }
 
     let mut map = serde_json::Map::new();
+    // A string field libcurl answers with a NULL `char *` becomes `""` here. php-src's
+    // array builder passes that same pointer straight to `add_assoc_string`, so it has no
+    // defined answer for it; the empty string is the closest non-crashing equivalent and
+    // is what libcurl itself means by "no value". `content_type` is the ONE key php-src
+    // handles explicitly, and it gets its own writer below.
     let string_key = |map: &mut serde_json::Map<String, serde_json::Value>,
-                          key: &str,
-                          number: i32| {
-        if let Some(bytes) = unsafe { easy::getinfo_str(curl, number) } {
-            map.insert(
-                key.to_string(),
-                String::from_utf8_lossy(&bytes).into_owned().into(),
-            );
+                      key: &str,
+                      number: i32| {
+        if let Some(value) = unsafe { easy::getinfo_str(curl, number) } {
+            let text = value
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            map.insert(key.to_string(), text.into());
         }
     };
     string_key(&mut map, "url", info::EFFECTIVE_URL);
-    string_key(&mut map, "content_type", info::CONTENT_TYPE);
+
+    // `content_type` IS EXPLICITLY NULLABLE, matching php-src:
+    //     if (s_code != NULL) { CAAS("content_type", s_code); } else { CAAZ("content_type"); }
+    // `CAAZ` adds a NULL zval, so a response with no `Content-Type` header answers
+    // `null` — not `""`, which is what a server that sent an EMPTY `Content-Type` would
+    // produce and is therefore a different fact.
+    match unsafe { easy::getinfo_str(curl, info::CONTENT_TYPE) } {
+        Some(Some(bytes)) => {
+            map.insert(
+                "content_type".to_string(),
+                String::from_utf8_lossy(&bytes).into_owned().into(),
+            );
+        }
+        Some(None) => {
+            map.insert("content_type".to_string(), serde_json::Value::Null);
+        }
+        None => {}
+    }
 
     let long_key = |map: &mut serde_json::Map<String, serde_json::Value>,
                         key: &str,

@@ -185,15 +185,24 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         return __elephc_curl_easy_setopt_slist($raw, $option, $blob);
     }
     // CURLOPT_POSTFIELDS (10015) is the one option whose value may be an array as well as
-    // a string: PHP encodes an array of scalars as `application/x-www-form-urlencoded`.
-    // (An array containing a CURLFile would be multipart/form-data — Task 11.)
+    // a string.
+    //
+    // DIVERGENCE FROM PHP: php-src routes ANY non-empty array through
+    // `build_mime_structure_from_hash` and posts `multipart/form-data`, unconditionally —
+    // `application/x-www-form-urlencoded` is what PHP produces for a STRING body, never
+    // for an array. elephc has no mime builder yet (Task 11 adds `CURLFile` and the mime
+    // structure with it), so an array of scalars is urlencoded here instead. That is the
+    // stopgap this feature's brief authorizes, not parity: a receiver that distinguishes
+    // the two content types WILL see a different request than PHP would have sent.
+    // Task 11 replaces this branch with a real mime multipart body.
     if ($option === 10015 && is_array($value)) {
         return __elephc_curl_easy_setopt_str($raw, $option, __elephc_curl_form_encode($value));
     }
-    if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
-        $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
-        throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
-    }
+    // THE PHP-LAYER OPTIONS ARE DISPATCHED BEFORE THE SCALAR TYPE GUARD BELOW, because
+    // they do not reach libcurl and therefore have no C type to be wrong for. php-src
+    // `ZVAL_COPY`s whatever it is handed for CURLOPT_PRIVATE and runs `zend_is_true` on
+    // the others, so `curl_setopt($ch, CURLOPT_PRIVATE, ['a'])` is legal PHP; running the
+    // guard first made it a TypeError.
     if ($kind === 5) {
         // CURLOPT_RETURNTRANSFER (19913) is mirrored onto the object because `curl_exec()`'s
         // RETURN SHAPE depends on it, and forwarded to the bridge because the write
@@ -221,6 +230,10 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         // CURLOPT_BINARYTRANSFER (19914): a documented no-op in modern PHP.
         return true;
     }
+    if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
+        $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
+        throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
+    }
     if ($kind === 2) {
         return __elephc_curl_easy_setopt_str($raw, $option, (string) $value);
     }
@@ -231,15 +244,16 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     return false;
 }
 
-// `CURLOPT_POSTFIELDS`'s ARRAY form, encoded exactly as PHP does when no `CURLFile` is
-// present: `application/x-www-form-urlencoded`, keys and values through `urlencode()`
-// (spaces as `+`, everything else percent-encoded), joined with `&`.
+// `CURLOPT_POSTFIELDS`'s ARRAY form as `application/x-www-form-urlencoded`: keys and
+// values percent-encoded (spaces as `+`), joined with `&`.
+//
+// DIVERGENCE FROM PHP, stated in full at the call site above: php-src posts an array as
+// `multipart/form-data`, always. This is Task 11's placeholder, not PHP's encoding.
 //
 // AN OBJECT IN THE ARRAY IS REFUSED, LOUDLY. In php-src an object here is a `CURLFile`
-// (or `CURLStringFile`), which switches the whole body to `multipart/form-data` — a
-// completely different request. `CURLFile` lands in Task 11; until then a half-done
-// encoding that silently posted `"Object"` as a field value would be worse than an error,
-// so this throws and says exactly what is missing.
+// (or `CURLStringFile`) and its file contents become a mime part. Silently posting the
+// object's string cast as a field value would be worse than an error, so this throws and
+// says exactly what is missing.
 //
 // `$fields` IS DECLARED `mixed`, NOT `array`, ONLY BECAUSE OF THE CHECKER: the caller
 // reaches this from inside `curl_setopt()`'s `mixed $value`, and elephc's checker does not
@@ -356,21 +370,6 @@ function curl_error(CurlHandle $handle): string {
 // of them assert on the FULL warning set, only on specific expected diagnostics.
 function curl_close(CurlHandle $handle): void {}
 
-// TASK 7 SCOPE: only `CURLINFO_HTTP_CODE` (2097154) is implemented. Every other option,
-// AND the no-`$option` associative-array form PHP documents, answer `false` — an honest
-// "not implemented yet" signal, never a fabricated array or a wrong number. Task 8 Wave C
-// owns the rest of the info surface (`.superpowers/sdd/php-curl-family/global-constraints.md`'s
-// file map).
-//
-// OPTION VALIDATION MIRRORS `curl_setopt()`'s (see the comment above that function):
-// `curl_easy_getinfo()` also dispatches its OUTPUT pointer's shape purely from the
-// option's numeric TYPE MASK (libcurl 8.21.0, lib/getinfo.c, `Curl_getinfo`) — a
-// STRING-typed option's `char **` and a LONG-typed option's `long *` are both 8 bytes on
-// every target this compiler ships for, so mismatching them cannot corrupt memory the way
-// `curl_setopt()`'s pointer-range mixups could, but it can still hand back a raw pointer
-// value dressed up as a PHP int. Rather than reasoning through every `CURLINFO_*` shape
-// now, only the one option this build actually understands is forwarded by exact number;
-// everything else answers `false` before reaching the bridge at all.
 // `curl_getinfo()` DISPATCHES ON THE OPTION'S TYPE MASK, exactly as php-src does
 // (`ext/curl/interface.c`) and for the same reason `curl_setopt()` consults the option
 // table: `curl_easy_getinfo` writes through its out-parameter according to

@@ -19,7 +19,12 @@
 //!   partway through, which surfaces here as a failed `read`/`write`. That is the expected
 //!   outcome of a test, not a fixture fault, so the accept loop logs nothing and simply
 //!   moves on to the next connection.
-//! - NO CA STORE IS INVOLVED ON EITHER SIDE. The success case turns verification OFF and
+//! - [`unrelated_ca_bundle`] is the OTHER half of keeping these tests hermetic: a
+//!   verification-failure test that lets libcurl fall back to its baked-in default CA path
+//!   answers a different `CURLcode` depending on whether that path exists on the machine.
+//!   Handing libcurl a real bundle that simply does not contain the fixture's certificate
+//!   removes the build machine from the question.
+//! - NO SYSTEM CA STORE IS INVOLVED ON EITHER SIDE. The success case turns verification OFF and
 //!   the failure case leaves it ON and expects rejection, so these fixtures run
 //!   identically on a machine with no system trust store — which is what keeps them
 //!   independent of the managed curl build's (currently non-hermetic) CA autodetection.
@@ -94,4 +99,55 @@ impl LocalHttpsServer {
     pub(crate) fn url(&self, path: &str) -> String {
         format!("https://127.0.0.1:{}{}", self.port, path)
     }
+}
+
+/// A self-signed certificate that is a perfectly VALID trust anchor and has nothing to do
+/// with [`LocalHttpsServer`]'s certificate. Only the certificate is kept — a trust anchor
+/// needs no private key — so this cannot accidentally become a second server identity.
+///
+/// `CN=elephc-unrelated-test-ca`, valid to 2046.
+const UNRELATED_CA_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDJzCCAg+gAwIBAgIUB1It8X7fDToZ4Ows+a8anwso3kUwDQYJKoZIhvcNAQEL
+BQAwIzEhMB8GA1UEAwwYZWxlcGhjLXVucmVsYXRlZC10ZXN0LWNhMB4XDTI2MDgx
+MzEyNTkzMloXDTQ2MDgwODEyNTkzMlowIzEhMB8GA1UEAwwYZWxlcGhjLXVucmVs
+YXRlZC10ZXN0LWNhMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3NKm
+ZdpQJk0yv5EBAtRgsRHGrRWraS7H4JAWixsHvlDVAHB8uxGcGIpWjSPM+HurdBQy
+ZnxScj7Mt0YCOSLbduSRko4Iyzm+wC5vdTceDCRO0Escc8tDkOYTS2HMvhJfrgSu
+1pdTTnYlXILzDhvqGS8zJZRaCole5PVc17VfhaOhWvb5+UDleNRMMiR3YjdcZjMg
+Ag4Ly678VMWKt4d7ONBEd/biIiFh5z+wrS2GkEQrtzsyUpyITBTMLmyT7YdbHV08
+TVh53lNf59jAlvDxKoQ817MQwceXiA6i/6fTWWvTJc+YuHnpT7ggWHp1HA6geNT+
+eeSp5CctaUzNRWZXeQIDAQABo1MwUTAdBgNVHQ4EFgQUh7M+SH+eMh6xYl5vMnyz
+/oq1vqcwHwYDVR0jBBgwFoAUh7M+SH+eMh6xYl5vMnyz/oq1vqcwDwYDVR0TAQH/
+BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAOKW1N2xBy0vmvWT3/glGPPssdJ3s
+QXKk9n64U0EeAEAZjyv2PaPt47Q/zzUbI9EnaF9W7nwCtToaoa52FPV5v78uOEK0
+VBUxrxQdDtydUlur2OKomjx6Aj21YW+Ip0IvmEgifZmlpm42aILg6aTtou3NGHpY
+a0+mQZjVQI4hhqb5WHOnya+Gq3csYSx5oXGo9I2Le+m7rA6xwI19PgFsfGXn+pz3
+D2+RSrABs5YpGKPEG8l3Ca5igI3tas/yUNslJXni7N1blKg2nf2nmDumHRV56lsC
+VnNfCxoR32CQNuilos6yhoJZRf4jjSdEllMvBQrq2Rixx1N8EZcMgR9QlQ==
+-----END CERTIFICATE-----
+";
+
+/// Writes [`UNRELATED_CA_PEM`] to a temp file once per process and returns its path, for
+/// `CURLOPT_CAINFO`.
+///
+/// This is what makes the verification-FAILURE test deterministic. Without it libcurl
+/// falls back to whatever CA path was compiled into the managed build, and the resulting
+/// `CURLcode` depends on whether that path exists on THIS machine: `60`
+/// (`CURLE_PEER_FAILED_VERIFICATION`) when the bundle is readable and simply does not
+/// contain the fixture's certificate, `77` (`CURLE_SSL_CACERT_BADFILE`) when it is not
+/// there at all. A bundle the test itself supplies is always readable and never contains
+/// the fixture's certificate, so the answer is always 60.
+pub(crate) fn unrelated_ca_bundle() -> std::path::PathBuf {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-curl-unrelated-ca-{}.pem",
+            std::process::id()
+        ));
+        std::fs::write(&path, UNRELATED_CA_PEM).expect("curl tls fixture: write CA bundle");
+        path
+    })
+    .clone()
 }

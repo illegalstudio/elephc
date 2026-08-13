@@ -228,22 +228,10 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
             return 0;
         };
 
-        let mut list: *mut easy::CurlSlist = std::ptr::null_mut();
-        for item in split_nul_terminated(blob) {
-            let Ok(item) = CString::new(item) else {
-                // Unreachable through the prelude (it frames items on NUL), but
-                // an embedded NUL would silently truncate a header, so refuse.
-                unsafe { easy::slist_free_all(list) };
-                return 0;
-            };
-            match unsafe { easy::slist_append(list, item.as_ptr()) } {
-                Some(next) => list = next,
-                None => {
-                    unsafe { easy::slist_free_all(list) };
-                    return 0;
-                }
-            }
-        }
+        let items = split_nul_terminated(blob);
+        let Some(list) = (unsafe { build_slist(&items) }) else {
+            return 0;
+        };
 
         let code = unsafe { easy::setopt_slist(entry.curl, opt as c_int, list) };
         if code != easy::CURLE_OK {
@@ -469,7 +457,13 @@ pub unsafe extern "C" fn elephc_curl_easy_str_op(
         let produced = match op {
             ELEPHC_CURL_STR_OP_ESCAPE => unsafe { easy::escape(entry.curl, argument) },
             ELEPHC_CURL_STR_OP_UNESCAPE => unsafe { easy::unescape(entry.curl, argument) },
-            ELEPHC_CURL_STR_OP_INFO_STRING => unsafe { easy::getinfo_str(entry.curl, number) },
+            // `.flatten()`: a NULL `char *` (libcurl succeeded, this transfer has no
+            // value for the field) collapses into the failure arm on purpose, so the
+            // typed `curl_getinfo($ch, CURLINFO_*)` form answers `false` the way php-src
+            // does rather than a fabricated empty string.
+            ELEPHC_CURL_STR_OP_INFO_STRING => {
+                unsafe { easy::getinfo_str(entry.curl, number) }.flatten()
+            }
             ELEPHC_CURL_STR_OP_INFO_SLIST => unsafe { easy::getinfo_slist(entry.curl, number) }
                 .map(|items| info::frame_items(&items)),
             ELEPHC_CURL_STR_OP_INFO_ALL => Some(unsafe { info::getinfo_all_json(entry.curl) }),
@@ -633,25 +627,54 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
 /// `CURLOPT_ERRORBUFFER` at the original entry's buffer (a dangling write the
 /// moment the original is freed). Both are re-pointed at the new entry here.
 ///
-/// THE SLIST MAP IS NOT COPIED, deliberately: libcurl duplicates slist options
-/// into lists the NEW easy handle owns and frees, so copying the bridge's own
-/// pointers would set up a double free. The copy's map starts empty and fills
-/// again the first time PHP sets a list option on it.
+/// EVERY LIST OPTION IS REBUILT FROM SCRATCH FOR THE COPY, and that is a
+/// USE-AFTER-FREE FIX, not tidiness. `curl_easy_duphandle` does NOT duplicate
+/// `struct curl_slist *` options: `dupset` (libcurl 8.21.0, `lib/easy.c`) starts
+/// with a shallow `dst->set = src->set` and then re-duplicates only the strings,
+/// the blobs, `CURLOPT_COPYPOSTFIELDS` and the mime part — every slist pointer
+/// rides the struct copy verbatim, because libcurl treats slists as
+/// APPLICATION-owned. So a copy that inherited the pointer would be reading a
+/// list this bridge owns and frees on the SOURCE's behalf:
+///
+///     $a = curl_init(...); curl_setopt($a, CURLOPT_HTTPHEADER, [...]);
+///     $b = curl_copy_handle($a);
+///     unset($a);            // EasyEntry::free_slists frees the list
+///     curl_exec($b);        // libcurl walks freed memory
+///
+/// `curl_reset($a)` and simply setting `CURLOPT_HTTPHEADER` on `$a` again reach
+/// the same dangling read. Copying the bridge's own map would be worse still —
+/// two entries owning one list, hence a double free. Rebuilding is the only
+/// shape where each handle owns exactly what it points at.
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
     handles::ffi_guard(0, || {
         let mut guard = handles::lock_recover(handles::handles());
-        let Some(source) = guard.get(&id) else {
-            return 0;
+
+        // Snapshot everything the copy needs while the source is borrowed, list
+        // options included: `easy::read_slist` walks each list into owned bytes
+        // so the rebuild below never reads the source's memory again.
+        let (copied, return_transfer, body, last_errno, last_error, slist_items) = {
+            let Some(source) = guard.get(&id) else {
+                return 0;
+            };
+            let slist_items: Vec<(i32, Vec<Vec<u8>>)> = source
+                .slists
+                .iter()
+                .map(|(&opt, &list)| (opt, unsafe { easy::read_slist(list) }))
+                .collect();
+            let copied = unsafe { easy::duphandle(source.curl) };
+            if copied.is_null() {
+                return 0;
+            }
+            (
+                copied,
+                source.return_transfer,
+                source.body.clone(),
+                source.last_errno,
+                source.last_error.clone(),
+                slist_items,
+            )
         };
-        let copied = unsafe { easy::duphandle(source.curl) };
-        if copied.is_null() {
-            return 0;
-        }
-        let return_transfer = source.return_transfer;
-        let body = source.body.clone();
-        let last_errno = source.last_errno;
-        let last_error = source.last_error.clone();
 
         let new_id = handles::next_id();
         let mut entry = EasyEntry::new(copied);
@@ -667,6 +690,23 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
                 entry.error_buf.as_mut_ptr() as *mut c_void,
             );
         }
+
+        for (opt, items) in slist_items {
+            // A rebuild this build cannot complete must CLEAR the option on the
+            // copy, never leave it pointing at the source's list: the whole point
+            // of this loop is that the inherited pointer is not safe to keep.
+            let rebuilt = unsafe { build_slist(&items) }.unwrap_or(std::ptr::null_mut());
+            let code = unsafe { easy::setopt_slist(copied, opt as c_int, rebuilt) };
+            if code == easy::CURLE_OK {
+                entry.slists.insert(opt, rebuilt);
+            } else {
+                unsafe {
+                    easy::slist_free_all(rebuilt);
+                    easy::setopt_slist(copied, opt as c_int, std::ptr::null_mut());
+                }
+            }
+        }
+
         guard.insert(new_id, entry);
         new_id
     })
@@ -759,6 +799,36 @@ fn split_nul_terminated(blob: &[u8]) -> Vec<&[u8]> {
         items.push(rest);
     }
     items
+}
+
+/// Builds a fresh `struct curl_slist` from owned byte items, or `None` when an item
+/// carries an embedded NUL (which would silently truncate it) or libcurl could not
+/// allocate — freeing whatever had been built in that case, so a failure leaks nothing
+/// and hands back no half-list.
+///
+/// An EMPTY item list yields a null list, which is not a failure: `curl_easy_setopt` with
+/// a null `struct curl_slist *` is how an option is CLEARED, and that is exactly what
+/// `curl_setopt($ch, CURLOPT_HTTPHEADER, [])` means.
+///
+/// # Safety
+/// The returned list, when non-null, is the caller's to free with
+/// `easy::slist_free_all` once no live easy handle still points at it.
+unsafe fn build_slist(items: &[impl AsRef<[u8]>]) -> Option<*mut easy::CurlSlist> {
+    let mut list: *mut easy::CurlSlist = std::ptr::null_mut();
+    for item in items {
+        let Ok(item) = CString::new(item.as_ref()) else {
+            unsafe { easy::slist_free_all(list) };
+            return None;
+        };
+        match unsafe { easy::slist_append(list, item.as_ptr()) } {
+            Some(next) => list = next,
+            None => {
+                unsafe { easy::slist_free_all(list) };
+                return None;
+            }
+        }
+    }
+    Some(list)
 }
 
 /// Applies `CURLOPT_POSTFIELDS` as libcurl's copying, length-aware pair:

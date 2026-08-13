@@ -1,9 +1,9 @@
 //! Purpose:
 //! A minimal loopback HTTP/1.0 server for `ext/curl` codegen fixtures: binds an ephemeral
 //! port, then serves `/hello` (`200`/`text/plain`/`hello-curl`), `/status` (`204`),
-//! `/redirect` (`302` to `/hello`) and `/echo` (a `200` whose body reports the method,
-//! headers and request body it received) on a background thread for the rest of the test
-//! process. Mirrors `tests/codegen/io/streams.rs`'s `spawn_http_server` family (bind on
+//! `/redirect` (`302` to `/hello`), `/echo` (a `200` whose body reports the method,
+//! headers and request body it received) and `/notype` (a `200` with NO `Content-Type`
+//! header at all) on a background thread for the rest of the test process. Mirrors `tests/codegen/io/streams.rs`'s `spawn_http_server` family (bind on
 //! port 0, accept-loop on a detached thread, write a close-framed HTTP/1.0 response)
 //! rather than introducing a second HTTP idiom.
 //!
@@ -16,6 +16,11 @@
 //!   because closing a socket with unread data queued sends an RST. `Content-Length` is
 //!   parsed out of the headers and exactly that many further bytes are read before any
 //!   response is written.
+//! - `/notype` EXISTS TO PRODUCE A NULL INFO FIELD. `CURLINFO_CONTENT_TYPE` is one of the
+//!   few string info fields libcurl really does answer with a NULL `char *` in ordinary
+//!   use, and PHP reports that as `false` (typed form) / `null` (array form) rather than
+//!   `""`. A response with no `Content-Type` header is the only way to reach it without
+//!   inventing a failure.
 //! - `/echo` IS WHAT MAKES OPTION FIXTURES REAL. `curl_setopt()` returning `true` only
 //!   says libcurl accepted the option; the echo route reports the request that actually
 //!   went out, so a fixture can assert on the WIRE rather than on the setter's return
@@ -76,7 +81,9 @@ fn serve_one(mut sock: TcpStream, port: u16) {
         return;
     };
     match request.path.as_str() {
-        "/hello" => respond(&mut sock, 200, "OK", "text/plain", b"hello-curl", &[]),
+        "/hello" => respond(&mut sock, 200, "OK", Some("text/plain"), b"hello-curl", &[]),
+        // Deliberately no `Content-Type`, so `CURLINFO_CONTENT_TYPE` is a NULL `char *`.
+        "/notype" => respond(&mut sock, 200, "OK", None, b"typeless", &[]),
         "/status" => {
             let _ = sock.write_all(b"HTTP/1.0 204 No Content\r\n\r\n");
         }
@@ -84,7 +91,7 @@ fn serve_one(mut sock: TcpStream, port: u16) {
             &mut sock,
             302,
             "Found",
-            "text/plain",
+            Some("text/plain"),
             b"redirecting",
             &[format!("Location: http://127.0.0.1:{port}/hello")],
         ),
@@ -96,9 +103,9 @@ fn serve_one(mut sock: TcpStream, port: u16) {
             body.push_str("body=");
             body.push_str(&String::from_utf8_lossy(&request.body));
             body.push('\n');
-            respond(&mut sock, 200, "OK", "text/plain", body.as_bytes(), &[]);
+            respond(&mut sock, 200, "OK", Some("text/plain"), body.as_bytes(), &[]);
         }
-        _ => respond(&mut sock, 404, "Not Found", "text/plain", b"missing", &[]),
+        _ => respond(&mut sock, 404, "Not Found", Some("text/plain"), b"missing", &[]),
     }
 }
 
@@ -152,19 +159,21 @@ fn read_request(sock: &mut TcpStream) -> Option<Request> {
     })
 }
 
-/// Writes a close-framed HTTP/1.0 response with an exact `Content-Length`.
+/// Writes a close-framed HTTP/1.0 response with an exact `Content-Length`. `content_type`
+/// is `None` to omit the header entirely, which is what `/notype` needs.
 fn respond(
     sock: &mut TcpStream,
     status: u16,
     reason: &str,
-    content_type: &str,
+    content_type: Option<&str>,
     body: &[u8],
     extra_headers: &[String],
 ) {
-    let mut header = format!(
-        "HTTP/1.0 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n",
-        body.len()
-    );
+    let mut header = format!("HTTP/1.0 {status} {reason}\r\n");
+    if let Some(content_type) = content_type {
+        header.push_str(&format!("Content-Type: {content_type}\r\n"));
+    }
+    header.push_str(&format!("Content-Length: {}\r\n", body.len()));
     for line in extra_headers {
         header.push_str(line);
         header.push_str("\r\n");

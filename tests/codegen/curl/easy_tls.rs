@@ -26,7 +26,7 @@
 //!   deliberately NOT added — it would be `#[ignore]`d and therefore never run, while
 //!   still being a public-internet dependency in the tree.
 
-use super::tls_fixture::LocalHttpsServer;
+use super::tls_fixture::{unrelated_ca_bundle, LocalHttpsServer};
 use crate::support::*;
 
 /// An HTTPS GET with peer/host verification turned off completes against the local
@@ -57,13 +57,18 @@ fn https_transfer_succeeds_without_peer_verification() {
     assert_eq!(out, "hello-tls\n0\n200\nhttps\n");
 }
 
-/// The SAME fixture with verification left ON is rejected: `curl_exec()` answers `false`
-/// and `curl_errno()` reports libcurl's own certificate-rejection `CURLcode` (60) for the
-/// untrusted self-signed certificate, with a non-empty message.
+/// The SAME fixture with verification left ON is rejected: `curl_exec()` answers `false`,
+/// with libcurl's own certificate `CURLcode` and a non-empty message.
 ///
-/// The constant is spelled `CURLE_SSL_CACERT` / `CURLE_SSL_PEER_CERTIFICATE` — PHP's two
-/// names for 60. libcurl's own `CURLE_PEER_FAILED_VERIFICATION` is the same value but is
-/// not a PHP constant, so it is not in the frozen surface and is not usable from PHP.
+/// THE CA BUNDLE IS SUPPLIED BY THE TEST, which is what makes this hermetic. Left to its
+/// default, libcurl consults whatever CA path was baked in at BUILD time; on a machine
+/// where that path does not exist the transfer still fails, but with
+/// `CURLE_SSL_CACERT_BADFILE` (77, "could not read the bundle") rather than
+/// `CURLE_PEER_FAILED_VERIFICATION` (60, "the certificate is untrusted") — the next test
+/// in this file pins exactly that. Pointing `CURLOPT_CAINFO` at a bundle that is a REAL,
+/// parseable certificate but not the one the fixture presents removes the build machine
+/// from the question entirely: libcurl can always read it, and the fixture's self-signed
+/// certificate is never in it, so the answer is deterministically 60.
 ///
 /// This is the half that proves the success case above is not succeeding by accident: if
 /// verification were quietly disabled everywhere, this test would pass a transfer through.
@@ -74,11 +79,14 @@ fn https_transfer_fails_with_peer_verification() {
     }
     let server = LocalHttpsServer::spawn();
     let url = server.url("/secure");
+    let bundle = unrelated_ca_bundle();
+    let bundle_path = bundle.display();
     let out = compile_and_run(&format!(
         r#"<?php
         $ch = curl_init("{url}");
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_CAINFO, "{bundle_path}");
         $body = curl_exec($ch);
         echo $body === false ? "F" : "X";
         echo curl_errno($ch) === CURLE_SSL_CACERT ? "V" : curl_errno($ch);
