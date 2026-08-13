@@ -29,6 +29,7 @@
 mod easy_body;
 mod easy_error;
 mod easy_free;
+mod easy_getinfo;
 mod easy_init;
 mod easy_scalar;
 pub(crate) mod slots;
@@ -38,6 +39,7 @@ mod warn_option;
 pub(crate) use easy_body::emit_curl_easy_body;
 pub(crate) use easy_error::emit_curl_easy_error;
 pub(crate) use easy_free::emit_curl_easy_free;
+pub(crate) use easy_getinfo::emit_curl_easy_getinfo_long;
 pub(crate) use easy_init::emit_curl_easy_init;
 pub(crate) use easy_scalar::emit_curl_easy_scalar_helpers;
 pub(crate) use version::emit_curl_version;
@@ -49,6 +51,7 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_easy_scalar_helpers(emitter);
     emit_curl_easy_body(emitter);
     emit_curl_easy_error(emitter);
+    emit_curl_easy_getinfo_long(emitter);
     emit_curl_version(emitter);
     emit_curl_easy_free(emitter);
     emit_curl_warn_unsupported_option(emitter);
@@ -84,6 +87,7 @@ mod tests {
         "__rt_curl_easy_perform",
         "__rt_curl_easy_errno",
         "__rt_curl_easy_error",
+        "__rt_curl_easy_getinfo_long",
         "__rt_curl_easy_body",
         "__rt_curl_version",
         "__rt_curl_easy_free",
@@ -154,18 +158,24 @@ mod tests {
         }
     }
 
-    /// The two helpers whose bridge entry point returns a C `int32_t` must branch on the
-    /// 32-BIT register, because both ABIs leave the upper half of the return register
-    /// unspecified.
+    /// The helpers whose bridge entry point returns a C `int32_t` and then reads a
+    /// stack out-parameter must branch on the 32-BIT register, because both ABIs leave
+    /// the upper half of the return register unspecified.
     ///
     /// This is pinned rather than merely commented because the failure is silent and
     /// nasty: `__rt_curl_easy_error` would take its SUCCESS path on a failed call and
     /// persist the out-parameter's length, reading past its 256-byte stack buffer into a
-    /// PHP string. The sibling forwarders in `easy_scalar.rs` widen the answer explicitly
-    /// instead, which is why only these two need the narrow branch.
+    /// PHP string; `__rt_curl_easy_getinfo_long` would do the same with whatever garbage
+    /// its zeroed 8-byte out-parameter slot held. The sibling forwarders in
+    /// `easy_scalar.rs` widen the answer explicitly instead, which is why only these
+    /// three need the narrow branch.
     #[test]
     fn int32_bridge_returns_are_branched_at_32_bit_width() {
-        for label in ["__rt_curl_easy_error", "__rt_curl_version"] {
+        for label in [
+            "__rt_curl_easy_error",
+            "__rt_curl_easy_getinfo_long",
+            "__rt_curl_version",
+        ] {
             for target_name in ["macos-aarch64", "linux-aarch64"] {
                 let asm = runtime_for(target_name);
                 let body = helper_body(&asm, label);

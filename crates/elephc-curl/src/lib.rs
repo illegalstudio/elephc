@@ -2,8 +2,10 @@
 //! `elephc-curl`: the libcurl-backed bridge staticlib for elephc's `ext/curl`
 //! surface. Task 3 (this crate's first landing) owns the `i64` easy-handle
 //! table and the ten-function C ABI in `abi.rs`: init/set_url/setopt_long
-//! (`RETURNTRANSFER`)/perform/errno/error/take_body/free/global_info. Later
-//! tasks add multi/share/info/slist/blob/callback entry points to the same
+//! (`RETURNTRANSFER`)/perform/errno/error/take_body/free/global_info. Task 7
+//! adds one more (`elephc_curl_easy_getinfo_long`, the first `curl_getinfo()`
+//! entry point — `CURLINFO_HTTP_CODE` only; Task 8 Wave C owns the rest).
+//! Later tasks add multi/share/slist/blob/callback entry points to the same
 //! crate.
 //!
 //! Called from:

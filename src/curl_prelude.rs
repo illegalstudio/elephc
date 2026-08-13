@@ -1,9 +1,9 @@
 //! Purpose:
 //! PHP's `ext/curl` easy-handle surface — the `CurlHandle` class plus the
-//! `curl_init` / `curl_setopt` / `curl_setopt_array` / `curl_exec` / `curl_close` /
-//! `curl_errno` / `curl_error` / `curl_version` functions — implemented in elephc-PHP
-//! on top of the internal `__elephc_curl_*` builtins. PHP 8 models a session as an
-//! OBJECT (`CurlHandle`), not a resource, and this prelude is what makes `curl_init()`
+//! `curl_init` / `curl_setopt` / `curl_setopt_array` / `curl_exec` / `curl_getinfo` /
+//! `curl_close` / `curl_errno` / `curl_error` / `curl_version` functions — implemented in
+//! elephc-PHP on top of the internal `__elephc_curl_*` builtins. PHP 8 models a session as
+//! an OBJECT (`CurlHandle`), not a resource, and this prelude is what makes `curl_init()`
 //! return a real object that `is_object`, `get_class`, `instanceof`, and `var_dump` all
 //! agree about.
 //!
@@ -57,6 +57,12 @@
 //!   merely a wrong answer. See the comment above the function for the ranges and the
 //!   libcurl source that fixes them. An option this build cannot carry answers `false`
 //!   with a PHP warning (locked decision 7), never an inert `true`.
+//! - `curl_getinfo()` ONLY UNDERSTANDS `CURLINFO_HTTP_CODE` (2097154) today: the
+//!   `elephc_curl` bridge's `curl_getinfo()`-family ABI landed in Task 7 with exactly the
+//!   one entry point that test needed (`elephc_curl_easy_getinfo_long`), so every other
+//!   `CURLINFO_*` option and the no-`$option` associative-array form answer `false` rather
+//!   than a fabricated value — see the comment above `curl_getinfo()` below. Task 8 Wave C
+//!   owns the rest of the info surface.
 //! - TWO SIGNATURES DIVERGE FROM php-src, both forced by checker limitations and both
 //!   documented at their declaration below: `curl_init()` returns a plain `CurlHandle`
 //!   and throws instead of returning `CurlHandle|false`, and `curl_version()` leaves its
@@ -184,7 +190,35 @@ function curl_error(CurlHandle $handle): string {
     return __elephc_curl_easy_error($raw);
 }
 
-function curl_close(CurlHandle $handle): void {}
+// `$_handle` (not `$handle`): the parameter is intentionally unused (the function is a
+// no-op), and `src/types/warnings/scope_usage.rs` only ignores unused-variable
+// warnings for names starting with `_` — noticed while smoke-testing Task 7's
+// `curl-get` example through the real CLI outside the codegen test harness, which
+// otherwise never surfaced this pre-existing warning.
+function curl_close(CurlHandle $_handle): void {}
+
+// TASK 7 SCOPE: only `CURLINFO_HTTP_CODE` (2097154) is implemented. Every other option,
+// AND the no-`$option` associative-array form PHP documents, answer `false` — an honest
+// "not implemented yet" signal, never a fabricated array or a wrong number. Task 8 Wave C
+// owns the rest of the info surface (`.superpowers/sdd/php-curl-family/global-constraints.md`'s
+// file map).
+//
+// OPTION VALIDATION MIRRORS `curl_setopt()`'s (see the comment above that function):
+// `curl_easy_getinfo()` also dispatches its OUTPUT pointer's shape purely from the
+// option's numeric TYPE MASK (libcurl 8.21.0, lib/getinfo.c, `Curl_getinfo`) — a
+// STRING-typed option's `char **` and a LONG-typed option's `long *` are both 8 bytes on
+// every target this compiler ships for, so mismatching them cannot corrupt memory the way
+// `curl_setopt()`'s pointer-range mixups could, but it can still hand back a raw pointer
+// value dressed up as a PHP int. Rather than reasoning through every `CURLINFO_*` shape
+// now, only the one option this build actually understands is forwarded by exact number;
+// everything else answers `false` before reaching the bridge at all.
+function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
+    $raw = $handle->__elephc_handle;
+    if ($option === 2097154) {
+        return __elephc_curl_easy_getinfo_long($raw, $option);
+    }
+    return false;
+}
 
 // DIVERGENCE FROM PHP: php-src declares `curl_version(): array|false`. The RETURN VALUE
 // here is exactly that (an associative array, or `false`), but the return type is left

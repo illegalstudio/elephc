@@ -57,6 +57,19 @@ pub(crate) const CURLOPT_WRITEDATA: c_int = 10001;
 /// `crate::php_layer::write_callback`).
 pub(crate) const CURLOPT_WRITEFUNCTION: c_int = 20011;
 
+/// `CURLINFO_TYPEMASK`: the low bits of a `CURLINFO_*` value are irrelevant to
+/// its C output type; `curl_easy_getinfo` dispatches purely on
+/// `info & CURLINFO_TYPEMASK` (libcurl 8.21.0, `include/curl/curl.h`).
+pub(crate) const CURLINFO_TYPEMASK: c_int = 0x00f0_0000;
+/// `CURLINFO_LONG`: the type mask value for a `long`-typed info field (e.g.
+/// `CURLINFO_RESPONSE_CODE`, PHP's `CURLINFO_HTTP_CODE`). `getinfo_long`
+/// refuses to call libcurl for any `info` outside this type: `curl_easy_getinfo`
+/// writes through its out-parameter according to this same type bit, the
+/// read-side mirror of how `curl_easy_setopt` reads its variadic argument
+/// according to `CURLOPTTYPE_*` (the wild-pointer hazard `src/curl_prelude.rs`
+/// documents at length for `curl_setopt()` in the elephc root crate).
+pub(crate) const CURLINFO_LONG: c_int = 0x0020_0000;
+
 /// The `curl_write_callback` C function-pointer type:
 /// `size_t (*)(char *buffer, size_t size, size_t nitems, void *outstream)`.
 pub(crate) type CurlWriteCallback =
@@ -119,6 +132,10 @@ extern "C" {
     /// The single variadic `curl_easy_setopt` symbol. Called only through
     /// the typed `setopt_*` wrappers below.
     fn curl_easy_setopt(curl: *mut CURL, option: c_int, ...) -> CURLcode;
+
+    /// The single variadic `curl_easy_getinfo` symbol. Called only through
+    /// the typed `getinfo_*` wrappers below.
+    fn curl_easy_getinfo(curl: *mut CURL, info: c_int, ...) -> CURLcode;
 
     /// Runs the transfer configured on `curl`, blocking until it completes.
     fn curl_easy_perform(curl: *mut CURL) -> CURLcode;
@@ -212,6 +229,27 @@ pub(crate) unsafe fn setopt_write_function(
     callback: CurlWriteCallback,
 ) -> CURLcode {
     curl_easy_setopt(curl, option, callback)
+}
+
+/// Reads a `long`-typed `curl_easy_getinfo` field (e.g. `CURLINFO_RESPONSE_CODE`,
+/// PHP's `CURLINFO_HTTP_CODE`). Returns `None` for any `info` outside the
+/// `CURLINFO_LONG` type range (never calls libcurl in that case — see
+/// `CURLINFO_LONG`'s doc comment) or when libcurl itself reports a non-`CURLE_OK`
+/// result.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn getinfo_long(curl: *mut CURL, info: c_int) -> Option<i64> {
+    if info & CURLINFO_TYPEMASK != CURLINFO_LONG {
+        return None;
+    }
+    let mut value: c_long = 0;
+    let code = curl_easy_getinfo(curl, info, &mut value as *mut c_long);
+    if code == CURLE_OK {
+        Some(value as i64)
+    } else {
+        None
+    }
 }
 
 /// Returns libcurl's version/feature info struct for `CURLVERSION_NOW`,

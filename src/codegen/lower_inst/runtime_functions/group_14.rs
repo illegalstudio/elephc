@@ -28,6 +28,9 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasyError => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_error(ctx, inst)
         }),
+        RuntimeFnId::CurlEasyGetinfoLong => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_getinfo_long(ctx, inst)
+        }),
         RuntimeFnId::CurlEasyInit => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_init(ctx, inst)
         }),

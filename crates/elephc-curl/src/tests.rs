@@ -52,9 +52,9 @@ mod skipped {
 mod native {
     use crate::abi::{
         elephc_curl_easy_error, elephc_curl_easy_errno, elephc_curl_easy_free,
-        elephc_curl_easy_init, elephc_curl_easy_perform, elephc_curl_easy_set_url,
-        elephc_curl_easy_setopt_long, elephc_curl_easy_take_body, elephc_curl_global_info,
-        elephc_curl_version_abi,
+        elephc_curl_easy_getinfo_long, elephc_curl_easy_init, elephc_curl_easy_perform,
+        elephc_curl_easy_set_url, elephc_curl_easy_setopt_long, elephc_curl_easy_take_body,
+        elephc_curl_global_info, elephc_curl_version_abi,
     };
     use crate::handles;
     use crate::php_layer::CURLOPT_RETURNTRANSFER;
@@ -234,5 +234,86 @@ mod native {
 
         elephc_curl_easy_free(id);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `CURLINFO_RESPONSE_CODE` (2097154, PHP's `CURLINFO_HTTP_CODE`) on a handle that
+    /// never performed a transfer reports success with value `0` — matching libcurl's own
+    /// documented behavior (the call succeeds even before any response code exists) and
+    /// `curl_getinfo()`'s expectation that a fresh handle answers `0`, not `false`.
+    #[test]
+    fn getinfo_long_reports_zero_before_any_transfer() {
+        const CURLINFO_RESPONSE_CODE: i32 = 2_097_154;
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        let mut value: i64 = -1;
+        let ok = unsafe { elephc_curl_easy_getinfo_long(id, CURLINFO_RESPONSE_CODE, &mut value) };
+        assert_eq!(ok, 1, "getinfo must succeed on a fresh handle");
+        assert_eq!(value, 0, "no response code has been received yet");
+
+        elephc_curl_easy_free(id);
+    }
+
+    /// End-to-end: a `file://` transfer (no network, matching every other perform test in
+    /// this file) still reports `CURLINFO_RESPONSE_CODE` as a real libcurl success with
+    /// value `0` — `file://` has no HTTP status line, so this is the same "succeeds, value
+    /// zero" shape as the fresh-handle case, but reached through a completed transfer
+    /// instead of an untouched handle.
+    #[test]
+    fn getinfo_long_after_file_transfer_reports_zero() {
+        const CURLINFO_RESPONSE_CODE: i32 = 2_097_154;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let suffix = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir()
+            .join(format!("elephc-curl-test-getinfo-{}-{suffix}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture_path = dir.join("body.txt");
+        std::fs::write(&fixture_path, b"getinfo fixture body\n").unwrap();
+        let url = format!("file://{}", fixture_path.display());
+
+        let id = elephc_curl_easy_init();
+        let set_ok = unsafe { elephc_curl_easy_set_url(id, url.as_ptr(), url.len()) };
+        assert_eq!(set_ok, 1);
+        let perform_ok = elephc_curl_easy_perform(id);
+        assert_eq!(perform_ok, 1);
+
+        let mut value: i64 = -1;
+        let ok = unsafe { elephc_curl_easy_getinfo_long(id, CURLINFO_RESPONSE_CODE, &mut value) };
+        assert_eq!(ok, 1);
+        assert_eq!(value, 0, "file:// transfers carry no HTTP status line");
+
+        elephc_curl_easy_free(id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An `info` value outside libcurl's `CURLINFO_LONG` type range (here
+    /// `CURLINFO_EFFECTIVE_URL`, a STRING-typed field) is rejected before libcurl is ever
+    /// asked to write through the `long`-shaped out-parameter — the read-side mirror of
+    /// `curl_setopt()`'s pointer-range validation, and the reason `getinfo_long` checks the
+    /// type mask at all rather than forwarding any option number blindly.
+    #[test]
+    fn getinfo_long_rejects_a_non_long_info_type() {
+        const CURLINFO_EFFECTIVE_URL: i32 = 0x10_0001;
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        let mut value: i64 = -1;
+        let ok = unsafe { elephc_curl_easy_getinfo_long(id, CURLINFO_EFFECTIVE_URL, &mut value) };
+        assert_eq!(ok, 0, "a non-long info type must be rejected, not forwarded");
+        assert_eq!(value, -1, "out must be left untouched on rejection");
+
+        elephc_curl_easy_free(id);
+    }
+
+    /// An unknown/already-freed id is a documented `0` failure, matching every other
+    /// per-handle entry point in this ABI.
+    #[test]
+    fn getinfo_long_reports_zero_for_unknown_id() {
+        const CURLINFO_RESPONSE_CODE: i32 = 2_097_154;
+        let mut value: i64 = -1;
+        let ok = unsafe { elephc_curl_easy_getinfo_long(-999, CURLINFO_RESPONSE_CODE, &mut value) };
+        assert_eq!(ok, 0);
+        assert_eq!(value, -1);
     }
 }

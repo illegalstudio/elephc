@@ -464,6 +464,9 @@ pub enum RuntimeFnId {
     CurlVersion,
     /// Raises PHP's warning for a `curl_setopt()` option this build cannot apply.
     CurlSetoptUnsupportedWarning,
+    /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
+    /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
+    CurlEasyGetinfoLong,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1182,6 +1185,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyBody
             | RuntimeFnId::CurlEasyErrno
             | RuntimeFnId::CurlEasyError
+            | RuntimeFnId::CurlEasyGetinfoLong
             | RuntimeFnId::CurlEasyInit
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
@@ -1445,14 +1449,18 @@ impl RuntimeFnId {
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
-                // The three curl operations that DO produce storage all allocate it
-                // fresh and can never alias an argument: `CurlEasyInit` boxes a brand-new
-                // Mixed handle cell (there is no argument to alias), and `CurlEasyBody` /
+                // The curl operations that DO produce storage all allocate it fresh and
+                // can never alias an argument: `CurlEasyInit` boxes a brand-new Mixed
+                // handle cell (there is no argument to alias), `CurlEasyBody` /
                 // `CurlEasyError` / `CurlVersion` copy bytes out of bridge-owned buffers
                 // through `__rt_str_persist` — deliberately, because those buffers are
-                // only borrowed until the next call on the same handle.
+                // only borrowed until the next call on the same handle — and
+                // `CurlEasyGetinfoLong` boxes its `int`/`false` answer through
+                // `__rt_mixed_from_value` from a stack out-parameter, never from the
+                // handle argument's own storage.
                 | RuntimeFnId::CurlEasyBody
                 | RuntimeFnId::CurlEasyError
+                | RuntimeFnId::CurlEasyGetinfoLong
                 | RuntimeFnId::CurlEasyInit
                 | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
@@ -1934,6 +1942,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyBody => "__elephc_curl_easy_body",
             RuntimeFnId::CurlEasyErrno => "__elephc_curl_easy_errno",
             RuntimeFnId::CurlEasyError => "__elephc_curl_easy_error",
+            RuntimeFnId::CurlEasyGetinfoLong => "__elephc_curl_easy_getinfo_long",
             RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",

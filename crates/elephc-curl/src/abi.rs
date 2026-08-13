@@ -2,8 +2,10 @@
 //! The Task 3 `elephc_curl_*` C ABI: the ten normative entry points
 //! (`.superpowers/sdd/php-curl-family/task-3-brief.md`) that own easy-handle
 //! lifecycle, URL/RETURNTRANSFER setup, performing a transfer, and reading
-//! back the error/body/global-version results. Every function here is thin:
-//! it validates arguments, takes the table lock, and delegates to
+//! back the error/body/global-version results, plus one Task 7 addition
+//! (`elephc_curl_easy_getinfo_long`, backing `curl_getinfo(..., CURLINFO_HTTP_CODE)` —
+//! Task 3's brief explicitly deferred every info entry point to a later task). Every
+//! function here is thin: it validates arguments, takes the table lock, and delegates to
 //! `crate::easy` (raw libcurl) or `crate::php_layer` (PHP-only semantics).
 //!
 //! Called from:
@@ -226,6 +228,38 @@ pub unsafe extern "C" fn elephc_curl_easy_error(
             return 0;
         };
         unsafe { publish_bytes(&entry.last_error, out, out_cap, out_len) }
+    })
+}
+
+/// Reads a `long`-typed `curl_easy_getinfo` field on handle `id` into `out`
+/// (e.g. `CURLINFO_RESPONSE_CODE`, PHP's `CURLINFO_HTTP_CODE` = 2097154).
+/// Returns `0` — leaving `out` untouched — for an unknown id, an `info` value
+/// outside libcurl's `CURLINFO_LONG` type range (see `crate::easy::
+/// CURLINFO_LONG`'s doc comment for why that check exists: `curl_easy_getinfo`
+/// dispatches its output type purely from `info`'s numeric bits, so this
+/// wrapper never asks it to write a `long` through a pointer typed for a
+/// different shape), or a libcurl `getinfo` failure.
+///
+/// # Safety
+/// `out` must be valid for a write when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_getinfo_long(id: i64, info: i32, out: *mut i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get(&id) else {
+            return 0;
+        };
+        match unsafe { easy::getinfo_long(entry.curl, info as c_int) } {
+            Some(value) => {
+                if !out.is_null() {
+                    unsafe {
+                        *out = value;
+                    }
+                }
+                1
+            }
+            None => 0,
+        }
     })
 }
 

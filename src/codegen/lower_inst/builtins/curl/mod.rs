@@ -23,6 +23,7 @@
 mod easy_body;
 mod easy_errno;
 mod easy_error;
+mod easy_getinfo;
 mod easy_init;
 mod easy_perform;
 mod easy_setopt;
@@ -33,6 +34,7 @@ mod version;
 pub(crate) use easy_body::lower_curl_easy_body;
 pub(crate) use easy_errno::lower_curl_easy_errno;
 pub(crate) use easy_error::lower_curl_easy_error;
+pub(crate) use easy_getinfo::lower_curl_easy_getinfo_long;
 pub(crate) use easy_init::lower_curl_easy_init;
 pub(crate) use easy_perform::lower_curl_easy_perform;
 pub(crate) use easy_setopt::{lower_curl_easy_setopt_long, lower_curl_easy_setopt_str};

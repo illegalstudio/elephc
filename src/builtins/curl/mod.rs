@@ -20,6 +20,7 @@
 pub mod __elephc_curl_easy_body;
 pub mod __elephc_curl_easy_errno;
 pub mod __elephc_curl_easy_error;
+pub mod __elephc_curl_easy_getinfo_long;
 pub mod __elephc_curl_easy_init;
 pub mod __elephc_curl_easy_perform;
 pub mod __elephc_curl_easy_setopt_long;
