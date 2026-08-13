@@ -77,7 +77,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         &param_types,
         &ref_params,
         true,
-        RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -218,6 +218,7 @@ pub(super) fn lower_mixed_method_candidate_call(
         &inst.operands,
         &param_types,
         &ref_params,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

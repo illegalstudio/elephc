@@ -455,7 +455,15 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let null_label = ctx.next_label("nullsafe_method_null");
     let done_label = ctx.next_label("nullsafe_method_done");
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    // THE RESERVED CALLEE-SAVED NESTED-CALL REGISTER (x19/r12), not a scratch one: the
+    // receiver has to survive argument materialization, which runs runtime helpers and — for
+    // an omitted optional by-reference argument — stages a caller-side cell. A caller-saved
+    // scratch register is destroyed by both, and the method would then be entered with
+    // whatever the last helper left there as `$this`. Every other receiver-register dispatch
+    // (`lower_mixed_method_call`, callable dispatch, the array-access and intrinsic paths)
+    // already uses this register for the same reason, and `crate::codegen::frame` reserves
+    // its save slot for exactly the `NullsafeMethodCall` receivers this lowering handles.
+    let object_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
@@ -471,6 +479,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
         &inst.operands,
         &param_types,
         &ref_params,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

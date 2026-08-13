@@ -281,6 +281,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
         &inst.operands,
         &param_types,
         &ref_params,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -312,7 +313,7 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
         &param_types,
         &ref_params,
         true,
-        RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

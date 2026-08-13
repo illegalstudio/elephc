@@ -103,6 +103,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     operands: &[ValueId],
     param_types: &[PhpType],
     ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -124,19 +125,31 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
     }
-    // `RefArgCellLifetime::CallOnly` is not a guess: PHP forbids calling `__construct()` as
-    // an ordinary instance method, so no callee reachable through a receiver REGISTER can
-    // promote a by-reference parameter into a property.
-    let mut ref_temp_cells = plan_ref_arg_temp_cells(
-        ctx,
-        operands,
-        param_types,
-        ref_params,
-        &ref_writebacks,
-        RefArgCellLifetime::CallOnly,
-    )?;
-    // The receiver is already in a register here, so the cell block is pushed BEFORE it is
-    // staged — the same order the receiver-local variant uses.
+    // `lifetime` IS NOT ALWAYS `CallOnly` HERE. `new $cls(...)` with a runtime class string
+    // reaches a CONSTRUCTOR through this materializer
+    // (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`), and a
+    // constructor may promote a by-reference parameter into a property that borrows the
+    // cell for the object's whole life — so that caller passes `MayOutliveCall` and gets the
+    // heap cell, exactly like the non-dynamic `new X()` path.
+    let mut ref_temp_cells =
+        plan_ref_arg_temp_cells(ctx, operands, param_types, ref_params, &ref_writebacks, lifetime)?;
+    // THE RECEIVER IS ALREADY IN A REGISTER, AND THE CELL BLOCK IS ALLOWED TO DESTROY
+    // CALLER-SAVED ONES: materializing a cell's value runs `load_value_to_result` and may
+    // call runtime helpers, so anything the caller left in a caller-saved register — or in
+    // the integer result register — is gone by the time the receiver is staged below.
+    //
+    // Every caller that can reach a non-empty block therefore hands the receiver over in the
+    // reserved CALLEE-SAVED nested-call register (`abi::nested_call_reg`, x19/r12), which
+    // `crate::codegen::frame` reserves a save slot for. This check makes that a hard
+    // contract instead of a coincidence: a future caller that passes a scratch register and
+    // a by-reference argument needing a cell gets a compile-time backend error rather than a
+    // constructor entered with the cell's value as `$this`.
+    if !ref_temp_cells.is_empty() && receiver_reg != abi::nested_call_reg(ctx.emitter) {
+        return Err(CodegenIrError::unsupported(format!(
+            "receiver-register method call staging a by-reference cell with the receiver in \
+             {receiver_reg} (needs the callee-saved nested-call register)"
+        )));
+    }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
@@ -378,11 +391,18 @@ pub(super) fn materialize_ref_arg_address(
 
 /// Allocates a heap ref-cell for a by-reference argument that is not a local variable.
 ///
-/// DEFENSIVE FALLBACK ONLY. Every call path that stages by-reference arguments now plans a
-/// stack cell for exactly this case ([`plan_ref_arg_temp_cells`]), because the allocation
-/// below is never freed — one leaked 16-byte block per call, which an omitted optional
-/// by-reference argument in a loop turns into unbounded growth. A caller that reaches this
-/// function has planned no cells at all.
+/// LOAD-BEARING, NOT DEAD. Two kinds of caller reach it, and only one of them is a leftover:
+///
+/// - A call whose cells were planned as [`RefArgCellLifetime::MayOutliveCall`] — every
+///   CONSTRUCTOR call, static or dynamic. A constructor that promotes a by-reference
+///   parameter binds a property that BORROWS this cell for the whole life of the object, so
+///   it has to be heap storage that outlives the frame. Nothing frees it, which is a
+///   narrower pre-existing defect (one cell per constructed object) that only the object
+///   model can fix — but replacing this allocation with a stack cell is a use-after-free,
+///   and that is exactly what a "clean up the dead fallback" edit would do.
+/// - A call path that plans no cells at all. Those would leak one 16-byte block per call, so
+///   every path that stages by-reference arguments today plans them
+///   ([`plan_ref_arg_temp_cells`]).
 pub(super) fn materialize_temporary_ref_arg_cell(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
