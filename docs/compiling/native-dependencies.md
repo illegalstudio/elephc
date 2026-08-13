@@ -10,12 +10,18 @@ as **curated native packages**: the project declares an exact version, the lock
 records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
-The catalog contains PCRE2 10.47 and zlib 1.3.2. Programs using `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` require PCRE2 at
-final link time. zlib is the second pure-C recipe and proves the manager is not
-PCRE2-specific; declaring it makes its verified static artifact available for
-future runtime/builtin integrations but does not by itself add `libz.a` to every
-program.
+The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.7, and curl 8.21.0.
+Programs using `preg_*`, `mb_ereg_match()`, `RegexIterator`, or
+`RecursiveRegexIterator` require PCRE2 at final link time. zlib is the second
+pure-C recipe and proves the manager is not PCRE2-specific; declaring it makes
+its verified static artifact available for future runtime/builtin integrations
+but does not by itself add `libz.a` to every program. curl is the first
+package with non-empty catalog dependencies: `elephc native add curl` also
+declares OpenSSL (curl's TLS backend only) and zlib, and `--with-curl` (or,
+once detection lands, ordinary `curl_*` usage) requires all three archives at
+final link time. See
+[Linking and conditional compilation](linking-and-conditional-compilation.md)
+for the `--with-curl` flag itself.
 
 ## Quick start
 

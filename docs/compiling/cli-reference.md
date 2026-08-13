@@ -271,7 +271,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `phar`, `tz`, `image`, `eval`, `regex`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-web` is an alias for `--web`. An unknown name is an error. |
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, curl)
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 

@@ -14,6 +14,17 @@
 //!   `hash()` (links elephc_crypto -> the `hash` extension); the negative case links no
 //!   bridge. Core extensions (json) always report loaded; a bridge with no linked
 //!   staticlib (curl) never does.
+//! - Task 4 of the php-curl-family plan registers `elephc_curl` in the bridge table
+//!   (`php_extension: Some("curl")`) and wires `--with-curl` to force-link it, but no
+//!   PHP-visible curl function exists yet (the prelude lands in Task 5), so there is no
+//!   `curl_*` call this file could compile to prove the bridge is reachable. Every
+//!   `extension_loaded('curl')` assertion below stays `false` on purpose — that is
+//!   still correct, since none of these programs pass `--with-curl`. The one new
+//!   linked-bridge assertion this task adds, `php_extension_for_lib("elephc_curl") ==
+//!   Some("curl")`, lives in `src/linker/bridges.rs`'s own unit tests instead: that
+//!   module (private to the `elephc` binary crate) is the only place able to call it
+//!   directly, since this file drives the CLI as an opaque subprocess. Task 5 should
+//!   add the real `--with-curl` + `curl_version()` compiled case here once it exists.
 
 use std::fs;
 use std::path::{Path, PathBuf};

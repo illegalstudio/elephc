@@ -140,6 +140,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extension: None,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_curl",
+        env_var: "ELEPHC_CURL_LIB_DIR",
+        crate_name: "elephc-curl",
+        flag_name: "curl",
+        whole_archive: true,
+        macos_frameworks: &["Security", "CoreFoundation", "SystemConfiguration"],
+        needs_libdl: true,
+        // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
+        php_extension: Some("curl"),
+    },
 ];
 
 /// A typed plan after known bridge names have been resolved as far as possible.
@@ -637,6 +648,24 @@ mod tests {
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
+
+        // Task 4: `--with-curl` force-links the whole archive (the curl prelude's
+        // internal builtins arrive later, so pay-for-use detection cannot see them
+        // yet) and needs the same macOS proxy/keychain framework trio as the crate's
+        // own gated native tests (`crates/elephc-curl/build.rs`): `Security` and
+        // `CoreFoundation` satisfy OpenSSL's keychain-backed trust store lookups,
+        // `SystemConfiguration` satisfies libcurl's own `SCDynamicStoreCopyProxies`
+        // system-proxy detection.
+        let curl = bridge_for_library("elephc_curl").expect("curl bridge");
+        assert_eq!(curl.crate_name, "elephc-curl");
+        assert_eq!(curl.env_var, "ELEPHC_CURL_LIB_DIR");
+        assert_eq!(curl.archive_filename(), "libelephc_curl.a");
+        assert!(curl.whole_archive);
+        assert!(curl.needs_libdl);
+        assert_eq!(
+            curl.macos_frameworks,
+            &["Security", "CoreFoundation", "SystemConfiguration"]
+        );
     }
 
     /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
@@ -680,6 +709,10 @@ mod tests {
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
         assert_eq!(php_extension_for_lib("elephc_tz"), None);
         assert_eq!(php_extension_for_lib("elephc_magician"), None);
+        // Task 4: no PHP-visible curl functions exist yet (the prelude lands in
+        // Task 5), so this bridge-table mapping is the only linked-bridge
+        // assertion possible until then — see the module doc for context.
+        assert_eq!(php_extension_for_lib("elephc_curl"), Some("curl"));
         assert_eq!(php_extension_for_lib("elephc_bogus"), None);
     }
 

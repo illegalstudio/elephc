@@ -226,7 +226,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     timings.record_since("runtime-cache", phase_started);
     timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
 
-    let native_requirements: Vec<NativeRequirement> = runtime_link_requirements
+    let mut native_requirements: Vec<NativeRequirement> = runtime_link_requirements
         .iter()
         .filter_map(|requirement| match requirement {
             LinkRequirement::NativePackage(package) => {
@@ -235,6 +235,20 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
         })
         .collect();
+    // The curl bridge is a Rust `staticlib` (`elephc_curl`, planned above like any
+    // other bridge) that itself links against the managed native `curl` package
+    // (which pulls in `openssl`/`zlib` transitively through the catalog). Unlike
+    // `regex`, curl has no `RuntimeFeatures` bit yet (pay-for-use detection lands
+    // with the prelude in Task 5), so the only trigger today is `--with-curl`
+    // planning `elephc_curl`; this mirrors that into the native requirement so the
+    // final link resolves `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a` instead of
+    // failing on `elephc_curl`'s undefined libcurl symbols.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_curl")
+    {
+        native_requirements.push(NativeRequirement::package("curl"));
+    }
     let resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,
