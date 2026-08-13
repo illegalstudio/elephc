@@ -452,6 +452,8 @@ pub enum RuntimeFnId {
     CurlEasySetoptLong,
     /// Applies a string-valued `curl_setopt()` option to an easy handle.
     CurlEasySetoptStr,
+    /// Applies a `struct curl_slist *`-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptSlist,
     /// Runs an easy handle's configured transfer to completion.
     CurlEasyPerform,
     /// Takes the `CURLOPT_RETURNTRANSFER`-captured response body from an easy handle.
@@ -1192,6 +1194,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyInit
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
+            | RuntimeFnId::CurlEasySetoptSlist
             | RuntimeFnId::CurlEasySetoptStr
             | RuntimeFnId::CurlOptionKind
             | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
@@ -1382,6 +1385,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyErrno
                 | RuntimeFnId::CurlEasyPerform
                 | RuntimeFnId::CurlEasySetoptLong
+                | RuntimeFnId::CurlEasySetoptSlist
                 | RuntimeFnId::CurlEasySetoptStr
                 // A pure table lookup: it hands back a small integer kind code and takes
                 // no handle at all, so there is no storage and nothing to alias.
@@ -1953,6 +1957,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
+            RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
             RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
             RuntimeFnId::CurlSetoptUnsupportedWarning => {

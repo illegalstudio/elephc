@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::easy::{self, CURL};
+use crate::easy::{self, CurlSlist, CURL};
 
 /// One tracked libcurl easy handle plus the PHP-layer state elephc keeps
 /// around it: the RETURNTRANSFER capture flag/buffer, the most recently taken
@@ -59,6 +59,17 @@ pub(crate) struct EasyEntry {
     /// most recent transfer, extracted up to the first NUL byte. Empty
     /// before the first transfer or after a transfer that set no message.
     pub(crate) last_error: Vec<u8>,
+    /// The `struct curl_slist` this handle currently has set, keyed by the
+    /// `CURLOPT_*` that owns it (`CURLOPT_HTTPHEADER`, `CURLOPT_QUOTE`, ...).
+    ///
+    /// libcurl does NOT copy a slist option: it stores the pointer and walks
+    /// it during the transfer, so the list must outlive every
+    /// `curl_easy_perform` on this handle. That is what this map is for —
+    /// `elephc_curl_easy_setopt_slist` moves the previous list for an option
+    /// out of here and frees it only AFTER libcurl has accepted the
+    /// replacement, and `free_slists` releases whatever is left when the
+    /// handle is reset or cleaned up.
+    pub(crate) slists: HashMap<i32, *mut CurlSlist>,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -104,6 +115,23 @@ impl EasyEntry {
             error_buf: vec![0u8; easy::CURL_ERROR_SIZE],
             last_errno: 0,
             last_error: Vec::new(),
+            slists: HashMap::new(),
+        }
+    }
+
+    /// Frees every `struct curl_slist` this handle owns and forgets them.
+    ///
+    /// Called on `curl_reset()` and on handle teardown. The lists are freed
+    /// AFTER `curl_easy_reset`/`curl_easy_cleanup` has dropped libcurl's own
+    /// pointers to them at every call site, never before: libcurl walks a slist
+    /// option during the transfer, so freeing one that is still set would leave
+    /// a dangling pointer inside the easy handle.
+    pub(crate) fn free_slists(&mut self) {
+        for (_, list) in self.slists.drain() {
+            // SAFETY: every pointer in this map came from `easy::slist_append`,
+            // is owned solely by this entry, and is removed from the map as it
+            // is freed, so no double free is reachable.
+            unsafe { easy::slist_free_all(list) };
         }
     }
 }

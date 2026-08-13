@@ -57,6 +57,26 @@ pub(crate) const CURLOPT_WRITEDATA: c_int = 10001;
 /// `crate::php_layer::write_callback`).
 pub(crate) const CURLOPT_WRITEFUNCTION: c_int = 20011;
 
+/// `CURLOPT_POSTFIELDS` (10015): the request body. Never forwarded directly —
+/// libcurl does NOT copy the buffer for this option, so elephc sets
+/// [`CURLOPT_POSTFIELDSIZE_LARGE`] + [`CURLOPT_COPYPOSTFIELDS`] instead, which
+/// is also what makes a body containing NUL bytes survive.
+pub(crate) const CURLOPT_POSTFIELDS: c_int = 10015;
+/// `CURLOPT_POSTFIELDSIZE_LARGE` (30120): the request body's exact byte length.
+/// Must be set BEFORE `CURLOPT_COPYPOSTFIELDS`, which reads it to decide how
+/// many bytes to copy (libcurl 8.21.0, `lib/setopt.c`); without it libcurl
+/// falls back to `strlen`, truncating a binary body at its first NUL.
+pub(crate) const CURLOPT_POSTFIELDSIZE_LARGE: c_int = 30120;
+/// `CURLOPT_COPYPOSTFIELDS` (10165): like `CURLOPT_POSTFIELDS`, but libcurl
+/// takes its own copy of the buffer, so the PHP string it came from is free to
+/// die immediately.
+pub(crate) const CURLOPT_COPYPOSTFIELDS: c_int = 10165;
+
+/// libcurl's opaque `struct curl_slist` linked-list node, built by
+/// [`slist_append`] and freed by [`slist_free_all`]. Never constructed on the
+/// Rust side; only ever seen as `*mut CurlSlist`.
+pub(crate) enum CurlSlist {}
+
 /// `CURLINFO_TYPEMASK`: the low bits of a `CURLINFO_*` value are irrelevant to
 /// its C output type; `curl_easy_getinfo` dispatches purely on
 /// `info & CURLINFO_TYPEMASK` (libcurl 8.21.0, `include/curl/curl.h`).
@@ -144,6 +164,15 @@ extern "C" {
     /// (`CURLVERSION_NOW`). The returned pointer is libcurl-owned `'static`
     /// storage; never freed by the caller.
     fn curl_version_info(stamp: c_int) -> *const CurlVersionInfoData;
+
+    /// Appends a NUL-terminated string to a `struct curl_slist`, returning the
+    /// new head (or null on allocation failure, in which case the ORIGINAL
+    /// list is leaked unless the caller kept its own pointer — which is why
+    /// [`slist_append`] below never overwrites its input on failure).
+    fn curl_slist_append(list: *mut CurlSlist, value: *const c_char) -> *mut CurlSlist;
+
+    /// Frees an entire `struct curl_slist`. Safe on null.
+    fn curl_slist_free_all(list: *mut CurlSlist);
 }
 
 /// Ensures `curl_global_init` has run exactly once for this process. Every
@@ -232,6 +261,52 @@ pub(crate) unsafe fn setopt_str(curl: *mut CURL, option: c_int, value: *const c_
 /// overwritten).
 pub(crate) unsafe fn setopt_ptr(curl: *mut CURL, option: c_int, value: *mut c_void) -> CURLcode {
     curl_easy_setopt(curl, option, value)
+}
+
+/// Sets a `struct curl_slist *` option (`CURLOPTTYPE_SLISTPOINT`).
+///
+/// UNLIKE string options, libcurl does NOT copy the list: it stores the pointer
+/// and walks it during the transfer, so `list` must outlive every
+/// `curl_easy_perform` on this handle. That lifetime is what
+/// `crate::handles::EasyEntry::slists` exists to own.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`]. `list` must stay valid
+/// until the option is replaced or the handle is cleaned up.
+pub(crate) unsafe fn setopt_slist(
+    curl: *mut CURL,
+    option: c_int,
+    list: *mut CurlSlist,
+) -> CURLcode {
+    curl_easy_setopt(curl, option, list)
+}
+
+/// Appends one NUL-terminated string to `list`, returning the new head, or
+/// `None` when libcurl could not allocate — in which case `list` is UNCHANGED
+/// and still the caller's to free.
+///
+/// # Safety
+/// `list` must be null or a list this module built. `value` must be a valid,
+/// NUL-terminated C string pointer.
+pub(crate) unsafe fn slist_append(
+    list: *mut CurlSlist,
+    value: *const c_char,
+) -> Option<*mut CurlSlist> {
+    let next = curl_slist_append(list, value);
+    if next.is_null() {
+        None
+    } else {
+        Some(next)
+    }
+}
+
+/// Frees a whole `struct curl_slist`. A no-op for null.
+///
+/// # Safety
+/// `list` must be null or a list this module built that has not already been
+/// freed, and must no longer be set on any live easy handle.
+pub(crate) unsafe fn slist_free_all(list: *mut CurlSlist) {
+    curl_slist_free_all(list);
 }
 
 /// Sets the write-callback function pointer (`CURLOPTTYPE_FUNCTIONPOINT`).

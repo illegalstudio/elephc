@@ -61,7 +61,27 @@ pub(crate) fn lower_curl_easy_setopt_str(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    ensure_curl_arg_count(inst, "__elephc_curl_easy_setopt_str", 3)?;
+    lower_curl_setopt_bytes(
+        ctx,
+        inst,
+        "__elephc_curl_easy_setopt_str",
+        "__rt_curl_easy_setopt_str",
+    )
+}
+
+/// Lowers any `(handle, option, byte string)` curl setter through the `(id, opt, ptr,
+/// len)` C ABI shape both `elephc_curl_easy_setopt_str` and
+/// `elephc_curl_easy_setopt_slist` declare.
+///
+/// Shared rather than duplicated so the staging order this file documents can only be
+/// changed for every byte-valued setter at once.
+pub(crate) fn lower_curl_setopt_bytes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    builtin_name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    ensure_curl_arg_count(inst, builtin_name, 3)?;
     let option = super::super::super::expect_operand(inst, 1)?;
 
     // The string materialization may itself call a runtime helper (a Mixed operand is
@@ -69,14 +89,7 @@ pub(crate) fn lower_curl_easy_setopt_str(
     // occupies a caller-saved register.
     let ptr_scratch = abi::int_result_reg(ctx.emitter);
     let len_scratch = abi::secondary_scratch_reg(ctx.emitter);
-    load_string_arg_to_regs(
-        ctx,
-        inst,
-        2,
-        "__elephc_curl_easy_setopt_str",
-        ptr_scratch,
-        len_scratch,
-    )?;
+    load_string_arg_to_regs(ctx, inst, 2, builtin_name, ptr_scratch, len_scratch)?;
     abi::emit_push_reg(ctx.emitter, len_scratch);
     abi::emit_push_reg(ctx.emitter, ptr_scratch);
     ctx.load_value_to_reg(option, ptr_scratch)?;
@@ -87,7 +100,7 @@ pub(crate) fn lower_curl_easy_setopt_str(
     abi::emit_pop_reg(ctx.emitter, curl_arg_reg(ctx, 2));                       // C ABI ptr = the value's bytes
     abi::emit_pop_reg(ctx.emitter, curl_arg_reg(ctx, 3));                       // C ABI len = the value's byte length
 
-    emit_setopt_call(ctx, "__rt_curl_easy_setopt_str");
+    emit_setopt_call(ctx, runtime_label);
     store_if_result(ctx, inst)
 }
 

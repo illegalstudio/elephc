@@ -144,9 +144,10 @@ pub extern "C" fn elephc_curl_easy_setopt_long(id: i64, opt: i32, value: i64) ->
 }
 
 /// Sets a string-valued `curl_setopt` option, forwarded to real
-/// `curl_easy_setopt` unchanged (no PHP-only string options exist yet in
-/// Task 3's scope). Returns `0` for an unknown id, embedded NUL bytes, or a
-/// libcurl setopt failure.
+/// `curl_easy_setopt` unchanged — except `CURLOPT_POSTFIELDS`, which goes
+/// through [`set_postfields`] because a request body is not a C string.
+/// Returns `0` for an unknown id, embedded NUL bytes, or a libcurl setopt
+/// failure.
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes when non-null.
@@ -158,6 +159,24 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
     len: usize,
 ) -> i32 {
     handles::ffi_guard(0, || {
+        // The body must be read as BYTES, before any `CString` conversion: a
+        // POST body may legitimately contain NUL (a PHP string is binary-safe,
+        // and so is `application/octet-stream`), and `bytes_to_cstring` would
+        // reject exactly that.
+        if opt == easy::CURLOPT_POSTFIELDS {
+            let body: &[u8] = if len == 0 {
+                &[]
+            } else if ptr.is_null() {
+                return 0;
+            } else {
+                unsafe { std::slice::from_raw_parts(ptr, len) }
+            };
+            let mut guard = handles::lock_recover(handles::handles());
+            let Some(entry) = guard.get_mut(&id) else {
+                return 0;
+            };
+            return unsafe { set_postfields(entry, body) } as i32;
+        }
         let Some(value) = bytes_to_cstring(ptr, len) else {
             return 0;
         };
@@ -167,6 +186,74 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
         };
         let code = unsafe { easy::setopt_str(entry.curl, opt as c_int, value.as_ptr()) };
         (code == easy::CURLE_OK) as i32
+    })
+}
+
+/// Sets a `struct curl_slist *` option (`CURLOPT_HTTPHEADER`, `CURLOPT_QUOTE`,
+/// `CURLOPT_RESOLVE`, ...) from a blob of NUL-TERMINATED items: each item's
+/// bytes followed by one `0` byte, so an empty blob is an empty list and a
+/// single empty item is one `0` byte. That framing is unambiguous where a
+/// separator-joined encoding is not, and it is exactly what
+/// `curl_slist_append` wants anyway.
+///
+/// The new list is stored on the handle (`EasyEntry::slists`) because libcurl
+/// does NOT copy it: it walks the list during the transfer, so it must outlive
+/// every `curl_easy_perform`. The PREVIOUS list for this option is freed only
+/// after libcurl has accepted the replacement, so a failed `setopt` leaves the
+/// handle exactly as it was rather than pointing at freed memory.
+///
+/// Returns `0` for an unknown id, a null pointer with a nonzero length, an item
+/// libcurl could not allocate, or a libcurl setopt failure.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
+    id: i64,
+    opt: i32,
+    ptr: *const u8,
+    len: usize,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let blob: &[u8] = if len == 0 {
+            &[]
+        } else if ptr.is_null() {
+            return 0;
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+
+        let mut list: *mut easy::CurlSlist = std::ptr::null_mut();
+        for item in split_nul_terminated(blob) {
+            let Ok(item) = CString::new(item) else {
+                // Unreachable through the prelude (it frames items on NUL), but
+                // an embedded NUL would silently truncate a header, so refuse.
+                unsafe { easy::slist_free_all(list) };
+                return 0;
+            };
+            match unsafe { easy::slist_append(list, item.as_ptr()) } {
+                Some(next) => list = next,
+                None => {
+                    unsafe { easy::slist_free_all(list) };
+                    return 0;
+                }
+            }
+        }
+
+        let code = unsafe { easy::setopt_slist(entry.curl, opt as c_int, list) };
+        if code != easy::CURLE_OK {
+            unsafe { easy::slist_free_all(list) };
+            return 0;
+        }
+        // libcurl now points at `list`; only here is the old list unreachable.
+        if let Some(previous) = entry.slists.insert(opt, list) {
+            unsafe { easy::slist_free_all(previous) };
+        }
+        1
     })
 }
 
@@ -335,10 +422,13 @@ pub unsafe extern "C" fn elephc_curl_easy_take_body(
 pub extern "C" fn elephc_curl_easy_free(id: i64) {
     handles::ffi_guard((), || {
         let mut guard = handles::lock_recover(handles::handles());
-        if let Some(entry) = guard.remove(&id) {
+        if let Some(mut entry) = guard.remove(&id) {
             // Do not hold the table lock across `curl_easy_cleanup`.
             drop(guard);
             unsafe { easy::cleanup(entry.curl) };
+            // AFTER cleanup, never before: libcurl holds raw pointers to the
+            // handle's slist options until the handle itself is gone.
+            entry.free_slists();
         }
     })
 }
@@ -361,6 +451,61 @@ pub unsafe extern "C" fn elephc_curl_global_info(
         let json = build_global_info_json();
         unsafe { publish_bytes(json.as_bytes(), out_json, cap, len) }
     })
+}
+
+/// Splits a blob of NUL-TERMINATED items into its items, dropping a trailing
+/// empty tail. `b""` is zero items; `b"\0"` is one empty item; `b"a\0b\0"` is
+/// two. See [`elephc_curl_easy_setopt_slist`] for why this framing rather than
+/// a separator.
+fn split_nul_terminated(blob: &[u8]) -> Vec<&[u8]> {
+    let mut items = Vec::new();
+    let mut rest = blob;
+    while let Some(end) = rest.iter().position(|&byte| byte == 0) {
+        items.push(&rest[..end]);
+        rest = &rest[end + 1..];
+    }
+    // Anything after the last NUL is an unterminated fragment the caller did
+    // not frame; the prelude always terminates, so this only guards a caller
+    // that does not.
+    if !rest.is_empty() {
+        items.push(rest);
+    }
+    items
+}
+
+/// Applies `CURLOPT_POSTFIELDS` as libcurl's copying, length-aware pair:
+/// `CURLOPT_POSTFIELDSIZE_LARGE` first (so libcurl knows how many bytes to
+/// take instead of calling `strlen` and truncating at the first NUL), then
+/// `CURLOPT_COPYPOSTFIELDS` (so libcurl owns the bytes and the PHP string that
+/// supplied them can die immediately).
+///
+/// php-src does exactly this in `_php_curl_setopt`, and for the same two
+/// reasons: `CURLOPT_POSTFIELDS` alone would leave libcurl holding a borrowed
+/// pointer into a PHP string.
+///
+/// # Safety
+/// `entry.curl` must be a still-live handle. `body` is only read for the
+/// duration of the call; libcurl copies it.
+unsafe fn set_postfields(entry: &mut EasyEntry, body: &[u8]) -> bool {
+    let size = unsafe {
+        easy::setopt_off_t(
+            entry.curl,
+            easy::CURLOPT_POSTFIELDSIZE_LARGE,
+            body.len() as i64,
+        )
+    };
+    if size != easy::CURLE_OK {
+        return false;
+    }
+    // A zero-length body still needs a non-null pointer: libcurl treats null
+    // as "unset the option" rather than "post nothing".
+    let ptr = if body.is_empty() {
+        c"".as_ptr()
+    } else {
+        body.as_ptr() as *const c_char
+    };
+    let code = unsafe { easy::setopt_str(entry.curl, easy::CURLOPT_COPYPOSTFIELDS, ptr) };
+    code == easy::CURLE_OK
 }
 
 /// Builds a NUL-free `CString` from a caller-supplied byte pointer/length, or

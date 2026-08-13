@@ -160,6 +160,31 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     if ($kind === 0) {
         throw new \ValueError("curl_setopt(): Argument #2 (\$option) is not a valid cURL option");
     }
+    // A string-list option takes an ARRAY and nothing else, matching php-src's own
+    // `zend_type_error(... must be of type array ...)` for the same options. The items
+    // travel to the bridge as one NUL-FRAMED blob (`item . "\0"` per element): PHP
+    // strings are binary-safe, so `[]` is `""` and `[""]` is a single NUL byte, which a
+    // separator-joined encoding could not tell apart.
+    if ($kind === 3) {
+        if (!is_array($value)) {
+            $given = is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value));
+            throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type array, " . $given . " given");
+        }
+        $blob = "";
+        foreach ($value as $item) {
+            if (is_array($item) || is_object($item) || is_null($item)) {
+                throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be an array of strings for this option");
+            }
+            $blob .= (string) $item . "\0";
+        }
+        return __elephc_curl_easy_setopt_slist($raw, $option, $blob);
+    }
+    // CURLOPT_POSTFIELDS (10015) is the one option whose value may be an array as well as
+    // a string: PHP encodes an array of scalars as `application/x-www-form-urlencoded`.
+    // (An array containing a CURLFile would be multipart/form-data — Task 11.)
+    if ($option === 10015 && is_array($value)) {
+        return __elephc_curl_easy_setopt_str($raw, $option, __elephc_curl_form_encode($value));
+    }
     if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
         $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
         throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
@@ -199,6 +224,78 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     }
     __elephc_curl_setopt_unsupported_warning($option);
     return false;
+}
+
+// `CURLOPT_POSTFIELDS`'s ARRAY form, encoded exactly as PHP does when no `CURLFile` is
+// present: `application/x-www-form-urlencoded`, keys and values through `urlencode()`
+// (spaces as `+`, everything else percent-encoded), joined with `&`.
+//
+// AN OBJECT IN THE ARRAY IS REFUSED, LOUDLY. In php-src an object here is a `CURLFile`
+// (or `CURLStringFile`), which switches the whole body to `multipart/form-data` — a
+// completely different request. `CURLFile` lands in Task 11; until then a half-done
+// encoding that silently posted `"Object"` as a field value would be worse than an error,
+// so this throws and says exactly what is missing.
+//
+// `$fields` IS DECLARED `mixed`, NOT `array`, ONLY BECAUSE OF THE CHECKER: the caller
+// reaches this from inside `curl_setopt()`'s `mixed $value`, and elephc's checker does not
+// narrow a `mixed` to `Array(Mixed)` after an `is_array()` guard, so an `array` parameter
+// makes the call a COMPILE ERROR. The guard is still there at the only call site.
+function __elephc_curl_form_encode(mixed $fields): string {
+    $encoded = "";
+    foreach ($fields as $name => $value) {
+        if (is_object($value)) {
+            throw new \RuntimeException("curl_setopt(): CURLOPT_POSTFIELDS with an object value (multipart/form-data upload) is not supported by this build");
+        }
+        if (is_array($value)) {
+            throw new \RuntimeException("curl_setopt(): CURLOPT_POSTFIELDS with a nested array value is not supported by this build");
+        }
+        if ($encoded !== "") {
+            $encoded .= "&";
+        }
+        // `(string) $x . ""`, NOT `(string) $x`, AND BOUND TO A LOCAL BEFORE THE CALL.
+        // A bare `(string) $mixed` cast handed straight to a function argument leaks its
+        // temporary (measured with `--gc-stats`: one block per cast, unbounded across a
+        // loop); routing it through a concatenation first produces an ordinary owned
+        // string local that the caller releases normally. Same family of pre-existing
+        // codegen leaks as the "bind the property to a local" rule `crate::hash_prelude`
+        // documents, and the reason every wrapper in this prelude binds before it calls.
+        $nameRaw = (string) $name . "";
+        $valueRaw = (string) $value . "";
+        $key = __elephc_curl_urlencode($nameRaw);
+        $val = __elephc_curl_urlencode($valueRaw);
+        $encoded .= $key . "=" . $val;
+    }
+    return $encoded;
+}
+
+// `application/x-www-form-urlencoded` percent-encoding: `[A-Za-z0-9_.-]` pass through, a
+// space becomes `+`, every other byte becomes uppercase `%XX`. Exactly PHP's `urlencode()`.
+//
+// IT DOES NOT CALL THE `urlencode()` BUILTIN, DELIBERATELY. elephc's `__rt_urlencode` /
+// `__rt_rawurlencode` helpers percent-encode ASCII DIGITS: their `A-Z` range test branches
+// straight to the punctuation check when the byte is below `'A'`, so the `0-9` test that
+// follows is unreachable (`urlencode("42")` answers `"%34%32"`, PHP answers `"42"`). That
+// is a pre-existing bug in a shared string builtin, outside this feature's blast radius to
+// fix here — but a form body that mangles every number in it would be worse than useless,
+// so this encoder is self-contained. When the builtin is fixed, this can collapse back to
+// a `urlencode()` call and the behaviour will not change.
+function __elephc_curl_urlencode(string $raw): string {
+    $out = "";
+    $len = strlen($raw);
+    for ($i = 0; $i < $len; $i++) {
+        $byte = ord($raw[$i]);
+        if (($byte >= 48 && $byte <= 57)
+            || ($byte >= 65 && $byte <= 90)
+            || ($byte >= 97 && $byte <= 122)
+            || $byte === 45 || $byte === 46 || $byte === 95) {
+            $out .= $raw[$i];
+        } elseif ($byte === 32) {
+            $out .= "+";
+        } else {
+            $out .= "%" . "0123456789ABCDEF"[($byte >> 4) & 15] . "0123456789ABCDEF"[$byte & 15];
+        }
+    }
+    return $out;
 }
 
 function curl_setopt_array(CurlHandle $handle, array $options): bool {

@@ -84,6 +84,7 @@ mod tests {
         "__rt_curl_easy_init",
         "__rt_curl_easy_setopt_long",
         "__rt_curl_easy_setopt_str",
+        "__rt_curl_easy_setopt_slist",
         "__rt_curl_easy_perform",
         "__rt_curl_easy_errno",
         "__rt_curl_easy_error",

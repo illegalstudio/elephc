@@ -231,3 +231,217 @@ fn wave_a_setopt_array_applies_and_stops_on_failure() {
     // answers `false` — `curl_setopt_array()` reports that as `false`, never a throw.
     assert_eq!(out, "applied\nua\nstopped\n");
 }
+
+/// Wave B: `CURLOPT_HTTPHEADER` really builds a `curl_slist` libcurl walks — the fixture
+/// echoes the headers it received, so both custom headers and the OVERRIDE of a header
+/// libcurl would otherwise send itself are proved on the wire.
+#[test]
+fn wave_b_httpheader_sends_a_real_slist() {
+    if skip_without_curl_native("wave_b_httpheader_sends_a_real_slist") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "X-Elephc: one",
+            "X-Second: two",
+            "Accept: application/json",
+        ]);
+        $body = curl_exec($ch);
+        echo str_contains($body, "x-elephc: one") ? "h1\n" : "no-h1\n";
+        echo str_contains($body, "x-second: two") ? "h2\n" : "no-h2\n";
+        echo str_contains($body, "accept: application/json") ? "accept\n" : "no-accept\n";
+        "#
+    ));
+    assert_eq!(out, "h1\nh2\naccept\n");
+}
+
+/// A slist option REPLACES the previous list rather than appending to it, and an empty
+/// array clears it — the same semantics php-src has, and the case where the bridge's
+/// "free the old list only after libcurl accepted the new one" ordering matters. The
+/// transfer afterwards is what proves the replaced list was not freed while libcurl still
+/// pointed at it.
+#[test]
+fn wave_b_httpheader_replaces_and_clears() {
+    if skip_without_curl_native("wave_b_httpheader_replaces_and_clears") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-First: 1"]);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-Second: 2"]);
+        $body = curl_exec($ch);
+        echo str_contains($body, "x-first") ? "stale\n" : "replaced\n";
+        echo str_contains($body, "x-second: 2") ? "fresh\n" : "no-fresh\n";
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, []);
+        $body2 = curl_exec($ch);
+        echo str_contains($body2, "x-second") ? "still\n" : "cleared\n";
+        "#
+    ));
+    assert_eq!(out, "replaced\nfresh\ncleared\n");
+}
+
+/// A slist option requires an ARRAY: php-src raises a `TypeError` for a string, and so
+/// does this build — never a silent `false` that would leave the caller guessing whether
+/// the header went out.
+#[test]
+fn wave_b_slist_options_require_an_array() {
+    if skip_without_curl_native("wave_b_slist_options_require_an_array") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $ch = curl_init();
+        try {
+            curl_setopt($ch, CURLOPT_HTTPHEADER, "Accept: text/plain");
+            echo "accepted\n";
+        } catch (\TypeError $e) {
+            echo $e->getMessage(), "\n";
+        }
+        echo curl_setopt($ch, CURLOPT_QUOTE, ["NOOP"]) ? "quote\n" : "no-quote\n";
+        echo curl_setopt($ch, CURLOPT_RESOLVE, ["example.test:443:127.0.0.1"]) ? "resolve\n" : "no-resolve\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_setopt(): Argument #3 ($value) must be of type array, string given\nquote\nresolve\n"
+    );
+}
+
+/// Wave B: `CURLOPT_POSTFIELDS` as a STRING posts that exact body, and libcurl's default
+/// `Content-Type` for it is `application/x-www-form-urlencoded` — both read back from the
+/// fixture's echo of the request it received.
+#[test]
+fn wave_b_postfields_string_posts_a_raw_body() {
+    if skip_without_curl_native("wave_b_postfields_string_posts_a_raw_body") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, "raw=body&x=1");
+        $body = curl_exec($ch);
+        echo str_contains($body, "method=POST") ? "post\n" : "no-post\n";
+        echo str_contains($body, "body=raw=body&x=1") ? "body\n" : "no-body\n";
+        echo str_contains($body, "content-length: 12") ? "len\n" : "no-len\n";
+        "#
+    ));
+    assert_eq!(out, "post\nbody\nlen\n");
+}
+
+/// `CURLOPT_POSTFIELDS` as an ARRAY of scalars encodes as
+/// `application/x-www-form-urlencoded`, exactly as PHP does when no `CURLFile` is
+/// present: `urlencode()` per key and value, joined with `&`.
+#[test]
+fn wave_b_postfields_array_form_encodes() {
+    if skip_without_curl_native("wave_b_postfields_array_form_encodes") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, ["name" => "a b", "n" => 42]);
+        $body = curl_exec($ch);
+        echo str_contains($body, "method=POST") ? "post\n" : "no-post\n";
+        echo str_contains($body, "body=name=a+b&n=42") ? "encoded\n" : "no-encoded\n";
+        "#
+    ));
+    assert_eq!(out, "post\nencoded\n");
+}
+
+/// A POST body containing NUL bytes survives intact: the bridge sets
+/// `CURLOPT_POSTFIELDSIZE_LARGE` before `CURLOPT_COPYPOSTFIELDS`, so libcurl copies the
+/// exact byte count instead of calling `strlen` and truncating at the first NUL. A plain
+/// `CURLOPT_POSTFIELDS` forward would have sent 3 bytes here, not 7.
+#[test]
+fn wave_b_postfields_are_binary_safe() {
+    if skip_without_curl_native("wave_b_postfields_are_binary_safe") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, "abc\0def");
+        $body = curl_exec($ch);
+        echo str_contains($body, "content-length: 7") ? "len\n" : "no-len\n";
+        "#
+    ));
+    assert_eq!(out, "len\n");
+}
+
+/// An array `CURLOPT_POSTFIELDS` holding an OBJECT is refused with a clear message rather
+/// than half-encoded: in php-src that is a `CURLFile` and switches the body to
+/// `multipart/form-data`, which lands in Task 11. Silently posting the object's string
+/// cast would be worse than an error.
+#[test]
+fn wave_b_postfields_object_values_are_refused() {
+    if skip_without_curl_native("wave_b_postfields_object_values_are_refused") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        class Upload { public string $name = "x"; }
+        $ch = curl_init();
+        try {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, ["file" => new Upload()]);
+            echo "accepted\n";
+        } catch (\RuntimeException $e) {
+            echo $e->getMessage(), "\n";
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_setopt(): CURLOPT_POSTFIELDS with an object value (multipart/form-data upload) is not supported by this build\n"
+    );
+}
+
+/// The slists a handle owns are freed with the handle, not leaked and not double-freed:
+/// a loop of handles that each set several `curl_slist` options and then perform a real
+/// transfer must leave elephc's heap balanced under `--heap-debug`.
+#[test]
+fn wave_b_slist_handles_free_cleanly() {
+    if skip_without_curl_native("wave_b_slist_handles_free_cleanly") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let output = compile_and_run_with_gc_stats(&format!(
+        r#"<?php
+        function post(): int {{
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-A: 1", "X-B: 2"]);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-C: 3"]);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, ["k" => "v"]);
+            curl_exec($ch);
+            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            unset($ch);
+            return $code;
+        }}
+        echo post(), post(), post(), "\n";
+        "#
+    ));
+    assert_eq!(output.stdout, "200200200\n");
+    let (allocs, frees) = parse_gc_stats(&output.stderr);
+    assert_eq!(allocs, frees, "slist-owning handles must not leak or double-free");
+}
