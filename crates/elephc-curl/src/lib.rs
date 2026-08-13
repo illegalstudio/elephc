@@ -27,6 +27,7 @@
 //!   callback semantics), `abi` (the `#[no_mangle]` C ABI entry points).
 
 mod abi;
+mod callbacks;
 mod easy;
 mod handles;
 mod info;

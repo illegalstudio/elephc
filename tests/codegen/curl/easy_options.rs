@@ -235,11 +235,13 @@ fn wave_a_setopt_array_applies_and_stops_on_failure() {
         echo str_contains(curl_exec($ch), "user-agent: array-agent") ? "ua\n" : "no-ua\n";
 
         $bad = curl_init();
-        echo curl_setopt_array($bad, [CURLOPT_WRITEFUNCTION => 1]) ? "accepted\n" : "stopped\n";
+        echo curl_setopt_array($bad, [CURLOPT_FNMATCH_FUNCTION => 1]) ? "accepted\n" : "stopped\n";
         "#
     ));
-    // CURLOPT_WRITEFUNCTION is a real option this build cannot carry, so it warns and
+    // CURLOPT_FNMATCH_FUNCTION is a real option this build cannot carry, so it warns and
     // answers `false` — `curl_setopt_array()` reports that as `false`, never a throw.
+    // (It used to be CURLOPT_WRITEFUNCTION here; Task 12 implements that one, so the
+    // rejection example moved to a callback option still in the second wave.)
     assert_eq!(out, "applied\nua\nstopped\n");
 }
 

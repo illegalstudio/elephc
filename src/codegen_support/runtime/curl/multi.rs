@@ -40,7 +40,7 @@ use crate::codegen_support::emit::Emitter;
 use super::easy_error::emit_message_copier;
 use super::easy_free::emit_free_helper;
 use super::easy_init::emit_handle_producer;
-use super::easy_scalar::{emit_forwarder, IntResult};
+use super::easy_scalar::{emit_forwarder, emit_forwarder_rethrowing, IntResult};
 
 /// The `__rt_mixed_free_deep` resource kind that owns a libcurl MULTI handle
 /// (`CurlMultiHandle`), the sibling of the easy handle's kind 6.
@@ -69,7 +69,12 @@ pub(crate) fn emit_curl_multi(emitter: &mut Emitter) {
         "curl_multi_remove (detach an easy handle from a multi handle)",
         IntResult::CurlCode,
     );
-    emit_forwarder(
+    // The multi twin of `__rt_curl_easy_perform`: this is the other place a PHP callback
+    // can run (libcurl calls the attached easy handles' callbacks from inside
+    // `curl_multi_perform`), so it is the other place a throwable the adapter's firewall
+    // parked has to resume. Without this the exception would sit in `_exc_value` and
+    // surface at some unrelated later throw site.
+    emit_forwarder_rethrowing(
         emitter,
         "__rt_curl_multi_exec",
         "_elephc_curl_multi_perform_fn",

@@ -26,6 +26,7 @@
 
 use std::ffi::{c_char, c_int, c_long, c_void};
 
+use crate::callbacks;
 use crate::easy::{self, CURL};
 use crate::handles::{self, EasyEntry};
 
@@ -59,6 +60,14 @@ pub(crate) const CURLOPTTYPE_BLOB: i32 = 40_000;
 pub(crate) fn apply_long_option(entry: &mut EasyEntry, opt: i32, value: i64) -> bool {
     if opt == CURLOPT_RETURNTRANSFER {
         entry.return_transfer = value != 0;
+        // php-src keeps ONE write mode, not a flag per sink: `CURLOPT_RETURNTRANSFER`
+        // assigns `handlers.write->method = PHP_CURL_RETURN`, which deselects a
+        // previously installed `CURLOPT_WRITEFUNCTION` (`PHP_CURL_USER`). Measured on
+        // PHP 8.4.20: setting WRITEFUNCTION and then RETURNTRANSFER makes `curl_exec()`
+        // return the body and never calls the callback. The callable itself stays
+        // rooted (php-src keeps `func_name` too), so re-setting WRITEFUNCTION later
+        // reinstates it.
+        entry.write_user = false;
         return true;
     }
     if (CURLOPTTYPE_OFF_T..CURLOPTTYPE_BLOB).contains(&opt) {
@@ -116,7 +125,12 @@ unsafe extern "C" fn write_callback(
         let Some(entry) = guard.get_mut(&id) else {
             return 0usize;
         };
-        if entry.return_transfer {
+        if entry.write_user {
+            // Do not hold the table lock across compiled PHP: the callback may call
+            // `curl_setopt()`/`curl_exec()` on other handles and re-enter this table.
+            drop(guard);
+            crate::callbacks::run_bytes_callback(id, callbacks::SLOT_WRITE as usize, chunk)
+        } else if entry.return_transfer {
             entry.body.extend_from_slice(chunk);
             total
         } else {

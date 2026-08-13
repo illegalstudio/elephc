@@ -17,9 +17,11 @@
 //!   `RuntimeFnId` and nothing else, so the backend stays reachable only through the
 //!   typed dispatch tables.
 
+pub mod __elephc_curl_adapter_addr;
 pub mod __elephc_curl_easy_body;
 pub mod __elephc_curl_easy_copy;
 pub mod __elephc_curl_easy_errno;
+pub mod __elephc_curl_easy_set_callback;
 pub mod __elephc_curl_easy_error;
 pub mod __elephc_curl_easy_getinfo_double;
 pub mod __elephc_curl_easy_getinfo_long;

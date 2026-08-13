@@ -68,7 +68,12 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_easy_setopt_slist (apply a string-list libcurl option)",
         IntResult::Boolean,
     );
-    emit_forwarder(
+    // PERFORM IS THE ONE EASY HELPER THAT RE-RAISES. A PHP callback that throws inside
+    // `curl_easy_perform` is caught by `__rt_curl_invoke_callback`'s firewall so the
+    // `longjmp` cannot unwind through libcurl's frames; the throwable is left pending and
+    // resumes here, the first moment libcurl has finished unwinding itself. That is what
+    // makes `try { curl_exec($ch); } catch (…)` work the way it does in php-src.
+    emit_forwarder_rethrowing(
         emitter,
         "__rt_curl_easy_perform",
         "_elephc_curl_easy_perform_fn",
@@ -80,6 +85,16 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "__rt_curl_option_kind",
         "_elephc_curl_option_kind_fn",
         "curl_option_kind (classify a curl_setopt option number)",
+        IntResult::Boolean,
+    );
+    // Task 12: installs/replaces/clears one PHP callback on a handle. Five C arguments
+    // (id, slot, descriptor, CurlHandle object, adapter address) — still inside both
+    // ABIs' integer argument registers, so the plain forwarder shape carries it.
+    emit_forwarder(
+        emitter,
+        "__rt_curl_easy_set_callback",
+        "_elephc_curl_easy_set_callback_fn",
+        "curl_easy_set_callback (install a PHP callable on a callback option)",
         IntResult::Boolean,
     );
     emit_forwarder(
@@ -161,6 +176,38 @@ pub(super) fn emit_forwarder(
     description: &str,
     result: IntResult,
 ) {
+    emit_forwarder_impl(emitter, label, slot, description, result, false);
+}
+
+/// Emits a forwarding helper that additionally calls `__rt_curl_rethrow_pending` on the
+/// way out, so an exception a PHP callback threw mid-transfer resumes once the bridge
+/// (and libcurl underneath it) has returned. Only the two helpers that can run PHP
+/// callbacks — `curl_easy_perform` and `curl_multi_perform` — use this shape; adding it
+/// anywhere else would just re-raise at an arbitrary later call.
+///
+/// The re-raise happens AFTER the return-width fix-up and BEFORE the frame is released,
+/// so the helper's own frame is still valid when `__rt_throw_current` abandons it (which
+/// is what every compiled `throw` does to its frame) and the widened answer in the result
+/// register survives the call untouched on the no-exception path.
+pub(super) fn emit_forwarder_rethrowing(
+    emitter: &mut Emitter,
+    label: &str,
+    slot: &str,
+    description: &str,
+    result: IntResult,
+) {
+    emit_forwarder_impl(emitter, label, slot, description, result, true);
+}
+
+/// Shared body of [`emit_forwarder`] and [`emit_forwarder_rethrowing`].
+fn emit_forwarder_impl(
+    emitter: &mut Emitter,
+    label: &str,
+    slot: &str,
+    description: &str,
+    result: IntResult,
+    rethrow_pending: bool,
+) {
     let missing = format!("{label}_missing");
     emitter.blank();
     emitter.comment(&format!("--- runtime: {description} ---"));
@@ -181,6 +228,10 @@ pub(super) fn emit_forwarder(
                 IntResult::Boolean => emit_zero_extend_int_result(emitter),
                 IntResult::CurlCode => emit_sign_extend_int_result(emitter),
                 IntResult::Wide => {}
+            }
+            if rethrow_pending {
+                emitter.instruction("bl __rt_curl_rethrow_pending");             // resume an exception a PHP callback threw mid-transfer
+
             }
             emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
 
@@ -214,6 +265,10 @@ pub(super) fn emit_forwarder(
                 IntResult::Boolean => emit_zero_extend_int_result(emitter),
                 IntResult::CurlCode => emit_sign_extend_int_result(emitter),
                 IntResult::Wide => {}
+            }
+            if rethrow_pending {
+                emitter.instruction("call __rt_curl_rethrow_pending");           // resume an exception a PHP callback threw mid-transfer
+
             }
             emitter.instruction("mov rsp, rbp");                                // release the frame
 

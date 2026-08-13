@@ -50,8 +50,8 @@
 #[cfg(test)]
 mod option_table {
     use crate::options::{
-        option_kind, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER, KIND_SHARE,
-        KIND_SLIST, KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
+        option_kind, KIND_CALLBACK, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER,
+        KIND_SHARE, KIND_SLIST, KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
     };
 
     /// Loads the frozen curl surface the whole feature is generated from.
@@ -98,7 +98,7 @@ mod option_table {
                 unclassified.push(format!("{name} ({number})"));
             }
             assert!(
-                (KIND_INVALID..=KIND_SHARE).contains(&kind),
+                (KIND_INVALID..=KIND_CALLBACK).contains(&kind),
                 "{name} ({number}) has an out-of-range kind {kind}"
             );
         }
@@ -129,6 +129,17 @@ mod option_table {
             ("CURLOPT_STDERR", KIND_UNSUPPORTED, "php_layer"),
             ("CURLOPT_PRIVATE", KIND_PHP_LAYER, "file"),
             ("CURLOPT_SHARE", KIND_SHARE, "file"),
+        ];
+
+        /// The callback options this build carries as real PHP callables (Task 12's
+        /// first wave). Every other `"callback"`-bucketed option stays `KIND_UNSUPPORTED`.
+        const IMPLEMENTED_CALLBACKS: &[&str] = &[
+            "CURLOPT_WRITEFUNCTION",
+            "CURLOPT_HEADERFUNCTION",
+            "CURLOPT_READFUNCTION",
+            "CURLOPT_PROGRESSFUNCTION",
+            "CURLOPT_XFERINFOFUNCTION",
+            "CURLOPT_DEBUGFUNCTION",
         ];
 
         let surface = frozen_surface();
@@ -162,6 +173,13 @@ mod option_table {
                 "slist" => KIND_SLIST,
                 "off_t" => KIND_OFF_T,
                 "php_layer" => KIND_PHP_LAYER,
+                // The frozen surface has ONE "callback" bucket; this build implements the
+                // first wave of it and still rejects the rest, so the bucket alone no
+                // longer decides the kind. `IMPLEMENTED_CALLBACKS` is the explicit list —
+                // adding a row there is the deliberate act of shipping that option, and
+                // anything not on it must still answer `false` + PHP's warning (locked
+                // decision 7), which is what keeps this half of the ratchet meaningful.
+                "callback" if IMPLEMENTED_CALLBACKS.contains(&name.as_str()) => KIND_CALLBACK,
                 "blob" | "callback" | "file" => KIND_UNSUPPORTED,
                 other => panic!("{name}: unknown frozen option kind {other:?}"),
             };

@@ -11,6 +11,7 @@
 //!   message when it does not, so a checkout without `elephc native add curl` still runs
 //!   the rest of the suite.
 
+mod callbacks;
 mod constants;
 mod easy_handle;
 mod easy_http;

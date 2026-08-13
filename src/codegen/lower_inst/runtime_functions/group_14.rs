@@ -58,6 +58,12 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasyPerform => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_perform(ctx, inst)
         }),
+        RuntimeFnId::CurlEasySetCallback => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_set_callback(ctx, inst)
+        }),
+        RuntimeFnId::CurlAdapterAddr => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_adapter_addr(ctx, inst)
+        }),
         RuntimeFnId::CurlEasySetoptLong => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_long(ctx, inst)
         }),

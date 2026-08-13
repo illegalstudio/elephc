@@ -157,6 +157,14 @@ final class CurlHandle {
     public mixed $__elephc_handle = null;
     public bool $__elephc_return_transfer = false;
     public mixed $__elephc_private = false;
+    // GC ROOT for the callables installed through curl_setopt()'s callback options,
+    // keyed by the bridge's slot index (0 write, 1 header, 2 read, 3 progress, 4 debug,
+    // 5 xferinfo). The bridge stores only the raw descriptor POINTER — it cannot touch a
+    // refcount it has no way to see — so the normalized callable has to stay reachable
+    // from PHP for as long as it is installed, exactly as `Pdo\Sqlite` roots its SQLite
+    // user functions. Assigning over a slot (or `null`ing it) is also what releases the
+    // previous callable, so re-setopt and `curl_reset()` need no explicit free.
+    public array $__elephc_callbacks = [];
 
     private function __construct() {}
 
@@ -316,6 +324,84 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         }
         $shareRaw = $value->__elephc_handle;
         return __elephc_curl_easy_set_share($raw, $shareRaw);
+    }
+    // ORDER IS LOAD-BEARING: this block must stay AFTER the `$kind === 7` block above.
+    // The type checker's flow narrowing of `$value` leaks out of an `if` body, and the
+    // `is_callable()`/`is_string()`/`is_null()` tests below re-narrow it hard enough that
+    // `CURLOPT_SHARE`'s `$value->__elephc_handle` stops type-checking ("Property access
+    // requires an object or typed pointer") when this block is placed first. That is a
+    // checker wart rather than a curl one — the two branches are mutually exclusive and
+    // the runtime behavior is identical either way — but the ordering is the cheap fix.
+    if ($kind === 8) {
+        // CALLBACK OPTIONS. The callable is decomposed here, at the PHP layer, into a
+        // descriptor pointer plus the shared codegen adapter's address, so no bridge
+        // extern ever declares a `callable` parameter — the same split `Pdo\Sqlite`
+        // uses for SQLite's user functions. `$handle` itself travels with them because
+        // libcurl callbacks receive `$ch` as their first PHP argument and the identity is
+        // observable (`$ch === $captured`); the bridge borrows the object as a
+        // non-owning back-pointer, exactly like php-src's `ch->self`.
+        $slot = 5;
+        $optionName = "CURLOPT_XFERINFOFUNCTION";
+        if ($option === 20011) {
+            $slot = 0;
+            $optionName = "CURLOPT_WRITEFUNCTION";
+        } elseif ($option === 20079) {
+            $slot = 1;
+            $optionName = "CURLOPT_HEADERFUNCTION";
+        } elseif ($option === 20012) {
+            $slot = 2;
+            $optionName = "CURLOPT_READFUNCTION";
+        } elseif ($option === 20056) {
+            $slot = 3;
+            $optionName = "CURLOPT_PROGRESSFUNCTION";
+        } elseif ($option === 20094) {
+            $slot = 4;
+            $optionName = "CURLOPT_DEBUGFUNCTION";
+        }
+        if (is_null($value)) {
+            // php-src restores the option's DEFAULT, which for CURLOPT_WRITEFUNCTION is
+            // stdout — NOT whatever CURLOPT_RETURNTRANSFER was set to earlier. Measured
+            // on PHP 8.4.20: after `curl_setopt($ch, CURLOPT_WRITEFUNCTION, null)` on a
+            // RETURNTRANSFER handle, `curl_exec()` prints the body and returns `true`.
+            $handle->__elephc_callbacks[$slot] = null;
+            if ($slot === 0) {
+                $handle->__elephc_return_transfer = false;
+            }
+            return __elephc_curl_easy_set_callback($raw, $slot, 0, $handle, 0);
+        }
+        if (!is_callable($value)) {
+            if (is_string($value)) {
+                throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be a valid callback for option " . $optionName . ", function \"" . $value . "\" not found or invalid function name");
+            }
+            throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be a valid callback for option " . $optionName . ", no array or string given");
+        }
+        $normalized = __elephc_normalize_callable($value);
+        $descriptor = __elephc_callable_ptr($normalized);
+        $adapter = __elephc_curl_adapter_addr();
+        if (!__elephc_curl_easy_set_callback($raw, $slot, $descriptor, $handle, $adapter)) {
+            return false;
+        }
+        // Rooted only AFTER the bridge accepted it, and rooted before this function
+        // returns: $normalized is a live local until then, so the descriptor cannot be
+        // released between the two statements.
+        $handle->__elephc_callbacks[$slot] = $normalized;
+        if ($slot === 0) {
+            // php-src keeps ONE write mode: installing CURLOPT_WRITEFUNCTION selects
+            // PHP_CURL_USER, which deselects PHP_CURL_RETURN. Measured: with a write
+            // callback installed last, `curl_exec()` returns `true` even when
+            // CURLOPT_RETURNTRANSFER was set, and the body reaches only the callback.
+            $handle->__elephc_return_transfer = false;
+        }
+        return true;
+    }
+    if ($kind === 6) {
+        // REJECTED BEFORE THE VALUE IS TYPE-CHECKED. An option this build cannot carry
+        // gets PHP's unsupported-option warning and `false` (locked decision 7) whatever
+        // the value's type is; running the scalar guard first would answer a TypeError
+        // for e.g. a closure passed to a still-unimplemented callback option, which is
+        // both a worse diagnostic and further from php-src (which accepts those).
+        __elephc_curl_setopt_unsupported_warning($option);
+        return false;
     }
     if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
         $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
@@ -780,6 +866,11 @@ function curl_reset(CurlHandle $handle): void {
     __elephc_curl_easy_reset($raw);
     $handle->__elephc_return_transfer = false;
     $handle->__elephc_private = false;
+    // php-src's curl_reset() releases the handler callables too (measured against PHP
+    // 8.4.20: a write callback installed before curl_reset() never fires afterwards).
+    // The bridge dropped its own slots and libcurl registrations inside
+    // __elephc_curl_easy_reset; this drops the GC roots that kept the descriptors alive.
+    $handle->__elephc_callbacks = [];
 }
 
 // DIVERGENCE FROM PHP, for the same reason `curl_init()` diverges (see its comment):
@@ -803,6 +894,24 @@ function curl_copy_handle(CurlHandle $handle): CurlHandle {
     $new = CurlHandle::__elephc_wrap($copy);
     $new->__elephc_return_transfer = $handle->__elephc_return_transfer;
     $new->__elephc_private = $handle->__elephc_private;
+    // CALLBACKS ARE RE-REGISTERED, NEVER INHERITED. libcurl's `dupset` copies the
+    // callback function pointers AND their CURLOPT_*DATA values, and every one of those
+    // data values is the ORIGINAL handle's bridge id — a copy left as libcurl made it
+    // would call the original's PHP callables with the ORIGINAL's $ch. The bridge clears
+    // every registration on the duplicate for exactly that reason; this loop puts them
+    // back pointing at the COPY, which is what php-src's curl_copy_handle does when it
+    // re-points its own handler struct at the new php_curl (measured: the copy's callback
+    // receives the copy's CurlHandle, not the original's).
+    $newRaw = $new->__elephc_handle;
+    $adapter = __elephc_curl_adapter_addr();
+    foreach ($handle->__elephc_callbacks as $slot => $callback) {
+        if ($callback === null) {
+            continue;
+        }
+        $descriptor = __elephc_callable_ptr($callback);
+        __elephc_curl_easy_set_callback($newRaw, (int) $slot, $descriptor, $new, $adapter);
+        $new->__elephc_callbacks[(int) $slot] = $callback;
+    }
     return $new;
 }
 

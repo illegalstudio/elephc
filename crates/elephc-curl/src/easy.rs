@@ -488,6 +488,67 @@ pub(crate) unsafe fn setopt_write_function(
     curl_easy_setopt(curl, option, callback)
 }
 
+/// Sets a `size_t (*)(char *, size_t, size_t, void *)`-shaped callback option —
+/// `CURLOPT_HEADERFUNCTION` and `CURLOPT_READFUNCTION` share the write callback's C
+/// signature. `None` writes a null function pointer, which is how libcurl restores the
+/// option's built-in default.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_bytes_function(
+    curl: *mut CURL,
+    option: c_int,
+    callback: Option<CurlWriteCallback>,
+) -> CURLcode {
+    match callback {
+        Some(callback) => curl_easy_setopt(curl, option, callback),
+        None => curl_easy_setopt(curl, option, std::ptr::null::<c_void>()),
+    }
+}
+
+/// The `curl_xferinfo_callback` C function-pointer type:
+/// `int (*)(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+/// curl_off_t ulnow)`. Backs BOTH of PHP's progress options — see
+/// `crate::callbacks::xferinfo_callback` for why.
+pub(crate) type CurlXferInfoCallback =
+    unsafe extern "C" fn(*mut c_void, i64, i64, i64, i64) -> c_int;
+
+/// Sets `CURLOPT_XFERINFOFUNCTION`. `None` clears it back to libcurl's default.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_xferinfo_function(
+    curl: *mut CURL,
+    option: c_int,
+    callback: Option<CurlXferInfoCallback>,
+) -> CURLcode {
+    match callback {
+        Some(callback) => curl_easy_setopt(curl, option, callback),
+        None => curl_easy_setopt(curl, option, std::ptr::null::<c_void>()),
+    }
+}
+
+/// The `curl_debug_callback` C function-pointer type:
+/// `int (*)(CURL *handle, curl_infotype type, char *data, size_t size, void *clientp)`.
+pub(crate) type CurlDebugCallback =
+    unsafe extern "C" fn(*mut CURL, c_int, *mut c_char, usize, *mut c_void) -> c_int;
+
+/// Sets `CURLOPT_DEBUGFUNCTION`. `None` clears it back to libcurl's default (which
+/// writes verbose output to stderr when `CURLOPT_VERBOSE` is on).
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_debug_function(
+    curl: *mut CURL,
+    option: c_int,
+    callback: Option<CurlDebugCallback>,
+) -> CURLcode {
+    match callback {
+        Some(callback) => curl_easy_setopt(curl, option, callback),
+        None => curl_easy_setopt(curl, option, std::ptr::null::<c_void>()),
+    }
+}
+
 /// Reads a `long`-typed `curl_easy_getinfo` field (e.g. `CURLINFO_RESPONSE_CODE`,
 /// PHP's `CURLINFO_HTTP_CODE`). Returns `None` for any `info` outside the
 /// `CURLINFO_LONG` type range (never calls libcurl in that case — see

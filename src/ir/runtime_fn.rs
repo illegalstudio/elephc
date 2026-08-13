@@ -454,6 +454,12 @@ pub enum RuntimeFnId {
     CurlEasySetoptStr,
     /// Applies a `struct curl_slist *`-valued `curl_setopt()` option to an easy handle.
     CurlEasySetoptSlist,
+    /// Installs, replaces, or clears a PHP callable on one of `curl_setopt()`'s callback
+    /// options (`CURLOPT_WRITEFUNCTION` and its five first-wave siblings).
+    CurlEasySetCallback,
+    /// Reports the address of `__rt_curl_invoke_callback`, the codegen adapter that
+    /// re-enters compiled PHP from inside a libcurl callback. Reaches no bridge symbol.
+    CurlAdapterAddr,
     /// Runs an easy handle's configured transfer to completion.
     CurlEasyPerform,
     /// Takes the `CURLOPT_RETURNTRANSFER`-captured response body from an easy handle.
@@ -1261,6 +1267,10 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyInit
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
+            // `CurlAdapterAddr` is deliberately ABSENT: it materializes a runtime label's
+            // address and reaches no `elephc_curl_*` symbol, exactly like the two
+            // unsupported-option warning ids below it.
+            | RuntimeFnId::CurlEasySetCallback
             | RuntimeFnId::CurlEasyCopy
             | RuntimeFnId::CurlEasyPause
             | RuntimeFnId::CurlEasyReset
@@ -1482,6 +1492,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasySetoptLong
                 | RuntimeFnId::CurlEasySetoptSlist
                 | RuntimeFnId::CurlEasySetoptStr
+                // Installing a callback answers a bare 0/1 acceptance flag; the pointers
+                // it forwards are borrowed by the bridge, never storage it hands back.
+                | RuntimeFnId::CurlEasySetCallback
+                // A bare machine address with no operands at all: nothing to alias.
+                | RuntimeFnId::CurlAdapterAddr
                 // `curl_reset`/`curl_upkeep` answer a bare acceptance flag and
                 // `curl_pause` a bare `CURLcode`; none of the three produces storage.
                 | RuntimeFnId::CurlEasyPause
@@ -2125,6 +2140,8 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
             RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlEasySetCallback => "__elephc_curl_easy_set_callback",
+            RuntimeFnId::CurlAdapterAddr => "__elephc_curl_adapter_addr",
             RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
             RuntimeFnId::CurlEasyId => "__elephc_curl_easy_id",
             RuntimeFnId::CurlMultiInit => "__elephc_curl_multi_init",

@@ -88,7 +88,7 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
             return 0;
         }
         let id = handles::next_id();
-        let mut entry = EasyEntry::new(curl);
+        let mut entry = EasyEntry::new(curl, id);
         unsafe {
             php_layer::install_write_callback(curl, id);
             // `error_buf`'s heap allocation address is stable across the
@@ -361,6 +361,7 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
                 return 0;
             };
             entry.body.clear();
+            entry.callback_threw = false;
             // Zero the error buffer first: libcurl is not guaranteed to
             // write it on success (only documented to write it on error).
             entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
@@ -376,6 +377,14 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
         };
+        if entry.callback_threw {
+            // A PHP callback threw: the transfer was aborted by the exception, not by
+            // libcurl, and the exception itself is what the program will see. php-src
+            // reports `curl_errno() === 0` in exactly this case (measured on 8.4.20),
+            // so the abort's own `CURLcode` is deliberately NOT recorded. The runtime
+            // re-raises the pending throwable as soon as this returns.
+            return 0;
+        }
         entry.last_errno = code;
         entry.last_error = extract_error_message(&entry.error_buf);
         (code == easy::CURLE_OK) as i32
@@ -647,6 +656,56 @@ pub unsafe extern "C" fn elephc_curl_easy_take_body(
     })
 }
 
+/// Installs, replaces, or clears one of `curl_setopt()`'s callback options on handle
+/// `id`. Returns `1` on success and `0` for an unknown id or an out-of-range `slot`.
+///
+/// `slot` is a `crate::callbacks::SLOT_*` index, NOT a `CURLOPT_*` number: the mapping
+/// from option number to slot lives in the curl prelude, next to the rest of the
+/// option dispatch. A null `descriptor` clears the slot (PHP `null` restores the
+/// option's default behavior); a non-null one replaces whatever was there.
+///
+/// The three pointers are the "decompose the callable at the PHP layer" triple this
+/// bridge shares with `elephc-pdo`: `descriptor` is the normalized callable's
+/// descriptor record, `self_obj` is the `CurlHandle` object to pass as `$ch`, and
+/// `adapter` is the address of the codegen-emitted `__rt_curl_invoke_callback`. None of
+/// them is owned here — see `crate::callbacks`'s module doc for the ownership argument
+/// (in particular why `self_obj` MUST stay a non-owning back-pointer).
+///
+/// # Safety
+/// `descriptor` must be null or a live callable descriptor rooted on the PHP side for
+/// at least as long as it stays installed; `self_obj` must be the `CurlHandle` object
+/// that owns `id`; `adapter` must be null or the address `__elephc_curl_adapter_addr()`
+/// produced.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_set_callback(
+    id: i64,
+    slot: i32,
+    descriptor: *mut c_void,
+    self_obj: *mut c_void,
+    adapter: *const c_void,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        if slot < 0 || slot as usize >= crate::callbacks::SLOT_COUNT {
+            return 0;
+        }
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        let value = if descriptor.is_null() {
+            crate::callbacks::CallbackSlot::empty()
+        } else {
+            crate::callbacks::CallbackSlot {
+                descriptor,
+                self_obj,
+                adapter,
+            }
+        };
+        crate::callbacks::apply_callback(entry, slot as usize, value);
+        1
+    })
+}
+
 /// Resets every libcurl option on handle `id` to its default and clears the
 /// PHP-layer state that goes with them, matching PHP's `curl_reset()`. Returns
 /// `0` for an unknown id.
@@ -683,7 +742,13 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         unsafe { easy::reset(entry.curl) };
         entry.free_slists();
         entry.free_mime();
+        // php-src's `curl_reset()` releases the handler callables too (measured: a
+        // write callback installed before `curl_reset()` never fires afterwards).
+        // `curl_easy_reset` has already dropped libcurl's own registrations, so this
+        // only has to forget the slots and re-apply the (now empty) registration set.
+        crate::callbacks::clear_all(entry);
         entry.return_transfer = false;
+        entry.callback_threw = false;
         entry.body.clear();
         entry.taken_body.clear();
         entry.scratch.clear();
@@ -811,7 +876,7 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
         };
 
         let new_id = handles::next_id();
-        let mut entry = EasyEntry::new(copied);
+        let mut entry = EasyEntry::new(copied, new_id);
         entry.return_transfer = return_transfer;
         entry.body = body;
         entry.last_errno = last_errno;
@@ -842,6 +907,18 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
             // but a bug this avoids having at all.
             easy::setopt_ptr(copied, easy::CURLOPT_SHARE, std::ptr::null_mut());
         }
+
+        // EVERY CALLBACK REGISTRATION IS CLEARED ON THE COPY, for the reason that makes
+        // this the most dangerous thing `curl_easy_duphandle` does: libcurl's `dupset`
+        // carries the callback FUNCTION POINTERS *and* their `CURLOPT_*DATA` values
+        // across verbatim — and every one of those data values is the ORIGINAL handle's
+        // bridge id. A copy left as libcurl made it would fire the original's PHP
+        // callables, with the original's `CurlHandle` as `$ch`, for the COPY's transfers.
+        // (`install_write_callback` above is the same fix for `CURLOPT_WRITEDATA`.)
+        // The curl prelude re-registers the copy's callbacks against the COPY's object
+        // immediately afterwards, which is also what php-src's `curl_copy_handle` does
+        // when it re-points its own handler struct at the new `php_curl`.
+        crate::callbacks::clear_all(&mut entry);
 
         for (opt, items) in slist_items {
             // A rebuild this build cannot complete must CLEAR the option on the

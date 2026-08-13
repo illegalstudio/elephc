@@ -70,6 +70,14 @@ pub(crate) const KIND_UNSUPPORTED: i32 = 6;
 /// `_slist`. A distinct kind from every other row in this table, added by Task 10; before
 /// it, this option was `KIND_UNSUPPORTED` like its `file`-bucket siblings.
 pub(crate) const KIND_SHARE: i32 = 7;
+/// A `curl_setopt()` callback option whose value is a PHP `callable` (or `null` to
+/// restore the default). Routed to `elephc_curl_easy_set_callback` (`crate::callbacks`)
+/// with the option's slot index, never to any of `setopt_long`/`_str`/`_slist`. Covers
+/// the first wave only — `CURLOPT_WRITEFUNCTION`, `CURLOPT_HEADERFUNCTION`,
+/// `CURLOPT_READFUNCTION`, `CURLOPT_PROGRESSFUNCTION`, `CURLOPT_XFERINFOFUNCTION`, and
+/// `CURLOPT_DEBUGFUNCTION`. The remaining callback options stay `KIND_UNSUPPORTED`
+/// (see the rows below).
+pub(crate) const KIND_CALLBACK: i32 = 8;
 
 /// Every option number php-src's `curl_setopt()` recognizes, paired with how this build
 /// carries it. Sorted by option number so [`option_kind`] can binary-search it; the sort
@@ -315,13 +323,18 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (10319, KIND_STRING), // CURLOPT_REDIR_PROTOCOLS_STR
     (19913, KIND_PHP_LAYER), // CURLOPT_RETURNTRANSFER
     (19914, KIND_PHP_LAYER), // CURLOPT_BINARYTRANSFER
-    (20011, KIND_UNSUPPORTED), // CURLOPT_WRITEFUNCTION
-    (20012, KIND_UNSUPPORTED), // CURLOPT_READFUNCTION
-    (20056, KIND_UNSUPPORTED), // CURLOPT_PROGRESSFUNCTION
-    (20079, KIND_UNSUPPORTED), // CURLOPT_HEADERFUNCTION
-    (20094, KIND_UNSUPPORTED), // CURLOPT_DEBUGFUNCTION
+    (20011, KIND_CALLBACK), // CURLOPT_WRITEFUNCTION
+    (20012, KIND_CALLBACK), // CURLOPT_READFUNCTION
+    (20056, KIND_CALLBACK), // CURLOPT_PROGRESSFUNCTION
+    (20079, KIND_CALLBACK), // CURLOPT_HEADERFUNCTION
+    (20094, KIND_CALLBACK), // CURLOPT_DEBUGFUNCTION
+    // STILL REJECTED (a deliberate second wave, not an oversight): each of these needs
+    // machinery the first wave does not build. FNMATCH/PREREQ/SSH_HOSTKEY/TRAILER/
+    // HSTS read+write need protocols or transfer phases outside the landed matrix, and
+    // SSL_CTX_FUNCTION/OPENSOCKET/SOCKOPT hand PHP a raw native pointer (an
+    // `SSL_CTX *`, a socket) that this build has no PHP-visible type for.
     (20200, KIND_UNSUPPORTED), // CURLOPT_FNMATCH_FUNCTION
-    (20219, KIND_UNSUPPORTED), // CURLOPT_XFERINFOFUNCTION
+    (20219, KIND_CALLBACK), // CURLOPT_XFERINFOFUNCTION
     (20312, KIND_UNSUPPORTED), // CURLOPT_PREREQFUNCTION
     (20316, KIND_UNSUPPORTED), // CURLOPT_SSH_HOSTKEYFUNCTION
     (30115, KIND_OFF_T), // CURLOPT_INFILESIZE_LARGE

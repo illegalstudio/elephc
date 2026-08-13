@@ -20,6 +20,7 @@
 //!   unboxes it and raises PHP's TypeError for anything that is not a resource, which is
 //!   the same guard `hash_update`/`hash_final` use for their context argument.
 
+mod callbacks;
 mod easy_body;
 mod easy_errno;
 mod easy_error;
@@ -39,6 +40,7 @@ mod warn_option;
 mod version;
 
 pub(crate) use easy_body::lower_curl_easy_body;
+pub(crate) use callbacks::{lower_curl_adapter_addr, lower_curl_easy_set_callback};
 pub(crate) use easy_errno::lower_curl_easy_errno;
 pub(crate) use easy_error::lower_curl_easy_error;
 pub(crate) use easy_getinfo::{lower_curl_easy_getinfo_double, lower_curl_easy_getinfo_long};

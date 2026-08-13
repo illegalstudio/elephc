@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use crate::callbacks::{CallbackSlot, SLOT_COUNT};
 use crate::easy::{self, CurlSlist, CURL};
 use crate::mime::{self, CurlMime, CurlMimePart};
 
@@ -106,6 +107,25 @@ pub(crate) struct EasyEntry {
     /// freed: parts are owned by the `curl_mime` structure they belong to, and are released
     /// as a whole when that structure is freed.
     pub(crate) pending_part: Option<*mut CurlMimePart>,
+    /// This entry's own bridge id. Duplicated out of the table key because the callback
+    /// registrations in `crate::callbacks` carry it as libcurl `userdata`, and the
+    /// trampolines look the handle back up with it — `apply_callback` needs it while it
+    /// only holds a `&mut EasyEntry`.
+    pub(crate) id: i64,
+    /// The PHP callables installed through `curl_setopt()`'s callback options, indexed by
+    /// `crate::callbacks::SLOT_*`. Borrowed, never owned: the descriptors are rooted in
+    /// `CurlHandle` properties on the PHP side (see `crate::callbacks`).
+    pub(crate) callbacks: [CallbackSlot; SLOT_COUNT],
+    /// Whether `CURLOPT_WRITEFUNCTION` currently owns the body. With
+    /// `return_transfer`, models php-src's single `handlers.write->method` enum:
+    /// `write_user` = `PHP_CURL_USER`, `return_transfer` = `PHP_CURL_RETURN`, neither =
+    /// `PHP_CURL_STDOUT`. The two are never both set — each setter clears the other.
+    pub(crate) write_user: bool,
+    /// Set when a PHP callback threw during the current transfer, so
+    /// `elephc_curl_easy_perform` reports the failure without overwriting
+    /// `curl_errno()` (php-src surfaces the exception with `curl_errno() === 0`).
+    /// Cleared at the start of every `elephc_curl_easy_perform`.
+    pub(crate) callback_threw: bool,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -142,9 +162,13 @@ impl EasyEntry {
     /// Builds a fresh entry around an already-initialized `curl` handle, with
     /// its error buffer allocated and zeroed at the fixed size libcurl
     /// requires for `CURLOPT_ERRORBUFFER`.
-    pub(crate) fn new(curl: *mut CURL) -> Self {
+    pub(crate) fn new(curl: *mut CURL, id: i64) -> Self {
         Self {
             curl,
+            id,
+            callbacks: [CallbackSlot::empty(); SLOT_COUNT],
+            write_user: false,
+            callback_threw: false,
             return_transfer: false,
             body: Vec::new(),
             taken_body: Vec::new(),

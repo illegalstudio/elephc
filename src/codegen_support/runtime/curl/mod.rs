@@ -26,6 +26,7 @@
 //!   the bridge's own table, never by pointer. Id `0` is the bridge's "allocation failed"
 //!   answer, so it is also the one id `__rt_curl_easy_init` turns into PHP `false`.
 
+mod callbacks;
 mod easy_body;
 mod easy_error;
 mod easy_free;
@@ -39,6 +40,7 @@ mod str_op;
 mod version;
 mod warn_option;
 
+pub(crate) use callbacks::{emit_curl_invoke_callback, emit_curl_rethrow_pending};
 pub(crate) use easy_body::emit_curl_easy_body;
 pub(crate) use easy_error::{emit_curl_easy_error, emit_curl_strerror};
 pub(crate) use easy_free::emit_curl_easy_free;
@@ -64,6 +66,8 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_easy_str_op(emitter);
     emit_curl_version(emitter);
     emit_curl_easy_free(emitter);
+    emit_curl_invoke_callback(emitter);
+    emit_curl_rethrow_pending(emitter);
     emit_curl_warn_unsupported_option(emitter);
     emit_curl_multi_warn_unsupported_option(emitter);
     multi::emit_curl_multi(emitter);
@@ -112,6 +116,9 @@ mod tests {
         "__rt_curl_easy_body",
         "__rt_curl_version",
         "__rt_curl_easy_free",
+        "__rt_curl_easy_set_callback",
+        "__rt_curl_invoke_callback",
+        "__rt_curl_rethrow_pending",
         "__rt_curl_warn_unsupported_option",
         "__rt_curl_option_kind",
         "__rt_curl_multi_init",
