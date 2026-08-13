@@ -61,12 +61,13 @@
 //!   recognize at all raises php-src's own `ValueError`; one it recognizes that this
 //!   build cannot carry answers `false` with a PHP warning (locked decision 7), never an
 //!   inert `true`.
-//! - `curl_getinfo()` ONLY UNDERSTANDS `CURLINFO_HTTP_CODE` (2097154) today: the
-//!   `elephc_curl` bridge's `curl_getinfo()`-family ABI landed in Task 7 with exactly the
-//!   one entry point that test needed (`elephc_curl_easy_getinfo_long`), so every other
-//!   `CURLINFO_*` option and the no-`$option` associative-array form answer `false` rather
-//!   than a fabricated value — see the comment above `curl_getinfo()` below. Task 8 Wave C
-//!   owns the rest of the info surface.
+//! - `curl_getinfo()` DISPATCHES ON THE `CURLINFO_*` TYPE MASK, the read-side mirror of
+//!   `curl_setopt()`'s option table and php-src's own structure: string/long/double/slist/
+//!   off_t each read through their own typed entry point, three options are special-cased
+//!   before the mask (`CURLINFO_PRIVATE`, `CURLINFO_CERTINFO`, `CURLINFO_HEADER_OUT`), and
+//!   anything else answers `false` — never a fabricated value. The no-`$option` form
+//!   returns PHP's documented associative array, built as JSON by the bridge and decoded
+//!   with the ordinary `json_decode` builtin, the same route `curl_version()` takes.
 //! - TWO SIGNATURES DIVERGE FROM php-src, both forced by checker limitations and both
 //!   documented at their declaration below: `curl_init()` returns a plain `CurlHandle`
 //!   and throws instead of returning `CurlHandle|false`, and `curl_version()` leaves its
@@ -356,16 +357,91 @@ function curl_close(CurlHandle $handle): void {}
 // value dressed up as a PHP int. Rather than reasoning through every `CURLINFO_*` shape
 // now, only the one option this build actually understands is forwarded by exact number;
 // everything else answers `false` before reaching the bridge at all.
+// `curl_getinfo()` DISPATCHES ON THE OPTION'S TYPE MASK, exactly as php-src does
+// (`ext/curl/interface.c`) and for the same reason `curl_setopt()` consults the option
+// table: `curl_easy_getinfo` writes through its out-parameter according to
+// `$option & CURLINFO_TYPEMASK` (0xf00000) and nothing else, so the shape of the read has
+// to be chosen from those bits before libcurl is called.
+//
+//   0x100000 string    0x200000 long    0x300000 double    0x400000 slist    0x600000 off_t
+//
+// Three options are answered BEFORE the mask, because php-src special-cases them too:
+// CURLINFO_PRIVATE (a PHP value this prelude stored), CURLINFO_CERTINFO (SLIST-tagged but
+// really a `struct curl_certinfo *`), and CURLINFO_HEADER_OUT (not a getinfo type at all).
+// Anything else — including the socket and pointer type masks PHP has never exposed —
+// answers `false`, which is php-src's `default:` too.
 function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
     $raw = $handle->__elephc_handle;
-    // CURLINFO_PRIVATE (1048597) reads back the arbitrary PHP value CURLOPT_PRIVATE
-    // stored on the object; libcurl never held it, so it is answered before any bridge
-    // call. `false` on a handle that never set it, matching php-src.
+    if ($option === null) {
+        // The no-`$option` associative array. The bridge builds it as JSON (php-src's own
+        // key names and value types) and the ordinary `json_decode` builtin turns it into
+        // a PHP array, the same route `curl_version()` takes.
+        $json = __elephc_curl_easy_str_op($raw, 5, "", 0);
+        if (!is_string($json)) {
+            return false;
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+        return $decoded;
+    }
+    // CURLINFO_PRIVATE (1048597): the arbitrary PHP value CURLOPT_PRIVATE stored on the
+    // object. libcurl never held it, so it is answered without a bridge call. `false` on
+    // a handle that never set it, matching php-src.
     if ($option === 1048597) {
         return $handle->__elephc_private;
     }
-    if ($option === 2097154) {
+    // CURLINFO_HEADER_OUT (2): php-src returns the captured request header, but capturing
+    // it needs the CURLOPT_DEBUGFUNCTION plumbing this build does not have yet (Task 12),
+    // and `curl_setopt($ch, CURLINFO_HEADER_OUT, true)` is refused for that same reason.
+    // php-src answers `false` for a handle where the option was never enabled, which is
+    // therefore also the honest answer here — not a fabricated empty string.
+    if ($option === 2) {
+        return false;
+    }
+    // CURLINFO_CERTINFO (4194338): shares the SLIST type mask but hands back a
+    // `struct curl_certinfo *`. The bridge encodes it as php-src's array-of-arrays shape.
+    if ($option === 4194338) {
+        $json = __elephc_curl_easy_str_op($raw, 6, "", $option);
+        if (!is_string($json)) {
+            return false;
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+        return $decoded;
+    }
+    $mask = $option & 15728640;
+    if ($mask === 2097152 || $mask === 6291456) {
+        // CURLINFO_LONG and CURLINFO_OFF_T. Both are 64-bit integers on every target
+        // elephc supports and both surface as PHP `int`, so one entry point reads both —
+        // see `crates/elephc-curl/src/easy.rs`'s `getinfo_long` for the LP64 argument.
         return __elephc_curl_easy_getinfo_long($raw, $option);
+    }
+    if ($mask === 3145728) {
+        return __elephc_curl_easy_getinfo_double($raw, $option);
+    }
+    if ($mask === 1048576) {
+        return __elephc_curl_easy_str_op($raw, 3, "", $option);
+    }
+    if ($mask === 4194304) {
+        // A `CURLINFO_SLIST` field arrives as one NUL-FRAMED blob (`item . "\0"` per
+        // entry), the same framing `curl_setopt()` sends string lists in. The trailing
+        // terminator is trimmed BEFORE the split rather than the trailing empty fragment
+        // being popped afterwards: `array_pop()` leaks the value it discards (measured
+        // with `--gc-stats`: one block per call), a pre-existing codegen leak this prelude
+        // routes around the same way it routes around the others documented above.
+        $blob = __elephc_curl_easy_str_op($raw, 4, "", $option);
+        if (!is_string($blob)) {
+            return false;
+        }
+        $text = (string) $blob . "";
+        if ($text === "") {
+            return [];
+        }
+        return explode("\0", substr($text, 0, strlen($text) - 1));
     }
     return false;
 }

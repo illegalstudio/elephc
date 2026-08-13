@@ -70,6 +70,13 @@ pub(crate) struct EasyEntry {
     /// replacement, and `free_slists` releases whatever is left when the
     /// handle is reset or cleaned up.
     pub(crate) slists: HashMap<i32, *mut CurlSlist>,
+    /// A borrowed-until-overwritten byte buffer for the string-shaped operations
+    /// (`curl_getinfo()`'s string/list/array forms, and Wave D's
+    /// `curl_escape`/`curl_unescape`), the same convention `taken_body` uses for
+    /// the response body. Kept SEPARATE from `taken_body` so reading a header out
+    /// of `curl_getinfo()` cannot invalidate a captured body the caller has not
+    /// copied yet.
+    pub(crate) scratch: Vec<u8>,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -116,6 +123,7 @@ impl EasyEntry {
             last_errno: 0,
             last_error: Vec::new(),
             slists: HashMap::new(),
+            scratch: Vec::new(),
         }
     }
 

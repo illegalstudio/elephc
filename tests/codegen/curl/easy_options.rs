@@ -445,3 +445,147 @@ fn wave_b_slist_handles_free_cleanly() {
     let (allocs, frees) = parse_gc_stats(&output.stderr);
     assert_eq!(allocs, frees, "slist-owning handles must not leak or double-free");
 }
+
+/// Wave C: the no-`$option` `curl_getinfo()` form returns PHP's documented associative
+/// array, with PHP's own key names (`http_code`, not `CURLINFO_HTTP_CODE`) and value
+/// types, filled from a real transfer.
+#[test]
+fn wave_c_getinfo_array_uses_php_key_names() {
+    if skip_without_curl_native("wave_c_getinfo_array_uses_php_key_names") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $info = curl_getinfo($ch);
+        echo is_array($info) ? "array\n" : "not-array\n";
+        echo $info['url'], "\n";
+        echo $info['http_code'], "\n";
+        echo $info['content_type'], "\n";
+        echo $info['redirect_count'], "\n";
+        echo $info['primary_ip'], "\n";
+        echo $info['scheme'], "\n";
+        echo $info['effective_method'], "\n";
+        echo $info['size_download'], "\n";
+        echo is_float($info['total_time']) ? "float\n" : "not-float\n";
+        echo is_int($info['total_time_us']) ? "int\n" : "not-int\n";
+        echo is_array($info['certinfo']) ? "certinfo\n" : "no-certinfo\n";
+        echo array_key_exists('request_header', $info) ? "req\n" : "no-req\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        format!(
+            "array\n{url}\n200\ntext/plain\n0\n127.0.0.1\nhttp\nGET\n10\nfloat\nint\ncertinfo\nno-req\n"
+        )
+    );
+}
+
+/// Wave C: each `CURLINFO_*` type mask reads through its own typed entry point and comes
+/// back as PHP's documented type — string, int, float — with real values from a completed
+/// transfer, never a fabricated one.
+#[test]
+fn wave_c_typed_info_keys_return_real_values() {
+    if skip_without_curl_native("wave_c_typed_info_keys_return_real_values") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $eff = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        echo is_string($eff) ? "str\n" : "not-str\n";
+        echo $eff, "\n";
+        echo curl_getinfo($ch, CURLINFO_HTTP_CODE), "\n";
+        echo curl_getinfo($ch, CURLINFO_PRIMARY_PORT) > 0 ? "port\n" : "no-port\n";
+        $total = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
+        echo is_float($total) ? "float\n" : "not-float\n";
+        $size = curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD_T);
+        echo is_int($size) ? "int\n" : "not-int\n";
+        echo $size, "\n";
+        echo curl_getinfo($ch, CURLINFO_CONTENT_TYPE), "\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        format!("str\n{url}\n200\nport\nfloat\nint\n10\ntext/plain\n")
+    );
+}
+
+/// Wave C: a `CURLINFO_SLIST` key comes back as a PHP ARRAY of strings, and an info key
+/// this build cannot answer comes back as `false` — never an invented value.
+/// `CURLINFO_COOKIELIST` is empty here because no cookie engine was enabled, which is
+/// exactly what PHP reports for the same handle.
+#[test]
+fn wave_c_slist_and_unknown_info_keys() {
+    if skip_without_curl_native("wave_c_slist_and_unknown_info_keys") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_COOKIEFILE, "");
+        curl_exec($ch);
+        $cookies = curl_getinfo($ch, CURLINFO_COOKIELIST);
+        echo is_array($cookies) ? "array\n" : "not-array\n";
+        echo count($cookies), "\n";
+        $certs = curl_getinfo($ch, CURLINFO_CERTINFO);
+        echo is_array($certs) ? "certs\n" : "no-certs\n";
+        echo curl_getinfo($ch, CURLINFO_HEADER_OUT) === false ? "header-out-false\n" : "header-out-set\n";
+        echo curl_getinfo($ch, 5242880) === false ? "unknown-false\n" : "unknown-set\n";
+        "#
+    ));
+    assert_eq!(out, "array\n0\ncerts\nheader-out-false\nunknown-false\n");
+}
+
+/// Wave C's TYPED info reads allocate fresh PHP values and never alias the handle: a loop
+/// of real transfers reading ints, floats, strings and list keys must leave elephc's heap
+/// balanced under `--heap-debug`.
+///
+/// THE NO-`$OPTION` ARRAY FORM IS DELIBERATELY ABSENT from this loop. It leaks, and the
+/// leak is not curl's: `json_decode()` never releases the value it decodes (measured with
+/// `--gc-stats`: `json_decode('{"a":1,"b":2}', true)` leaks 10 blocks per call, a bare
+/// `json_decode('5', true)` leaks 1), which `curl_version()` has inherited since Task 5
+/// and `curl_getinfo($ch)` now inherits too. Asserting balance here would pin a bug in a
+/// shared builtin to this feature's test; the report records it instead.
+#[test]
+fn wave_c_typed_getinfo_shapes_do_not_leak() {
+    if skip_without_curl_native("wave_c_typed_getinfo_shapes_do_not_leak") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let output = compile_and_run_with_gc_stats(&format!(
+        r#"<?php
+        function probe(): int {{
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_exec($ch);
+            $effective = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+            $time = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
+            $cookies = curl_getinfo($ch, CURLINFO_COOKIELIST);
+            $size = curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD_T);
+            $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            unset($ch);
+            if (strlen($effective) === 0 || $time < 0 || count($cookies) !== 0 || $size !== 10) {{
+                return 0;
+            }}
+            return $code;
+        }}
+        echo probe(), probe(), probe(), "\n";
+        "#
+    ));
+    assert_eq!(output.stdout, "200200200\n");
+    let (allocs, frees) = parse_gc_stats(&output.stderr);
+    assert_eq!(allocs, frees, "typed curl_getinfo() shapes must not leak or double-free");
+}

@@ -469,6 +469,12 @@ pub enum RuntimeFnId {
     /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
     /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
     CurlEasyGetinfoLong,
+    /// Reads a `double`-typed `CURLINFO_*` field from an easy handle's most recent
+    /// transfer.
+    CurlEasyGetinfoDouble,
+    /// Runs one of the bridge's string-producing easy-handle operations (the string,
+    /// list and array forms of `curl_getinfo()`, plus `curl_escape`/`curl_unescape`).
+    CurlEasyStrOp,
     /// Classifies a `curl_setopt()` option number against the bridge's frozen option
     /// table, so the prelude can pick the setter that matches the option's C type.
     CurlOptionKind,
@@ -1194,6 +1200,8 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyInit
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
+            | RuntimeFnId::CurlEasyGetinfoDouble
+            | RuntimeFnId::CurlEasyStrOp
             | RuntimeFnId::CurlEasySetoptSlist
             | RuntimeFnId::CurlEasySetoptStr
             | RuntimeFnId::CurlOptionKind
@@ -1471,8 +1479,13 @@ impl RuntimeFnId {
                 // handle argument's own storage.
                 | RuntimeFnId::CurlEasyBody
                 | RuntimeFnId::CurlEasyError
+                | RuntimeFnId::CurlEasyGetinfoDouble
                 | RuntimeFnId::CurlEasyGetinfoLong
                 | RuntimeFnId::CurlEasyInit
+                // Its bytes are copied out of the bridge's borrowed scratch buffer and
+                // boxed by `__rt_mixed_from_value`, which persists the string, so the
+                // cell handed back owns storage no argument shares.
+                | RuntimeFnId::CurlEasyStrOp
                 | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
@@ -1953,7 +1966,9 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyBody => "__elephc_curl_easy_body",
             RuntimeFnId::CurlEasyErrno => "__elephc_curl_easy_errno",
             RuntimeFnId::CurlEasyError => "__elephc_curl_easy_error",
+            RuntimeFnId::CurlEasyGetinfoDouble => "__elephc_curl_easy_getinfo_double",
             RuntimeFnId::CurlEasyGetinfoLong => "__elephc_curl_easy_getinfo_long",
+            RuntimeFnId::CurlEasyStrOp => "__elephc_curl_easy_str_op",
             RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",

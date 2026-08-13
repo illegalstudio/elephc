@@ -33,15 +33,17 @@ mod easy_getinfo;
 mod easy_init;
 mod easy_scalar;
 pub(crate) mod slots;
+mod str_op;
 mod version;
 mod warn_option;
 
 pub(crate) use easy_body::emit_curl_easy_body;
 pub(crate) use easy_error::emit_curl_easy_error;
 pub(crate) use easy_free::emit_curl_easy_free;
-pub(crate) use easy_getinfo::emit_curl_easy_getinfo_long;
+pub(crate) use easy_getinfo::{emit_curl_easy_getinfo_double, emit_curl_easy_getinfo_long};
 pub(crate) use easy_init::emit_curl_easy_init;
 pub(crate) use easy_scalar::emit_curl_easy_scalar_helpers;
+pub(crate) use str_op::emit_curl_easy_str_op;
 pub(crate) use version::emit_curl_version;
 pub(crate) use warn_option::emit_curl_warn_unsupported_option;
 
@@ -52,6 +54,8 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_easy_body(emitter);
     emit_curl_easy_error(emitter);
     emit_curl_easy_getinfo_long(emitter);
+    emit_curl_easy_getinfo_double(emitter);
+    emit_curl_easy_str_op(emitter);
     emit_curl_version(emitter);
     emit_curl_easy_free(emitter);
     emit_curl_warn_unsupported_option(emitter);
@@ -89,6 +93,8 @@ mod tests {
         "__rt_curl_easy_errno",
         "__rt_curl_easy_error",
         "__rt_curl_easy_getinfo_long",
+        "__rt_curl_easy_getinfo_double",
+        "__rt_curl_easy_str_op",
         "__rt_curl_easy_body",
         "__rt_curl_version",
         "__rt_curl_easy_free",
@@ -176,6 +182,8 @@ mod tests {
         for label in [
             "__rt_curl_easy_error",
             "__rt_curl_easy_getinfo_long",
+            "__rt_curl_easy_getinfo_double",
+            "__rt_curl_easy_str_op",
             "__rt_curl_version",
         ] {
             for target_name in ["macos-aarch64", "linux-aarch64"] {

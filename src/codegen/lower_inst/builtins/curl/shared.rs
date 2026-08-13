@@ -26,19 +26,23 @@ use crate::codegen::context::FunctionContext;
 
 /// Returns the target's `index`-th C integer argument register.
 ///
-/// Only the first four are named: no `elephc_curl` entry point the runtime reaches takes
-/// more than four arguments, and an out-of-range index is a lowering bug rather than a
-/// runtime condition, so it panics rather than silently picking a wrong register.
+/// Only the first FIVE are named. `elephc_curl_easy_str_op` is the widest entry point the
+/// runtime reaches, at five arguments; a sixth would collide with the entry-pointer
+/// scratch register on x86_64 (`r9`, `codegen_support::runtime::curl::slots::entry_reg`)
+/// and would need that scratch moved first. An out-of-range index is a lowering bug rather
+/// than a runtime condition, so it panics rather than silently picking a wrong register.
 pub(super) fn curl_arg_reg(ctx: &FunctionContext<'_>, index: usize) -> &'static str {
     match (ctx.emitter.target.arch, index) {
         (Arch::AArch64, 0) => "x0",
         (Arch::AArch64, 1) => "x1",
         (Arch::AArch64, 2) => "x2",
         (Arch::AArch64, 3) => "x3",
+        (Arch::AArch64, 4) => "x4",
         (Arch::X86_64, 0) => "rdi",
         (Arch::X86_64, 1) => "rsi",
         (Arch::X86_64, 2) => "rdx",
         (Arch::X86_64, 3) => "rcx",
+        (Arch::X86_64, 4) => "r8",
         (_, index) => panic!("curl lowering requested C argument register {index}"),
     }
 }

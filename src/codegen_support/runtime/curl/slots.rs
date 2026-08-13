@@ -48,6 +48,15 @@ pub(crate) const CURL_ABI_SLOTS: &[(&str, &str)] = &[
         "elephc_curl_easy_take_body",
         "_elephc_curl_easy_take_body_fn",
     ),
+    (
+        "elephc_curl_easy_getinfo_double",
+        "_elephc_curl_easy_getinfo_double_fn",
+    ),
+    ("elephc_curl_easy_str_op", "_elephc_curl_easy_str_op_fn"),
+    (
+        "elephc_curl_easy_take_scratch",
+        "_elephc_curl_easy_take_scratch_fn",
+    ),
     ("elephc_curl_easy_free", "_elephc_curl_easy_free_fn"),
     ("elephc_curl_global_info", "_elephc_curl_global_info_fn"),
     ("elephc_curl_option_kind", "_elephc_curl_option_kind_fn"),

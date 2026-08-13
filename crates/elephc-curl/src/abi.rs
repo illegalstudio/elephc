@@ -45,6 +45,7 @@ use std::ffi::{c_char, c_int, c_void, CString};
 
 use crate::easy;
 use crate::handles::{self, EasyEntry};
+use crate::info;
 use crate::options;
 use crate::php_layer;
 
@@ -368,6 +369,145 @@ pub unsafe extern "C" fn elephc_curl_easy_getinfo_long(id: i64, info: i32, out: 
             }
             None => 0,
         }
+    })
+}
+
+/// Reads a `double`-typed `curl_easy_getinfo` field on handle `id` into `out`
+/// (`CURLINFO_TOTAL_TIME`, `CURLINFO_SPEED_DOWNLOAD`, ...). Returns `0` —
+/// leaving `out` untouched — for an unknown id, an `info` outside libcurl's
+/// `CURLINFO_DOUBLE` type range, or a libcurl `getinfo` failure. The type-range
+/// check is the same read-side guard `elephc_curl_easy_getinfo_long` documents.
+///
+/// # Safety
+/// `out` must be valid for a write when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_getinfo_double(
+    id: i64,
+    info: i32,
+    out: *mut f64,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get(&id) else {
+            return 0;
+        };
+        match unsafe { easy::getinfo_double(entry.curl, info as c_int) } {
+            Some(value) => {
+                if !out.is_null() {
+                    unsafe {
+                        *out = value;
+                    }
+                }
+                1
+            }
+            None => 0,
+        }
+    })
+}
+
+/// `elephc_curl_easy_str_op`'s `op`: read a `CURLINFO_STRING` field
+/// (`number` = the `CURLINFO_*` value).
+pub const ELEPHC_CURL_STR_OP_INFO_STRING: i32 = 3;
+/// `elephc_curl_easy_str_op`'s `op`: read a `CURLINFO_SLIST` field into a
+/// NUL-framed item blob (`number` = the `CURLINFO_*` value).
+pub const ELEPHC_CURL_STR_OP_INFO_SLIST: i32 = 4;
+/// `elephc_curl_easy_str_op`'s `op`: build the whole no-`$option`
+/// `curl_getinfo()` associative array as a JSON blob.
+pub const ELEPHC_CURL_STR_OP_INFO_ALL: i32 = 5;
+/// `elephc_curl_easy_str_op`'s `op`: build `CURLINFO_CERTINFO` as a JSON blob.
+pub const ELEPHC_CURL_STR_OP_INFO_CERTINFO: i32 = 6;
+
+/// Runs one STRING-PRODUCING operation on handle `id` and parks its result in
+/// the handle's scratch buffer, for [`elephc_curl_easy_take_scratch`] to hand
+/// back. Returns `0` for an unknown id, an unknown `op`, or an operation
+/// libcurl could not answer (a wrong info type, a field this transfer has no
+/// value for).
+///
+/// WHY ONE ENTRY POINT AND NOT SIX. Every string-shaped `curl_getinfo()` answer
+/// — and, from Wave D, `curl_escape`/`curl_unescape` — needs the identical
+/// two-step dance: produce bytes the bridge owns, then copy them into a PHP
+/// string before the next call can overwrite them. Each separate entry point
+/// would need its own hand-written `__rt_curl_*` helper on three targets to do
+/// exactly that. Folding them into one `op` keeps that assembly written once,
+/// and the `op` codes above are the whole of the added indirection.
+///
+/// `ptr`/`len` carry the operation's STRING argument (unused, and expected
+/// empty, by the info ops above); `number` carries its INTEGER argument (the
+/// `CURLINFO_*` value for the info ops).
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_str_op(
+    id: i64,
+    op: i32,
+    ptr: *const u8,
+    len: usize,
+    number: i64,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let argument: &[u8] = if len == 0 {
+            &[]
+        } else if ptr.is_null() {
+            return 0;
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        let Ok(number) = i32::try_from(number) else {
+            return 0;
+        };
+        let produced = match op {
+            ELEPHC_CURL_STR_OP_INFO_STRING => unsafe { easy::getinfo_str(entry.curl, number) },
+            ELEPHC_CURL_STR_OP_INFO_SLIST => unsafe { easy::getinfo_slist(entry.curl, number) }
+                .map(|items| info::frame_items(&items)),
+            ELEPHC_CURL_STR_OP_INFO_ALL => Some(unsafe { info::getinfo_all_json(entry.curl) }),
+            ELEPHC_CURL_STR_OP_INFO_CERTINFO => Some(unsafe { info::certinfo_json(entry.curl) }),
+            _ => {
+                let _ = argument;
+                None
+            }
+        };
+        match produced {
+            Some(bytes) => {
+                entry.scratch = bytes;
+                1
+            }
+            None => 0,
+        }
+    })
+}
+
+/// Hands back the bytes the last [`elephc_curl_easy_str_op`] on this `id`
+/// produced, as a pointer/length pair valid until the next `elephc-curl` call
+/// that touches this `id` — the same "borrowed until overwritten" convention
+/// [`elephc_curl_easy_take_body`] uses, and the reason the caller copies
+/// immediately. Returns `0` for an unknown id.
+///
+/// # Safety
+/// `ptr` and `len` must be valid for a write when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_take_scratch(
+    id: i64,
+    ptr: *mut *mut u8,
+    len: *mut usize,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            write_out_len(len, 0);
+            return 0;
+        };
+        write_out_len(len, entry.scratch.len());
+        if !ptr.is_null() {
+            unsafe {
+                *ptr = entry.scratch.as_mut_ptr();
+            }
+        }
+        1
     })
 }
 

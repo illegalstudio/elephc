@@ -31,6 +31,12 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasyGetinfoLong => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_getinfo_long(ctx, inst)
         }),
+        RuntimeFnId::CurlEasyGetinfoDouble => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_getinfo_double(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasyStrOp => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_str_op(ctx, inst)
+        }),
         RuntimeFnId::CurlEasyInit => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_init(ctx, inst)
         }),

@@ -29,6 +29,7 @@
 mod abi;
 mod easy;
 mod handles;
+mod info;
 mod options;
 mod php_layer;
 

@@ -81,6 +81,30 @@ pub(crate) enum CurlSlist {}
 /// its C output type; `curl_easy_getinfo` dispatches purely on
 /// `info & CURLINFO_TYPEMASK` (libcurl 8.21.0, `include/curl/curl.h`).
 pub(crate) const CURLINFO_TYPEMASK: c_int = 0x00f0_0000;
+/// `CURLINFO_STRING`: the type mask value for a `char *`-typed info field.
+pub(crate) const CURLINFO_STRING: c_int = 0x0010_0000;
+/// `CURLINFO_DOUBLE`: the type mask value for a `double`-typed info field.
+pub(crate) const CURLINFO_DOUBLE: c_int = 0x0030_0000;
+/// `CURLINFO_SLIST`: the type mask value for a `struct curl_slist *`-typed info
+/// field. `CURLINFO_CERTINFO` shares this mask but returns a
+/// `struct curl_certinfo *`, which is why [`getinfo_certinfo`] exists separately.
+pub(crate) const CURLINFO_SLIST: c_int = 0x0040_0000;
+/// `CURLINFO_OFF_T`: the type mask value for a `curl_off_t`-typed info field.
+pub(crate) const CURLINFO_OFF_T: c_int = 0x0060_0000;
+/// `CURLINFO_CERTINFO` (4194338): `CURLINFO_SLIST + 34`, but the out-parameter
+/// is a `struct curl_certinfo *`, NOT a `struct curl_slist *`. Reading it
+/// through the slist path would walk a `num_of_certs` integer as a list node.
+pub(crate) const CURLINFO_CERTINFO: c_int = 0x0040_0000 + 34;
+
+/// libcurl's `struct curl_certinfo`: a count plus an array of per-certificate
+/// `struct curl_slist *`, each holding `"Name:Value"` lines. Owned by libcurl;
+/// valid until the next transfer on the handle.
+#[repr(C)]
+pub(crate) struct CurlCertInfo {
+    pub(crate) num_of_certs: c_int,
+    pub(crate) certinfo: *mut *mut CurlSlist,
+}
+
 /// `CURLINFO_LONG`: the type mask value for a `long`-typed info field (e.g.
 /// `CURLINFO_RESPONSE_CODE`, PHP's `CURLINFO_HTTP_CODE`). `getinfo_long`
 /// refuses to call libcurl for any `info` outside this type: `curl_easy_getinfo`
@@ -330,16 +354,147 @@ pub(crate) unsafe fn setopt_write_function(
 /// # Safety
 /// `curl` must be a still-live pointer from [`init`].
 pub(crate) unsafe fn getinfo_long(curl: *mut CURL, info: c_int) -> Option<i64> {
-    if info & CURLINFO_TYPEMASK != CURLINFO_LONG {
+    // `CURLINFO_OFF_T` fields are accepted here too. They are a DIFFERENT C type
+    // (`curl_off_t`) from `CURLINFO_LONG`'s `long`, but both are exactly 64 bits
+    // on every target elephc supports (macos-aarch64, linux-aarch64,
+    // linux-x86_64 — all LP64), so the same 8-byte out-parameter is correct for
+    // both, and PHP surfaces both as `int`. This would need splitting if elephc
+    // ever targeted an ILP32 platform.
+    let type_mask = info & CURLINFO_TYPEMASK;
+    if type_mask != CURLINFO_LONG && type_mask != CURLINFO_OFF_T {
         return None;
     }
-    let mut value: c_long = 0;
-    let code = curl_easy_getinfo(curl, info, &mut value as *mut c_long);
+    let mut value: i64 = 0;
+    let code = curl_easy_getinfo(curl, info, &mut value as *mut i64);
     if code == CURLE_OK {
-        Some(value as i64)
+        Some(value)
     } else {
         None
     }
+}
+
+/// Reads a `double`-typed `curl_easy_getinfo` field (`CURLINFO_TOTAL_TIME`,
+/// `CURLINFO_SPEED_DOWNLOAD`, ...). Returns `None` for any `info` outside the
+/// `CURLINFO_DOUBLE` type range or a libcurl failure — the same type-mask guard
+/// [`getinfo_long`] documents, for the same reason.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn getinfo_double(curl: *mut CURL, info: c_int) -> Option<f64> {
+    if info & CURLINFO_TYPEMASK != CURLINFO_DOUBLE {
+        return None;
+    }
+    let mut value: f64 = 0.0;
+    let code = curl_easy_getinfo(curl, info, &mut value as *mut f64);
+    if code == CURLE_OK {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Reads a `char *`-typed `curl_easy_getinfo` field into an owned byte vector.
+/// A field libcurl reports as NULL (never set for this transfer) answers an
+/// EMPTY vector rather than `None`, matching PHP's own `""` for those keys;
+/// `None` means the type mask was wrong or libcurl itself failed.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn getinfo_str(curl: *mut CURL, info: c_int) -> Option<Vec<u8>> {
+    if info & CURLINFO_TYPEMASK != CURLINFO_STRING {
+        return None;
+    }
+    let mut value: *const c_char = std::ptr::null();
+    let code = curl_easy_getinfo(curl, info, &mut value as *mut *const c_char);
+    if code != CURLE_OK {
+        return None;
+    }
+    if value.is_null() {
+        return Some(Vec::new());
+    }
+    Some(std::ffi::CStr::from_ptr(value).to_bytes().to_vec())
+}
+
+/// Reads a `struct curl_slist *`-typed `curl_easy_getinfo` field
+/// (`CURLINFO_COOKIELIST`, `CURLINFO_SSL_ENGINES`) into owned byte vectors.
+///
+/// `CURLINFO_COOKIELIST` hands back a list the CALLER must free; the others hand
+/// back libcurl-owned storage. libcurl documents `curl_slist_free_all` on the
+/// cookie list specifically, so [`getinfo_cookielist`] wraps that case and this
+/// one never frees.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn getinfo_slist(curl: *mut CURL, info: c_int) -> Option<Vec<Vec<u8>>> {
+    if info & CURLINFO_TYPEMASK != CURLINFO_SLIST || info == CURLINFO_CERTINFO {
+        return None;
+    }
+    let mut list: *mut CurlSlist = std::ptr::null_mut();
+    let code = curl_easy_getinfo(curl, info, &mut list as *mut *mut CurlSlist);
+    if code != CURLE_OK {
+        return None;
+    }
+    let items = read_slist(list);
+    // `CURLINFO_COOKIELIST` is the one slist info libcurl hands to the caller to
+    // free (`curl_easy_getinfo` docs); the rest point into libcurl's own state.
+    if info == CURLINFO_COOKIELIST {
+        slist_free_all(list);
+    }
+    Some(items)
+}
+
+/// `CURLINFO_COOKIELIST` (4194332): the one `CURLINFO_SLIST` field whose list
+/// libcurl transfers to the caller, so it is also the one this crate frees.
+pub(crate) const CURLINFO_COOKIELIST: c_int = 0x0040_0000 + 28;
+
+/// Reads `CURLINFO_CERTINFO` into per-certificate `"Name:Value"` line lists.
+/// Returns `None` when libcurl has no certificate chain (a plaintext transfer,
+/// or `CURLOPT_CERTINFO` never enabled) or reports a failure.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn getinfo_certinfo(curl: *mut CURL) -> Option<Vec<Vec<Vec<u8>>>> {
+    let mut info: *mut CurlCertInfo = std::ptr::null_mut();
+    let code = curl_easy_getinfo(curl, CURLINFO_CERTINFO, &mut info as *mut *mut CurlCertInfo);
+    if code != CURLE_OK || info.is_null() {
+        return None;
+    }
+    let count = (*info).num_of_certs;
+    if count <= 0 || (*info).certinfo.is_null() {
+        return Some(Vec::new());
+    }
+    let mut certs = Vec::with_capacity(count as usize);
+    for index in 0..count as isize {
+        certs.push(read_slist(*(*info).certinfo.offset(index)));
+    }
+    Some(certs)
+}
+
+/// Walks a `struct curl_slist` into owned byte vectors without freeing it.
+///
+/// # Safety
+/// `list` must be null or a valid libcurl slist for the duration of the call.
+unsafe fn read_slist(list: *mut CurlSlist) -> Vec<Vec<u8>> {
+    // `struct curl_slist { char *data; struct curl_slist *next; }` — two
+    // pointers, in that order, in every libcurl release. Read through a local
+    // `#[repr(C)]` mirror rather than by pointer arithmetic so the layout is
+    // stated once and checked by the compiler.
+    #[repr(C)]
+    struct SlistNode {
+        data: *mut c_char,
+        next: *mut SlistNode,
+    }
+    let mut items = Vec::new();
+    let mut node = list as *mut SlistNode;
+    while !node.is_null() {
+        if !(*node).data.is_null() {
+            items.push(std::ffi::CStr::from_ptr((*node).data).to_bytes().to_vec());
+        } else {
+            items.push(Vec::new());
+        }
+        node = (*node).next;
+    }
+    items
 }
 
 /// Returns libcurl's version/feature info struct for `CURLVERSION_NOW`,
