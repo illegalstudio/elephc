@@ -47,7 +47,7 @@ pub(crate) use crate::codegen_support::sentinels::{
     NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 pub(crate) use crate::codegen_support::{
-    abi, bcmath, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib,
+    abi, bcmath, callable_descriptor, callable_dispatch, callable_invoker_args, cdylib, curl,
     data_section, emit, hash_crypto, interface_wrappers, phar_stream, reflection, runtime,
     sentinels, stream_filters,
     tls, visibility,

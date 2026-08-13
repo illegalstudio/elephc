@@ -298,6 +298,18 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
+    // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
+    // the internal `__elephc_curl_*` builtins) only when the program references that
+    // surface, so non-curl binaries never declare `CurlHandle`, never link
+    // `-lelephc_curl`, and never require the managed native `curl` package. Runs after
+    // the hash prelude (both are order-independent declaration-only preludes) and before
+    // name resolution so a namespaced caller resolves to it. `--with-curl` forces the
+    // injection for a program that only reaches curl dynamically.
+    crate::progress::phase("curl-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::curl_prelude::inject_if_used(ast, with_crates.contains("curl"));
+    timings.record_since("curl-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(

@@ -446,6 +446,22 @@ pub enum RuntimeFnId {
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
+    CurlEasyInit,
+    /// Applies an integer-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptLong,
+    /// Applies a string-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptStr,
+    /// Runs an easy handle's configured transfer to completion.
+    CurlEasyPerform,
+    /// Takes the `CURLOPT_RETURNTRANSFER`-captured response body from an easy handle.
+    CurlEasyBody,
+    /// Reports the `CURLcode` from an easy handle's most recent transfer.
+    CurlEasyErrno,
+    /// Reports libcurl's error message for an easy handle's most recent transfer.
+    CurlEasyError,
+    /// Reports the linked libcurl's `curl_version_info` data as a JSON blob.
+    CurlVersion,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1157,6 +1173,18 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
+            // Every curl operation needs the `elephc_curl` bridge, which in turn makes
+            // `crate::pipeline::backend` require the managed native `curl` package (and
+            // transitively `openssl`/`zlib`). This is the whole pay-for-use contract:
+            // a program that never reaches one of these ids links none of it.
+            RuntimeFnId::CurlEasyBody
+            | RuntimeFnId::CurlEasyErrno
+            | RuntimeFnId::CurlEasyError
+            | RuntimeFnId::CurlEasyInit
+            | RuntimeFnId::CurlEasyPerform
+            | RuntimeFnId::CurlEasySetoptLong
+            | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzinflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1333,6 +1361,21 @@ impl RuntimeFnId {
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
+        // The curl status/answer operations hand back a raw machine value — a `CURLcode`
+        // or a 0/1 acceptance flag — never storage. Their one operand is the boxed Mixed
+        // handle cell, so the default `MayAliasArguments` bucket would keep that owned
+        // temporary alive for the integer's whole lifetime: the leak shape already
+        // documented for `IntvalBase` above, except here the temporary owns a live
+        // libcurl handle, so the leak would also keep a socket and its TLS session open.
+        if matches!(
+            self,
+            RuntimeFnId::CurlEasyErrno
+                | RuntimeFnId::CurlEasyPerform
+                | RuntimeFnId::CurlEasySetoptLong
+                | RuntimeFnId::CurlEasySetoptStr
+        ) {
+            return BuiltinResultOwnership::NonHeap;
+        }
         if matches!(
             self,
             RuntimeFnId::Abs
@@ -1397,6 +1440,16 @@ impl RuntimeFnId {
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
+                // The three curl operations that DO produce storage all allocate it
+                // fresh and can never alias an argument: `CurlEasyInit` boxes a brand-new
+                // Mixed handle cell (there is no argument to alias), and `CurlEasyBody` /
+                // `CurlEasyError` / `CurlVersion` copy bytes out of bridge-owned buffers
+                // through `__rt_str_persist` — deliberately, because those buffers are
+                // only borrowed until the next call on the same handle.
+                | RuntimeFnId::CurlEasyBody
+                | RuntimeFnId::CurlEasyError
+                | RuntimeFnId::CurlEasyInit
+                | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
                 // back is independently owned and never aliases the source object's
@@ -1873,6 +1926,14 @@ impl RuntimeFnId {
             RuntimeFnId::ChunkSplit => "chunk_split",
             RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
+            RuntimeFnId::CurlEasyBody => "__elephc_curl_easy_body",
+            RuntimeFnId::CurlEasyErrno => "__elephc_curl_easy_errno",
+            RuntimeFnId::CurlEasyError => "__elephc_curl_easy_error",
+            RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
+            RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
+            RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
+            RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
             RuntimeFnId::CtypeDigit => "ctype_digit",

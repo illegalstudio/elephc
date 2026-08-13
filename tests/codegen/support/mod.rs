@@ -37,11 +37,13 @@ pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 mod platform;
 mod runner;
 mod compiler;
+mod curl_native;
 mod native_projects;
 mod projects;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
 pub(crate) use compiler::*;
+pub(crate) use curl_native::*;
 pub(crate) use native_projects::*;
 pub(crate) use projects::*;

@@ -14,6 +14,8 @@ mod buffers;
 mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;
+/// `ext/curl` easy-handle runtime helpers (`__rt_curl_*`) over the `elephc_curl` bridge.
+mod curl;
 pub(crate) mod data;
 mod diagnostics;
 mod emitters;
@@ -42,6 +44,13 @@ mod system;
 mod zval;
 
 pub(crate) use data::emit_runtime_data_fixed;
+
+/// Returns the `(C entry point, runtime slot)` pairs the `elephc_curl` bridge is reached
+/// through, so the publisher in `crate::codegen_support::curl` and the `__rt_curl_*`
+/// helpers that read the slots stay derived from one table.
+pub(crate) fn curl_abi_slots() -> &'static [(&'static str, &'static str)] {
+    curl::slots::CURL_ABI_SLOTS
+}
 /// PHP's process exit status for an uncaught exception, shared with the codegen guards in
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.

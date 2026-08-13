@@ -244,6 +244,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -278,6 +279,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
+    // Mirror `pipeline::backend`: report the bridges this fixture actually links to
+    // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
+    // instruction lowering, so the seed has to land before `generate_user_asm_*`.
+    elephc::codegen::set_linked_extensions(test_linked_extensions(
+        &check_result.required_libraries,
+    ));
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.

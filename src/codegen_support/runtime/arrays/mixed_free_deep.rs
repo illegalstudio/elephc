@@ -10,7 +10,11 @@
 //! - Tag 9 (resource) dispatches to a kind-specific destructor stored in the high payload word:
 //!   kind 0 = generic/unknown (no destructor), kind 1 = native stream fd (close),
 //!   kind 2 = HashContext (elephc_crypto_free), kind 3 = popen pipe (__rt_pclose,
-//!   closes the FILE* and reaps the child), kind 4 = opendir stream (__rt_closedir).
+//!   closes the FILE* and reaps the child), kind 4 = opendir stream (__rt_closedir),
+//!   kind 6 = CurlHandle (__rt_curl_easy_free, which runs curl_easy_cleanup through the
+//!   elephc_curl bridge). Kind 6 is what makes a `CurlHandle` OBJECT's ordinary teardown
+//!   close its transfer: the object holds the cell in a property, property release
+//!   reaches here, and this ladder is the only free path for the native handle.
 //! - KIND 5 IS RESERVED AND MUST NEVER GAIN AN ARM HERE. It is the eval-owned inert
 //!   hash-context handle boxed by `__elephc_eval_value_hash_context`, and its low
 //!   payload word is NOT a pointer: it is a key into
@@ -19,7 +23,7 @@
 //!   it is owned by `EvalHashContext` and released by its `Drop`, so freeing anything
 //!   from here would be a double free of the context and a wild free of the key. Kind 5
 //!   deliberately falls off the end of the ladder into `__rt_mixed_free_deep_box`.
-//!   A future resource kind must therefore take 6 or higher.
+//!   A future resource kind must therefore take 7 or higher (6 is CurlHandle).
 //! - Each fd-backed kind skips handles >= 0x40000000: synthetic wrapper handles and
 //!   the -1 sentinel written into the low payload word by an explicit close (see #4)
 //!   so an already-released descriptor is never closed twice.
@@ -128,6 +132,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
         emitter.instruction("b.eq __rt_mixed_free_deep_resource_dir");          // directory streams release their DIR* via __rt_closedir
     }
 
+    emitter.instruction("cmp x9, #6");                                          // is the resource a libcurl easy handle?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_curl");             // CurlHandle needs curl_easy_cleanup via the elephc_curl bridge
+
     emitter.instruction("b __rt_mixed_free_deep_box");                          // unknown resource kind, free the box without destructor
 
 
@@ -182,6 +190,14 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
         emitter.instruction("b __rt_mixed_free_deep_box");                      // free the mixed box after releasing the directory
     }
+
+
+    emitter.label("__rt_mixed_free_deep_resource_curl");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the libcurl handle id from the low payload word
+
+    emitter.instruction("bl __rt_curl_easy_free");                              // release the easy handle through the indirect curl slot
+
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the handle
 
 
     emitter.label("__rt_mixed_free_deep_string");
@@ -297,6 +313,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
         emitter.instruction("je __rt_mixed_free_deep_resource_dir");            // directory streams release their DIR* via __rt_closedir
     }
 
+    emitter.instruction("cmp r9, 6");                                           // is the resource a libcurl easy handle?
+
+    emitter.instruction("je __rt_mixed_free_deep_resource_curl");               // CurlHandle needs curl_easy_cleanup via the elephc_curl bridge
+
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // unknown resource kind, free the box without destructor
 
 
@@ -346,6 +366,14 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
         emitter.instruction("jmp __rt_mixed_free_deep_box");                    // free the mixed box after releasing the directory
     }
+
+
+    emitter.label("__rt_mixed_free_deep_resource_curl");
+    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the libcurl handle id from the low payload word
+
+    emitter.instruction("call __rt_curl_easy_free");                            // release the easy handle through the indirect curl slot
+
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
 
 
     emitter.label("__rt_mixed_free_deep_string");

@@ -66,6 +66,10 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
+    /// PHP extension name this bridge provides, mirroring the `php_extension` field of
+    /// the production bridge table in `src/linker/bridges.rs`. `None` for bridges with no
+    /// distinct PHP extension (the tz bridge folds into `date`; eval is internal).
+    php_extension: Option<&'static str>,
 }
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
@@ -73,14 +77,17 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
+        php_extension: Some("openssl"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
+        php_extension: Some("PDO"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
+        php_extension: Some("hash"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
@@ -89,22 +96,27 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
+        php_extension: Some("Phar"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
         package: "elephc-tz",
+        php_extension: None,
     },
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
+        php_extension: Some("gd"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_magician",
         package: "elephc-magician",
+        php_extension: None,
     },
     TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
+        php_extension: Some("curl"),
     },
 ];
 
@@ -251,6 +263,27 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
         .iter()
         .filter(|bridge| actual_link_libs.iter().any(|lib| *lib == bridge.lib_name))
         .collect()
+}
+
+/// Maps the bridges a fixture links to the PHP extension names `extension_loaded()` must
+/// report, mirroring what `pipeline::backend` does with `linker::php_extension_for_lib`.
+///
+/// That table lives in the `elephc` BINARY crate and is unreachable from an integration
+/// test, so the mapping is carried on `TEST_BRIDGE_STATICLIBS` — the list this harness
+/// already mirrors from it — rather than invented per test.
+pub(crate) fn test_linked_extensions(required_libraries: &[String]) -> Vec<String> {
+    let mut extensions: Vec<String> = Vec::new();
+    for bridge in TEST_BRIDGE_STATICLIBS {
+        let Some(extension) = bridge.php_extension else {
+            continue;
+        };
+        if required_libraries.iter().any(|lib| lib == bridge.lib_name)
+            && !extensions.iter().any(|existing| existing == extension)
+        {
+            extensions.push(extension.to_string());
+        }
+    }
+    extensions
 }
 
 /// Builds any requested bridge staticlibs missing from the debug target directory.
@@ -719,6 +752,32 @@ fn test_link_plan(
             elephc::codegen::LinkRequirement::SystemLibrary(library) => {
                 if named.insert(library.clone()) {
                     plan.push(LinkItem::named_runtime(library));
+                }
+            }
+        }
+    }
+    // The `elephc_curl` bridge declares libcurl's symbols without linking them (its
+    // staticlib never invokes a linker), so a fixture that pulls the bridge in must also
+    // supply the managed native archives the production path resolves through
+    // `native_deps` + `pipeline::backend`. The harness has no project manifest to resolve
+    // against, so it reads the same durable cache structurally — see
+    // `super::curl_native`. A fixture whose packages are missing skips before it ever
+    // reaches this point.
+    if named.contains("elephc_curl") {
+        if let Some(packages) = curl_native_packages() {
+            for package in packages {
+                plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+            }
+            for package in packages {
+                for library in &package.libraries {
+                    if named.insert(library.clone()) {
+                        plan.push(LinkItem::named_runtime(library.as_str()));
+                    }
+                }
+            }
+            if target().platform == Platform::MacOS {
+                for framework in CURL_MACOS_FRAMEWORKS {
+                    plan.push(LinkItem::Framework((*framework).to_string()));
                 }
             }
         }

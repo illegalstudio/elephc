@@ -20,6 +20,7 @@ mod declaration_order;
 mod driver_support;
 pub(crate) mod dynamic_new;
 mod emitted_classes;
+pub(crate) mod curl;
 pub(crate) mod emit;
 pub(crate) mod hash_crypto;
 pub(crate) mod interface_wrappers;

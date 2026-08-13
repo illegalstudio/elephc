@@ -715,6 +715,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // shared runtime can release unfinalized HashContext handles without naming
     // elephc-crypto directly.
     out.push_str(&comm_directive("_elephc_crypto_free_fn", 8, target));
+    // ext/curl bridge slots, published together by every curl call site
+    // (`codegen_support::curl::publish_elephc_curl_function_pointers`) and read by the
+    // `__rt_curl_*` helpers. A curl-free program leaves all of them null and therefore
+    // names no `elephc_curl_*` symbol, links no `-lelephc_curl`, and needs no managed
+    // native `curl` package. `_elephc_curl_easy_free_fn` is the one whose publication is
+    // load-bearing beyond its own call site: `__rt_mixed_free_deep` reads it when a
+    // resource-kind-6 cell is released, which can happen anywhere a `CurlHandle` object
+    // goes out of scope.
+    for slot in crate::codegen_support::runtime::curl_abi_slots() {
+        out.push_str(&comm_directive(slot.1, 8, target));
+    }
     // _elephc_crypto_is_finalized_fn: indirect pointer to elephc_crypto_is_finalized.
     // __rt_hash_update / __rt_hash_final / __rt_hash_copy ask through it whether the
     // incoming context was already consumed by a previous hash_final(), which is the

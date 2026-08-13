@@ -26,6 +26,7 @@ mod group_10;
 mod group_11;
 mod group_12;
 mod group_13;
+mod group_14;
 
 /// Lowers one typed runtime function through its backend implementation dispatcher.
 pub(super) fn lower(
@@ -73,6 +74,9 @@ pub(super) fn lower(
         return result;
     }
     if let Some(result) = group_13::lower(ctx, inst, target) {
+        return result;
+    }
+    if let Some(result) = group_14::lower(ctx, inst, target) {
         return result;
     }
     Err(CodegenIrError::invalid_module(format!(
