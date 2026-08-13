@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Submodules group focused fixtures for classes, object GC aliasing, magic methods, property access, constructor property promotion, and related suites.
+//! - `mixed_sourced_typed_param_limitation` is a KNOWN-MISCOMPILE pin rather than a parity fixture: it asserts today's WRONG answer for an object that reaches a typed object parameter through Mixed storage, and names the curl workaround that exists because of it.
 
 use crate::support::*;
 
@@ -29,3 +30,5 @@ mod untyped_property_defaults;
 mod nested_arrays;
 #[path = "objects/nullable_dispatch.rs"]
 mod nullable_dispatch;
+#[path = "objects/mixed_sourced_typed_param_limitation.rs"]
+mod mixed_sourced_typed_param_limitation;
