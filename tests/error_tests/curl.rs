@@ -159,6 +159,81 @@ fn curl_multi_get_handles_is_undefined_before_php_85() {
     );
 }
 
+/// `CurlShareHandle` is `final` and not user-constructible, exactly like `CurlHandle`/
+/// `CurlMultiHandle`: `curl_share_init()` is the only way to obtain one.
+#[test]
+fn curl_share_handle_cannot_be_extended_or_constructed() {
+    expect_curl_error(
+        "<?php class MyShare extends CurlShareHandle {} $sh = curl_share_init();",
+        "final",
+    );
+    expect_curl_error("<?php $sh = new CurlShareHandle();", "private");
+}
+
+/// `curl_share_setopt()` takes exactly three arguments, so a call missing the value is an
+/// arity error rather than a silently ignored option.
+#[test]
+fn curl_share_setopt_rejects_wrong_arity() {
+    expect_curl_error(
+        "<?php $sh = curl_share_init(); curl_share_setopt($sh, CURLSHOPT_SHARE);",
+        "curl_share_setopt",
+    );
+}
+
+/// The share functions type their handle parameter, so a non-handle is refused at compile
+/// time — the same guard the easy/multi surfaces carry.
+#[test]
+fn curl_share_functions_reject_a_non_handle() {
+    expect_curl_error(
+        r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#,
+        "CurlShareHandle",
+    );
+    expect_curl_error(r#"<?php curl_share_errno(42);"#, "CurlShareHandle");
+    expect_curl_error(r#"<?php curl_share_close([]);"#, "CurlShareHandle");
+}
+
+/// `curl_share_errno()` takes exactly one argument.
+#[test]
+fn curl_share_errno_rejects_wrong_arity() {
+    expect_curl_error(
+        "<?php $sh = curl_share_init(); curl_share_errno($sh, 1);",
+        "curl_share_errno",
+    );
+}
+
+/// `curl_share_init_persistent()` / `CurlSharePersistentHandle` are PHP 8.5 SURFACE ONLY
+/// (locked decision 8), the same gate `curl_multi_get_handles()` has: compiled for 8.4
+/// the prelude must not declare either, so each reference is an ordinary "undefined
+/// function"/"undefined class" error, while 8.5 accepts both.
+#[test]
+fn curl_share_init_persistent_is_undefined_before_php_85() {
+    let function_source = "<?php $sh = curl_share_init_persistent([CURL_LOCK_DATA_DNS]);";
+    let error =
+        check_source_for_php_version(function_source, elephc::php_version::PhpVersion::Php84)
+            .expect_err("8.4 must not declare curl_share_init_persistent");
+    assert!(
+        error.contains("Undefined function") && error.contains("curl_share_init_persistent"),
+        "8.4 must report an undefined function, got: {error}"
+    );
+    assert!(
+        check_source_for_php_version(function_source, elephc::php_version::PhpVersion::Php85)
+            .is_ok(),
+        "8.5 must declare curl_share_init_persistent"
+    );
+
+    let class_source = "<?php function f(CurlSharePersistentHandle $h): bool { return true; }";
+    assert!(
+        check_source_for_php_version(class_source, elephc::php_version::PhpVersion::Php84)
+            .is_err(),
+        "8.4 must not declare CurlSharePersistentHandle"
+    );
+    assert!(
+        check_source_for_php_version(class_source, elephc::php_version::PhpVersion::Php85)
+            .is_ok(),
+        "8.5 must declare CurlSharePersistentHandle"
+    );
+}
+
 /// Runs the frontend with an explicit PHP compatibility version, so the version-gated
 /// halves of the curl prelude can be checked from here. Mirrors `check_source`, which
 /// always uses the default (8.5) profile.

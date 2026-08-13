@@ -513,6 +513,19 @@ pub enum RuntimeFnId {
     CurlMultiStrerror,
     /// Raises PHP's warning for a `CURLMOPT_*` option this build cannot apply.
     CurlMultiSetoptUnsupportedWarning,
+    /// Allocates a libcurl share handle and boxes it as a resource-kind-8 Mixed cell.
+    CurlShareInit,
+    /// Applies an integer-valued `CURLSHOPT_*` option to a share handle.
+    CurlShareSetopt,
+    /// Reports the `CURLSHcode` from a share handle's most recent operation.
+    CurlShareErrno,
+    /// Reports libcurl's human-readable message for a `CURLSHcode`.
+    CurlShareStrerror,
+    /// Attaches an easy handle to a share handle via `CURLOPT_SHARE`, answering a boolean.
+    CurlEasySetShare,
+    /// Builds or finds the process-lifetime share for `curl_share_init_persistent()`
+    /// (PHP 8.5), boxed as a resource-kind-8 Mixed cell.
+    CurlShareInitPersistent,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1255,6 +1268,12 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlMultiSetopt
             | RuntimeFnId::CurlMultiErrno
             | RuntimeFnId::CurlMultiStrerror
+            | RuntimeFnId::CurlShareInit
+            | RuntimeFnId::CurlShareSetopt
+            | RuntimeFnId::CurlShareErrno
+            | RuntimeFnId::CurlShareStrerror
+            | RuntimeFnId::CurlEasySetShare
+            | RuntimeFnId::CurlShareInitPersistent
             | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1470,6 +1489,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlMultiInfoRead
                 | RuntimeFnId::CurlMultiSetopt
                 | RuntimeFnId::CurlMultiErrno
+                // The share operations answer the identical shape: `CurlShareSetopt` a
+                // three-way `CURLSHcode`-derived status, `CurlShareErrno` a bare
+                // `CURLSHcode`, `CurlEasySetShare` a bare acceptance flag — none of the
+                // three produces storage, and their handle operand(s) must not be kept
+                // alive by a default `MayAliasArguments` bucket that assumes otherwise.
+                | RuntimeFnId::CurlShareSetopt
+                | RuntimeFnId::CurlShareErrno
+                | RuntimeFnId::CurlEasySetShare
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -1568,6 +1595,14 @@ impl RuntimeFnId {
                 // siblings above do.
                 | RuntimeFnId::CurlMultiInit
                 | RuntimeFnId::CurlMultiStrerror
+                // `curl_share_init()`/`curl_share_init_persistent()` box a brand-new
+                // resource-kind-8 Mixed cell (there is no argument to alias — the
+                // persistent form's one argument is a CSV STRING, never a handle) and
+                // `curl_share_strerror()` copies libcurl's `'static` `CURLSHcode` text
+                // into an owned string, exactly as their easy/multi siblings above do.
+                | RuntimeFnId::CurlShareInit
+                | RuntimeFnId::CurlShareInitPersistent
+                | RuntimeFnId::CurlShareStrerror
                 | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
@@ -2078,6 +2113,12 @@ impl RuntimeFnId {
             RuntimeFnId::CurlSetoptUnsupportedWarning => {
                 "__elephc_curl_setopt_unsupported_warning"
             }
+            RuntimeFnId::CurlShareInit => "__elephc_curl_share_init",
+            RuntimeFnId::CurlShareSetopt => "__elephc_curl_share_setopt",
+            RuntimeFnId::CurlShareErrno => "__elephc_curl_share_errno",
+            RuntimeFnId::CurlShareStrerror => "__elephc_curl_share_strerror",
+            RuntimeFnId::CurlEasySetShare => "__elephc_curl_easy_set_share",
+            RuntimeFnId::CurlShareInitPersistent => "__elephc_curl_share_init_persistent",
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",

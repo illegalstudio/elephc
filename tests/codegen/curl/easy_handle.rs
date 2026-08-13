@@ -236,10 +236,12 @@ fn curl_setopt_forwards_and_rejects_honestly() {
 /// This is a memory-safety regression test, not a politeness one. Every option here used
 /// to be forwarded verbatim: 20011 (`CURLOPT_WRITEFUNCTION`) overwrote the bridge's own
 /// write callback with the address `1`, and 40291 (`CURLOPT_SSLCERT_BLOB`) mis-read a PHP
-/// string as a `struct curl_blob *`. 10001 (`CURLOPT_FILE`) and 10100 (`CURLOPT_SHARE`)
-/// are the PHP-stream and share-handle options later tasks own. The transfer at the end
-/// is what proves nothing was corrupted: the handle still performs and still reports its
-/// own error, so none of the rejected options reached libcurl's state.
+/// string as a `struct curl_blob *`. 10001 (`CURLOPT_FILE`) is the PHP-stream option a
+/// later task owns. 10100 (`CURLOPT_SHARE`) used to be in this list too — Task 10 makes it
+/// work; `tests/codegen/curl/share.rs` covers it now, including its own honest rejection
+/// (a non-`CurlShareHandle` value is a `TypeError`, not a silent `false`). The transfer at
+/// the end is what proves nothing was corrupted: the handle still performs and still
+/// reports its own error, so none of the rejected options reached libcurl's state.
 #[test]
 fn unsupported_options_are_rejected_before_libcurl() {
     if skip_without_curl_native("unsupported_options_are_rejected_before_libcurl") {
@@ -251,7 +253,6 @@ fn unsupported_options_are_rejected_before_libcurl() {
         echo curl_setopt($ch, 20011, 1) ? "accepted\n" : "rejected\n";
         echo curl_setopt($ch, 40291, "blob") ? "accepted\n" : "rejected\n";
         echo curl_setopt($ch, 10001, 1) ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 10100, 1) ? "accepted\n" : "rejected\n";
         curl_setopt($ch, 10002, "file:///nonexistent-elephc-curl-probe");
         curl_setopt($ch, 19913, true);
         $body = curl_exec($ch);
@@ -261,9 +262,9 @@ fn unsupported_options_are_rejected_before_libcurl() {
     );
     assert_eq!(
         output.stdout,
-        "rejected\nrejected\nrejected\nrejected\nexec-false\nerrno\n"
+        "rejected\nrejected\nrejected\nexec-false\nerrno\n"
     );
-    for option in ["20011", "40291", "10001", "10100"] {
+    for option in ["20011", "40291", "10001"] {
         assert!(
             output.stderr.contains(&format!(
                 "Warning: curl_setopt(): Option {option} is not supported by this build"

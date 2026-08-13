@@ -94,6 +94,28 @@
 //!   itself. Without this, `curl_multi_getcontent($info['handle'])` — the canonical PHP
 //!   multi loop — would be a compile error, or, written with the `instanceof` narrowing
 //!   the checker accepts, a SILENTLY WRONG answer.
+//! - THE SHARE INTERFACE (Task 10) ADDS NO NEW SIGNATURE DIVERGENCE of the union-return or
+//!   mixed-parameter families above — `CurlShareHandle`/`CurlSharePersistentHandle` are
+//!   never read back out of a `mixed` array/return slot the way a multi-attached
+//!   `CurlHandle` is, so `curl_share_setopt()`/`curl_share_errno()`/`curl_share_close()`
+//!   stay typed `CurlShareHandle` throughout. It DOES add one new `curl_setopt()`
+//!   `$kind` (`7`, `KIND_SHARE`): `CURLOPT_SHARE`'s value is the ONE object read out of
+//!   `curl_setopt()`'s `mixed $value` in this whole file, handled before the scalar-type
+//!   guard (see the `if ($kind === 7)` branch below) and requiring an `elephc_curl_easy_
+//!   set_share()` bridge call rather than any of the three ordinary setters.
+//! - THE SHARE LIFETIME HAZARD is real and is closed at the BRIDGE, not here:
+//!   `crates/elephc-curl/src/share.rs`'s module doc carries the full argument for why
+//!   `curl_setopt($ch, CURLOPT_SHARE, $sh)` needs no PHP-level reference from `$ch` to
+//!   `$sh` the way `CurlMultiHandle::__elephc_attach()` takes one for an added easy
+//!   handle — freeing a share (`CurlShareHandle`'s Mixed cell teardown) detaches every
+//!   still-attached easy handle at the libcurl level BEFORE `curl_share_cleanup()` runs,
+//!   so no dangling `data->share` pointer can ever be read, regardless of `unset()` order.
+//! - `curl_share_init_persistent()` (PHP 8.5) IS PROCESS-LIFETIME, mirroring
+//!   `curl_multi_get_handles()`'s version gate (locked decision 8) but adding its own:
+//!   the underlying native share, once created, is NEVER freed by
+//!   `__elephc_curl_share_free()` — elephc has no PHP-FPM-worker-restart boundary to key a
+//!   shorter lifetime off, so "process lifetime" is the honest answer. See that function's
+//!   own comment below.
 
 mod detect;
 
@@ -169,6 +191,9 @@ function curl_init(?string $url = null): CurlHandle {
 //   4  curl_off_t                    -> __elephc_curl_easy_setopt_long (the bridge widens)
 //   5  PHP-layer pseudo-option       -> handled in this prelude, libcurl never sees it
 //   6  real option, not carryable    -> false + PHP's warning (locked decision 7)
+//   7  CURLOPT_SHARE (Task 10)       -> __elephc_curl_easy_set_share (a CurlShareHandle
+//                                        object, not a scalar; the ONLY option this whole
+//                                        function reads an OBJECT out of $value for)
 //
 // THE 0-vs-6 SPLIT IS php-src's OWN. `_php_curl_setopt` (ext/curl/interface.c) ends its
 // switch with `zend_argument_value_error(2, "is not a valid cURL option")`, so an option
@@ -246,6 +271,32 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         }
         // CURLOPT_BINARYTRANSFER (19914): a documented no-op in modern PHP.
         return true;
+    }
+    // CURLOPT_SHARE (10100) IS THE ONE OBJECT-VALUED curl_setopt() OPTION, handled here
+    // before the scalar-type guard below (an object is never int/bool/float/string) — Task
+    // 10 makes it work; it used to be KIND_UNSUPPORTED. Both `CurlShareHandle` and PHP
+    // 8.5's `CurlSharePersistentHandle` are accepted, matching php-src's own CURLOPT_SHARE
+    // contract. The LATTER is matched by class NAME (`get_class()`) rather than
+    // `instanceof`, because `CurlSharePersistentHandle` is declared only for PHP >= 8.5
+    // (locked decision 8) and THIS function's body is never version-gated, so a literal
+    // `instanceof CurlSharePersistentHandle` would fail to resolve the class name at all
+    // when compiling for 8.4 — a plain runtime string comparison needs no such
+    // declaration.
+    //
+    // THE LIFETIME ARGUMENT for why attaching a share here never takes a PHP-level
+    // reference from `$handle` to `$value` lives in `crates/elephc-curl/src/share.rs`'s
+    // module doc and `__elephc_curl_easy_set_share`'s: the BRIDGE, not this prelude, is
+    // what keeps a share alive as long as any easy handle still points at it, by
+    // detaching every attached easy handle before the share is ever actually freed.
+    if ($kind === 7) {
+        $isShare = ($value instanceof CurlShareHandle)
+            || (is_object($value) && get_class($value) === "CurlSharePersistentHandle");
+        if (!$isShare) {
+            $given = is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value));
+            throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be of type CurlShareHandle, " . $given . " given");
+        }
+        $shareRaw = $value->__elephc_handle;
+        return __elephc_curl_easy_set_share($raw, $shareRaw);
     }
     if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
         $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
@@ -852,6 +903,105 @@ function curl_multi_strerror(int $error_code): string {
     $message = __elephc_curl_multi_strerror($error_code);
     return $message;
 }
+
+// THE SHARE INTERFACE. `CurlShareHandle` needs no identity map the way `CurlMultiHandle`
+// does — nothing ever reads a share handle back OUT of the bridge the way
+// `curl_multi_info_read()`/`curl_multi_get_handles()` read easy handles back, so there is
+// no "which PHP object does this native id belong to" question to answer. Its object
+// shape is otherwise identical to `CurlHandle`'s: a private constructor, a static wrap
+// factory, an empty `__debugInfo()`, and a `__serialize()` that throws.
+//
+// THE LIFETIME HAZARD: libcurl requires a share object to outlive every easy handle that
+// has `CURLOPT_SHARE` pointed at it — for the WHOLE remaining life of that easy handle,
+// including its own eventual `curl_easy_cleanup()`, not merely "while a transfer using it
+// is in flight". `curl_setopt($ch, CURLOPT_SHARE, $sh)` (this file's `curl_setopt()`,
+// `$kind === 7` branch) therefore does NOT take a PHP-level reference from `$ch` to `$sh`
+// the way `CurlMultiHandle::__elephc_attach()` does for an added easy handle — the BRIDGE
+// is the source of truth instead. `crates/elephc-curl/src/share.rs`'s module doc carries
+// the full argument; in short, every share entry tracks which easy ids are attached to it,
+// and freeing a share (`__elephc_curl_share_free`, reached from this class's Mixed cell
+// teardown — there is deliberately no `__destruct`) detaches every one of them
+// (`CURLOPT_SHARE` -> null) BEFORE `curl_share_cleanup()` runs. A PHP program is therefore
+// free to `unset()` the share before the easy handles attached to it: the transfer already
+// run is unaffected, and any FUTURE transfer on those handles still succeeds (it simply
+// stops benefiting from the shared cache).
+final class CurlShareHandle {
+    public mixed $__elephc_handle = null;
+
+    private function __construct() {}
+
+    public static function __elephc_wrap(mixed $raw): CurlShareHandle {
+        $h = new self();
+        $h->__elephc_handle = $raw;
+        return $h;
+    }
+
+    public function __debugInfo(): array {
+        return [];
+    }
+
+    public function __serialize(): array {
+        throw new \Exception("Serialization of 'CurlShareHandle' is not allowed");
+    }
+}
+
+// php-src declares `curl_share_init(): CurlShareHandle` with NO `false` arm — PHP's own
+// docs describe it as never failing — the same shape `curl_multi_init()` has. libcurl's
+// own `curl_share_init()` CAN still return null on allocation failure, so the bridge's
+// `false` answer becomes a thrown `RuntimeException` here, the same divergence
+// `curl_init()`/`curl_multi_init()` already document (see this file's header).
+function curl_share_init(): CurlShareHandle {
+    $raw = __elephc_curl_share_init();
+    if ($raw === false) {
+        throw new \RuntimeException("curl_share_init(): libcurl could not allocate a share handle");
+    }
+    return CurlShareHandle::__elephc_wrap($raw);
+}
+
+// ONLY TWO `CURLSHOPT_*` VALUES ARE REAL PHP SURFACE: `CURLSHOPT_SHARE` (1) and
+// `CURLSHOPT_UNSHARE` (2). Confirmed against the frozen PHP 8.2-8.5 extraction
+// (scripts/docs/curl_surface.json): `CURLSHOPT_LOCKFUNC`/`UNLOCKFUNC`/`USERDATA` are
+// C-API-only locking hooks PHP never exposes as constants at all, so php-src's own
+// `curl_share_setopt()` switch has exactly two cases and a `default:
+// zend_argument_value_error(...)` — there is no third "real option this build cannot
+// carry" bucket the way `curl_setopt()`/`curl_multi_setopt()` need one.
+//
+// `$value` IS THE `CURL_LOCK_DATA_*` CONSTANT naming which cache to (un)share. libcurl
+// itself validates it and answers `CURLSHE_BAD_OPTION` for a value it does not recognize
+// (or `CURLSHE_NOT_BUILT_IN` for one this libcurl build lacks); this function turns EITHER
+// into a plain `false` — no fabricated warning, the same answer `curl_setopt()` gives for
+// a real, carryable option that libcurl itself refuses. The true code stays retrievable
+// through `curl_share_errno()`/`curl_share_strerror()`.
+function curl_share_setopt(CurlShareHandle $share_handle, int $option, mixed $value): bool {
+    $raw = $share_handle->__elephc_handle;
+    if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
+        $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
+        throw new \TypeError("curl_share_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
+    }
+    $applied = __elephc_curl_share_setopt($raw, $option, (int) $value);
+    if ($applied === -1) {
+        throw new \ValueError("curl_share_setopt(): Argument #2 (\$option) is not a valid cURL share option");
+    }
+    return $applied === 1;
+}
+
+// KNOWN NOISE, NOT FIXED: `$share_handle` is unused, for the same reason `curl_close()`'s
+// `$handle` is (see this file's header) — the function is a no-op in PHP 8 and the
+// parameter name is PHP-visible named-argument surface that cannot be renamed.
+function curl_share_close(CurlShareHandle $share_handle): void {}
+
+function curl_share_errno(CurlShareHandle $share_handle): int {
+    $raw = $share_handle->__elephc_handle;
+    return __elephc_curl_share_errno($raw);
+}
+
+// DIVERGENCE FROM PHP, the same one `curl_strerror()`/`curl_multi_strerror()` document:
+// php-src declares `?string`; libcurl's `curl_share_strerror()` never answers a null
+// pointer (it falls back to "Unknown error" for a code it does not recognize).
+function curl_share_strerror(int $error_code): string {
+    $message = __elephc_curl_share_strerror($error_code);
+    return $message;
+}
 // -- elephc PHP >= 8.5 curl_multi_get_handles begin --
 // PHP 8.5 ONLY (locked decision 8): 8.2-8.4 have no `curl_multi_get_handles`, and a
 // program compiled with `--php-version 8.4` must see an "undefined function" error for it,
@@ -865,6 +1015,85 @@ function curl_multi_get_handles(CurlMultiHandle $multi_handle): array {
     return $handles;
 }
 // -- elephc PHP >= 8.5 curl_multi_get_handles end --
+// -- elephc PHP >= 8.5 curl_share_init_persistent begin --
+// PHP 8.5 ONLY (locked decision 8): `curl_share_init_persistent()`/`CurlSharePersistentHandle`
+// do not exist before 8.5, exactly like `curl_multi_get_handles()` above. The block
+// markers are what `prelude_source_for_version` strips.
+//
+// `CurlSharePersistentHandle` IS A SIBLING OF `CurlShareHandle`, NOT A SUBCLASS —
+// php-src does not extend it, so `curl_share_setopt()`/`curl_share_errno()`/
+// `curl_share_close()` all stay typed `CurlShareHandle` and never accept this class.
+// `curl_setopt()`'s `CURLOPT_SHARE` branch (this file's `$kind === 7` code, ABOVE this
+// fenced block and therefore compiled for EVERY PHP version) matches it by `get_class()`
+// STRING rather than `instanceof`, precisely so that always-compiled code never has to
+// resolve this class name on an 8.4 profile — see that branch's own comment.
+//
+// PROCESS-LIFETIME, NEVER FREED. `curl_share_init_persistent()` is php-src's PHP-FPM
+// answer to "build the share once, reuse it across every worker request forever" — elephc
+// has no FPM-style worker-restart boundary to key that lifetime off, so the underlying
+// libcurl share is kept alive until the PROCESS itself exits:
+// `__elephc_curl_share_free()`/`crates/elephc-curl/src/share.rs`'s `elephc_curl_share_free`
+// is a documented no-op for a share id created through this path. The PHP OBJECT wrapping
+// it can still be garbage-collected normally like any other object — only the native
+// share and its bridge-table entry are immortal.
+//
+// SAME OPTIONS -> SAME UNDERLYING SHARE. Repeated calls with an equivalent (order- and
+// duplicate-insensitive) option set return a handle onto the identical native share, keyed
+// by the sorted+deduplicated `CURL_LOCK_DATA_*` list — php-src's own semantics.
+final class CurlSharePersistentHandle {
+    public mixed $__elephc_handle = null;
+
+    private function __construct() {}
+
+    public static function __elephc_wrap(mixed $raw): CurlSharePersistentHandle {
+        $h = new self();
+        $h->__elephc_handle = $raw;
+        return $h;
+    }
+
+    public function __debugInfo(): array {
+        return [];
+    }
+
+    public function __serialize(): array {
+        throw new \Exception("Serialization of 'CurlSharePersistentHandle' is not allowed");
+    }
+}
+
+// ONLY THE FIVE `CURL_LOCK_DATA_*` VALUES PHP ACTUALLY EXPOSES ARE ACCEPTED — COOKIE,
+// DNS, SSL_SESSION, CONNECT, PSL (frozen in scripts/docs/curl_surface.json; PHP does not
+// define a userland `CURL_LOCK_DATA_HSTS` even though libcurl itself has one since 7.74) —
+// everything else is php-src's own `ValueError`. Literal numbers, matching every other
+// option check in this file: 2 COOKIE, 3 DNS, 4 SSL_SESSION, 5 CONNECT, 6 PSL.
+//
+// THE ARRAY CROSSES THE ABI AS A COMMA-SEPARATED STRING of the validated decimal ints
+// (`__elephc_curl_share_init_persistent()`'s own doc comment explains why: this crate's C
+// ABI has no native array shape, and encoding a variable-length PHP value as one byte
+// blob for a fixed-arity C entry point is the same pattern `curl_setopt()`'s string-list
+// options already establish). The BRIDGE does the sorting/deduplication that makes an
+// equivalent option set — any order, with duplicates — resolve to the same share.
+function curl_share_init_persistent(array $share_options): CurlSharePersistentHandle {
+    $csv = "";
+    foreach ($share_options as $opt) {
+        if (is_array($opt) || is_object($opt)) {
+            throw new \ValueError("curl_share_init_persistent(): Argument #1 (\$share_options) must only contain CURL_LOCK_DATA_* values");
+        }
+        $n = (int) $opt;
+        if ($n !== 2 && $n !== 3 && $n !== 4 && $n !== 5 && $n !== 6) {
+            throw new \ValueError("curl_share_init_persistent(): Argument #1 (\$share_options) must only contain CURL_LOCK_DATA_* values");
+        }
+        if ($csv !== "") {
+            $csv .= ",";
+        }
+        $csv .= (string) $n;
+    }
+    $raw = __elephc_curl_share_init_persistent($csv);
+    if ($raw === false) {
+        throw new \RuntimeException("curl_share_init_persistent(): libcurl could not allocate a share handle");
+    }
+    return CurlSharePersistentHandle::__elephc_wrap($raw);
+}
+// -- elephc PHP >= 8.5 curl_share_init_persistent end --
 "#;
 
 /// Injects the curl prelude when the program references the `ext/curl` surface, leaving
@@ -916,6 +1145,11 @@ fn prelude_source_for_version(
         &mut source,
         "// -- elephc PHP >= 8.5 curl_multi_get_handles begin --",
         "// -- elephc PHP >= 8.5 curl_multi_get_handles end --",
+    );
+    remove_version_block(
+        &mut source,
+        "// -- elephc PHP >= 8.5 curl_share_init_persistent begin --",
+        "// -- elephc PHP >= 8.5 curl_share_init_persistent end --",
     );
     std::borrow::Cow::Owned(source)
 }
@@ -973,6 +1207,49 @@ mod version_tests {
                 "function curl_multi_info_read(",
                 "function curl_multi_getcontent(",
                 "function curl_multi_strerror(",
+            ] {
+                assert!(
+                    source.contains(declaration),
+                    "{version} must keep {declaration}"
+                );
+            }
+        }
+    }
+
+    /// `curl_share_init_persistent()`/`CurlSharePersistentHandle` are PHP 8.5 ONLY, the
+    /// same locked-decision-8 gate `curl_multi_get_handles()` has — every earlier profile
+    /// must not declare either.
+    #[test]
+    fn curl_share_init_persistent_is_php_85_only() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            for declaration in [
+                "function curl_share_init_persistent(",
+                "final class CurlSharePersistentHandle {",
+            ] {
+                assert_eq!(
+                    source.contains(declaration),
+                    version >= PhpVersion::Php85,
+                    "{declaration} must be declared exactly for PHP >= 8.5, not {version}"
+                );
+            }
+        }
+    }
+
+    /// Stripping EITHER 8.5 block must not take the version-independent SHARE surface with
+    /// it: `CurlShareHandle` and its functions are PHP 8.0+ and must survive every profile,
+    /// unlike `CurlSharePersistentHandle` above.
+    #[test]
+    fn every_version_keeps_the_version_independent_share_surface() {
+        for version in PhpVersion::ALL {
+            let source = prelude_source_for_version(version);
+            for declaration in [
+                "final class CurlShareHandle {",
+                "function curl_share_init(): CurlShareHandle {",
+                "function curl_share_setopt(",
+                "function curl_share_close(",
+                "function curl_share_errno(",
+                "function curl_share_strerror(",
             ] {
                 assert!(
                     source.contains(declaration),

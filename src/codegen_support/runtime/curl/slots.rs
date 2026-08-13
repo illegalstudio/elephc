@@ -84,6 +84,26 @@ pub(crate) const CURL_ABI_SLOTS: &[(&str, &str)] = &[
         "_elephc_curl_multi_strerror_fn",
     ),
     ("elephc_curl_multi_free", "_elephc_curl_multi_free_fn"),
+    ("elephc_curl_share_init", "_elephc_curl_share_init_fn"),
+    ("elephc_curl_share_setopt", "_elephc_curl_share_setopt_fn"),
+    ("elephc_curl_share_errno", "_elephc_curl_share_errno_fn"),
+    (
+        "elephc_curl_share_strerror",
+        "_elephc_curl_share_strerror_fn",
+    ),
+    (
+        "elephc_curl_easy_set_share",
+        "_elephc_curl_easy_set_share_fn",
+    ),
+    (
+        // NOT `elephc_curl_share_init_persistent`: that spelling is a textual PREFIX of
+        // `elephc_curl_share_init` (this table's own earlier row), which trips this
+        // module's `the_shared_runtime_never_references_the_curl_bridge` test — see
+        // `crates/elephc-curl/src/share.rs`'s identical comment on the C function itself.
+        "elephc_curl_share_persistent_init",
+        "_elephc_curl_share_persistent_init_fn",
+    ),
+    ("elephc_curl_share_free", "_elephc_curl_share_free_fn"),
 ];
 
 /// The scratch register each target uses to hold a loaded bridge entry pointer.

@@ -77,6 +77,15 @@ pub(crate) struct EasyEntry {
     /// of `curl_getinfo()` cannot invalidate a captured body the caller has not
     /// copied yet.
     pub(crate) scratch: Vec<u8>,
+    /// The bridge id of the share (`crate::share`) this handle currently has attached
+    /// via `CURLOPT_SHARE`, or `None` when unattached. Lets `elephc_curl_easy_set_share`
+    /// detach from a PREVIOUS share when the option is set again to a different one, and
+    /// lets `elephc_curl_easy_reset`/`elephc_curl_easy_free` remove this id from the
+    /// share's own `attached` bookkeeping so it cannot grow unboundedly across many
+    /// short-lived easy handles sharing one long-lived (in particular,
+    /// `curl_share_init_persistent()`) share. See `crate::share`'s module doc for the
+    /// full lifetime argument this field is part of.
+    pub(crate) share_id: Option<i64>,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -124,6 +133,7 @@ impl EasyEntry {
             last_error: Vec::new(),
             slists: HashMap::new(),
             scratch: Vec::new(),
+            share_id: None,
         }
     }
 

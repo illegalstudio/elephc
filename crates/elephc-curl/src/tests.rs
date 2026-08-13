@@ -50,8 +50,8 @@
 #[cfg(test)]
 mod option_table {
     use crate::options::{
-        option_kind, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER, KIND_SLIST,
-        KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
+        option_kind, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER, KIND_SHARE,
+        KIND_SLIST, KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
     };
 
     /// Loads the frozen curl surface the whole feature is generated from.
@@ -77,9 +77,9 @@ mod option_table {
         }
     }
 
-    /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the seven
-    /// kinds — never the `KIND_INVALID` that would make `curl_setopt()` raise
-    /// `ValueError` for a real PHP option.
+    /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the EIGHT
+    /// kinds (Task 10 adds `KIND_SHARE`) — never the `KIND_INVALID` that would make
+    /// `curl_setopt()` raise `ValueError` for a real PHP option.
     #[test]
     fn every_frozen_curlopt_is_classified() {
         let surface = frozen_surface();
@@ -98,7 +98,7 @@ mod option_table {
                 unclassified.push(format!("{name} ({number})"));
             }
             assert!(
-                (KIND_INVALID..=KIND_UNSUPPORTED).contains(&kind),
+                (KIND_INVALID..=KIND_SHARE).contains(&kind),
                 "{name} ({number}) has an out-of-range kind {kind}"
             );
         }
@@ -128,7 +128,7 @@ mod option_table {
             ("CURLOPT_WRITEHEADER", KIND_UNSUPPORTED, "php_layer"),
             ("CURLOPT_STDERR", KIND_UNSUPPORTED, "php_layer"),
             ("CURLOPT_PRIVATE", KIND_PHP_LAYER, "file"),
-            ("CURLOPT_SHARE", KIND_UNSUPPORTED, "file"),
+            ("CURLOPT_SHARE", KIND_SHARE, "file"),
         ];
 
         let surface = frozen_surface();
@@ -271,6 +271,64 @@ mod multi_option_table {
                 multi_option_kind(opt),
                 MULTI_OPTION_INVALID,
                 "{opt} is not a cURL multi option"
+            );
+        }
+    }
+}
+
+/// Purpose:
+/// The `curl_share_setopt()` half of the option ratchet.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness.
+///
+/// Key details:
+/// - UNLIKE `option_table`/`multi_option_table`, there is no per-constant frozen
+///   `option_kinds` bucket to walk here: `CURLSHOPT_*` is a plain `typedef enum`
+///   (`scripts/docs/curl_surface.json`'s `constant_verification.method` says so
+///   explicitly), and PHP exposes only THREE members of it as constants at all —
+///   `CURLSHOPT_NONE`/`SHARE`/`UNSHARE` — so the ratchet instead cross-checks those three
+///   frozen NUMBERS directly against `crate::share::share_option_kind`.
+#[cfg(test)]
+mod share_option_table {
+    use crate::share::{share_option_kind, SHARE_OPTION_INVALID, SHARE_OPTION_LONG};
+
+    fn frozen_surface() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/docs/curl_surface.json");
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("frozen curl surface at {}: {e}", path.display()));
+        serde_json::from_slice(&bytes).expect("frozen curl surface must be valid JSON")
+    }
+
+    /// `CURLSHOPT_SHARE`/`CURLSHOPT_UNSHARE`, at whatever numbers the frozen surface
+    /// freezes them at, classify as the one real kind; `CURLSHOPT_NONE` (0, never a
+    /// meaningful `curl_share_setopt()` argument) does not.
+    #[test]
+    fn share_and_unshare_match_the_frozen_numbers() {
+        let surface = frozen_surface();
+        let constants = surface["constants"].as_object().expect("constants map");
+        for name in ["CURLSHOPT_SHARE", "CURLSHOPT_UNSHARE"] {
+            let number = constants[name].as_i64().expect("integer option value");
+            assert_eq!(
+                share_option_kind(number),
+                SHARE_OPTION_LONG,
+                "{name} ({number}) must classify as a real cURL share option"
+            );
+        }
+        let none = constants["CURLSHOPT_NONE"].as_i64().expect("integer option value");
+        assert_eq!(share_option_kind(none), SHARE_OPTION_INVALID);
+    }
+
+    /// No other number — including the three locking-hook values PHP does not even
+    /// expose as constants (see this module's header) — is a valid share option.
+    #[test]
+    fn unknown_share_options_are_invalid() {
+        for opt in [-1, 3, 4, 5, 6, 999_999, i64::from(i32::MAX) + 1] {
+            assert_eq!(
+                share_option_kind(opt),
+                SHARE_OPTION_INVALID,
+                "{opt} is not a cURL share option"
             );
         }
     }
@@ -786,5 +844,158 @@ mod native_multi {
             MULTI_SETOPT_UNSUPPORTED,
             "a real option on an unknown handle is a failed apply, not a ValueError"
         );
+    }
+}
+
+/// Purpose:
+/// The SHARE interface's real-libcurl tests: lifecycle, `curl_share_setopt()`'s three-way
+/// answer, the error surface, `CURLOPT_SHARE` attach/detach, and — the load-bearing one —
+/// that freeing a share BEFORE the easy handle attached to it is safe rather than a
+/// use-after-free, exactly the hazard this module's own doc comment argues about.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness, when `ELEPHC_CURL_LIB_DIR`
+///   is set (see this module's header).
+#[cfg(elephc_curl_native)]
+mod native_share {
+    use crate::abi::{elephc_curl_easy_free, elephc_curl_easy_init};
+    use crate::share::{
+        elephc_curl_easy_set_share, elephc_curl_share_errno, elephc_curl_share_free,
+        elephc_curl_share_init, elephc_curl_share_persistent_init, elephc_curl_share_setopt,
+        SHARE_SETOPT_APPLIED, SHARE_SETOPT_INVALID, SHARE_SETOPT_REFUSED,
+    };
+
+    /// `CURL_LOCK_DATA_DNS`, frozen at 3 in `scripts/docs/curl_surface.json`.
+    const CURL_LOCK_DATA_DNS: i64 = 3;
+    /// `CURLSHOPT_SHARE`, frozen at 1.
+    const CURLSHOPT_SHARE: i64 = 1;
+
+    /// Share ids are their own id space: allocated, positive, monotonic, never reused —
+    /// exactly like the multi table's, independent of both it and the easy table.
+    #[test]
+    fn share_init_and_free_allocate_independent_ids() {
+        let a = elephc_curl_share_init();
+        let b = elephc_curl_share_init();
+        assert_ne!(a, 0, "curl_share_init should succeed with real libcurl linked");
+        assert_ne!(b, 0);
+        assert!(b > a, "share ids are monotonic");
+        elephc_curl_share_free(a);
+        elephc_curl_share_free(b);
+        // Freeing twice is a no-op, ids are never reused.
+        elephc_curl_share_free(a);
+    }
+
+    /// `curl_share_setopt()`'s three-way answer: a real `CURLSHOPT_SHARE`/`CURL_LOCK_DATA_*`
+    /// pair applies; an unknown option number is `SHARE_SETOPT_INVALID`, matching php-src's
+    /// own two-case switch (see `crate::share::share_option_kind`'s doc comment).
+    #[test]
+    fn share_setopt_applies_and_rejects_honestly() {
+        let share = elephc_curl_share_init();
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED
+        );
+        assert_eq!(elephc_curl_share_errno(share), 0, "CURLSHE_OK");
+        assert_eq!(
+            elephc_curl_share_setopt(share, 999_999, 1),
+            SHARE_SETOPT_INVALID,
+            "not a cURL share option at all"
+        );
+        // CURLSHOPT_LOCKFUNC (3): a real libcurl CURLSHOPT_* number, but not one PHP
+        // exposes as a constant, so it is INVALID here too, not merely REFUSED — see
+        // this module's header for why there is no "recognized but unsupported" bucket.
+        assert_eq!(elephc_curl_share_setopt(share, 3, 1), SHARE_SETOPT_INVALID);
+        elephc_curl_share_free(share);
+    }
+
+    /// An unrecognized `CURL_LOCK_DATA_*` VALUE (as opposed to option NUMBER) is a real
+    /// libcurl-level refusal (`CURLSHE_BAD_OPTION`), reported as `SHARE_SETOPT_REFUSED`
+    /// with the code retrievable through `curl_share_errno()` — never a fabricated
+    /// warning (this module's header explains why that split matters).
+    #[test]
+    fn share_setopt_refuses_an_unrecognized_lock_data_value() {
+        let share = elephc_curl_share_init();
+        let result = elephc_curl_share_setopt(share, CURLSHOPT_SHARE, 999_999);
+        assert_eq!(result, SHARE_SETOPT_REFUSED);
+        assert_ne!(elephc_curl_share_errno(share), 0, "the real CURLSHcode stays retrievable");
+        elephc_curl_share_free(share);
+    }
+
+    /// THE LOAD-BEARING TEST. A share is attached to an easy handle via
+    /// `elephc_curl_easy_set_share`, then the SHARE is freed FIRST — while the easy
+    /// handle is still live and never told to stop using it. If this module's detach-
+    /// before-cleanup design is wrong, the next libcurl call this test makes touches
+    /// freed memory (a real, if usually silent, use-after-free rather than a clean
+    /// crash) — running this repeatedly under a sanitizer or the OS allocator's own
+    /// debug checks is what would surface it. `elephc_curl_easy_free` on the now-
+    /// unshared easy handle afterwards must also succeed cleanly.
+    #[test]
+    fn freeing_the_share_before_the_easy_handle_is_safe() {
+        let share = elephc_curl_share_init();
+        assert_eq!(
+            elephc_curl_share_setopt(share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED
+        );
+        let easy = elephc_curl_easy_init();
+        assert_ne!(easy, 0);
+        assert_eq!(elephc_curl_easy_set_share(easy, share), 1, "attach must succeed");
+
+        // Free the share WHILE the easy handle still has CURLOPT_SHARE pointed at it.
+        elephc_curl_share_free(share);
+
+        // The easy handle must still be perfectly usable: freeing it now is the exact
+        // operation that would read through a dangling `data->share` pointer if this
+        // module's detach-before-cleanup design were missing or wrong.
+        elephc_curl_easy_free(easy);
+    }
+
+    /// Repeated calls with an EQUIVALENT (sorted/deduplicated) `CURL_LOCK_DATA_*` set
+    /// return the SAME underlying share id — php-src's own semantics — and the id is
+    /// never freed by `elephc_curl_share_free` (process-lifetime).
+    #[test]
+    fn persistent_shares_are_keyed_by_the_sorted_option_set() {
+        let a = unsafe {
+            let csv = b"3,2";
+            elephc_curl_share_persistent_init(csv.as_ptr(), csv.len())
+        };
+        let b = unsafe {
+            // Same two values, reversed order plus a duplicate: must resolve to the
+            // identical share id.
+            let csv = b"2,3,2";
+            elephc_curl_share_persistent_init(csv.as_ptr(), csv.len())
+        };
+        assert_ne!(a, 0);
+        assert_eq!(a, b, "an equivalent option set must return the same persistent share");
+
+        let different = unsafe {
+            let csv = b"4";
+            elephc_curl_share_persistent_init(csv.as_ptr(), csv.len())
+        };
+        assert_ne!(different, a, "a different option set must mint a different share");
+
+        // Documented no-op: a persistent share is never actually freed.
+        elephc_curl_share_free(a);
+        assert_eq!(
+            elephc_curl_share_setopt(a, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_APPLIED,
+            "the persistent share must still be alive and usable after 'freeing' it"
+        );
+    }
+
+    /// Every per-handle share entry point answers its documented failure value for an
+    /// unknown id — never a value a caller could read as success.
+    #[test]
+    fn unknown_share_ids_fail_closed() {
+        const UNKNOWN: i64 = -999;
+        assert_eq!(elephc_curl_share_errno(UNKNOWN), 0, "CURLSHE_OK, nothing happened");
+        assert_eq!(
+            elephc_curl_share_setopt(UNKNOWN, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS),
+            SHARE_SETOPT_REFUSED
+        );
+        let easy = elephc_curl_easy_init();
+        assert_eq!(elephc_curl_easy_set_share(easy, UNKNOWN), 0);
+        elephc_curl_easy_free(easy);
+        // A no-op, not a crash.
+        elephc_curl_share_free(UNKNOWN);
     }
 }

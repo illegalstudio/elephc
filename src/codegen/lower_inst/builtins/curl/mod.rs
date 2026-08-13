@@ -31,6 +31,7 @@ mod easy_setopt_slist;
 mod lifecycle;
 mod multi;
 mod option_kind;
+mod share;
 mod shared;
 mod str_op;
 mod warn_option;
@@ -54,6 +55,10 @@ pub(crate) use multi::{
     lower_curl_multi_select, lower_curl_multi_setopt, lower_curl_multi_strerror,
 };
 pub(crate) use option_kind::lower_curl_option_kind;
+pub(crate) use share::{
+    lower_curl_easy_set_share, lower_curl_share_errno, lower_curl_share_init,
+    lower_curl_share_init_persistent, lower_curl_share_setopt, lower_curl_share_strerror,
+};
 pub(crate) use str_op::lower_curl_easy_str_op;
 pub(crate) use version::lower_curl_version;
 pub(crate) use warn_option::{

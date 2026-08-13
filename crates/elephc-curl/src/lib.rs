@@ -33,6 +33,7 @@ mod info;
 mod multi;
 mod options;
 mod php_layer;
+mod share;
 
 #[cfg(test)]
 mod tests;

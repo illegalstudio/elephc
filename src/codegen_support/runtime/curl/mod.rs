@@ -33,6 +33,7 @@ mod easy_getinfo;
 mod easy_init;
 mod easy_scalar;
 mod multi;
+mod share;
 pub(crate) mod slots;
 mod str_op;
 mod version;
@@ -66,6 +67,7 @@ pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_warn_unsupported_option(emitter);
     emit_curl_multi_warn_unsupported_option(emitter);
     multi::emit_curl_multi(emitter);
+    share::emit_curl_share(emitter);
 }
 
 #[cfg(test)]
@@ -123,6 +125,13 @@ mod tests {
         "__rt_curl_multi_strerror",
         "__rt_curl_multi_free",
         "__rt_curl_multi_warn_unsupported_option",
+        "__rt_curl_share_init",
+        "__rt_curl_share_setopt",
+        "__rt_curl_share_errno",
+        "__rt_curl_share_strerror",
+        "__rt_curl_easy_set_share",
+        "__rt_curl_share_init_persistent",
+        "__rt_curl_share_free",
     ];
 
     /// Renders the shared runtime object's assembly for one supported target.
@@ -210,6 +219,7 @@ mod tests {
             "__rt_curl_easy_str_op",
             "__rt_curl_version",
             "__rt_curl_multi_strerror",
+            "__rt_curl_share_strerror",
         ] {
             for target_name in ["macos-aarch64", "linux-aarch64"] {
                 let asm = runtime_for(target_name);
@@ -265,19 +275,20 @@ mod tests {
         }
     }
 
-    /// `__rt_mixed_free_deep` routes resource kind 6 to the EASY destructor and kind 7 to
-    /// the MULTI one, which is what makes a `CurlHandle`/`CurlMultiHandle` object's
-    /// teardown release its libcurl handle.
+    /// `__rt_mixed_free_deep` routes resource kind 6 to the EASY destructor, kind 7 to the
+    /// MULTI one, and kind 8 to the SHARE one, which is what makes a `CurlHandle`/
+    /// `CurlMultiHandle`/`CurlShareHandle`/`CurlSharePersistentHandle` object's teardown
+    /// release its libcurl handle.
     ///
     /// The branch target is matched by NAME rather than as a whole line, because local
     /// labels carry a platform-specific prefix (`L...` on macOS) that is not part of the
     /// contract being pinned.
     #[test]
     fn mixed_free_deep_routes_the_curl_kinds_to_their_destructors() {
-        for (target_name, mnemonic, easy_compare, multi_compare) in [
-            ("macos-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7"),
-            ("linux-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7"),
-            ("linux-x86_64", "je", "cmp r9, 6", "cmp r9, 7"),
+        for (target_name, mnemonic, easy_compare, multi_compare, share_compare) in [
+            ("macos-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7", "cmp x9, #8"),
+            ("linux-aarch64", "b.eq", "cmp x9, #6", "cmp x9, #7", "cmp x9, #8"),
+            ("linux-x86_64", "je", "cmp r9, 6", "cmp r9, 7", "cmp r9, 8"),
         ] {
             let asm = runtime_for(target_name);
             for (compare, arm, destructor, kind) in [
@@ -292,6 +303,12 @@ mod tests {
                     "__rt_mixed_free_deep_resource_curl_multi",
                     "__rt_curl_multi_free",
                     7,
+                ),
+                (
+                    share_compare,
+                    "__rt_mixed_free_deep_resource_curl_share",
+                    "__rt_curl_share_free",
+                    8,
                 ),
             ] {
                 assert!(

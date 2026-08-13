@@ -32,10 +32,12 @@
 //!   - `CURLOPT_PRIVATE` (10103) stores an arbitrary PHP value that
 //!     `curl_getinfo(..., CURLINFO_PRIVATE)` reads back; libcurl never sees it, so it is
 //!     `KIND_PHP_LAYER` and lives on the `CurlHandle` object.
-//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR` and `CURLOPT_SHARE`/`READDATA` need
-//!     PHP stream or share-handle plumbing this build does not have, so they are
-//!     `KIND_UNSUPPORTED` (`false` + PHP's warning, locked decision 7) rather than
-//!     silently accepted.
+//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`/`READDATA` need PHP stream plumbing
+//!     this build does not have, so they are `KIND_UNSUPPORTED` (`false` + PHP's warning,
+//!     locked decision 7) rather than silently accepted. `CURLOPT_SHARE` is the ONE row in
+//!     this bucket that diverges the OTHER way: Task 10 gives it its own kind,
+//!     `KIND_SHARE`, because it needs a share-handle id, not a scalar — see `KIND_SHARE`'s
+//!     own doc comment.
 //! - `CURLINFO_HEADER_OUT` (2) is in the table even though it is not a `CURLOPT_*`
 //!   constant: php-src's `curl_setopt()` switch accepts it (it turns on request-header
 //!   tracking through the debug callback), so answering `ValueError` for it would be
@@ -60,8 +62,14 @@ pub(crate) const KIND_OFF_T: i32 = 4;
 /// `CURLOPT_BINARYTRANSFER`, `CURLOPT_SAFE_UPLOAD`, `CURLOPT_PRIVATE`).
 pub(crate) const KIND_PHP_LAYER: i32 = 5;
 /// Recognized by php-src's `curl_setopt()` but not carryable by this build (blobs,
-/// callbacks, PHP stream options, share handles) -> `false` + PHP's warning.
+/// callbacks, PHP stream options) -> `false` + PHP's warning.
 pub(crate) const KIND_UNSUPPORTED: i32 = 6;
+/// `CURLOPT_SHARE` (10100) ONLY: the value is a `CurlShareHandle`/`CurlSharePersistentHandle`
+/// object, not a scalar libcurl setter can carry, so it is routed to
+/// `elephc_curl_easy_set_share` (`crate::share`) instead of any of `setopt_long`/`_str`/
+/// `_slist`. A distinct kind from every other row in this table, added by Task 10; before
+/// it, this option was `KIND_UNSUPPORTED` like its `file`-bucket siblings.
+pub(crate) const KIND_SHARE: i32 = 7;
 
 /// Every option number php-src's `curl_setopt()` recognizes, paired with how this build
 /// carries it. Sorted by option number so [`option_kind`] can binary-search it; the sort
@@ -234,7 +242,7 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (10089, KIND_STRING), // CURLOPT_SSLENGINE
     (10093, KIND_SLIST), // CURLOPT_PREQUOTE
     (10097, KIND_STRING), // CURLOPT_CAPATH
-    (10100, KIND_UNSUPPORTED), // CURLOPT_SHARE
+    (10100, KIND_SHARE), // CURLOPT_SHARE
     (10102, KIND_STRING), // CURLOPT_ACCEPT_ENCODING/CURLOPT_ENCODING
     (10103, KIND_PHP_LAYER), // CURLOPT_PRIVATE
     (10104, KIND_SLIST), // CURLOPT_HTTP200ALIASES

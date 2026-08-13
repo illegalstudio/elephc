@@ -583,6 +583,13 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         entry.last_errno = easy::CURLE_OK;
         entry.last_error.clear();
         entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
+        // `curl_easy_reset` puts CURLOPT_SHARE back to its default (null) at the libcurl
+        // level along with every other option; the share's own `attached` bookkeeping is
+        // brought back into agreement here rather than left stale — see
+        // `crate::share::detach_easy`'s doc comment for why an unbounded `attached` list
+        // is a real concern for a long-lived (in particular persistent) share reused
+        // across many short-lived easy handles.
+        let previous_share = entry.share_id.take();
         unsafe {
             php_layer::install_write_callback(entry.curl, id);
             easy::setopt_ptr(
@@ -590,6 +597,10 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
                 easy::CURLOPT_ERRORBUFFER,
                 entry.error_buf.as_mut_ptr() as *mut c_void,
             );
+        }
+        drop(guard);
+        if let Some(share_id) = previous_share {
+            crate::share::detach_easy(share_id, id);
         }
         1
     })
@@ -702,6 +713,18 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
                 easy::CURLOPT_ERRORBUFFER,
                 entry.error_buf.as_mut_ptr() as *mut c_void,
             );
+            // CURLOPT_SHARE IS EXPLICITLY CLEARED ON THE COPY, not inherited — the same
+            // "re-point rather than trust the copied value" rule this function already
+            // applies to WRITEDATA/ERRORBUFFER, and for the identical reason: whether
+            // `curl_easy_duphandle` itself carries the raw `CURLSH *` pointer across is an
+            // internal libcurl detail this bridge does not rely on either way. The new
+            // entry's `share_id` field defaults to `None` (`EasyEntry::new`), so setting
+            // the option to null here keeps the bridge's bookkeeping and libcurl's real
+            // option state in agreement by construction: the copy starts genuinely
+            // unattached, never a second easy handle silently sharing the source's
+            // bridge-tracked attachment (which `crate::share::elephc_curl_share_free`
+            // would then not know to detach before `curl_share_cleanup`).
+            easy::setopt_ptr(copied, easy::CURLOPT_SHARE, std::ptr::null_mut());
         }
 
         for (opt, items) in slist_items {
@@ -770,6 +793,16 @@ pub extern "C" fn elephc_curl_easy_free(id: i64) {
             // AFTER cleanup, never before: libcurl holds raw pointers to the
             // handle's slist options until the handle itself is gone.
             entry.free_slists();
+            // Remove this id from its share's `attached` bookkeeping (if any), the same
+            // hygiene `elephc_curl_easy_reset` performs. Not required for MEMORY SAFETY —
+            // `elephc_curl_share_free`'s detach loop already skips an id `easy_ptr` no
+            // longer resolves, exactly as `elephc_curl_multi_free` skips an already-freed
+            // easy id — but without this, a long-lived share (in particular one minted by
+            // `curl_share_init_persistent()`, which is NEVER freed) would accumulate one
+            // dead id per easy handle ever attached to it for the life of the process.
+            if let Some(share_id) = entry.share_id {
+                crate::share::detach_easy(share_id, id);
+            }
         }
     })
 }

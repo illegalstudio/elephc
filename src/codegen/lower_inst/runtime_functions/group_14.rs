@@ -113,6 +113,26 @@ pub(super) fn lower(
                 ctx, inst,
             )
         }),
+        RuntimeFnId::CurlShareInit => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_share_init(ctx, inst)
+        }),
+        RuntimeFnId::CurlShareSetopt => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_share_setopt(ctx, inst)
+        }),
+        RuntimeFnId::CurlShareErrno => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_share_errno(ctx, inst)
+        }),
+        RuntimeFnId::CurlShareStrerror => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_share_strerror(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasySetShare => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_set_share(ctx, inst)
+        }),
+        RuntimeFnId::CurlShareInitPersistent => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_share_init_persistent(
+                ctx, inst,
+            )
+        }),
         _ => None,
     }
 }

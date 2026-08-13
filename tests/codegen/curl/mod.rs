@@ -18,4 +18,5 @@ mod easy_options;
 mod easy_tls;
 mod http_fixture;
 mod multi;
+mod share;
 mod tls_fixture;

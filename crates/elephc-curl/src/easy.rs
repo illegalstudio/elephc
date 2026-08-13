@@ -72,6 +72,12 @@ pub(crate) const CURLOPT_POSTFIELDSIZE_LARGE: c_int = 30120;
 /// die immediately.
 pub(crate) const CURLOPT_COPYPOSTFIELDS: c_int = 10165;
 
+/// `CURLOPT_SHARE` (10100): attaches a `CURLSH *` share object to this easy handle,
+/// or detaches it when passed null. Task 10 (`crate::share`) is the only writer of
+/// this option; `crate::abi::elephc_curl_easy_duphandle` also clears it explicitly on
+/// every duplicate (see that function's doc comment for why).
+pub(crate) const CURLOPT_SHARE: c_int = 10100;
+
 /// libcurl's opaque `struct curl_slist` linked-list node, built by
 /// [`slist_append`] and freed by [`slist_free_all`]. Never constructed on the
 /// Rust side; only ever seen as `*mut CurlSlist`.
